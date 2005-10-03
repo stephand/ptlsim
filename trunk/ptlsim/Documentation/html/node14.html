@@ -1,0 +1,230 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+
+<!--Converted with LaTeX2HTML 2002-2-1 (1.70)
+original version by:  Nikos Drakos, CBLU, University of Leeds
+* revised and updated by:  Marcus Hennecke, Ross Moore, Herb Swan
+* with significant contributions from:
+  Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
+<HTML>
+<HEAD>
+<TITLE>Speculation and Recovery</TITLE>
+<META NAME="description" CONTENT="Speculation and Recovery">
+<META NAME="keywords" CONTENT="PTLsimManual">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+<META NAME="Generator" CONTENT="LaTeX2HTML v2002-2-1">
+<META HTTP-EQUIV="Content-Style-Type" CONTENT="text/css">
+
+<LINK REL="STYLESHEET" HREF="PTLsimManual.css">
+
+<LINK REL="next" HREF="node15.html">
+<LINK REL="previous" HREF="node13.html">
+<LINK REL="up" HREF="node9.html">
+<LINK REL="next" HREF="node15.html">
+</HEAD>
+
+<BODY >
+<!--Navigation Panel-->
+<A NAME="tex2html529"
+  HREF="node15.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html525"
+  HREF="node9.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html519"
+  HREF="node13.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html527"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html530"
+  HREF="node15.html">Load Issue</A>
+<B> Up:</B> <A NAME="tex2html526"
+  HREF="node9.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html520"
+  HREF="node13.html">Scheduling, Dispatch and Issue</A>
+ &nbsp; <B>  <A NAME="tex2html528"
+  HREF="node1.html">Contents</A></B> 
+<BR>
+<BR>
+<!--End of Navigation Panel-->
+<!--Table of Child-Links-->
+<A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
+
+<UL>
+<LI><A NAME="tex2html531"
+  HREF="node14.html#SECTION04510000000000000000">Misspeculation Cases</A>
+<UL>
+<LI><A NAME="tex2html532"
+  HREF="node14.html#SECTION04511000000000000000">Branch Mispredictions</A>
+<LI><A NAME="tex2html533"
+  HREF="node14.html#SECTION04512000000000000000">Unaligned Loads and Stores and Aliased Stores</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html534"
+  HREF="node14.html#SECTION04520000000000000000">Recovery</A>
+</UL>
+<!--End of Table of Child-Links-->
+<HR>
+
+<H1><A NAME="SECTION04500000000000000000"></A><A NAME="sec:SpeculationAndRecovery"></A>
+<BR>
+Speculation and Recovery
+</H1>
+
+<P>
+PTLsim allows speculative execution of two classes of uops which may
+require all uops in program order after and optionally including the
+mis-speculated uop to be annulled before they are committed to the
+architectural state.
+
+<P>
+
+<H1><A NAME="SECTION04510000000000000000">
+Misspeculation Cases</A>
+</H1>
+
+<P>
+
+<H2><A NAME="SECTION04511000000000000000">
+Branch Mispredictions</A>
+</H2>
+
+<P>
+Branch mispredictions form the bulk of all mis-speculated operations.
+Whenever the actual RIP returned by a branch uop differs from the
+<TT><FONT SIZE="-1">riptaken</FONT></TT> field of the uop, the branch has been mispredicted.
+This means all uops after (but <I>not</I> including) the branch must
+be annulled and removed from all processor structures. The fetch queue
+(Section <A HREF="node11.html#sec:FetchStage">7.1</A>) is then reset and fetching is redirected
+to the correct branch target. However, all uops in program order before
+the branch are still correct and may continue executing.
+
+<P>
+Note that we do <I>not</I> just reissue the branch: this would be
+pointless, as we already know the correct RIP since the branch uop
+itself has already executed once. Instead, we let it writeback and
+commit as if it were predicted correctly.
+
+<P>
+
+<H2><A NAME="SECTION04512000000000000000">
+Unaligned Loads and Stores and Aliased Stores</A>
+</H2>
+
+<P>
+Loads and stores may also require the annulment of all uops following
+(and this time including) the load or store in program order. The
+conditions under which this process can occur are described in Sections
+<A HREF="node15.html#sec:IssuingLoads">11.1</A> and <A HREF="node16.html#sub:AliasCheck">12.2.1</A>.
+
+<P>
+
+<H1><A NAME="SECTION04520000000000000000"></A><A NAME="sec:SpeculationRecovery"></A>
+<BR>
+Recovery
+</H1>
+
+<P>
+In PTLsim, the <TT><FONT SIZE="-1">ReorderBufferEntry::annul()</FONT></TT> method
+removes any and all ROBs that entered the pipeline after and optionally
+including the misspeculated uop (depending on the <TT><FONT SIZE="-1">keep_misspec_uop</FONT></TT>
+argument). Because this method moves all affected ROBs to the free
+state, they are instantly taken out of consideration for future pipeline
+stages and will be dropped on the next cycle.
+
+<P>
+We must be extremely careful to annul all uops in an x86 macro-op;
+otherwise half the x86 instruction could be executed twice once refetched.
+Therefore, if the first uop to annul is not also the first uop in
+the x86 macro-op, we may have to scan backwards in the ROB until we
+find the first uop of the macro-op. In this way, we ensure that we
+can annul the entire macro-op. All uops comprising the macro-op are
+guaranteed to still be in the ROB since none of the uops can commit
+until the entire macro-op can commit. Note that this does not apply
+if the final uop in the macro-op is a branch and that branch uop itself
+is being retained as occurs with mispredicted branches.
+
+<P>
+The first uop to annul is determined in the <TT><FONT SIZE="-1">annul()</FONT></TT>
+method by scanning backwards in time from the excepting uop until
+a uop with its SOM (start of macro-op) bit is set, as described in
+Section <A HREF="node8.html#sec:UopIntro">5.1</A>. This SOM uop represents the boundary
+between x86 instructions, and is where we start annulment. The end
+of the range of uops to annul is at the tail of the reorder buffer.
+
+<P>
+We have to reconstruct the speculative RRT as it existed just before
+the first uop to be annulled was renamed. This is done by calling
+the <TT><FONT SIZE="-1">pseudocommit()</FONT></TT> method of each annulled uop to
+implement the ``fast flush with pseudo-commit'' algorithm as follows.
+First, we overwrite the speculative RRT with the committed RRT. We
+then <I>simulate</I> the commitment of all non-speculative ROBs up
+to the first uop to be annulled by updating the speculative RRT as
+if it were the commit RRT. This brings the speculative RRT to the
+same state as if all in flight nonspeculative operations before the
+first uop to be annulled had actually committed. Fetching is then
+resumed at the correct RIP, where new uops are renamed using the recovered
+speculative RRT.
+
+<P>
+Other methods of RRT reconstruction (like backwards walk with saved
+checkpoint values) are difficult to impossible because of the requirement
+that flag rename tables be restored even if some of the required physical
+registers with attached flags have since been freed. Technically RRT
+checkpointing could be used but due to the load/store replay mechanism
+in use, this would require a checkpoint at every load and store as
+well as branches. Hence, the forward walk method seems to offer the
+best performance in practice and is quite simple. The Pentium 4 is
+believed to use a similar method of recovering from some types of
+mis-speculations.
+
+<P>
+After reconstructing the RRT, for each ROB to annul, we broadcast
+the ROB index to the appropriate cluster's issue queue, allowing the
+issue queue to purge the slot of the ROB being annulled. Finally,
+for each annulled uop, we free any resources allocated to it (i.e.,
+the ROB itself, the destination physical register, the load/store
+queue entry (if any) and so on. Any updates to the branch predictor
+and return address stack made during the speculative execution of
+branches are also rolled back.
+
+<P>
+Finally, the fetch unit is restarted at the correct RIP and uops enter
+the pipeline and are renamed according to the recovered rename tables
+and allocated resource maps.
+
+<P>
+<HR>
+<!--Navigation Panel-->
+<A NAME="tex2html529"
+  HREF="node15.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html525"
+  HREF="node9.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html519"
+  HREF="node13.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html527"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html530"
+  HREF="node15.html">Load Issue</A>
+<B> Up:</B> <A NAME="tex2html526"
+  HREF="node9.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html520"
+  HREF="node13.html">Scheduling, Dispatch and Issue</A>
+ &nbsp; <B>  <A NAME="tex2html528"
+  HREF="node1.html">Contents</A></B> 
+<!--End of Navigation Panel-->
+<ADDRESS>
+Matt T Yourst
+2005-10-03
+</ADDRESS>
+</BODY>
+</HTML>
