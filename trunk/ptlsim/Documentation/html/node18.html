@@ -195,36 +195,43 @@ commit as described above. Out of order x86 processors must maintain
 three separate rename table entries for the ZAPS, CF, OF flags in
 addition to the register rename table entry, any or all of which may
 be updated when uops rename and retire, depending on the uop's flag
-renaming semantics. For this reason, even though a given physical
-register value may become inaccessible and hence dead at commit time,
-the flags associated with that physical register are frequently still
-referenced within the pipeline, so the physical register itself must
-remain allocated.
+renaming semantics (see Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>), For this
+reason, even though a given physical register value may become inaccessible
+and hence dead at commit time, the flags associated with that physical
+register are frequently still referenced within the pipeline, so the
+physical register itself must remain allocated.
 
 <P>
-Consider the following case:
+Consider the following specific example, with uops listed in program
+order:
 
 <P>
 
 <UL>
-<LI>uop U3 is renamed and found to depend on physical register R from
-an earlier uop U1.
+<LI><TT><FONT SIZE="-1">sub rax = rax,rbx</FONT></TT>
+<BR>
+Assign RRT[<TT><FONT SIZE="-1">rax</FONT></TT>] = phys reg r0
+<BR>
+Assign RRT[<TT><FONT SIZE="-1">flags</FONT></TT>] = <I>r0</I> (since SUB all updates
+flags)
 </LI>
-<LI>U1 commits to architectural register A and moves R to the arch state
+<LI><TT><FONT SIZE="-1">mov rax = rcx</FONT></TT>
+<BR>
+Assign RRT[<TT><FONT SIZE="-1">rax</FONT></TT>] = phys reg r1
+<BR><I>No flags renamed:</I> MOV never updates flags, so RRT[<TT><FONT SIZE="-1">flags</FONT></TT>]
+is still <I>r0</I>.
 </LI>
-<LI>U2, which updates the same architectural register A as U1, also commits.
-Since the mapping of A is being logically overwritten by U2, U1's
-physical register R is freed.
-</LI>
-<LI>U3 finally issues, but finds that operand physical register R for
-U1 no longer exists.
+<LI><TT><FONT SIZE="-1">br.e target</FONT></TT>
+<BR>
+Depends on flags attached to <I>r0</I>, even though actual architectural
+register (<TT><FONT SIZE="-1">rax</FONT></TT>) for <I>r0</I> has already been overwritten
+in the commit RRT by the MOV's commit. We cannot free <I>r0</I> since
+the BR uop might not have issued yet.
 </LI>
 </UL>
-Additionally, in x86 processors the flags attached to a given physical
-register may be referenced by three additional rename table entries
-(ZAPS, CF, OF - see Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>), so simply
-freeing the old physical register mapping when the RRT is updated
-doesn't work.
+This situation only happens with instruction sets like x86 (and SPARC
+or even PowerPC to some extent) which support writing flags (particularly
+multiple independent flags) and data in a single instruction.
 
 <P>
 

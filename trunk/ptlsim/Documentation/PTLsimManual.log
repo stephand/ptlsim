@@ -1,4 +1,4 @@
-This is pdfeTeX, Version 3.141592-1.21a-2.2 (Web2C 7.5.4) (format=pdflatex 2005.7.13)  3 OCT 2005 16:14
+This is pdfeTeX, Version 3.141592-1.21a-2.2 (Web2C 7.5.4) (format=pdflatex 2005.7.13)  3 OCT 2005 19:47
 entering extended mode
 **PTLsimManual.tex
 (./PTLsimManual.tex
@@ -472,7 +472,7 @@ Chapter 15.
 [52
 
 ] [53]
-Overfull \hbox (25.74605pt too wide) in paragraph at lines 2800--2809
+Overfull \hbox (25.74605pt too wide) in paragraph at lines 2804--2813
 \T1/pcr/m/n/10 MAX_WAKEUPS_PER_CYCLE \T1/ptm/m/n/10.95 LFRQ slots in the \T1/pt
 m/m/it/10.95 ready \T1/ptm/m/n/10.95 state and wakes them up by call-ing the \T
 1/pcr/m/n/10 load_filled_callback()
@@ -481,7 +481,7 @@ m/m/it/10.95 ready \T1/ptm/m/n/10.95 state and wakes them up by call-ing the \T
 [54] [55]
 Chapter 16.
 
-Overfull \hbox (46.70256pt too wide) in paragraph at lines 2922--2928
+Overfull \hbox (46.70256pt too wide) in paragraph at lines 2926--2932
 []\T1/ptm/m/n/10.95 As each uop com-mits, the \T1/pcr/m/n/10 BranchPredictorInt
 erface::update() \T1/ptm/m/n/10.95 method is passed the uop's saved \T1/pcr/m/n
 /10 PredictorUpdate
@@ -490,7 +490,7 @@ erface::update() \T1/ptm/m/n/10.95 method is passed the uop's saved \T1/pcr/m/n
 [56
 
 ] [57]
-Overfull \hbox (72.7884pt too wide) in paragraph at lines 3002--3016
+Overfull \hbox (72.7884pt too wide) in paragraph at lines 3006--3020
 []\T1/ptm/m/n/10.95 If uops must be an-nulled, the \T1/pcr/m/n/10 ReorderBuffer
 Entry::annul() \T1/ptm/m/n/10.95 method calls the \T1/pcr/m/n/10 BranchPredicto
 rInterface::annulras()
@@ -504,25 +504,25 @@ Chapter 17.
 
 ]
 LaTeX Font Info:    Font shape `T1/pcr/bx/n' in size <12> not available
-(Font)              Font shape `T1/pcr/b/n' tried instead on input line 3030.
+(Font)              Font shape `T1/pcr/b/n' tried instead on input line 3034.
 LaTeX Font Info:    Font shape `T1/phv/m/it' in size <10.95> not available
-(Font)              Font shape `T1/phv/m/sl' tried instead on input line 3041.
+(Font)              Font shape `T1/phv/m/sl' tried instead on input line 3045.
 LaTeX Font Info:    Font shape `T1/phv/bx/it' in size <10.95> not available
-(Font)              Font shape `T1/phv/b/it' tried instead on input line 3080.
+(Font)              Font shape `T1/phv/b/it' tried instead on input line 3084.
 LaTeX Font Info:    Font shape `T1/phv/b/it' in size <10.95> not available
-(Font)              Font shape `T1/phv/b/sl' tried instead on input line 3080.
+(Font)              Font shape `T1/phv/b/sl' tried instead on input line 3084.
  [61] [62] [63]
 LaTeX Font Info:    Font shape `T1/pcr/bx/it' in size <10.95> not available
-(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3230.
+(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3234.
 LaTeX Font Info:    Font shape `T1/pcr/b/it' in size <10.95> not available
-(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3230.
+(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3234.
 LaTeX Font Info:    Font shape `T1/pcr/bx/it' in size <10> not available
-(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3230.
+(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3234.
 LaTeX Font Info:    Font shape `T1/pcr/b/it' in size <10> not available
-(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3230.
+(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3234.
  [64] [65] [66] [67] [68] [69] [70] [71] [72] [73] [74]
 [75] [76] [77] [78] [79] [80] [81] [82] [83]
-Overfull \hbox (4.1546pt too wide) in paragraph at lines 4018--4032
+Overfull \hbox (4.1546pt too wide) in paragraph at lines 4022--4036
 [][] 
  []
 
@@ -532,7 +532,7 @@ Chapter 18.
 [106
 
 ]
-Underfull \hbox (badness 10000) in paragraph at lines 4853--4865
+Underfull \hbox (badness 10000) in paragraph at lines 4857--4869
 
  []
 
@@ -564,4 +564,4 @@ pfb></usr/share/texmf/fonts/type1/urw/times/utmbi8a.pfb></usr/share/texmf/fonts
 ></usr/share/texmf/fonts/type1/urw/courier/ucrr8a.pfb></usr/share/texmf/fonts/t
 ype1/urw/times/utmr8a.pfb></usr/share/texmf/fonts/type1/urw/times/utmri8a.pfb><
 /usr/share/texmf/fonts/type1/urw/helvetic/uhvb8a.pfb>
-Output written on PTLsimManual.pdf (115 pages, 524610 bytes).
+Output written on PTLsimManual.pdf (115 pages, 525390 bytes).

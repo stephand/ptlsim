@@ -8697,41 +8697,115 @@ In some processor designs, it is not always possible to immediately free
  Out of order x86 processors must maintain three separate rename table entries
  for the ZAPS, CF, OF flags in addition to the register rename table entry,
  any or all of which may be updated when uops rename and retire, depending
- on the uop's flag renaming semantics.
- For this reason, even though a given physical register value may become
+ on the uop's flag renaming semantics (see Section 
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
+
+\end_inset 
+
+), For this reason, even though a given physical register value may become
  inaccessible and hence dead at commit time, the flags associated with that
  physical register are frequently still referenced within the pipeline,
  so the physical register itself must remain allocated.
 \layout Standard
 
-Consider the following case:
+Consider the following specific example, with uops listed in program order:
 \layout Itemize
 
-uop U3 is renamed and found to depend on physical register R from an earlier
- uop U1.
+
+\family typewriter 
+\size small 
+sub rax = rax,rbx
+\family default 
+\size default 
+
+\newline 
+Assign RRT[
+\family typewriter 
+\size small 
+rax
+\family default 
+\size default 
+] = phys reg r0
+\newline 
+Assign RRT[
+\family typewriter 
+\size small 
+flags
+\family default 
+\size default 
+] = 
+\emph on 
+r0
+\emph default 
+ (since SUB all updates flags)
 \layout Itemize
 
-U1 commits to architectural register A and moves R to the arch state
+
+\family typewriter 
+\size small 
+mov rax = rcx
+\family default 
+\size default 
+
+\newline 
+Assign RRT[
+\family typewriter 
+\size small 
+rax
+\family default 
+\size default 
+] = phys reg r1
+\newline 
+
+\emph on 
+No flags renamed:
+\emph default 
+ MOV never updates flags, so RRT[
+\family typewriter 
+\size small 
+flags
+\family default 
+\size default 
+] is still 
+\emph on 
+r0
+\emph default 
+.
 \layout Itemize
 
-U2, which updates the same architectural register A as U1, also commits.
- Since the mapping of A is being logically overwritten by U2, U1's physical
- register R is freed.
-\layout Itemize
 
-U3 finally issues, but finds that operand physical register R for U1 no
- longer exists.
+\family typewriter 
+\size small 
+br.e target
+\family default 
+\size default 
+
+\newline 
+Depends on flags attached to 
+\emph on 
+r0
+\emph default 
+, even though actual architectural register (
+\family typewriter 
+\size small 
+rax
+\family default 
+\size default 
+) for 
+\emph on 
+r0
+\emph default 
+ has already been overwritten in the commit RRT by the MOV's commit.
+ We cannot free 
+\emph on 
+r0
+\emph default 
+ since the BR uop might not have issued yet.
 \layout Standard
 
-Additionally, in x86 processors the flags attached to a given physical register
- may be referenced by three additional rename table entries (ZAPS, CF, OF
- - see Section 
-\begin_inset LatexCommand \ref{sub:FlagsManagement}
-
-\end_inset 
-
-), so simply freeing the old physical register mapping when the RRT is updated
- doesn't work.
+This situation only happens with instruction sets like x86 (and SPARC or
+ even PowerPC to some extent) which support writing flags (particularly
+ multiple independent flags) and data in a single instruction.
 \layout Subsection
 
 Reference Counting

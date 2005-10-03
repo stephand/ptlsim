@@ -2553,29 +2553,33 @@ commit as described above. Out of order x86 processors must maintain
 three separate rename table entries for the ZAPS, CF, OF flags in
 addition to the register rename table entry, any or all of which may
 be updated when uops rename and retire, depending on the uop's flag
-renaming semantics. For this reason, even though a given physical
-register value may become inaccessible and hence dead at commit time,
-the flags associated with that physical register are frequently still
-referenced within the pipeline, so the physical register itself must
-remain allocated.
+renaming semantics (see Section \ref{sub:FlagsManagement}), For this
+reason, even though a given physical register value may become inaccessible
+and hence dead at commit time, the flags associated with that physical
+register are frequently still referenced within the pipeline, so the
+physical register itself must remain allocated.
 
-Consider the following case:
+Consider the following specific example, with uops listed in program
+order:
 
 \begin{itemize}
-\item uop U3 is renamed and found to depend on physical register R from
-an earlier uop U1.
-\item U1 commits to architectural register A and moves R to the arch state
-\item U2, which updates the same architectural register A as U1, also commits.
-Since the mapping of A is being logically overwritten by U2, U1's
-physical register R is freed.
-\item U3 finally issues, but finds that operand physical register R for
-U1 no longer exists.
+\item \texttt{\small sub rax = rax,rbx}\\
+Assign RRT{[}\texttt{\small rax}{]} = phys reg r0\\
+Assign RRT{[}\texttt{\small flags}{]} = \emph{r0} (since SUB all updates
+flags)
+\item \texttt{\small mov rax = rcx}\\
+Assign RRT{[}\texttt{\small rax}{]} = phys reg r1\\
+\emph{No flags renamed:} MOV never updates flags, so RRT{[}\texttt{\small flags}{]}
+is still \emph{r0}.
+\item \texttt{\small br.e target}\\
+Depends on flags attached to \emph{r0}, even though actual architectural
+register (\texttt{\small rax}) for \emph{r0} has already been overwritten
+in the commit RRT by the MOV's commit. We cannot free \emph{r0} since
+the BR uop might not have issued yet.
 \end{itemize}
-Additionally, in x86 processors the flags attached to a given physical
-register may be referenced by three additional rename table entries
-(ZAPS, CF, OF - see Section \ref{sub:FlagsManagement}), so simply
-freeing the old physical register mapping when the RRT is updated
-doesn't work.
+This situation only happens with instruction sets like x86 (and SPARC
+or even PowerPC to some extent) which support writing flags (particularly
+multiple independent flags) and data in a single instruction.
 
 
 \subsection{Reference Counting}
