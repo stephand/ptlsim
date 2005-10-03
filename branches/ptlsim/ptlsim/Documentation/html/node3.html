@@ -1,0 +1,192 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+
+<!--Converted with LaTeX2HTML 2002-2-1 (1.70)
+original version by:  Nikos Drakos, CBLU, University of Leeds
+* revised and updated by:  Marcus Hennecke, Ross Moore, Herb Swan
+* with significant contributions from:
+  Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
+<HTML>
+<HEAD>
+<TITLE>Introducing PTLsim</TITLE>
+<META NAME="description" CONTENT="Introducing PTLsim">
+<META NAME="keywords" CONTENT="PTLsimManual">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+<META NAME="Generator" CONTENT="LaTeX2HTML v2002-2-1">
+<META HTTP-EQUIV="Content-Style-Type" CONTENT="text/css">
+
+<LINK REL="STYLESHEET" HREF="PTLsimManual.css">
+
+<LINK REL="next" HREF="node4.html">
+<LINK REL="previous" HREF="node2.html">
+<LINK REL="up" HREF="node2.html">
+<LINK REL="next" HREF="node4.html">
+</HEAD>
+
+<BODY >
+<!--Navigation Panel-->
+<A NAME="tex2html277"
+  HREF="node4.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html273"
+  HREF="node2.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html267"
+  HREF="node2.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html275"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html278"
+  HREF="node4.html">Getting Started with PTLsim</A>
+<B> Up:</B> <A NAME="tex2html274"
+  HREF="node2.html">PTLsim User's Guide</A>
+<B> Previous:</B> <A NAME="tex2html268"
+  HREF="node2.html">PTLsim User's Guide</A>
+ &nbsp; <B>  <A NAME="tex2html276"
+  HREF="node1.html">Contents</A></B> 
+<BR>
+<BR>
+<!--End of Navigation Panel-->
+<!--Table of Child-Links-->
+<A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
+
+<UL>
+<LI><A NAME="tex2html279"
+  HREF="node3.html#SECTION02110000000000000000">Introducing PTLsim</A>
+<LI><A NAME="tex2html280"
+  HREF="node3.html#SECTION02120000000000000000">History</A>
+<LI><A NAME="tex2html281"
+  HREF="node3.html#SECTION02130000000000000000">Documentation Roadmap</A>
+</UL>
+<!--End of Table of Child-Links-->
+<HR>
+
+<H1><A NAME="SECTION02100000000000000000">
+Introducing PTLsim</A>
+</H1>
+
+<P>
+
+<H1><A NAME="SECTION02110000000000000000">
+Introducing PTLsim</A>
+</H1>
+
+<P>
+<B>PTLsim</B> is a state of the art cycle accurate microprocessor
+simulator and virtual machine for the x86 and x86-64 instruction sets.
+This release of PTLsim models a modern speculative out of order x86-64
+compatible processor core, cache hierarchy and supporting hardware.
+
+<P>
+PTLsim is very different from most cycle accurate simulators used
+in research applications. It runs directly on the same platform it
+is simulating (an x86-64 machine running Linux) and is able to switch
+in and out of full out of order simulation mode and native x86-64
+mode at any time completely transparent to the running user code.
+This lets users quickly profile a small section of the user code without
+the overhead of emulating the uninteresting parts. It is also capable
+of switching between 32-bit and 64-bit threads on the fly.
+
+<P>
+Compared to competing simulators, PTLsim provides extremely high performance
+even when running in full cycle accurate out of order simulation mode.
+Through extensive tuning, cache profiling and the use of x86 specific
+accelerated vector operations and instructions, PTLsim significantly
+cuts simulation time compared to traditional research simulators.
+Even with its optimized core, PTLsim still allows a significant amount
+of flexibility for easy experimentation through the use of optimized
+C++ template classes and libraries suited to synchronous logic design.
+We have successfully run a wide array of programs under PTLsim, from
+typical benchmarks to graphical applications and network servers.
+
+<P>
+
+<H1><A NAME="SECTION02120000000000000000">
+History</A>
+</H1>
+
+<P>
+PTLsim was designed and developed by Matt T. Yourst <TT><FONT SIZE="-1">&lt;yourst@yourst.com&gt;</FONT></TT>
+with its beginnings dating back to 2001. The main PTLsim code base,
+including the out of order processor model, has been in active development
+since 2003 and has been extensively used by our processor design research
+group at the State University of New York at Binghamton. The out of
+order simulator was based on an earlier model, also developed by Matt
+Yourst, designed around the Alpha instruction set.
+
+<P>
+PTLsim is not related to other widely used simulators. It is our hope
+that PTLsim will help microprocessor researchers move to a contemporary
+and widely used instruction set (x86 and x86-64) with readily available
+hardware implementations. This will provide a new option for researchers
+stuck with simulation tools supporting only the Alpha or MIPS based
+instruction sets, both of which have since been discontinued on real
+commercially available hardware (making co-simulation impossible)
+with an uncertain future in up to date compiler toolchains.
+
+<P>
+The PTLsim software and this manual are free software, licensed under
+the GNU General Public License version 2.
+
+<P>
+
+<H1><A NAME="SECTION02130000000000000000">
+Documentation Roadmap</A>
+</H1>
+
+<P>
+This manual has been divided into several parts:
+
+<P>
+
+<UL>
+<LI>Part <A HREF="node2.html#part:Introduction">I</A> introduces PTLsim and describes its
+structure and operation
+</LI>
+<LI>Part <A HREF="node7.html#part:x86andUops">II</A> describes the PTLsim internal micro-operation
+instruction set and its relation to x86 and x86-64
+</LI>
+<LI>Part <A HREF="node9.html#part:OutOfOrderModel">III</A> details the design and implementation
+of the PTLsim out of order core model
+</LI>
+<LI>Part <A HREF="node21.html#part:Appendices">IV</A> is a reference manual for the PTLsim internal
+uop instruction set, the performance monitoring events the simulator
+supports and a variety of other technical information.
+</LI>
+</UL>
+
+<P>
+<HR>
+<!--Navigation Panel-->
+<A NAME="tex2html277"
+  HREF="node4.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html273"
+  HREF="node2.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html267"
+  HREF="node2.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html275"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html278"
+  HREF="node4.html">Getting Started with PTLsim</A>
+<B> Up:</B> <A NAME="tex2html274"
+  HREF="node2.html">PTLsim User's Guide</A>
+<B> Previous:</B> <A NAME="tex2html268"
+  HREF="node2.html">PTLsim User's Guide</A>
+ &nbsp; <B>  <A NAME="tex2html276"
+  HREF="node1.html">Contents</A></B> 
+<!--End of Navigation Panel-->
+<ADDRESS>
+Matt T Yourst
+2005-10-03
+</ADDRESS>
+</BODY>
+</HTML>

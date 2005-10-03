@@ -1,0 +1,139 @@
+
+Benchmark Results
+~~~~~~~~~~~~~~~~~
+
+Prepared: Tue Nov 16 21:50:02 EST 2004
+
+Philosophy:
+~~~~~~~~~~~
+
+Size of SPEC inputs was tuned to make the entire program run to completion if possible,
+such that that nearly every instruction in the binary is executed at least once. The
+traditional way of benchmarking for a fixed number of cycles is inappropriate for binary
+translation systems since it does not show how quickly our solution can converge on
+optimized code.
+
+
+Benchmark: spec2K/gcc:
+~~~~~~~~~~~~~~~~~~~~~~
+
+General:
+~~~~~~~~
+  Alpha insns issued in fastsim: 253714770 insns
+  Warmup:                          1037318 insns
+
+  Scope:
+  Executed over first part of SPEC input 'integrate.i' so total was ~250M insns committed.
+  This means that nearly every instruction in the gcc binary is executed at least once.
+
+  Simulator: Built Nov 16 2004 20:34:29 on lightstream.lab.yourst.com using gcc-3.4
+  Processor: core revision 2.1 with PTL 2.3-debug
+  Options:   nodslu
+
+Commit Groups (full optimizations, with commit groups)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Core Pipeline:
+  Cycles:         8.5% ordered, 12.0% scheduled, 79.5% optimized
+  Commits:        2.8% ordered,  6.8% scheduled, 90.5% optimized
+  IPC:           0.727 ordered, 1.843 scheduled, 2.510 optimized
+  Total IPC:     2.283
+  Average weighted trace length:   32.5 uops  (i.e. total commits / total traces executed)
+Trace Predictor:
+  Selection strategy:
+    guessed               1940225  23.791%
+    fallback                 1361   0.017%
+    branchsel             1663255  20.395%
+    predicted             4384534  53.763%
+    translated             165968   2.035%
+    Total                 8155343 trace selections
+  Prediction results:                                   WastedCyc  Wasted%
+    Correctly completed              3976322  50.851%:         0:   0.000%
+    APC Mispredict                   1664647  21.288%:   8323235:   6.935%
+    Depth Mispredict                 1245164  13.129%:   6225820:   5.187%
+    APC and Depth Mispredict          933397   8.699%:   4666985:   3.889%
+    Total mispredicts               11662738 100.000%:  19216040:  16.011%
+Stalls:
+  Fetch stall cycles:                     2856769   2.380%
+  Operand stall cycles:                   2478733   2.065%
+  Realloc stall cycles:                     94121   0.078%
+  Commit stall cycles:                    4298192   3.581%
+Rollbacks:                                          %ByType  WastedCyc Wasted%
+  BranchMispredict                         1489053  89.544%  5662975:   4.718%
+  Total rollbacks                          1662924 100.000%  5967403:   4.972%
+Cache Performance:
+  Average service time: 2.257
+    2 cycles:     93.2%  (L1 hit)
+    5 cycles:      6.3%  (L1 miss, L2 hit)
+  137 cycles:      0.5%  (L1 miss, L2 miss, L3 miss, main memory serviced)
+
+
+Atomic (same as above but with all optimized traces atomic)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Core Pipeline:
+  Cycles:        11.1% ordered, 32.7% scheduled, 56.3% optimized
+  Commits:        4.6% ordered, 21.9% scheduled, 73.5% optimized
+  IPC:           0.735 ordered, 1.175 scheduled, 2.289 optimized
+  Total IPC:     1.753
+  Average weighted trace length:   20.6 uops
+Trace Predictor:
+  Selection strategy:
+    guessed               2739617  21.261%
+    fallback                 1523   0.012%
+    branchsel             2283625  17.722%
+    predicted             7704785  59.793%
+    translated             156289   1.213%
+    Total                12885839 trace selections
+  Prediction results:
+    Correctly completed              7167879  56.300%:              0 cycles:   0.000% wasted from all cycles
+    APC Mispredict                   2764232  21.712%:       13821160 cycles:   9.145% wasted from all cycles
+    Depth Mispredict                 2170113  14.004%:       10850565 cycles:   7.180% wasted from all cycles
+    APC and Depth Mispredict          629408   3.563%:        3147040 cycles:   2.082% wasted from all cycles
+    Total mispredicts               18295385 100.000%:       27818765 cycles:  18.408% wasted from all cycles
+Stalls:
+  Fetch stall cycles:                     6010427   3.977%
+  Operand stall cycles:                   2596742   1.718%
+  Realloc stall cycles:                     72773   0.048%
+  Commit stall cycles:                     417675   0.276%
+Rollbacks:
+  BranchMispredict                         2027050  88.770%   12077665 cycles wasted:   7.992%
+  Total rollbacks                          2283488 100.000%   13381919 cycles wasted:   8.855%
+Cache Performance:
+  Average service time: 2.260
+    2 cycles:       94.6%
+    5 cycles:        5.1%
+  137 cycles:        0.1%
+
+Commentary:
+~~~~~~~~~~~
+
+IPC Increase:
+~~~~~~~~~~~~~
+IPC difference: 2.3 vs 1.7 (35% faster)
+
+Longer Traces:
+~~~~~~~~~~~~~~
+35.2 uops with commit groups, 20.6 with atomic traces: longer traces => more ILP
+
+Faster convergence on optimized code:
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+With commit groups enabled, the processor is executing fully optimized traces 80% of the time. However, with traditional atomic traces, only 56% of the cycles are spent on optimized code. Therefore commit gorups help the optimizer converge on an optimal working set faster since it can splice together the correctly executed parts of multiple traces.
+
+Significant rollback penalty decrease:
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- 2.2x as many cycles were wasted with atomic traces (i.e. 8.9% of all cycles) as with commit groups (only 4.9% wasted)
+
+Predictor:
+~~~~~~~~~~
+- Slightly higher APC and depth misprediction with atomic traces (18% of cycles wasted vs 16%)
+
+I-cache hit rate: (128KB i-cache, holds about 16K Alpha-equivalent uops)
+~~~~~~~~~~~~~~~~~
+- Commit groups let us reuse parts of traces many times rather than having to evict them from the L1 cache to get an entirely new atomic trace from the main memory translation cache (32 MB).
+- Specifics: 3.977% of cycles wasted on fetch stalls with atomic commits, vs 2.4% on commit group based traces
+
+Commit stall cycles:
+~~~~~~~~~~~~~~~~~~~~
+- With commit groups, 3.581% of cycles spent waiting at frequent commit points for all uops to complete, while atomic traces only wasted 0.276% of all cycles. Justification: more frequent commit points may be bad in cases when loads often miss the cache, since we end up waiting for these loads to complete. Strategies can be used to reduce the commit point count for traces that rarely if ever roll back.
+

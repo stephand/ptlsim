@@ -1,0 +1,16 @@
+make: Entering directory `/project/ptlsim/benchmarks/gzip'
+ptlsim gzip input.source
+//  
+//  PTLsim: Cycle Accurate x86-64 Simulator
+//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>
+// 
+//  Built Oct  2 2005 20:22:28 on tidalwave.cs.binghamton.edu using gcc-3.4
+//  Running on tidalwave.cs.binghamton.edu (2202 MHz)
+//  
+//  Arguments: gzip input.source
+//  Thread 30358 is running in 64-bit x86-64 mode
+//  
+
+make: Leaving directory `/project/ptlsim/benchmarks/gzip'
+131.42user 0.03system 2:11.68elapsed 99%CPU (0avgtext+0avgdata 0maxresident)k
+0inputs+0outputs (0major+4390minor)pagefaults 0swaps

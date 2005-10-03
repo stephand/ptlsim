@@ -1,0 +1,236 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+
+<!--Converted with LaTeX2HTML 2002-2-1 (1.70)
+original version by:  Nikos Drakos, CBLU, University of Leeds
+* revised and updated by:  Marcus Hennecke, Ross Moore, Herb Swan
+* with significant contributions from:
+  Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
+<HTML>
+<HEAD>
+<TITLE>Out of Order Processor Model</TITLE>
+<META NAME="description" CONTENT="Out of Order Processor Model">
+<META NAME="keywords" CONTENT="PTLsimManual">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+<META NAME="Generator" CONTENT="LaTeX2HTML v2002-2-1">
+<META HTTP-EQUIV="Content-Style-Type" CONTENT="text/css">
+
+<LINK REL="STYLESHEET" HREF="PTLsimManual.css">
+
+<LINK REL="next" HREF="node21.html">
+<LINK REL="previous" HREF="node7.html">
+<LINK REL="up" HREF="PTLsimManual.html">
+<LINK REL="next" HREF="node10.html">
+</HEAD>
+
+<BODY >
+<!--Navigation Panel-->
+<A NAME="tex2html391"
+  HREF="node10.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html387"
+  HREF="PTLsimManual.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html381"
+  HREF="node8.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html389"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html392"
+  HREF="node10.html">Introduction</A>
+<B> Up:</B> <A NAME="tex2html388"
+  HREF="PTLsimManual.html">PTLsimManual</A>
+<B> Previous:</B> <A NAME="tex2html382"
+  HREF="node8.html">x86 Instructions and Micro-Ops</A>
+ &nbsp; <B>  <A NAME="tex2html390"
+  HREF="node1.html">Contents</A></B> 
+<BR>
+<BR>
+<!--End of Navigation Panel-->
+
+<H1><A NAME="SECTION04000000000000000000"></A><A NAME="part:OutOfOrderModel"></A>
+<BR>
+Out of Order Processor Model
+</H1>
+
+<P>
+<BR><HR>
+<!--Table of Child-Links-->
+<A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
+
+<UL>
+<LI><A NAME="tex2html393"
+  HREF="node10.html">Introduction</A>
+<LI><A NAME="tex2html394"
+  HREF="node11.html">Fetch Stage</A>
+<UL>
+<LI><A NAME="tex2html395"
+  HREF="node11.html#SECTION04210000000000000000">Instruction Fetching and the Basic Block Cache</A>
+<LI><A NAME="tex2html396"
+  HREF="node11.html#SECTION04220000000000000000">Fetch Queue</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html397"
+  HREF="node12.html">Frontend and Key Structures</A>
+<UL>
+<LI><A NAME="tex2html398"
+  HREF="node12.html#SECTION04310000000000000000">Resource Allocation</A>
+<LI><A NAME="tex2html399"
+  HREF="node12.html#SECTION04320000000000000000">Reorder Buffer Entries</A>
+<UL>
+<LI><A NAME="tex2html400"
+  HREF="node12.html#SECTION04321000000000000000">ROB States</A>
+</UL>
+<LI><A NAME="tex2html401"
+  HREF="node12.html#SECTION04330000000000000000">Physical Registers</A>
+<UL>
+<LI><A NAME="tex2html402"
+  HREF="node12.html#SECTION04331000000000000000">Physical Registers</A>
+<LI><A NAME="tex2html403"
+  HREF="node12.html#SECTION04332000000000000000">Physical Register File</A>
+<LI><A NAME="tex2html404"
+  HREF="node12.html#SECTION04333000000000000000">Physical Register States</A>
+</UL>
+<LI><A NAME="tex2html405"
+  HREF="node12.html#SECTION04340000000000000000">Load Store Queue Entries</A>
+<UL>
+<LI><A NAME="tex2html406"
+  HREF="node12.html#SECTION04341000000000000000">Register Renaming</A>
+<LI><A NAME="tex2html407"
+  HREF="node12.html#SECTION04342000000000000000">External State</A>
+</UL>
+<LI><A NAME="tex2html408"
+  HREF="node12.html#SECTION04350000000000000000">Frontend Stages</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html409"
+  HREF="node13.html">Scheduling, Dispatch and
+Issue</A>
+<UL>
+<LI><A NAME="tex2html410"
+  HREF="node13.html#SECTION04410000000000000000">Clustering and Issue Queue Configuration</A>
+<LI><A NAME="tex2html411"
+  HREF="node13.html#SECTION04420000000000000000">Cluster Selection</A>
+<LI><A NAME="tex2html412"
+  HREF="node13.html#SECTION04430000000000000000">Issue Queue Structure and Operation</A>
+<UL>
+<LI><A NAME="tex2html413"
+  HREF="node13.html#SECTION04431000000000000000">Implementation</A>
+<LI><A NAME="tex2html414"
+  HREF="node13.html#SECTION04432000000000000000">Other Designs</A>
+</UL>
+<LI><A NAME="tex2html415"
+  HREF="node13.html#SECTION04440000000000000000">Issue</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html416"
+  HREF="node14.html">Speculation and Recovery</A>
+<UL>
+<LI><A NAME="tex2html417"
+  HREF="node14.html#SECTION04510000000000000000">Misspeculation Cases</A>
+<UL>
+<LI><A NAME="tex2html418"
+  HREF="node14.html#SECTION04511000000000000000">Branch Mispredictions</A>
+<LI><A NAME="tex2html419"
+  HREF="node14.html#SECTION04512000000000000000">Unaligned Loads and Stores and Aliased Stores</A>
+</UL>
+<LI><A NAME="tex2html420"
+  HREF="node14.html#SECTION04520000000000000000">Recovery</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html421"
+  HREF="node15.html">Load Issue</A>
+<UL>
+<LI><A NAME="tex2html422"
+  HREF="node15.html#SECTION04610000000000000000">Issuing Loads</A>
+<LI><A NAME="tex2html423"
+  HREF="node15.html#SECTION04620000000000000000">Store Queue Check and Store Dependencies</A>
+<LI><A NAME="tex2html424"
+  HREF="node15.html#SECTION04630000000000000000">Data Extraction</A>
+<LI><A NAME="tex2html425"
+  HREF="node15.html#SECTION04640000000000000000">Cache Miss Handling</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html426"
+  HREF="node16.html">Stores</A>
+<UL>
+<LI><A NAME="tex2html427"
+  HREF="node16.html#SECTION04710000000000000000">Store to Store Forwarding and Merging</A>
+<LI><A NAME="tex2html428"
+  HREF="node16.html#SECTION04720000000000000000">Split Phase Stores</A>
+<UL>
+<LI><A NAME="tex2html429"
+  HREF="node16.html#SECTION04721000000000000000">Load Queue Search (Alias Check)</A>
+<LI><A NAME="tex2html430"
+  HREF="node16.html#SECTION04722000000000000000">Store Queue Search (Merge Check)</A>
+</UL>
+</UL>
+<BR>
+<LI><A NAME="tex2html431"
+  HREF="node17.html">Forwarding, Wakeup and Writeback</A>
+<UL>
+<LI><A NAME="tex2html432"
+  HREF="node17.html#SECTION04810000000000000000">Forwarding and the Clustered Bypass Network</A>
+<LI><A NAME="tex2html433"
+  HREF="node17.html#SECTION04820000000000000000">Writeback</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html434"
+  HREF="node18.html">Commitment</A>
+<UL>
+<LI><A NAME="tex2html435"
+  HREF="node18.html#SECTION04910000000000000000">Introduction</A>
+<LI><A NAME="tex2html436"
+  HREF="node18.html#SECTION04920000000000000000">Atomicity of x86 instructions</A>
+<LI><A NAME="tex2html437"
+  HREF="node18.html#SECTION04930000000000000000">Commitment</A>
+<LI><A NAME="tex2html438"
+  HREF="node18.html#SECTION04940000000000000000">Physical Register
+Recycling Complications</A>
+<UL>
+<LI><A NAME="tex2html439"
+  HREF="node18.html#SECTION04941000000000000000">Problem Scenarios</A>
+<LI><A NAME="tex2html440"
+  HREF="node18.html#SECTION04942000000000000000">Reference Counting</A>
+<LI><A NAME="tex2html441"
+  HREF="node18.html#SECTION04943000000000000000">Hardware Implementation</A>
+</UL>
+</UL>
+<BR>
+<LI><A NAME="tex2html442"
+  HREF="node19.html">Cache Hierarchy</A>
+<UL>
+<LI><A NAME="tex2html443"
+  HREF="node19.html#SECTION041010000000000000000">General Configurable Parameters</A>
+<LI><A NAME="tex2html444"
+  HREF="node19.html#SECTION041020000000000000000">Initiating a Cache Miss</A>
+<LI><A NAME="tex2html445"
+  HREF="node19.html#SECTION041030000000000000000">Filling a Cache Miss</A>
+<LI><A NAME="tex2html446"
+  HREF="node19.html#SECTION041040000000000000000">Translation Lookaside Buffers</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html447"
+  HREF="node20.html">Branch Prediction</A>
+<UL>
+<LI><A NAME="tex2html448"
+  HREF="node20.html#SECTION041110000000000000000">Introduction</A>
+<LI><A NAME="tex2html449"
+  HREF="node20.html#SECTION041120000000000000000">Conditional Branch Predictor</A>
+<LI><A NAME="tex2html450"
+  HREF="node20.html#SECTION041130000000000000000">Branch Target Buffer</A>
+<LI><A NAME="tex2html451"
+  HREF="node20.html#SECTION041140000000000000000">Return Address Stack</A>
+</UL></UL>
+<!--End of Table of Child-Links-->
+<BR><HR>
+<ADDRESS>
+Matt T Yourst
+2005-10-03
+</ADDRESS>
+</BODY>
+</HTML>
