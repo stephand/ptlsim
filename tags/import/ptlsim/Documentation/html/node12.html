@@ -1,0 +1,456 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+
+<!--Converted with LaTeX2HTML 2002-2-1 (1.70)
+original version by:  Nikos Drakos, CBLU, University of Leeds
+* revised and updated by:  Marcus Hennecke, Ross Moore, Herb Swan
+* with significant contributions from:
+  Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
+<HTML>
+<HEAD>
+<TITLE>Frontend and Key Structures</TITLE>
+<META NAME="description" CONTENT="Frontend and Key Structures">
+<META NAME="keywords" CONTENT="PTLsimManual">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+<META NAME="Generator" CONTENT="LaTeX2HTML v2002-2-1">
+<META HTTP-EQUIV="Content-Style-Type" CONTENT="text/css">
+
+<LINK REL="STYLESHEET" HREF="PTLsimManual.css">
+
+<LINK REL="next" HREF="node13.html">
+<LINK REL="previous" HREF="node11.html">
+<LINK REL="up" HREF="node9.html">
+<LINK REL="next" HREF="node13.html">
+</HEAD>
+
+<BODY >
+<!--Navigation Panel-->
+<A NAME="tex2html488"
+  HREF="node13.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html484"
+  HREF="node9.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html478"
+  HREF="node11.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html486"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html489"
+  HREF="node13.html">Scheduling, Dispatch and Issue</A>
+<B> Up:</B> <A NAME="tex2html485"
+  HREF="node9.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html479"
+  HREF="node11.html">Fetch Stage</A>
+ &nbsp; <B>  <A NAME="tex2html487"
+  HREF="node1.html">Contents</A></B> 
+<BR>
+<BR>
+<!--End of Navigation Panel-->
+<!--Table of Child-Links-->
+<A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
+
+<UL>
+<LI><A NAME="tex2html490"
+  HREF="node12.html#SECTION04310000000000000000">Resource Allocation</A>
+<LI><A NAME="tex2html491"
+  HREF="node12.html#SECTION04320000000000000000">Reorder Buffer Entries</A>
+<UL>
+<LI><A NAME="tex2html492"
+  HREF="node12.html#SECTION04321000000000000000">ROB States</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html493"
+  HREF="node12.html#SECTION04330000000000000000">Physical Registers</A>
+<UL>
+<LI><A NAME="tex2html494"
+  HREF="node12.html#SECTION04331000000000000000">Physical Registers</A>
+<LI><A NAME="tex2html495"
+  HREF="node12.html#SECTION04332000000000000000">Physical Register File</A>
+<LI><A NAME="tex2html496"
+  HREF="node12.html#SECTION04333000000000000000">Physical Register States</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html497"
+  HREF="node12.html#SECTION04340000000000000000">Load Store Queue Entries</A>
+<UL>
+<LI><A NAME="tex2html498"
+  HREF="node12.html#SECTION04341000000000000000">Register Renaming</A>
+<LI><A NAME="tex2html499"
+  HREF="node12.html#SECTION04342000000000000000">External State</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html500"
+  HREF="node12.html#SECTION04350000000000000000">Frontend Stages</A>
+</UL>
+<!--End of Table of Child-Links-->
+<HR>
+
+<H1><A NAME="SECTION04300000000000000000">
+Frontend and Key Structures</A>
+</H1>
+
+<P>
+
+<H1><A NAME="SECTION04310000000000000000">
+Resource Allocation</A>
+</H1>
+
+<P>
+During the Allocate stage, PTLsim dequeues uops from the fetch queue,
+ensures all resources needed by those uops are free, and assigns resources
+to each uop as needed. These resources include Reorder Buffer (ROB)
+slots, physical registers and load store queue (LSQ) entries. In the
+event that the fetch queue is empty or any of the ROB, physical register
+file, load queue or store queue is full, the allocation stage stalls
+until some resources become available.
+
+<P>
+
+<H1><A NAME="SECTION04320000000000000000">
+Reorder Buffer Entries</A>
+</H1>
+
+<P>
+The Reorder Buffer (ROB) in the PTLsim out of order model works exactly
+like a traditional ROB: as a queue, entries are allocated from the
+tail and committed from the head. Each <TT><FONT SIZE="-1">ReorderBufferEntry</FONT></TT>
+structure is the central tracking structure for uops in the pipeline.
+This structure contains a variety of fields including:
+
+<P>
+
+<UL>
+<LI>The decoded uop (<TT><FONT SIZE="-1">uop</FONT></TT> field). This is the fully decoded
+<TT><FONT SIZE="-1">TransOp</FONT></TT> augmented with fetch-related information like
+the uop's UUID, RIP and branch predictor information as described
+in the Fetch stage (Section <A HREF="node11.html#sec:FetchStage">7.1</A>).
+</LI>
+<LI>Current state of the ROB entry and uop (<TT><FONT SIZE="-1">current_state_list</FONT></TT>;
+see below)
+</LI>
+<LI>Indices of the physical register (<TT><FONT SIZE="-1">physreg</FONT></TT>), LSQ entry
+(<TT><FONT SIZE="-1">lsq</FONT></TT>) and other resources allocated to the uop
+</LI>
+<LI>Indices of the three physical register operands to the uop, as well
+as a possible store dependency used in replay scheduling (described
+later)
+</LI>
+<LI>Various cycle counters and related fields for simulating progress
+through the pipeline
+</LI>
+</UL>
+
+<P>
+
+<H2><A NAME="SECTION04321000000000000000">
+ROB States</A>
+</H2>
+
+<P>
+Each ROB entry and corresponding uop can be in one of a number of
+states describing its progress through the simulator state machine.
+ROBs are linked into linked lists according to their current state;
+these lists are named <TT><FONT SIZE="-1">rob_</FONT></TT><I>statename</I><TT><FONT SIZE="-1">_list</FONT></TT>.
+The <TT><FONT SIZE="-1">current_state_list</FONT></TT> field specifies the list
+the ROB is currently on. ROBs can be moved between states using the
+<TT><FONT SIZE="-1">ROB::changestate(</FONT><I><FONT SIZE="-1">statelist</FONT></I><FONT SIZE="-1">)</FONT></TT>
+method. The specific states will be described below as they are encountered.
+
+<P>
+<B><I>NOTE:</I></B> the terms ``ROB entry'' (singular) and ``uop''
+are used interchangeably from now on unless otherwise stated, since
+there is a 1:1 mapping between the two.
+
+<P>
+
+<H1><A NAME="SECTION04330000000000000000"></A><A NAME="sec:PhysicalRegisters"></A>
+<BR>
+Physical Registers
+</H1>
+
+<P>
+
+<H2><A NAME="SECTION04331000000000000000">
+Physical Registers</A>
+</H2>
+
+<P>
+Physical registers are represented in PTLsim by the <TT><FONT SIZE="-1">PhysicalRegister</FONT></TT>
+structure. Physical registers store several components:
+
+<P>
+
+<UL>
+<LI>The actual 64-bit register data
+</LI>
+<LI>x86 flags: Z, P, S, O, C. These are discussed below in Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>.
+</LI>
+<LI>Waiting flag (<TT><FONT SIZE="-1">FLAG_WAIT</FONT></TT>) for results not yet ready
+</LI>
+<LI>Invalid flag (<TT><FONT SIZE="-1">FLAG_INVAL</FONT></TT>) for ready results which
+encountered an exception. The exception code is written to the data
+field in lieu of the real result.
+</LI>
+<LI>Current state of the physical register
+</LI>
+<LI>ROB currently owning this physical register, or architectural register
+mapping this physical register
+</LI>
+<LI>Reference counter for the physical register. This is required for
+reasons described in Section <A HREF="node18.html#sub:PhysicalRegisterRecyclingComplications">14.4</A>.
+</LI>
+</UL>
+
+<P>
+
+<H2><A NAME="SECTION04332000000000000000">
+Physical Register File</A>
+</H2>
+
+<P>
+PTLsim models a unified physical register file holding both integer
+and floating point results; this is required because presently many
+PTL uops assume both types of registers are accessible as operands
+to a single uop.
+
+<P>
+
+<H2><A NAME="SECTION04333000000000000000">
+Physical Register States</A>
+</H2>
+
+<P>
+Each physical register can be in one of several states at any given
+time; PTLsim maintains linked lists (the <TT><FONT SIZE="-1">physreg_</FONT></TT><I>statename</I><TT><FONT SIZE="-1">_list</FONT></TT>
+lists) to track which registers are in each state. The <TT><FONT SIZE="-1">current_state_list</FONT></TT>
+field in each physical register specifies this state. The valid states
+are:
+
+<P>
+
+<UL>
+<LI><B><I>free:</I></B> the register is not allocated to any uop.
+</LI>
+<LI><B><I>used:</I></B> the register has been allocated to a uop but
+that uop has not issued yet.
+</LI>
+<LI><B><I>ready:</I></B> the uop associated with the register has issued
+and produced a value (or encountered an exception), but that value
+is only on the bypass network - it has not actually been written back
+yet. For simulation purposes only, uops immediately write their results
+into the physical register as soon as they issue, even though technically
+the result is still only on the bypass network. This helps simplify
+the simulator considerably without compromising accuracy.
+</LI>
+<LI><B><I>written:</I></B> the uop associated with the register has
+passed through the writeback stage and the value of the physical register
+is now up to date; all future consumers will read the uop's result
+from this physical register.
+</LI>
+<LI><B><I>arch:</I></B> the physical register is currently mapped to
+one of the architectural registers; it has no associated uop currently
+in the pipeline
+</LI>
+<LI><B><I>pendingfree:</I></B> this is a special state described in
+Section <A HREF="node18.html#sub:PhysicalRegisterRecyclingComplications">14.4</A>.
+</LI>
+</UL>
+One physical register is allocated to each uop and moved into the
+<I>used</I> state, regardless of which type of uop it is. For integer,
+floating point and load uops, the physical register holds the actual
+numerical value generated by the corresponding uop. Branch uops place
+the target RIP of the branch in a physical register. Store uops place
+the physical address in the register. Technically branches and stores
+do not need physical registers, but to keep the processor design simple,
+they are allocated registers anyway.
+
+<P>
+
+<H1><A NAME="SECTION04340000000000000000"></A><A NAME="sec:LoadStoreQueueEntry"></A>
+<BR>
+Load Store Queue Entries
+</H1>
+
+<P>
+Load Store Queue (LSQ) Entries (the <TT><FONT SIZE="-1">LoadStoreQueueEntry</FONT></TT>
+structure in PTLsim) are used to track additional information about
+loads and stores in the pipeline that cannot be represented by a physical
+register. Specifically, LSQ entries track:
+
+<P>
+
+<UL>
+<LI><B>Physical address</B> of the corresponding load or store
+</LI>
+<LI><B>Data</B> field (64 bits) stores the loaded value (for loads)
+or the value to store (for stores)
+</LI>
+<LI><B>Address valid</B> bit flag indicates if the load or store knows
+its effective physical address yet. If set, the physical address field
+is valid.
+</LI>
+<LI><B>Data valid</B> bit flag indicates if the data field is valid.
+For loads, this is set when the data has arrived from the cache. For
+stores, this is set when the data to store becomes ready and is merged.
+</LI>
+<LI><B>Invalid</B> bit flag is set if an exception occurs in the corresponding
+load or store.
+</LI>
+</UL>
+The <TT><FONT SIZE="-1">LoadStoreQueueEntry</FONT></TT> structure is technically a
+superset of a structure known as an <I>SFR</I> (Store Forwarding Register),
+which completely represents any load or store and can be passed between
+PTLsim subsystems easily. One LSQ entry is allocated to each load
+or store during the Allocate stage.
+
+<P>
+In real processors, the load queue (LDQ) and store queue (STQ) are
+physically separate for circuit complexity reasons. However, in PTLsim
+a unified LSQ is used to make searching operations easier. One additional
+bit flag (<TT><FONT SIZE="-1">store</FONT></TT> bit) specifies whether an LSQ entry
+is a load or store.
+
+<P>
+
+<H2><A NAME="SECTION04341000000000000000"></A><A NAME="sub:RegisterRenaming"></A>
+<BR>
+Register Renaming
+</H2>
+
+<P>
+The basic register renaming process in the PTLsim x86 model is very
+similar to classical register renaming, with the exception of the
+flags complications described in Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>.
+Two versions of the register rename table (RRT) are maintained: a
+<I>speculative RRT</I> which is updated as uops are renamed, and a
+<I>commit RRT</I>, which is only updated when uops successfully commit.
+Since the simulator implements a unified physical and architectural
+register file, the commit process does not actually involve any data
+movement between physical and architectural registers: only the commit
+RRT needs to be updated. The commit RRT is used only for exception
+and branch mispredict recovery, since it holds the last known good
+mapping of architectural to physical registers.
+
+<P>
+Each rename table contains 80 entries as shown in Table <A HREF="#table:ArchitecturalRegisters">8.1</A>.
+This table maps architectural registers and pseudo-registers to the
+most up to date physical registers for the following:
+
+<P>
+
+<UL>
+<LI>16 x86-64 integer registers
+</LI>
+<LI>16 128-bit SSE registers (represented as separate 64-bit high and
+low halves)
+</LI>
+<LI>ZAPS, CF, OF flag sets described in Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>.
+These rename table entries point to the physical register (with attached
+flags) of the most recent uop in program order to update any or all
+of the ZAPS, CF, OF flag sets, respectively.
+</LI>
+<LI>Various integer and x87 status registers
+</LI>
+<LI>Temporary pseudo-registers <TT><FONT SIZE="-1">temp0</FONT></TT>-<TT><FONT SIZE="-1">temp7</FONT></TT>
+not visible to x86 code but required to hold temporaries (e.g. generated
+addresses or value to swap in <TT><FONT SIZE="-1">xchg</FONT></TT> instructions).
+</LI>
+<LI>Special fixed values, e.g. <TT><FONT SIZE="-1">zero</FONT></TT>, <TT><FONT SIZE="-1">imm</FONT></TT>
+(value is in immediate field), <TT><FONT SIZE="-1">mem</FONT></TT> (destination of
+stores)
+</LI>
+</UL>
+<BR><P></P>
+<DIV ALIGN="CENTER">
+
+<P>
+
+<P>
+<DIV ALIGN="CENTER">
+<A NAME="3852"></A>
+<TABLE CELLPADDING=3 BORDER="1">
+<CAPTION><STRONG>Table 8.1:</STRONG>
+Architectural registers and
+pseudo-registers used for renaming.</CAPTION>
+<TR><TD ALIGN="CENTER" COLSPAN=9><I><FONT SIZE="-1">Architectural Registers and Pseudo-Registers</I></FONT></TD>
+</TR>
+</TABLE>
+</DIV>
+</DIV>
+<BR>
+
+<P>
+Once the uop's three architectural register sources are mapped to
+physical registers, these physical registers are placed in the <TT><FONT SIZE="-1">operands[</FONT></TT>0,1,2<TT><FONT SIZE="-1">]</FONT></TT>
+fields. The fourth operand field, <TT><FONT SIZE="-1">operands[</FONT></TT>3<TT><FONT SIZE="-1">]</FONT></TT>,
+is used to hold a store buffer dependency for loads and stores; this
+will be discussed later. The speculative RRT entries for both the
+destination physical register and any modified flags are then overwritten.
+Finally, the ROB is moved into the <B><I>frontend</I></B> state.
+
+<P>
+
+<H2><A NAME="SECTION04342000000000000000">
+External State</A>
+</H2>
+
+<P>
+Since the rest of the simulator outside of the out of order core does
+not know about the RRTs and expects architectural registers to be
+in a standardized format, the system-wide <TT><FONT SIZE="-1">ctx</FONT></TT> structure
+of class <TT><FONT SIZE="-1">CoreState</FONT></TT> is used to house the architectural
+register file. The <TT><FONT SIZE="-1">REG_flags</FONT></TT> and <TT><FONT SIZE="-1">REG_rip</FONT></TT>
+entries of this structure are directly updated by the out of order
+core as instructions commit.
+
+<P>
+
+<H1><A NAME="SECTION04350000000000000000">
+Frontend Stages</A>
+</H1>
+
+<P>
+To simulate various processor frontend pipeline depths, ROBs are placed
+in the <I>frontend</I> state for a user-selectable number of cycles.
+In the <TT><FONT SIZE="-1">frontend()</FONT></TT> function, the <TT><FONT SIZE="-1">cycles_left</FONT></TT>
+field in each ROB is decremented until it becomes zero. At this point,
+the uop is moved to the <B><I>ready_to_dispatch</I></B> state.
+This feature can be used to simulate various branch mispredict penalties
+by setting the <TT><FONT SIZE="-1">FRONTEND_STAGES</FONT></TT> constant.
+
+<P>
+<HR>
+<!--Navigation Panel-->
+<A NAME="tex2html488"
+  HREF="node13.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html484"
+  HREF="node9.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html478"
+  HREF="node11.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html486"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html489"
+  HREF="node13.html">Scheduling, Dispatch and Issue</A>
+<B> Up:</B> <A NAME="tex2html485"
+  HREF="node9.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html479"
+  HREF="node11.html">Fetch Stage</A>
+ &nbsp; <B>  <A NAME="tex2html487"
+  HREF="node1.html">Contents</A></B> 
+<!--End of Navigation Panel-->
+<ADDRESS>
+Matt T Yourst
+2005-10-03
+</ADDRESS>
+</BODY>
+</HTML>

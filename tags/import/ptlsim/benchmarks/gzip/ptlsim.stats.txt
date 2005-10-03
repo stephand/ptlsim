@@ -1,0 +1,830 @@
+
+Loading stats from ptlsim.stats...
+
+root {
+  0 {
+    issue {
+      source (total 160399424) {
+        [  63% ] bypass = 100407325;
+        [  14% ] archreg = 22212247;
+        [  24% ] physreg = 37779852;
+      }
+      opclass (total 122873268) {
+        [   3% ] flags = 4000144;
+        [   0% ] jmp = 427751;
+        [   3% ] ld.pre = 3216506;
+        [   8% ] st = 9701715;
+        [  20% ] logic = 24657198;
+        [   0% ] mul = 1876;
+        [   0% ] addsubc = 1015;
+        [   1% ] bru = 1496807;
+        [   0% ] byteop = 140;
+        [  17% ] ld = 20980667;
+        [   0% ] chk = 69735;
+        [  33% ] addsub = 40911947;
+        [  12% ] br.cc = 14485210;
+        [   1% ] sel = 1233830;
+        [   1% ] shift = 1688727;
+      }
+      width {
+        int1 (total 88696969) {
+          [  21% ] 1 = 18197087;
+          [  72% ] 0 = 63840745;
+          [   8% ] 2 = 6659137;
+        }
+        fp (total 88696969) {
+          [   3% ] 1 = 2280909;
+          [  97% ] 0 = 86377965;
+          [   0% ] 2 = 38095;
+        }
+        int0 (total 88696969) {
+          [  21% ] 1 = 18232907;
+          [  72% ] 0 = 63497773;
+          [   8% ] 2 = 6966289;
+        }
+        ld (total 88696969) {
+          [  27% ] 1 = 23612782;
+          [  52% ] 0 = 46445953;
+          [  21% ] 2 = 18638234;
+        }
+      }
+      result (total 126927195) {
+        [   4% ] replay = 4945152;
+        [   1% ] branch-mispredict = 1191154;
+        [   0% ] exception = 156;
+        [  92% ] complete = 116736653;
+        [   0% ] misspeculation = 154;
+        [   3% ] no-fu = 4053926;
+      }
+    }
+    commit {
+      opclass (total 104795335) {
+        [   4% ] flags = 3900728;
+        [   0% ] jmp = 401039;
+        [   2% ] ld.pre = 2548851;
+        [   5% ] st = 5443614;
+        [  20% ] logic = 21030394;
+        [   0% ] mul = 1866;
+        [   0% ] addsubc = 887;
+        [   1% ] bru = 1210700;
+        [   0% ] byteop = 84;
+        [  17% ] ld = 17508336;
+        [   0% ] chk = 69719;
+        [  34% ] addsub = 35744764;
+        [  13% ] br.cc = 14086115;
+        [   1% ] sel = 1208653;
+        [   2% ] shift = 1639585;
+      }
+      transient (total 0) {
+        transient = 0;
+        persistent = 0;
+      }
+      width (total 88696969) {
+        [   7% ] 1 = 5873400;
+        [  50% ] 0 = 44437556;
+        [  25% ] 3 = 22149456;
+        [  18% ] 2 = 16236557;
+      }
+      setflags (total 104725529) {
+        [  29% ] yes = 30593021;
+        [  71% ] no = 74132508;
+      }
+      userinsns = 81695759;
+      physreg-recycled = 42447058;
+      uops = 104795335;
+      result (total 171290084) {
+        [   0% ] stop = 0;
+        [   0% ] exception = 0;
+        [   0% ] barrier = 453;
+        [   0% ] skipblock = 0;
+        [  39% ] none = 66494749;
+        [  61% ] ok = 104794882;
+      }
+      freereg (total 104793328) {
+        [  41% ] pending = 42447075;
+        [  59% ] free = 62346253;
+      }
+    }
+    writeback {
+      transient (total 0) {
+        transient = 0;
+        persistent = 0;
+      }
+      width {
+        int1 (total 88696969) {
+          [  20% ] 1 = 18147152;
+          [  75% ] 0 = 66418504;
+          [   5% ] 2 = 4131313;
+        }
+        fp (total 88696969) {
+          [   3% ] 1 = 2257930;
+          [  97% ] 0 = 86401656;
+          [   0% ] 2 = 37383;
+        }
+        int0 (total 88696969) {
+          [  21% ] 1 = 18238781;
+          [  75% ] 0 = 66222449;
+          [   0% ] 3 = 131;
+          [   5% ] 2 = 4235608;
+        }
+        ld (total 88696969) {
+          [  28% ] 1 = 25002666;
+          [  55% ] 0 = 48972968;
+          [   3% ] 3 = 2643020;
+          [  14% ] 2 = 12078315;
+        }
+      }
+      total = 112541220;
+    }
+    simulator {
+      rate {
+        cycles-per-sec = 476490.586094;
+        issues-per-sec = 660089.710858;
+        commits-per-sec = 562972.914633;
+        user-commits-per-sec = 438879.264591;
+        total-secs = 186.146318;
+      }
+      cycles (total 221) {
+        [  32% ] issue = 54.216608; (total 71) {
+          [  14% ] annul = 9.990059;
+          [   3% ] store = 1.892803;
+          [   8% ] load = 5.631411;
+        }
+        [   7% ] exec2 = 14.929163;
+        [   0% ] translate = 0.008925;
+        [   8% ] commit = 17.721996;
+        [   4% ] writeback = 9.301277;
+        [   2% ] complete = 4.919673;
+        [   2% ] frontend = 5.155215;
+        [  10% ] dispatch = 21.135408;
+        [   9% ] rename = 19.573562;
+        [  10% ] exec = 21.419615;
+        [   7% ] fetch = 14.948247;
+        [   9% ] transfer = 20.574304;
+      }
+      bbcache {
+        removes = 50;
+        count = 0;
+        inserts = 2735;
+      }
+    }
+    summary {
+      commits = 104795335;
+      ipc {
+        commit-in-user-insns = 0.921066;
+        issue-in-uops = 1.385315;
+        commit-in-uops = 1.181499;
+      }
+      cycles = 88696968;
+      usercommits = 81695759;
+      issues = 122873269;
+    }
+    frontend {
+      width (total 88696272) {
+        [  15% ] 1 = 13032517;
+        [  21% ] 0 = 18571545;
+        [  54% ] 3 = 47870524;
+        [  10% ] 2 = 9221686;
+      }
+      status (total 215913070) {
+        [  81% ] complete = 175087461;
+        [   1% ] fetchq-empty = 1400825;
+        [  18% ] physregs-full = 39414553;
+        [   0% ] rob-full = 10231;
+        [   0% ] stq-full = 0;
+        [   0% ] ldq-full = 0;
+      }
+      alloc (total 175087461) {
+        [  62% ] reg = 108890218;
+        [   5% ] sfr = 8169863;
+        [  17% ] ldreg = 30209600;
+        [  16% ] br = 27817780;
+      }
+      renamed (total 175087461) {
+        [  16% ] flags = 28174366;
+        [  37% ] reg = 65070217;
+        [  14% ] reg-and-flags = 24710241;
+        [  33% ] none = 57132637;
+      }
+    }
+    dispatch {
+      source (total 195843829) {
+        [  14% ] bypass = 26524493;
+        [  11% ] archreg = 21675018;
+        [  69% ] waiting = 135032242;
+        [   6% ] physreg = 12612076;
+      }
+      cluster (total 181606192) {
+        [  18% ] int1 = 33153648;
+        [   2% ] fp = 2887581;
+        [  19% ] int0 = 33600555;
+        [  41% ] ld = 74313271;
+        [  21% ] none = 37651137;
+      }
+    }
+    dcache {
+      store {
+        issue (total 9401895) {
+          [  38% ] replay (total 3553657) {
+            [   0% ] wait-sfraddr = 0;
+            [  33% ] wait-storedata-sfraddr = 1157881;
+            [  33% ] wait-storedata-sfraddr-sfrdata = 1157881;
+            [  21% ] wait-storedata-sfrdata = 748400;
+            [   0% ] wait-sfrdata = 10382;
+            [  13% ] wait-sfraddr-sfrdata = 479113;
+          }
+          [   0% ] exception = 59;
+          [   0% ] ordering = 104;
+          [  62% ] complete = 5848069;
+          [   0% ] unaligned = 6;
+        }
+        commit (total 5443585) {
+          [   0% ] deferred = 0;
+          [ 100% ] direct = 5443585;
+        }
+        type (total 9701715) {
+          [   0% ] internal = 0;
+          [   0% ] unaligned = 144;
+          [ 100% ] aligned = 9701571;
+        }
+        prefetches = 326;
+        forward (total 5848069) {
+          [  15% ] sfr = 852219;
+          [  85% ] zero = 4995850;
+        }
+      }
+      missbuf {
+        deliver (total 3927650) {
+          [   0% ] mem-to-L3 = 3855;
+          [   0% ] L2-to-L1I = 1119;
+          [ 100% ] L2-to-L1D = 3914038;
+          [   0% ] L3-to-L2 = 8638;
+        }
+        inserts = 3915157;
+      }
+      lfrq {
+        width (total 88696969) {
+          [   4% ] 1 = 3823303;
+          [  96% ] 0 = 84868179;
+          [   0% ] 2 = 5487;
+        }
+        total-latency = 23500882;
+        resets = 0;
+        annuls = 80037;
+        inserts = 3914314;
+        wakeups = 3834277;
+        average-miss-latency = 6.129156;
+      }
+      load {
+        issue (total 20979899) {
+          [   5% ] replay (total 1091675) {
+            [   0% ] missbuf-full = 0;
+            [   0% ] sfr-addr-not-ready = 0;
+            [  89% ] sfr-data-not-ready = 976061;
+            [  11% ] sfr-addr-and-data-not-ready = 115614;
+          }
+          [   0% ] exception = 73;
+          [   0% ] ordering = 0;
+          [  76% ] complete = 15973793;
+          [  19% ] miss = 3914314;
+          [   0% ] unaligned = 44;
+        }
+        transfer-L2-to-L1 (total 3914314) {
+          [   0% ] partial-L2-to-L1 = 378;
+          [ 100% ] full-L2-to-L1 = 3913936;
+          [   0% ] L2-to-L1I = 0;
+        }
+        size (total 9701715) {
+          [  26% ] 4 = 2504296;
+          [   7% ] 1 = 636981;
+          [  21% ] 8 = 2018939;
+          [  47% ] 2 = 4541499;
+        }
+        type (total 20980667) {
+          [   0% ] internal = 40;
+          [   0% ] unaligned = 2598;
+          [ 100% ] aligned = 20978029;
+        }
+        dtlb (total 18896489) {
+          [ 100% ] hits = 18895496;
+          [   0% ] misses = 993;
+        }
+        forward (total 19888107) {
+          [   4% ] sfr-and-cache = 875384;
+          [   5% ] sfr = 991618;
+          [  91% ] cache = 18021105;
+        }
+        dependency (total 20980550) {
+          [   8% ] stq-address-match = 1623957;
+          [   6% ] predicted-alias-unresolved = 1334720;
+          [  86% ] independent = 18021873;
+        }
+        hit (total 19887831) {
+          [  20% ] L2 = 3906492;
+          [   0% ] mem = 3229;
+          [   0% ] L3 = 4317;
+          [  80% ] L1 = 15973793;
+        }
+      }
+      prefetches (total 0) {
+        in-L2 = 0;
+        in-L1 = 0;
+        required = 0;
+      }
+      fetch {
+        itlb (total 53626988) {
+          [ 100% ] hits = 53626924;
+          [   0% ] misses = 64;
+        }
+        hit (total 53626509) {
+          [   0% ] L2 = 27;
+          [   0% ] mem = 626;
+          [   0% ] L3 = 466;
+          [ 100% ] L1 = 53625390;
+        }
+      }
+    }
+    branchpred {
+      updates = 15697854;
+      indirect (total 438) {
+        [  72% ] correct = 315;
+        [  28% ] mispred = 123;
+      }
+      predictions = 32552569;
+      summary (total 16409756) {
+        [  93% ] correct = 15218602;
+        [   7% ] mispred = 1191154;
+      }
+      return (total 427301) {
+        [ 100% ] correct = 427101;
+        [   0% ] mispred = 200;
+      }
+      ras (total 1879166) {
+        [  38% ] push = 723401;
+        [  33% ] pop = 616827;
+        [  29% ] annuls = 538938;
+        [   0% ] pop-underflows = 0;
+        [   0% ] push-overflow = 0;
+      }
+      cond (total 14485210) {
+        [  92% ] correct = 13294379;
+        [   8% ] mispred = 1190831;
+      }
+    }
+    fetch {
+      blocks = 53625390;
+      stop (total 88696272) {
+        [   8% ] full-width = 6844236;
+        [  15% ] branch-taken = 13605062;
+        [   0% ] bogus-rip = 26106;
+        [  77% ] fetchq-full = 68144344;
+        [   0% ] icache-miss = 76524;
+      }
+      opclass (total 200848477) {
+        [   4% ] flags = 7912176;
+        [   0% ] jmp = 789804;
+        [   2% ] ld.pre = 3802967;
+        [   5% ] st = 9448005;
+        [  20% ] logic = 39868562;
+        [   0% ] mul = 3544;
+        [   0% ] addsubc = 2035;
+        [   1% ] bru = 2289849;
+        [   0% ] byteop = 349;
+        [  17% ] ld = 35073209;
+        [   0% ] chk = 70020;
+        [  34% ] addsub = 68171211;
+        [  15% ] br.cc = 29472916;
+        [   1% ] sel = 1299072;
+        [   1% ] shift = 2644758;
+      }
+      width (total 88621346) {
+        [   3% ] 4 = 2813480;
+        [  21% ] 1 = 19005642;
+        [   3% ] 5 = 2549780;
+        [  22% ] 0 = 19786435;
+        [  32% ] 3 = 27925991;
+        [   8% ] 6 = 6844236;
+        [  11% ] 2 = 9695782;
+      }
+      user-insns = 156619781;
+      uops = 200848477;
+    }
+  }
+  ptlsim {
+    build-hostname = "tidalwave.cs.binghamton.edu";
+    native-mhz = 2202.914000;
+    args = "gzip input.source.smaller";
+    hostname = "tidalwave.cs.binghamton.edu";
+    build-compiler-version = "gcc-3.4";
+    build-timestamp = "Sep 30 2005 04:31:04";
+    executable = "/project/ptlsim/spec2K/gzip/gzip";
+  }
+  final {
+    issue {
+      source (total 160399424) {
+        [  63% ] bypass = 100407325;
+        [  14% ] archreg = 22212247;
+        [  24% ] physreg = 37779852;
+      }
+      opclass (total 122873268) {
+        [   3% ] flags = 4000144;
+        [   0% ] jmp = 427751;
+        [   3% ] ld.pre = 3216506;
+        [   8% ] st = 9701715;
+        [  20% ] logic = 24657198;
+        [   0% ] mul = 1876;
+        [   0% ] addsubc = 1015;
+        [   1% ] bru = 1496807;
+        [   0% ] byteop = 140;
+        [  17% ] ld = 20980667;
+        [   0% ] chk = 69735;
+        [  33% ] addsub = 40911947;
+        [  12% ] br.cc = 14485210;
+        [   1% ] sel = 1233830;
+        [   1% ] shift = 1688727;
+      }
+      width {
+        int1 (total 88696969) {
+          [  21% ] 1 = 18197087;
+          [  72% ] 0 = 63840745;
+          [   8% ] 2 = 6659137;
+        }
+        fp (total 88696969) {
+          [   3% ] 1 = 2280909;
+          [  97% ] 0 = 86377965;
+          [   0% ] 2 = 38095;
+        }
+        int0 (total 88696969) {
+          [  21% ] 1 = 18232907;
+          [  72% ] 0 = 63497773;
+          [   8% ] 2 = 6966289;
+        }
+        ld (total 88696969) {
+          [  27% ] 1 = 23612782;
+          [  52% ] 0 = 46445953;
+          [  21% ] 2 = 18638234;
+        }
+      }
+      result (total 126927195) {
+        [   4% ] replay = 4945152;
+        [   1% ] branch-mispredict = 1191154;
+        [   0% ] exception = 156;
+        [  92% ] complete = 116736653;
+        [   0% ] misspeculation = 154;
+        [   3% ] no-fu = 4053926;
+      }
+    }
+    commit {
+      opclass (total 104795335) {
+        [   4% ] flags = 3900728;
+        [   0% ] jmp = 401039;
+        [   2% ] ld.pre = 2548851;
+        [   5% ] st = 5443614;
+        [  20% ] logic = 21030394;
+        [   0% ] mul = 1866;
+        [   0% ] addsubc = 887;
+        [   1% ] bru = 1210700;
+        [   0% ] byteop = 84;
+        [  17% ] ld = 17508336;
+        [   0% ] chk = 69719;
+        [  34% ] addsub = 35744764;
+        [  13% ] br.cc = 14086115;
+        [   1% ] sel = 1208653;
+        [   2% ] shift = 1639585;
+      }
+      transient (total 0) {
+        transient = 0;
+        persistent = 0;
+      }
+      width (total 88696969) {
+        [   7% ] 1 = 5873400;
+        [  50% ] 0 = 44437556;
+        [  25% ] 3 = 22149456;
+        [  18% ] 2 = 16236557;
+      }
+      setflags (total 104725529) {
+        [  29% ] yes = 30593021;
+        [  71% ] no = 74132508;
+      }
+      userinsns = 81695759;
+      physreg-recycled = 42447058;
+      uops = 104795335;
+      result (total 171290084) {
+        [   0% ] stop = 0;
+        [   0% ] exception = 0;
+        [   0% ] barrier = 453;
+        [   0% ] skipblock = 0;
+        [  39% ] none = 66494749;
+        [  61% ] ok = 104794882;
+      }
+      freereg (total 104793328) {
+        [  41% ] pending = 42447075;
+        [  59% ] free = 62346253;
+      }
+    }
+    writeback {
+      transient (total 0) {
+        transient = 0;
+        persistent = 0;
+      }
+      width {
+        int1 (total 88696969) {
+          [  20% ] 1 = 18147152;
+          [  75% ] 0 = 66418504;
+          [   5% ] 2 = 4131313;
+        }
+        fp (total 88696969) {
+          [   3% ] 1 = 2257930;
+          [  97% ] 0 = 86401656;
+          [   0% ] 2 = 37383;
+        }
+        int0 (total 88696969) {
+          [  21% ] 1 = 18238781;
+          [  75% ] 0 = 66222449;
+          [   0% ] 3 = 131;
+          [   5% ] 2 = 4235608;
+        }
+        ld (total 88696969) {
+          [  28% ] 1 = 25002666;
+          [  55% ] 0 = 48972968;
+          [   3% ] 3 = 2643020;
+          [  14% ] 2 = 12078315;
+        }
+      }
+      total = 112541220;
+    }
+    simulator {
+      rate {
+        cycles-per-sec = 476490.586094;
+        issues-per-sec = 660089.710858;
+        commits-per-sec = 562972.914633;
+        user-commits-per-sec = 438879.264591;
+        total-secs = 186.146318;
+      }
+      cycles (total 221) {
+        [  32% ] issue = 54.216608; (total 71) {
+          [  14% ] annul = 9.990059;
+          [   3% ] store = 1.892803;
+          [   8% ] load = 5.631411;
+        }
+        [   7% ] exec2 = 14.929163;
+        [   0% ] translate = 0.008925;
+        [   8% ] commit = 17.721996;
+        [   4% ] writeback = 9.301277;
+        [   2% ] complete = 4.919673;
+        [   2% ] frontend = 5.155215;
+        [  10% ] dispatch = 21.135408;
+        [   9% ] rename = 19.573562;
+        [  10% ] exec = 21.419615;
+        [   7% ] fetch = 14.948247;
+        [   9% ] transfer = 20.574304;
+      }
+      bbcache {
+        removes = 50;
+        count = 0;
+        inserts = 2735;
+      }
+    }
+    summary {
+      commits = 104795335;
+      ipc {
+        commit-in-user-insns = 0.921066;
+        issue-in-uops = 1.385315;
+        commit-in-uops = 1.181499;
+      }
+      cycles = 88696968;
+      usercommits = 81695759;
+      issues = 122873269;
+    }
+    frontend {
+      width (total 88696272) {
+        [  15% ] 1 = 13032517;
+        [  21% ] 0 = 18571545;
+        [  54% ] 3 = 47870524;
+        [  10% ] 2 = 9221686;
+      }
+      status (total 215913070) {
+        [  81% ] complete = 175087461;
+        [   1% ] fetchq-empty = 1400825;
+        [  18% ] physregs-full = 39414553;
+        [   0% ] rob-full = 10231;
+        [   0% ] stq-full = 0;
+        [   0% ] ldq-full = 0;
+      }
+      alloc (total 175087461) {
+        [  62% ] reg = 108890218;
+        [   5% ] sfr = 8169863;
+        [  17% ] ldreg = 30209600;
+        [  16% ] br = 27817780;
+      }
+      renamed (total 175087461) {
+        [  16% ] flags = 28174366;
+        [  37% ] reg = 65070217;
+        [  14% ] reg-and-flags = 24710241;
+        [  33% ] none = 57132637;
+      }
+    }
+    dispatch {
+      source (total 195843829) {
+        [  14% ] bypass = 26524493;
+        [  11% ] archreg = 21675018;
+        [  69% ] waiting = 135032242;
+        [   6% ] physreg = 12612076;
+      }
+      cluster (total 181606192) {
+        [  18% ] int1 = 33153648;
+        [   2% ] fp = 2887581;
+        [  19% ] int0 = 33600555;
+        [  41% ] ld = 74313271;
+        [  21% ] none = 37651137;
+      }
+    }
+    dcache {
+      store {
+        issue (total 9401895) {
+          [  38% ] replay (total 3553657) {
+            [   0% ] wait-sfraddr = 0;
+            [  33% ] wait-storedata-sfraddr = 1157881;
+            [  33% ] wait-storedata-sfraddr-sfrdata = 1157881;
+            [  21% ] wait-storedata-sfrdata = 748400;
+            [   0% ] wait-sfrdata = 10382;
+            [  13% ] wait-sfraddr-sfrdata = 479113;
+          }
+          [   0% ] exception = 59;
+          [   0% ] ordering = 104;
+          [  62% ] complete = 5848069;
+          [   0% ] unaligned = 6;
+        }
+        commit (total 5443585) {
+          [   0% ] deferred = 0;
+          [ 100% ] direct = 5443585;
+        }
+        type (total 9701715) {
+          [   0% ] internal = 0;
+          [   0% ] unaligned = 144;
+          [ 100% ] aligned = 9701571;
+        }
+        prefetches = 326;
+        forward (total 5848069) {
+          [  15% ] sfr = 852219;
+          [  85% ] zero = 4995850;
+        }
+      }
+      missbuf {
+        deliver (total 3927650) {
+          [   0% ] mem-to-L3 = 3855;
+          [   0% ] L2-to-L1I = 1119;
+          [ 100% ] L2-to-L1D = 3914038;
+          [   0% ] L3-to-L2 = 8638;
+        }
+        inserts = 3915157;
+      }
+      lfrq {
+        width (total 88696969) {
+          [   4% ] 1 = 3823303;
+          [  96% ] 0 = 84868179;
+          [   0% ] 2 = 5487;
+        }
+        total-latency = 23500882;
+        resets = 0;
+        annuls = 80037;
+        inserts = 3914314;
+        wakeups = 3834277;
+        average-miss-latency = 6.129156;
+      }
+      load {
+        issue (total 20979899) {
+          [   5% ] replay (total 1091675) {
+            [   0% ] missbuf-full = 0;
+            [   0% ] sfr-addr-not-ready = 0;
+            [  89% ] sfr-data-not-ready = 976061;
+            [  11% ] sfr-addr-and-data-not-ready = 115614;
+          }
+          [   0% ] exception = 73;
+          [   0% ] ordering = 0;
+          [  76% ] complete = 15973793;
+          [  19% ] miss = 3914314;
+          [   0% ] unaligned = 44;
+        }
+        transfer-L2-to-L1 (total 3914314) {
+          [   0% ] partial-L2-to-L1 = 378;
+          [ 100% ] full-L2-to-L1 = 3913936;
+          [   0% ] L2-to-L1I = 0;
+        }
+        size (total 9701715) {
+          [  26% ] 4 = 2504296;
+          [   7% ] 1 = 636981;
+          [  21% ] 8 = 2018939;
+          [  47% ] 2 = 4541499;
+        }
+        type (total 20980667) {
+          [   0% ] internal = 40;
+          [   0% ] unaligned = 2598;
+          [ 100% ] aligned = 20978029;
+        }
+        dtlb (total 18896489) {
+          [ 100% ] hits = 18895496;
+          [   0% ] misses = 993;
+        }
+        forward (total 19888107) {
+          [   4% ] sfr-and-cache = 875384;
+          [   5% ] sfr = 991618;
+          [  91% ] cache = 18021105;
+        }
+        dependency (total 20980550) {
+          [   8% ] stq-address-match = 1623957;
+          [   6% ] predicted-alias-unresolved = 1334720;
+          [  86% ] independent = 18021873;
+        }
+        hit (total 19887831) {
+          [  20% ] L2 = 3906492;
+          [   0% ] mem = 3229;
+          [   0% ] L3 = 4317;
+          [  80% ] L1 = 15973793;
+        }
+      }
+      prefetches (total 0) {
+        in-L2 = 0;
+        in-L1 = 0;
+        required = 0;
+      }
+      fetch {
+        itlb (total 53626988) {
+          [ 100% ] hits = 53626924;
+          [   0% ] misses = 64;
+        }
+        hit (total 53626509) {
+          [   0% ] L2 = 27;
+          [   0% ] mem = 626;
+          [   0% ] L3 = 466;
+          [ 100% ] L1 = 53625390;
+        }
+      }
+    }
+    branchpred {
+      updates = 15697854;
+      indirect (total 438) {
+        [  72% ] correct = 315;
+        [  28% ] mispred = 123;
+      }
+      predictions = 32552569;
+      summary (total 16409756) {
+        [  93% ] correct = 15218602;
+        [   7% ] mispred = 1191154;
+      }
+      return (total 427301) {
+        [ 100% ] correct = 427101;
+        [   0% ] mispred = 200;
+      }
+      ras (total 1879166) {
+        [  38% ] push = 723401;
+        [  33% ] pop = 616827;
+        [  29% ] annuls = 538938;
+        [   0% ] pop-underflows = 0;
+        [   0% ] push-overflow = 0;
+      }
+      cond (total 14485210) {
+        [  92% ] correct = 13294379;
+        [   8% ] mispred = 1190831;
+      }
+    }
+    fetch {
+      blocks = 53625390;
+      stop (total 88696272) {
+        [   8% ] full-width = 6844236;
+        [  15% ] branch-taken = 13605062;
+        [   0% ] bogus-rip = 26106;
+        [  77% ] fetchq-full = 68144344;
+        [   0% ] icache-miss = 76524;
+      }
+      opclass (total 200848477) {
+        [   4% ] flags = 7912176;
+        [   0% ] jmp = 789804;
+        [   2% ] ld.pre = 3802967;
+        [   5% ] st = 9448005;
+        [  20% ] logic = 39868562;
+        [   0% ] mul = 3544;
+        [   0% ] addsubc = 2035;
+        [   1% ] bru = 2289849;
+        [   0% ] byteop = 349;
+        [  17% ] ld = 35073209;
+        [   0% ] chk = 70020;
+        [  34% ] addsub = 68171211;
+        [  15% ] br.cc = 29472916;
+        [   1% ] sel = 1299072;
+        [   1% ] shift = 2644758;
+      }
+      width (total 88621346) {
+        [   3% ] 4 = 2813480;
+        [  21% ] 1 = 19005642;
+        [   3% ] 5 = 2549780;
+        [  22% ] 0 = 19786435;
+        [  32% ] 3 = 27925991;
+        [   8% ] 6 = 6844236;
+        [  11% ] 2 = 9695782;
+      }
+      user-insns = 156619781;
+      uops = 200848477;
+    }
+  }
+}

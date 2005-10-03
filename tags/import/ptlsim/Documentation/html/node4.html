@@ -1,0 +1,307 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+
+<!--Converted with LaTeX2HTML 2002-2-1 (1.70)
+original version by:  Nikos Drakos, CBLU, University of Leeds
+* revised and updated by:  Marcus Hennecke, Ross Moore, Herb Swan
+* with significant contributions from:
+  Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
+<HTML>
+<HEAD>
+<TITLE>Getting Started with PTLsim</TITLE>
+<META NAME="description" CONTENT="Getting Started with PTLsim">
+<META NAME="keywords" CONTENT="PTLsimManual">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+<META NAME="Generator" CONTENT="LaTeX2HTML v2002-2-1">
+<META HTTP-EQUIV="Content-Style-Type" CONTENT="text/css">
+
+<LINK REL="STYLESHEET" HREF="PTLsimManual.css">
+
+<LINK REL="next" HREF="node5.html">
+<LINK REL="previous" HREF="node3.html">
+<LINK REL="up" HREF="node2.html">
+<LINK REL="next" HREF="node5.html">
+</HEAD>
+
+<BODY >
+<!--Navigation Panel-->
+<A NAME="tex2html292"
+  HREF="node5.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html288"
+  HREF="node2.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html282"
+  HREF="node3.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html290"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html293"
+  HREF="node5.html">PTLsim Internals</A>
+<B> Up:</B> <A NAME="tex2html289"
+  HREF="node2.html">PTLsim User's Guide</A>
+<B> Previous:</B> <A NAME="tex2html283"
+  HREF="node3.html">Introducing PTLsim</A>
+ &nbsp; <B>  <A NAME="tex2html291"
+  HREF="node1.html">Contents</A></B> 
+<BR>
+<BR>
+<!--End of Navigation Panel-->
+<!--Table of Child-Links-->
+<A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
+
+<UL>
+<LI><A NAME="tex2html294"
+  HREF="node4.html#SECTION02210000000000000000">Building PTLsim</A>
+<LI><A NAME="tex2html295"
+  HREF="node4.html#SECTION02220000000000000000">Running PTLsim</A>
+<LI><A NAME="tex2html296"
+  HREF="node4.html#SECTION02230000000000000000">Configuration Options</A>
+</UL>
+<!--End of Table of Child-Links-->
+<HR>
+
+<H1><A NAME="SECTION02200000000000000000">
+Getting Started with PTLsim</A>
+</H1>
+
+<P>
+
+<H1><A NAME="SECTION02210000000000000000">
+Building PTLsim</A>
+</H1>
+
+<P>
+PTLsim is written in C++ with extensive use of x86 and x86-64 inline
+assembly code for performance and virtualization purposes. In its
+present release, it is designed for use on an x86-64 host system running
+Linux 2.6.
+
+<P>
+<B>Notes:</B>
+
+<P>
+
+<UL>
+<LI><B>PTLsim is currently intended for x86-64 machines only.</B> Do
+not attempt to build it on a normal 32-bit x86 machine - it will not
+work. However, we will be modifying PTLsim in the near future to run
+on regular 32-bit x86 systems (albeit with lower performance and the
+lack of x86-64 support).
+</LI>
+<LI>PTLsim is very sensitive to the <B>Linux kernel</B> version it is
+running on. We have tested this version of PTLsim on 2.6.12 and <B>2.6.13</B>,
+but it may break on earlier versions due to changes in certain undocumented
+system calls and structures we use for virtualization purposes. Section
+<A HREF="node5.html#sec:PTLsimInternals">3</A> gives more information on this. 
+</LI>
+<LI><B>gcc 3.4.x</B> should be used to compile the code, although it
+should also work with gcc 3.3 or 4.0 (we have not tested this though)
+</LI>
+<LI>We have not tried PTLsim on an <B>Intel based x86-64</B> (a.k.a.
+EM64T) capable processor, but in theory it should work correctly.
+You may need to adjust the Makefile options to specify this. Let us
+know if you get this working!
+</LI>
+</UL>
+To build PTLsim, unpack the sources (or obtain them via CVS checkout)
+and just run <TT><FONT SIZE="-1">make</FONT></TT> (on a multiprocessor machine, you
+may wish to use <TT><FONT SIZE="-1">make -j2</FONT></TT>). By default, the <TT><FONT SIZE="-1">Makefile</FONT></TT>
+specifies maximum optimization for an AMD x86-64 machine, so compilation
+may be slow. For debugging purposes only, the <TT><FONT SIZE="-1">Makefile</FONT></TT>
+line specifying ``<TT><FONT SIZE="-1">-O0 -g3</FONT></TT>'' (no optimization,
+all debugging info) may be used, but this will make PTLsim <I>very</I>
+slow.
+
+<P>
+
+<H1><A NAME="SECTION02220000000000000000"></A><A NAME="sec:RunningPTLsim"></A>
+<BR>
+Running PTLsim
+</H1>
+
+<P>
+PTLsim invocation is very simple: after compiling the simulator and
+making sure the <TT><FONT SIZE="-1">ptlsim</FONT></TT> executable is in your path,
+simply run:
+
+<P>
+<BLOCKQUOTE>
+<TT><FONT SIZE="-1">ptlsim&nbsp;</FONT></TT> <I>full-path-to-executable</I> <I>arguments...</I>
+
+</BLOCKQUOTE>
+PTLsim reads configuration options for running various user programs
+by looking for a configuration file named <TT><FONT SIZE="-1">/home/</FONT></TT><I>username</I><TT><FONT SIZE="-1">/.ptlsim/</FONT></TT><I>path/to/program/executablename</I><TT><FONT SIZE="-1">.conf</FONT></TT>.
+To set options for each program, you'll need to create a directory
+of the form <TT><FONT SIZE="-1">/home/</FONT></TT><I>username</I><TT><FONT SIZE="-1">/.ptlsim</FONT></TT>
+and make sub-directories under it corresponding to the full path to
+the program. For example, to configure <TT><FONT SIZE="-1">/bin/ls</FONT></TT> you'll
+need to run &#34;<TT><FONT SIZE="-1">mkdir /home/</FONT></TT><I>username</I><TT><FONT SIZE="-1">/.ptlsim/bin</FONT></TT>''
+and then edit &#34;<TT><FONT SIZE="-1">/home/</FONT></TT><I>username</I><TT><FONT SIZE="-1">/.ptlsim/bin/ls.conf</FONT></TT>&#34;
+with the appropriate options. For example, try putting the following
+in <TT><FONT SIZE="-1">ls.conf</FONT></TT> as described:
+
+<P>
+<BLOCKQUOTE>
+<TT><FONT SIZE="-1">-logfile ls.ptlsim -loglevel 9 -stats ls.stats -stopinsns
+10000</FONT></TT></BLOCKQUOTE>
+<P>
+<BLOCKQUOTE>
+
+</BLOCKQUOTE>
+Then run:
+
+<P>
+<BLOCKQUOTE>
+<TT><FONT SIZE="-1">ptlsim /bin/ls -la</FONT></TT></BLOCKQUOTE>
+<P>
+<BLOCKQUOTE>
+
+</BLOCKQUOTE>
+PTLsim should display its system information banner, then the output
+of simulating the directory listing. With the options above, PTLsim
+will simulate <TT><FONT SIZE="-1">/bin/ls</FONT></TT> starting at the first x86 instruction
+in the dynamic linker's entry point, run until 10000 x86 instructions
+have been committed, and will then switch back to native mode (i.e.
+the user code will run directly on the real processor) until the program
+exits. During this time, it will compile an extensive log of the state
+of every micro-operation executed by the processor and will save it
+to ``<TT><FONT SIZE="-1">ls.ptlsim</FONT></TT>'' in the current directory. It
+will also create ``<TT><FONT SIZE="-1">ls.stats</FONT></TT>'', a binary file containing
+snapshots of PTLsim's internal performance counters. The <TT><FONT SIZE="-1">ptlstats</FONT></TT>
+program can be used to print and analyze these statistics by running
+``<TT><FONT SIZE="-1">ptlstats -dumpraw ls.stats</FONT></TT>''.
+
+<P>
+
+<H1><A NAME="SECTION02230000000000000000"></A><A NAME="sec:ConfigurationOptions"></A>
+<BR>
+Configuration Options
+</H1>
+
+<P>
+PTLsim supports.a variety of options in the configuration file of
+each program; you can run &#34;ptlsim&#34; without arguments
+to get a full list of these options. The options described below are
+used to control which code PTLsim executes and how it profiles it.
+The default value for each option is shown in [brackets] at the
+end of the description.
+
+<P>
+
+<UL>
+<LI>[<B><I>Logging:</I></B>]&nbsp;
+</LI>
+<LI>[<B>-quiet</B>]Do not print PTLsim system information banner [disabled]
+</LI>
+<LI>[<B>-logfile&nbsp;</B><I>file</I>]Log filename <I>file</I> (use /dev/fd/1
+for stdout, /dev/fd/2 for stderr) [(none)]
+</LI>
+<LI>[<B>-loglevel&nbsp;</B><I>N</I>]Log level <I>N</I>. Higher levels provide
+a breakdown of every operation in every stage of the pipeline; ``0''
+disables all logging except startup messages and system call tracing
+[0]
+</LI>
+<LI>[<B>-startlog&nbsp;</B><I>N</I>]Start logging after cycle <I>N</I>
+[infinity]
+</LI>
+<LI>[<B><I>Statistics&nbsp;Collection:</I></B>]&nbsp;
+</LI>
+<LI>[<B>-stats&nbsp;</B><I>file</I>]Statistics filename <I>file</I> [(none)]
+</LI>
+<LI>[<B>-snapshot&nbsp;</B><I>N</I>]Take statistical snapshot and reset
+counters every <I>N</I> cycles [infinite]
+</LI>
+<LI>[<B><I>Simulation&nbsp;Start&nbsp;Point:</I></B>]&nbsp;
+</LI>
+<LI>[<B>-startrip</B>&nbsp;<I>addr</I>]Start at RIP address <I>startrip</I>
+[(none)]
+</LI>
+<LI>[<B>-startrepeat</B>&nbsp;<I>N</I>]Start after passing start RIP at
+least <I>N</I> times [(none)]
+</LI>
+<LI>[<B>-excludeld</B>]Exclude dynamic linker execution (start at <TT><FONT SIZE="-1">main()</FONT></TT>
+instead) [disabled]
+</LI>
+<LI>[<B>-trigger</B>]Trigger mode: wait for user process to use special
+function <TT><FONT SIZE="-1">ptlcall_switch_to_sim()</FONT></TT> before entering
+simulation mode [disabled]. This is described in Section <A HREF="node6.html#sec:TriggerMode">4.3</A>.
+</LI>
+<LI>[<B><I>Simulation&nbsp;Stop&nbsp;Point:</I></B>]&nbsp;
+</LI>
+<LI>[<B>-stop&nbsp;</B><I>N</I>]Stop after <I>N</I> instructions [infinity]
+</LI>
+<LI>[<B>-stop</B>rip&nbsp;<I>addr</I>]Stop before basic block RIP <I>addr</I>
+is translated for the first time [0]
+</LI>
+<LI>[<B>-bbinsns&nbsp;</B><I>N</I>]In final basic block, only translate
+<I>N</I> user instructions [infinity]
+</LI>
+<LI>[<B>-stopinsns&nbsp;</B><I>N</I>]Stop after committing <I>N</I> user
+instructions [infinity]
+</LI>
+<LI>[<B>-flushevery&nbsp;</B><I>N</I>]Flush pipeline after every <I>N</I>
+user instructions commit [infinity]
+</LI>
+<LI>[<B><I>Sequential&nbsp;and&nbsp;Native&nbsp;Control:</I></B>]&nbsp;
+</LI>
+<LI>[<B>-profonly</B>]Profile user code in native mode only using CPU
+performance counters; don't simulate anything [disabled]
+</LI>
+<LI>[<B>-exitend</B>]Kill the thread after full simulation completes
+rather than going native [disabled]
+</LI>
+<LI>[<B><I>Debugging:</I></B>]&nbsp;
+</LI>
+<LI>[<B>-dumpcode&nbsp;</B><I>file</I>]Save page of user code at final
+RIP to <I>file</I> [(none)]
+</LI>
+<LI>[<B>-perfect-cache</B>]Perfect cache hit rate [disabled]
+</LI>
+<LI>[<B>-ooo</B>]Use out of order core [always enabled]
+</LI>
+</UL><B><I>NOTE:</I></B> If you use the &#34;<TT><FONT SIZE="-1">-logfile</FONT></TT>&#34;
+option, <B>do not run it forever by accident</B> since the log files
+will go on for gigabytes. Use <TT><FONT SIZE="-1">-startlog</FONT></TT> and <TT><FONT SIZE="-1">-stop</FONT></TT>
+to limit the logged range. 
+
+<P>
+<B><I>NOTE:</I></B> To actually modify the microarchitecture of
+the simulated processor, you will need to edit the source code and
+recompile.
+
+<P>
+<HR>
+<!--Navigation Panel-->
+<A NAME="tex2html292"
+  HREF="node5.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html288"
+  HREF="node2.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html282"
+  HREF="node3.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html290"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html293"
+  HREF="node5.html">PTLsim Internals</A>
+<B> Up:</B> <A NAME="tex2html289"
+  HREF="node2.html">PTLsim User's Guide</A>
+<B> Previous:</B> <A NAME="tex2html283"
+  HREF="node3.html">Introducing PTLsim</A>
+ &nbsp; <B>  <A NAME="tex2html291"
+  HREF="node1.html">Contents</A></B> 
+<!--End of Navigation Panel-->
+<ADDRESS>
+Matt T Yourst
+2005-10-03
+</ADDRESS>
+</BODY>
+</HTML>

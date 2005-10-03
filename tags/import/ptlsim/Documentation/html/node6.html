@@ -1,0 +1,427 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+
+<!--Converted with LaTeX2HTML 2002-2-1 (1.70)
+original version by:  Nikos Drakos, CBLU, University of Leeds
+* revised and updated by:  Marcus Hennecke, Ross Moore, Herb Swan
+* with significant contributions from:
+  Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
+<HTML>
+<HEAD>
+<TITLE>Statistics Collection and Control</TITLE>
+<META NAME="description" CONTENT="Statistics Collection and Control">
+<META NAME="keywords" CONTENT="PTLsimManual">
+<META NAME="resource-type" CONTENT="document">
+<META NAME="distribution" CONTENT="global">
+
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+<META NAME="Generator" CONTENT="LaTeX2HTML v2002-2-1">
+<META HTTP-EQUIV="Content-Style-Type" CONTENT="text/css">
+
+<LINK REL="STYLESHEET" HREF="PTLsimManual.css">
+
+<LINK REL="previous" HREF="node5.html">
+<LINK REL="up" HREF="node2.html">
+<LINK REL="next" HREF="node7.html">
+</HEAD>
+
+<BODY >
+<!--Navigation Panel-->
+<A NAME="tex2html328"
+  HREF="node7.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html324"
+  HREF="node2.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html320"
+  HREF="node5.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html326"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html329"
+  HREF="node7.html">x86 Instruction Set and</A>
+<B> Up:</B> <A NAME="tex2html325"
+  HREF="node2.html">PTLsim User's Guide</A>
+<B> Previous:</B> <A NAME="tex2html321"
+  HREF="node5.html">PTLsim Internals</A>
+ &nbsp; <B>  <A NAME="tex2html327"
+  HREF="node1.html">Contents</A></B> 
+<BR>
+<BR>
+<!--End of Navigation Panel-->
+<!--Table of Child-Links-->
+<A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
+
+<UL>
+<LI><A NAME="tex2html330"
+  HREF="node6.html#SECTION02410000000000000000">Using PTLstats to Analyze Statistics</A>
+<LI><A NAME="tex2html331"
+  HREF="node6.html#SECTION02420000000000000000">Statistics support in code</A>
+<LI><A NAME="tex2html332"
+  HREF="node6.html#SECTION02430000000000000000">PTLsim Calls From User Code</A>
+<LI><A NAME="tex2html333"
+  HREF="node6.html#SECTION02440000000000000000">Performance and Statistical Counters</A>
+</UL>
+<!--End of Table of Child-Links-->
+<HR>
+
+<H1><A NAME="SECTION02400000000000000000"></A><A NAME="sec:StatisticsInfrastructure"></A>
+<BR>
+Statistics Collection and Control
+</H1>
+
+<P>
+
+<H1><A NAME="SECTION02410000000000000000">
+Using PTLstats to Analyze Statistics</A>
+</H1>
+
+<P>
+PTLsim maintains a huge number of statistical counters and data points
+during the simulation process, and can optionally save this data to
+a statistics data store by using the ``<TT><FONT SIZE="-1">-stats</FONT></TT> <I>filename</I>''
+configuration option introduced in Section <A HREF="node4.html#sec:ConfigurationOptions">2.3</A>.
+The data store is a binary file format (defined in <TT><FONT SIZE="-1">datastore.cpp</FONT></TT>)
+used to efficiently capture large quantities of statistical information
+for later analysis. This file format supports storing multiple regular
+snapshots of all counters by specifying the ``<TT><FONT SIZE="-1">-snapshot</FONT></TT>
+<I>N</I>'' option to save a snapshot of the simulator state every
+<I>N</I> cycles in addition to the final state.
+
+<P>
+The <I>PTLstats</I> program is used to analyze the statistics data
+store files produced by PTLsim. The syntax of this command is ``<TT><FONT SIZE="-1">ptlstats
+-</FONT></TT><I>command</I> <I>filename</I>''. Presently the most useful command
+is ``<TT><FONT SIZE="-1">-dumpraw</FONT></TT>'', which prints out a textual representation
+of the internal tree format in which the statistics are maintained.
+PTLstats will automatically sum up all entries in certain branches
+of the tree to provide the user with a breakdown by percentages of
+the total for that subtree in addition to the raw values.
+
+<P>
+The following is an example of the type of output you can expect from
+the PTLstats command <TT><FONT SIZE="-1">-dumpraw</FONT></TT>:
+
+<P>
+
+<DL COMPACT>
+<DT>
+<DD><FONT SIZE="-1">dcache&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;store&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;issue&nbsp;(total&nbsp;134243383)&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;22%&nbsp;]&nbsp;replay&nbsp;(total&nbsp;29278598)&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;&nbsp;0%&nbsp;]&nbsp;wait-sfraddr&nbsp;=&nbsp;0;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;33%&nbsp;]&nbsp;wait-storedata-sfraddr&nbsp;=&nbsp;9755097;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;33%&nbsp;]&nbsp;wait-storedata-sfraddr-sfrdata&nbsp;=&nbsp;9755097;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;&nbsp;6%&nbsp;]&nbsp;wait-storedata-sfrdata&nbsp;=&nbsp;1891253;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;&nbsp;4%&nbsp;]&nbsp;wait-sfrdata&nbsp;=&nbsp;1069751;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;23%&nbsp;]&nbsp;wait-sfraddr-sfrdata&nbsp;=&nbsp;6807400;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;&nbsp;0%&nbsp;]&nbsp;exception&nbsp;=&nbsp;196094;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;&nbsp;0%&nbsp;]&nbsp;ordering&nbsp;=&nbsp;55369;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;78%&nbsp;]&nbsp;complete&nbsp;=&nbsp;104592504;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[&nbsp;&nbsp;&nbsp;0%&nbsp;]&nbsp;unaligned&nbsp;=&nbsp;120818;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;}</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;...</FONT>
+<P>
+
+
+<P>
+</DD>
+</DL>
+<P>
+
+<H1><A NAME="SECTION02420000000000000000">
+Statistics support in code</A>
+</H1>
+
+<P>
+Internally, PTLsim represents data store nodes in a tree format via
+the <TT><FONT SIZE="-1">DataStoreNode</FONT></TT> class defined in <TT><FONT SIZE="-1">datastore.h</FONT></TT>.
+Each node can contain other data store nodes as well as a value (64-bit
+integer, floating point, character string) or an array of values.
+The following example illustrates the proper way to save statistical
+counters (typically declared as global variables of type <TT><FONT SIZE="-1">W64</FONT></TT>,
+a 64-bit integer) into the data store. In this example, the <TT><I><FONT SIZE="-1">root</FONT></I></TT>
+<TT><FONT SIZE="-1">DataStoreNode</FONT></TT> is assumed to be passed in as the parent
+of all other nodes:
+
+<P>
+
+<DL COMPACT>
+<DT>
+<DD><FONT SIZE="-1">DataStoreNode&amp;&nbsp;issue&nbsp;=&nbsp;root(&#34;issue&#34;);&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;DataStoreNode&amp;&nbsp;unit&nbsp;=&nbsp;issue(&#34;unit&#34;);&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;unit.summable&nbsp;=&nbsp;1;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;unit.add(&#34;integer&#34;,&nbsp;issued_integer_uops);</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;unit.add(&#34;fp&#34;,&nbsp;issued_fp_uops);</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;unit.add(&#34;load&#34;,&nbsp;issued_load_uops);</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;unit.add(&#34;store&#34;,&nbsp;issued_store_uops);</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;}</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;DataStoreNode&amp;&nbsp;histogram&nbsp;=&nbsp;issue(&#34;times&#34;);&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;cluster.summable&nbsp;=&nbsp;1;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;foreach&nbsp;(i,&nbsp;MAX_CLUSTERS)&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;stringbuf&nbsp;sb;&nbsp;sb&nbsp;&lt;&lt;&nbsp;i;</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cluster.addfloat(sb,&nbsp;timer_histogram[i]);</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;}</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;}</FONT>
+<P>
+
+
+<P>
+<FONT SIZE="-1">}</FONT>
+<P>
+
+</DD>
+</DL>In the example above, a statistics tree is created in which all subnodes
+under the ``<TT><FONT SIZE="-1">unit</FONT></TT>'' node are integers together
+assumed to total 100% of whatever quantity is being measured. Setting
+<TT><FONT SIZE="-1">summable = 1</FONT></TT> tells PTLstats to print percentages next
+to the raw values in this subtree for easier viewing. The ``<TT><FONT SIZE="-1">times</FONT></TT>''
+subnode contains floating point values; the <TT><FONT SIZE="-1">stringbuf</FONT></TT>
+utility class is used to convert each slot index of this example histogram
+into a proper node name. This is only an example - PTLsim already
+contains code to save all statistics it generates.
+
+<P>
+PTLsim will by default call <TT><FONT SIZE="-1">ooo_capture_stats()</FONT></TT>
+every time a snapshot or final capture is taken, and will pass this
+function the top level DataStoreNode for that snapshot. Therefore,
+if adding your own statistics and counters, you should start by saving
+these counters using code inside <TT><FONT SIZE="-1">ooo_capture_stats()</FONT></TT>
+like that shown above. 
+
+<P>
+We suggest using the data store mechanism to store <I>all</I> statistics
+generated by your additions to PTLsim, since this system has built-in
+support for snapshots, checkpointing and structured easy to parse
+data (unlike simply writing values to a text file). It is further
+suggested that only raw values be saved, rather than doing computations
+in the simulator itself - leave the analysis to PTLstats after gathering
+the raw data. In particular, try to avoid using floating point within
+the simulator if at all possible, since some floating point calculations
+may reconfigure the SSE rounding and control flags in ways that break
+the assumptions used to execute actual user code.
+
+<P>
+
+<H1><A NAME="SECTION02430000000000000000"></A><A NAME="sec:TriggerMode"></A>
+<BR>
+PTLsim Calls From User Code
+</H1>
+
+<P>
+PTLsim optionally allows user code to control the simulator mode through
+the <TT><FONT SIZE="-1">ptlcall_xxx()</FONT></TT> family of functions found in <TT><FONT SIZE="-1">ptlcalls.h</FONT></TT>
+when trigger mode is enabled (<TT><FONT SIZE="-1">-trigger</FONT></TT> configuration
+option). This file should be included by any PTLsim-aware user programs;
+these programs must be recompiled to take advantage of these features.
+Amongst the functions provided by <TT><FONT SIZE="-1">ptlcalls.h</FONT></TT> are:
+
+<P>
+
+<UL>
+<LI><TT><FONT SIZE="-1">ptlcall_switch_to_sim()</FONT></TT> is only available while
+the program is executing in native mode. It forces PTLsim to regain
+control and begin simulating instructions as soon as this call returns.
+</LI>
+<LI><TT><FONT SIZE="-1">ptlcall_switch_to_native()</FONT></TT> stops simulation and
+returns to native execution, effectively removing PTLsim from the
+loop.
+</LI>
+<LI><TT><FONT SIZE="-1">ptlcall_marker()</FONT></TT> simply places a user-specified marker
+number in the PTLsim log file
+</LI>
+<LI><TT><FONT SIZE="-1">ptlcall_capture_stats()</FONT></TT> adds a new statistics data
+store snapshot at the time it is called. 
+</LI>
+<LI><TT><FONT SIZE="-1">ptlcall_nop()</FONT></TT> does nothing but test the call mechanism.
+</LI>
+</UL>
+These calls work by forcing execution to code on a ``gateway page''
+at a specific fixed address (<TT><FONT SIZE="-1">0x1000</FONT></TT> currently); PTLsim
+will write the appropriate call gate code to this page depending on
+whether the process is in native or simulated mode. In native mode,
+the call gate page typically contains a 64-to-64-bit or 32-to-64-bit
+far jump into PTLsim, while in simulated mode it contains a reserved
+x86 opcode interpreted by the x86 decoder as a special kind of system
+call.
+
+<P>
+Generally these calls are used to perform ``intelligent benchmarking'':
+the <TT><FONT SIZE="-1">ptlcall_switch_to_sim()</FONT></TT> call is made at the
+top of the main loop of a benchmark after initialization, while the
+<TT><FONT SIZE="-1">ptlcall_switch_to_native()</FONT></TT> call is inserted after
+some number of iterations to stop simulation after a representative
+subset of the code has completed. This intelligent approach is far
+better than the blind ``sample for N million cycles after S million
+startup cycles'' approach used by most researchers.
+
+<P>
+Fortran programs will have to actually link in the <TT><FONT SIZE="-1">ptlcalls.o</FONT></TT>
+object file, since they cannot include C header files. The function
+names that should be used in the Fortran code remain the same as those
+from the <TT><FONT SIZE="-1">ptlcalls.h</FONT></TT> header file.
+
+<P>
+
+<H1><A NAME="SECTION02440000000000000000">
+Performance and Statistical Counters</A>
+</H1>
+
+<P>
+The full list of PTLsim performance and statistical counters is given
+in Section <A HREF="node23.html#sec:PerformanceCounters">18</A>.
+
+<P>
+<HR>
+<!--Navigation Panel-->
+<A NAME="tex2html328"
+  HREF="node7.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html324"
+  HREF="node2.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html320"
+  HREF="node5.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html326"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html329"
+  HREF="node7.html">x86 Instruction Set and</A>
+<B> Up:</B> <A NAME="tex2html325"
+  HREF="node2.html">PTLsim User's Guide</A>
+<B> Previous:</B> <A NAME="tex2html321"
+  HREF="node5.html">PTLsim Internals</A>
+ &nbsp; <B>  <A NAME="tex2html327"
+  HREF="node1.html">Contents</A></B> 
+<!--End of Navigation Panel-->
+<ADDRESS>
+Matt T Yourst
+2005-10-03
+</ADDRESS>
+</BODY>
+</HTML>
