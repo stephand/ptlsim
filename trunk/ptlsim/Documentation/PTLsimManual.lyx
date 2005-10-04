@@ -550,7 +550,7 @@ ptlstats -dumpraw ls.stats
 Configuration Options
 \layout Standard
 
-PTLsim supports.a variety of options in the configuration file of each program;
+PTLsim supports a variety of options in the configuration file of each program;
  you can run "ptlsim" without arguments to get a full list of these options.
  The options described below are used to control which code PTLsim executes
  and how it profiles it.
@@ -9387,8 +9387,8 @@ STATE_DELIVER_TO_L3
 \size default 
  state (i.e.
  in progress from main memory) and the cycle counter just became zero, a
- line in the L3 cache can now line is validated with the incoming data (this
- may involve evicting another line in the same set to make room).
+ line in the L3 cache is validated with the incoming data (this may involve
+ evicting another line in the same set to make room).
  The MB is then moved to the next state up the cache hierarchy (i.e.
  
 \family typewriter 
