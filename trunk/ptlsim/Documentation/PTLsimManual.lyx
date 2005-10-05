@@ -67,9 +67,20 @@ Matt T.
 <yourst@yourst.com>
 \layout Standard
 \noindent \align center 
-Revision 20051001
+Revision 20051005
 \layout Standard
 \added_space_top vfill \noindent \align center 
+The latest version of PTLsim and this document are always available at:
+\family sans 
+\series bold 
+\size largest 
+
+\newline 
+
+\newline 
+www.ptlsim.org
+\layout Standard
+\added_space_top bigskip \noindent \align center 
 
 \begin_inset Formula $\copyright$
 \end_inset 
@@ -218,6 +229,20 @@ Part
  is a reference manual for the PTLsim internal uop instruction set, the
  performance monitoring events the simulator supports and a variety of other
  technical information.
+\layout Section
+
+Additional Resources
+\layout Standard
+
+The latest version of PTLsim and this document are always available at the
+ PTLsim web site:
+\layout Quote
+
+
+\family sans 
+\series bold 
+\size large 
+http://www.ptlsim.org
 \layout Chapter
 
 Getting Started with PTLsim
