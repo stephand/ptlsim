@@ -67,7 +67,7 @@ Matt T.
 <yourst@yourst.com>
 \layout Standard
 \noindent \align center 
-Revision 20051005
+Revision 20051010
 \layout Standard
 \added_space_top vfill \noindent \align center 
 The latest version of PTLsim and this document are always available at:
@@ -3026,7 +3026,7 @@ ptlstats -
 \family default 
 \size default 
 \emph on 
-command
+options
 \emph default 
  
 \emph on 
@@ -3037,35 +3037,117 @@ filename
 \end_inset 
 
 .
- Presently the most useful command is 
+\layout Standard
+
+The following major actions) are supported:
+\layout List
+\labelwidthstring WWWWWWWW
+
+(no\SpecialChar ~
+options) Print the full PTLsim statistics tree in the textual format
+ shown below.
+\layout List
+\labelwidthstring WWWWWWWW
+
+
+\series bold 
+-subtree
+\emph on 
+\SpecialChar ~
+
+\series default 
+root
+\emph default 
+ Print a subtree of the statistics tree.
+ For instance, to print just the load unit statistics in the final snapshot,
+ use 
 \begin_inset Quotes eld
 \end_inset 
 
 
 \family typewriter 
 \size small 
--dumpraw
+ptlstats 
+\series bold 
+-subtree final/dcache/load
+\series default 
+ 
+\emph on 
+filename.stats
+\family default 
+\size default 
+\emph default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+.
+\layout List
+\labelwidthstring WWWWWWWW
+
+
+\series bold 
+-collect
+\emph on 
+\SpecialChar ~
+
+\series default 
+root
+\emph default 
+ Collect the same subtree from muliple statistics files and print all the
+ subtrees.
+ For instance, to print the L1 cache hit rate for two benchmarks, use 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+ptlstats 
+\series bold 
+-collect /final/dcache/load/hit/L1
+\series default 
+ bench1.stats bench2.stats ...
 \family default 
 \size default 
 
 \begin_inset Quotes erd
 \end_inset 
 
-, which prints out a textual representation of the internal tree format
- in which the statistics are maintained.
- PTLstats will automatically sum up all entries in certain branches of the
- tree to provide the user with a breakdown by percentages of the total for
- that subtree in addition to the raw values.
+.
+ This option is useful for taking a cross section from all benchmarks of
+ a specific statistic (or subtree of statistics).
+\layout List
+\labelwidthstring WWWWWWWW
+
+
+\series bold 
+-histogram
+\emph on 
+\SpecialChar ~
+
+\series default 
+root
+\emph default 
+ Generate a histogram graph, in SVG (Scalable Vector Graphics) format, of
+ the specified statistics node.
+ The node must be an array of integers previously marked as a histogram
+ (see the source code examples for details).
+ Various other options are provided to control the graph size, title, data
+ percentile cutoff and log scaling.
+ 
 \layout Standard
 
-The following is an example of the type of output you can expect from the
- PTLstats command 
+Additional options and their descriptions can be found by running 
 \family typewriter 
 \size small 
--dumpraw
+ptlstats
 \family default 
 \size default 
-:
+ without any arguments.
+\layout Standard
+
+The following is an example of the type of output you can expect from PTLstats:
 \layout LyX-Code
 
 
@@ -3151,8 +3233,11 @@ dcache {
 
 \size small 
     ...
-\layout LyX-Code
+\layout Standard
 
+Notice how PTLstats will automatically sum up all entries in certain branches
+ of the tree to provide the user with a breakdown by percentages of the
+ total for that subtree in addition to the raw values.
 \layout Section
 
 Statistics support in code
