@@ -14,12 +14,6 @@ run:
 		make -C $$dir run; \
 	done;
 
-run-native:
-	for dir in $(SUBDIRS); do \
-	  echo "Making run-native in $$dir"; \
-		make -C $$dir run-native; \
-	done;
-
 clean:
 	for dir in $(SUBDIRS); do \
 	  echo "Making clean in $$dir"; \
