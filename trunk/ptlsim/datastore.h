@@ -20,8 +20,14 @@ struct DataStoreNode {
   hash_t* subnodes;
   const char* name;
   W16 type;
-  W16 summable:1;
+  W16 summable:1, histogramarray:1;
   W32 count;
+
+  // For nodes with an array style histogram:
+  W64 histomin;       // minslot
+  W64 histomax;       // maxslot
+  W64 histostride;    // real units per histogram slot
+
   DataStoreNode* parent;
 
   enum NodeType { DS_NODE_TYPE_NULL, DS_NODE_TYPE_INT, DS_NODE_TYPE_FLOAT, DS_NODE_TYPE_NODE, DS_NODE_TYPE_STRING };
@@ -57,6 +63,8 @@ struct DataStoreNode {
 
   DataStoreNode* search(const char* key) const;
 
+  DataStoreNode* searchpath(const char* path) const;
+
   DataStoreNode& get(const char* key);
 
   DataStoreNode& operator ()(const char* key) { return get(key); }
@@ -74,10 +82,11 @@ struct DataStoreNode {
   //
 
   DataStoreNode(const char* name, W64s value);
-  DataStoreNode(const char* name, const W64s* values, int count);
+  DataStoreNode(const char* name, const W64s* values, int count, bool histogram = false);
 
   DataStoreNode& add(const char* key, W64s value) { return add(new DataStoreNode(key, (W64s)value)); }
   DataStoreNode& add(const char* key, W64s* value, int count) { return add(new DataStoreNode(key, (W64s*)value, count)); }
+  DataStoreNode& add(const char* key, W64s* value, int count, W64s histomin, W64s histomax, W64s histostride);
 
   operator W64s() const;
 
@@ -132,7 +141,10 @@ struct DataStoreNode {
 
   double sum() const;
 
-  ostream& print(ostream& os, bool percents = false, int depth = 0, double supersum = 0) const;
+  DataStoreNode& histogram(const W64* values, int count);
+  DataStoreNode& histogram(const char** names, const W64* values, int count);
+
+  ostream& print(ostream& os, bool percents = true, int depth = 0, double supersum = 0) const;
 
   DataStoreNode(idstream& is);
 

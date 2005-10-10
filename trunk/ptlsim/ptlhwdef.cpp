@@ -382,6 +382,7 @@ BasicBlock* BasicBlock::clone() {
   bb->memcount = memcount;
   bb->storecount = storecount;
   bb->usedregs = usedregs;
+  bb->synthops = null;
   memcpy(bb->data, this->data, bytes);
   return bb;
 }

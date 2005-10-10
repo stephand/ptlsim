@@ -297,10 +297,39 @@ void dcache_save_stats(DataStoreNode& ds) {
 
     stores.add("prefetches", store_prefetches);
   }
+
+#ifdef TRACK_LINE_USAGE
+  DataStoreNode& histograms = ds("histograms"); {
+    L1StatsCollector::savestats(histograms("L1"));
+    L1IStatsCollector::savestats(histograms("L1I"));
+    L2StatsCollector::savestats(histograms("L2"));
+    L3StatsCollector::savestats(histograms("L3"));
+  }
+#endif
 }
 
 namespace DataCache {
-  
+
+#ifdef TRACK_LINE_USAGE
+  // Lifetime
+  template <> W64 L1StatsCollectorBase::line_lifetime_histogram[DCACHE_L1_LINE_LIFETIME_SLOTS] = {};
+  template <> W64 L1IStatsCollectorBase::line_lifetime_histogram[DCACHE_L1I_LINE_LIFETIME_SLOTS] = {};
+  template <> W64 L2StatsCollectorBase::line_lifetime_histogram[DCACHE_L2_LINE_LIFETIME_SLOTS] = {};
+  template <> W64 L3StatsCollectorBase::line_lifetime_histogram[DCACHE_L3_LINE_LIFETIME_SLOTS] = {};
+
+  // Deadtime
+  template <> W64 L1StatsCollectorBase::line_deadtime_histogram[DCACHE_L1_LINE_DEADTIME_SLOTS] = {};
+  template <> W64 L1IStatsCollectorBase::line_deadtime_histogram[DCACHE_L1I_LINE_DEADTIME_SLOTS] = {};
+  template <> W64 L2StatsCollectorBase::line_deadtime_histogram[DCACHE_L2_LINE_DEADTIME_SLOTS] = {};
+  template <> W64 L3StatsCollectorBase::line_deadtime_histogram[DCACHE_L3_LINE_DEADTIME_SLOTS] = {};
+
+  // Hit count
+  template <> W64 L1StatsCollectorBase::line_hitcount_histogram[DCACHE_L1_LINE_HITCOUNT_SLOTS] = {};
+  template <> W64 L1IStatsCollectorBase::line_hitcount_histogram[DCACHE_L1I_LINE_HITCOUNT_SLOTS] = {};
+  template <> W64 L2StatsCollectorBase::line_hitcount_histogram[DCACHE_L2_LINE_HITCOUNT_SLOTS] = {};
+  template <> W64 L3StatsCollectorBase::line_hitcount_histogram[DCACHE_L3_LINE_HITCOUNT_SLOTS] = {};
+#endif
+
   L1Cache L1;
 
   L1ICache L1I;
@@ -310,10 +339,10 @@ namespace DataCache {
   // are at least N free load fill requests and and N miss buffers.
   //
 
-  /*
-   * Load fill request queue (LFRQ) contains any requests for outstanding
-   * loads from both the L2 or L1. 
-   */
+  //
+  // Load fill request queue (LFRQ) contains any requests for outstanding
+  // loads from both the L2 or L1. 
+  //
   struct LoadFillReq {
     W64 addr;       // physical address
     W64 data;       // data already known so far (e.g. from SFR)
@@ -391,9 +420,8 @@ namespace DataCache {
     void restart() {
       // Clear out any waiting entries (prefetches), including waiting physregs and cbslots,
       // so the next trace doesn't get confused.
-      if (freemap.allset()) return; // (fast path)
 
-      while (*freemap) {
+      while (!freemap.allset()) {
         int idx = (~freemap).lsb();
         LoadFillReq& req = reqs[idx];
         if (analyze_in_detail()) logfile << "iter ", iterations, ": force final wakeup/reset of LFRQ slot ", idx, ": ", req, endl;
@@ -407,9 +435,9 @@ namespace DataCache {
       return (!freemap);
     }
 
-    /*
-     * Add an entry to the LFRQ in the waiting state.
-     */
+    //
+    // Add an entry to the LFRQ in the waiting state.
+    //
     int add(const LoadFillReq& req) {
       if (full()) return -1;
       int idx = freemap.lsb();
@@ -419,13 +447,13 @@ namespace DataCache {
       return idx;
     }
 
-    /*
-     * Move any LFRQ entries in <mask> to the ready state
-     * in response to the arrival of the corresponding
-     * line at the L1 level. Once a line is delivered,
-     * it is copied into the L1 cache and the corresponding
-     * miss buffer can be freed.
-     */ 
+    //
+    // Move any LFRQ entries in <mask> to the ready state
+    // in response to the arrival of the corresponding
+    // line at the L1 level. Once a line is delivered,
+    // it is copied into the L1 cache and the corresponding
+    // miss buffer can be freed.
+    // 
     void wakeup(W64 address, const bitvec<LFRQ_SIZE>& lfrqmask) {
       if (analyze_in_detail()) logfile << "LFRQ.wakeup(", (void*)address, ", ", lfrqmask, ")", endl;
       //assert(L2.probe(address));
@@ -433,20 +461,20 @@ namespace DataCache {
       ready |= lfrqmask;
     }
 
-    /*
-     * Find the first N requests (N = 2) in the READY state,
-     * and extract, sign extend and write into their target
-     * register, then mark that register as ready.
-     *
-     * Also mark the entire cache line containing each load
-     * as fully valid.
-     *
-     * Loads will always be allocated a physical register
-     * since if the load misses the L1, it will have fallen
-     * off the end of the pipeline and into the register file
-     * by the earliest time we can receive the data from the
-     * L2 cache and/or lower levels.
-     */
+    //
+    // Find the first N requests (N = 2) in the READY state,
+    // and extract, sign extend and write into their target
+    // register, then mark that register as ready.
+    //
+    // Also mark the entire cache line containing each load
+    // as fully valid.
+    //
+    // Loads will always be allocated a physical register
+    // since if the load misses the L1, it will have fallen
+    // off the end of the pipeline and into the register file
+    // by the earliest time we can receive the data from the
+    // L2 cache and/or lower levels.
+    //
     void clock() {
       //
       // Process up to MAX_WAKEUPS_PER_CYCLE missed loads per cycle:
@@ -508,20 +536,6 @@ namespace DataCache {
 
   LoadFillReqQueue<LFRQ_SIZE> lfrq;
 
-  typedef CacheLine<L3_LINE_SIZE> L3CacheLine;
-
-  inline ostream& operator <<(ostream& os, const L3CacheLine& line) {
-    return line.print(os, 0);
-  }
-
-  struct L3Cache: public AssociativeArray<W64, L3CacheLine, L3_SET_COUNT, L3_WAY_COUNT, L3_LINE_SIZE> {
-    L3CacheLine* validate(W64 addr) {
-      W64 oldaddr;
-      L3CacheLine* line = select(addr, oldaddr);
-      return line;
-    }
-  };
-
   L3Cache L3;
 
   enum { STATE_IDLE, STATE_DELIVER_TO_L3, STATE_DELIVER_TO_L2, STATE_DELIVER_TO_L1 };
@@ -561,12 +575,12 @@ namespace DataCache {
       freemap.setall();
     }
 
-    /*
-     * Restart the miss buffer after an inter-trace transition.
-     * This does NOT remove any in-flight entries, it just makes
-     * sure they don't erroneously wake up LFRQ slots used by
-     * something else in the new trace.
-     */
+    //
+    // Restart the miss buffer after an inter-trace transition.
+    // This does NOT remove any in-flight entries, it just makes
+    // sure they don't erroneously wake up LFRQ slots used by
+    // something else in the new trace.
+    //
     void restart() {
       if (!(freemap.allset())) {
         foreach (i, SIZE) {
@@ -587,10 +601,10 @@ namespace DataCache {
       return -1;
     }
 
-    /*
-     * Request fully or partially missed both the L2 and L1
-     * caches and needs service from below.
-     */
+    //
+    // Request fully or partially missed both the L2 and L1
+    // caches and needs service from below.
+    //
     int initiate_miss(W64 addr, bool hit_in_L2, bool icache = 0) {
       bool DEBUG = analyze_in_detail();
 
@@ -763,7 +777,6 @@ namespace DataCache {
   template <int size>
   void LoadFillReqQueue<size>::annul(int lfrqslot) {
     LoadFillReq& req = reqs[lfrqslot];
-    
     if (analyze_in_detail()) logfile << "  Annul physical register r", req.lsi.info.rd, endl;
     lfrq_annuls++;
     missbuf.annul_lfrq(lfrqslot);
@@ -774,21 +787,25 @@ namespace DataCache {
 
   template <int linesize>
   ostream& CacheLine<linesize>::print(ostream& os, W64 tag) const {
+#if 0
     const byte* data = (const byte*)(W64)tag;
     foreach (i, linesize/8) {
       os << "    ", bytemaskstring(data + i*8, (W64)-1LL, 8, 8), " ";
       os << endl;
     }
+#endif
     return os;
   }
 
   template <int linesize>
   ostream& CacheLineWithValidMask<linesize>::print(ostream& os, W64 tag) const {
+#if 0
     const byte* data = (const byte*)(W64)tag;
     foreach (i, linesize/8) {
       os << "    ", bytemaskstring(data + i*8, valid(i*8, 8).integer(), 8, 8), " ";
       os << endl;
     }
+#endif
     return os;
   }
 
@@ -824,7 +841,7 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
   }
 
   if (!L1line) {
-    L1line = L1.select(addr);
+    //L1line = L1.select(addr);
     load_transfer_L2_to_L1_full++;
   } else {
     load_transfer_L2_to_L1_partial++;
@@ -846,24 +863,10 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
       "  sframask  ", sframask, endl, "  reqmask   ", reqmask, endl;
 #endif
   } else {
-    L2line = L2.select(addr); // also evicts L1 line
-    L1line = L1.select(addr);
-
-    if (!L2line) {
-      //
-      // We could not find a matching line in L2 and all
-      // ways are locked down by pending loads or stores.
-      // This is an exception (CacheLocked) that requires
-      // the trace to be split up.
-      //
-      state.ldreg.flags = FLAG_INV;
-      state.ldreg.rddata = EXCEPTION_CacheLocked;
-      stoptimer(load_slowpath_timer);
-      return -1;
-    }
   }
 
 #ifdef CACHE_ALWAYS_HITS
+  L1line = L1.select(addr);
   L1line->tag = L1.tagof(addr);
   L1line->valid.setall();
   L2line->tag = L2.tagof(addr);
@@ -872,6 +875,7 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
 #endif
 
 #ifdef L2_ALWAYS_HITS
+  L2line = L2.select(addr);
   L2line->tag = L2.tagof(addr);
   L2line->valid.setall();
   L2line->lru = sim_cycle;
@@ -960,7 +964,9 @@ bool probe_cache_and_sfr(W64 addr, const SFR* sfr, int sizeshift) {
   // If not, put this request on the LFRQ and mark it as waiting.
   //
 
-  return ((reqmask & (sframask | L1line->valid)) == reqmask);
+  bool hit = ((reqmask & (sframask | L1line->valid)) == reqmask);
+
+  return hit;
 }
 
 void annul_lfrq_slot(int lfrqslot) {
@@ -1053,101 +1059,12 @@ static inline W64 storemask(W64 addr, W64 data, byte bytemask) {
   return data;
 }
 
-void CommitRollbackCache<W64, L2CacheLine, L2_SET_COUNT, L2_WAY_COUNT, L2_LINE_SIZE, MAX_LOCKED_LINES>::invalidate_upwards(W64 addr) {
-  addr = floor(addr, L2_LINE_SIZE);
-  foreach (i, L2_LINE_SIZE / L1_LINE_SIZE) {
-    L1.invalidate(addr + i*L1_LINE_SIZE);
-  }
-}
 
-/*
- * Commit one store from an SFR to the transactional L2 cache.
- * The store must have already been checked for ALL exceptions,
- * however this function can still return CacheLocked if all
- * ways are locked.
- */
-W64 commitstore(const SFR& sfr) {
-  if (sfr.invalid | (sfr.bytemask == 0))
-    return 0;
-
-  //bool DEBUG = analyze_in_detail();
-  static const bool DEBUG = 0;
-
-  starttimer(store_flush_timer);
-
-  W64 addr = sfr.physaddr << 3;
-
-  L2CacheLine* L2line = L2.select_and_lock(addr);
-
-  if (!L2line) {
-    //
-    // We could not find a matching line in L2 and all
-    // ways are locked down by pending loads or stores.
-    // This is an exception (CacheLocked) that requires
-    // the trace to be split up.
-    //
-    // Notice that we only know about this condition
-    // in the deferred commit spill hardware, not at
-    // the time the store issues. Therefore it is sort
-    // of an asynchronous exception, but it still happens
-    // when the home commit group is executing.
-    //
-    stoptimer(store_flush_timer);
-    return EXCEPTION_CacheLocked;
-  }
-
-  //
-  // Slap a lock on the L2 line it so it can't get evicted,
-  // and make sure we can restore it if an exception occurs.
-  //
-  // We do NOT even test for hit/miss status on stores:
-  // if it was a hit, L2.select() will return the existing
-  // locked line; otherwise select() will allocate a new
-  // line and tag it appropriately.
-  //
-
-  storemask(signext64(sfr.physaddr << 3, 48), sfr.data, sfr.bytemask);
-
-  L1CacheLine* L1line = L1.select(addr);
-
-  L1line->valid |= ((W64)sfr.bytemask << lowbits(addr, 6));
-  L2line->valid |= ((W64)sfr.bytemask << lowbits(addr, 6));
-
-  if (!L1line->valid.allset()) {
-    store_prefetches++;
-    missbuf.initiate_miss(addr, L2line->valid.allset());
-  }
-
-  stoptimer(store_flush_timer);
-
-  return 0;
-}
-
-extern "C" W64 commitstore_direct(const SFR& sfr) {
-  //bool DEBUG = analyze_in_detail();
-  static const bool DEBUG = 0;
-
-  if (DEBUG) logfile << "commitstore_direct: ", sfr, endl;
-  W64 rc = commitstore(sfr);
-  if (!rc) store_commit_direct++;
-  return rc;
-}
-
-extern "C" W64 commitstore_deferred(const SFR& sfr) {
-  //bool DEBUG = analyze_in_detail();
-  static const bool DEBUG = 0;
-
-  if (DEBUG) logfile << "commitstore_deferred: ", sfr, endl;
-  W64 rc = commitstore(sfr);
-  if (!rc) store_commit_deferred++;
-  return rc;
-}
-
-/*
- * Commit one store from an SFR to the L2 cache without locking
- * any cache lines. The store must have already been checked
- * to have no exceptions.
- */
+//
+// Commit one store from an SFR to the L2 cache without locking
+// any cache lines. The store must have already been checked
+// to have no exceptions.
+//
 W64 commitstore_unlocked(const SFR& sfr) {
   if (sfr.invalid | (sfr.bytemask == 0))
     return 0;
@@ -1179,21 +1096,22 @@ W64 commitstore_unlocked(const SFR& sfr) {
   return 0;
 }
 
-void dcache_commit() {
-  L2.commit();
-}
-
-void dcache_rollback() {
-  L2.rollback();
-}
 
 void dcache_clock() {
+  if ((sim_cycle & 0x7fffffff) == 0x7fffffff) {
+    // Clear any 32-bit cycle-related counters in the cache to prevent wraparound:
+    L1.clearstats();
+    L1I.clearstats();
+    L2.clearstats();
+    L3.clearstats();
+    logfile << "Clearing cache statistics to prevent wraparound...", endl, flush;
+  }
+
   lfrq.clock();
   missbuf.clock();
 }
 
 void dcache_complete() {
-  L2.complete();
   lfrq.restart();
   missbuf.restart();
 }

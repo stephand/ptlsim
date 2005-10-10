@@ -11,6 +11,8 @@
 #include <globals.h>
 #include <superstl.h>
 
+extern ostream logfile;
+
 template <typename T> 
 struct latch {
   T data;
@@ -38,49 +40,6 @@ struct latch {
       data = newdata;
   }
 };
-
-typedef W64 regdata_t;
-
-template <int b>
-class reg {
-public:
-
-  reg() { }
-
-  reg(int r) { value = r; }
-
-  // operator , // (concat bits, verilog style)
-
-  reg(const reg<b>& r) { value = r.value; }
-
-  operator regdata_t() const {
-    return value;
-  }
-  /*
-  template <int high, int low>
-  reg<(high - low) + 1> bits() const {
-    //return bits(value, low, (high - low)+1);
-    return (value >> low);
-  }
-  */
-  regdata_t operator ()(int high, int low) const {
-    return (value >> low) & ((1 << ((high-low)+1)) - 1);
-  }
-
-  bool operator [](int i) const {
-    return (value >> i) & 1;
-  }
-
-protected:
-  regdata_t value:b;
-};
-
-template <int leftbits, int rightbits>
-reg<leftbits + rightbits> operator ,(const reg<leftbits>& r1, const reg<rightbits>& r2) {
-  return reg<leftbits + rightbits>(((regdata_t)r1 << rightbits) | (regdata_t)r2);
-}
-
-typedef reg<1> bit;
 
 template <typename T, int size>
 struct SynchronousRegisterFile {
@@ -446,7 +405,18 @@ stringbuf& operator <<(stringbuf& sb, const FullyAssociativeTags<T, ways>& tags)
   return tags.print(sb);
 }
 
-template <typename T, typename V, int ways>
+template <typename T, typename V>
+struct NullAssociativeArrayStatisticsCollector {
+  static void inserted(V& elem, T newtag, int way) { }
+  static void replaced(V& elem, T oldtag, T newtag, int way) { }
+  static void probed(V& elem, T tag, int way, bool hit) { }
+  static void overflow(T tag) { }
+  static void locked(V& slot, T tag, int way) { }
+  static void unlocked(V& slot, T tag, int way) { }
+  static void invalidated(V& elem, T oldtag, int way) { }
+};
+
+template <typename T, typename V, int ways, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
 struct FullyAssociativeArray {
   FullyAssociativeTags<T, ways> tags;
   V data[ways];
@@ -462,20 +432,30 @@ struct FullyAssociativeArray {
 
   V* probe(T tag) {
     int way = tags.probe(tag);
+    stats::probed((way < 0) ? data[0] : data[way], tag, way, (way >= 0));
     return (way < 0) ? null : &data[way];
   }
 
   V* select(T tag, T& oldtag) {
     int way = tags.select(tag, oldtag);
-    return (way < 0) ? null : &data[way];
+
+    V& slot = data[way];
+
+    if ((way >= 0) & (tag == oldtag)) {
+      stats::probed(slot, tag, way, 1);
+    } else {
+      if (oldtag == tags.INVALID)
+        stats::inserted(slot, tag, way);
+      else stats::replaced(slot, oldtag, tag, way);
+    }
+
+    return &slot;
   }
 
   V* select(T tag) {
     T dummy;
     return select(tag, dummy);
   }
-
-  void invalidate(T tag) { tags.invalidate(tag); }
 
   int wayof(const V* line) const {
     int way = (line - (const V*)&data);
@@ -490,10 +470,21 @@ struct FullyAssociativeArray {
     return tags.tags[way];
   }
 
-  void invalidate_line(V* line) {
-    int way = wayof(line);
+  void invalidate_way(int way) {
+    stats::invalidated(data[way], tags[way], way);
     tags.invalidate_way(way);
     data[way].reset();
+  }
+
+  void invalidate_line(V* line) {
+    invalidate_way(wayof(line));
+  }
+
+  int invalidate(T tag) {
+    int way = tags.probe(tag);
+    if (way < 0) return -1;
+    invalidate_way(way);
+    return way;
   }
   
   V& operator [](int way) { return data[way]; }
@@ -517,9 +508,9 @@ ostream& operator <<(ostream& os, const FullyAssociativeArray<T, V, ways>& assoc
   return assoc.print(os);
 }
 
-template <typename T, typename V, int setcount, int waycount, int linesize>
+template <typename T, typename V, int setcount, int waycount, int linesize, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
 struct AssociativeArray {
-  typedef FullyAssociativeArray<T, V, waycount> Set;
+  typedef FullyAssociativeArray<T, V, waycount, stats> Set;
   Set sets[setcount];
 
   AssociativeArray() {
@@ -676,6 +667,8 @@ struct LockableFullyAssociativeTags {
     invalidate_way(way);
   }
 
+  bool islocked(int way) const { return !unlockedmap[way]; }
+
   void lock(int way) { unlockedmap[way] = 0; }
   void unlock(int way) { unlockedmap[way] = 1; }
 
@@ -722,7 +715,7 @@ stringbuf& operator <<(stringbuf& sb, const LockableFullyAssociativeTags<T, ways
   return tags.print(sb);
 }
 
-template <typename T, typename V, int ways>
+template <typename T, typename V, int ways, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
 struct LockableFullyAssociativeArray {
   LockableFullyAssociativeTags<T, ways> tags;
   V data[ways];
@@ -738,12 +731,29 @@ struct LockableFullyAssociativeArray {
 
   V* probe(T tag) {
     int way = tags.probe(tag);
+    stats::probed((way < 0) ? data[0] : data[way], tag, way, (way >= 0));
     return (way < 0) ? null : &data[way];
   }
 
   V* select(T tag, T& oldtag) {
     int way = tags.select(tag, oldtag);
-    return (way < 0) ? null : &data[way];
+
+    if (way < 0) {
+      stats::overflow(tag);
+      return null;
+    }
+
+    V& slot = data[way];
+
+    if ((way >= 0) & (tag == oldtag)) {
+      stats::probed(slot, tag, way, 1);
+    } else {
+      if (oldtag == tags.INVALID)
+        stats::inserted(slot, tag, way);
+      else stats::replaced(slot, oldtag, tag, way);
+    }
+
+    return &slot;
   }
 
   V* select(T tag) {
@@ -753,8 +763,24 @@ struct LockableFullyAssociativeArray {
 
   V* select_and_lock(T tag, bool& firstlock, T& oldtag) {
     int way = tags.select_and_lock(tag, firstlock, oldtag);
-    if (way < 0) return null;
-    return &data[way];
+
+    if (way < 0) {
+      stats::overflow(tag);
+      return null;
+    }
+
+    V& slot = data[way];
+
+    if (tag == oldtag) {
+      stats::probed(slot, tag, way, 1);
+    } else {
+      if (oldtag == tags.INVALID)
+        stats::inserted(slot, tag, way);
+      else stats::replaced(slot, oldtag, tag, way);
+      stats::locked(slot, tag, way);
+    }
+
+    return &slot;
   }
 
   V* select_and_lock(T tag, bool& firstlock) {
@@ -763,8 +789,6 @@ struct LockableFullyAssociativeArray {
   }
 
   V* select_and_lock(T tag) { bool dummy; return select_and_lock(tag, dummy); }
-
-  void invalidate(T tag) { tags.invalidate(tag); }
 
   int wayof(const V* line) const {
     int way = (line - (const V*)&data);
@@ -779,20 +803,39 @@ struct LockableFullyAssociativeArray {
     return tags.tags[way];
   }
 
-  void invalidate_line(V* line) {
-    int way = wayof(line);
+  void invalidate_way(int way) {
+    unlock_way(way);
+    stats::invalidated(data[way], tags[way], way);
     tags.invalidate_way(way);
     data[way].reset();
   }
-  
-  void unlock(T tag) {
-    int way = probe(tag);
+
+  void invalidate_line(V* line) {
+    invalidate_way(wayof(line));
+  }
+
+  int invalidate(T tag) {
+    int way = tags.probe(tag);
+    if (way < 0) return;
+    invalidate_way(&data[way]);
+    return way;
+  }
+
+  void unlock_way(int way) {
+    stats::unlocked(data[way], tags[way], way);
     tags.unlock(way);
   }
 
   void unlock_line(V* line) {
-    int way = wayof(line);
-    tags.unlock(way);
+    unlock_way(wayof(line));
+  }
+
+  int unlock(T tag) {
+    int way = tags.probe(tag);
+    if (way < 0) return;
+    unlock_way(way);
+    if (tags.islocked(way)) stats::unlocked(data[way], tags[way], way);
+    return way;
   }
 
   V& operator [](int way) { return data[way]; }
@@ -816,9 +859,9 @@ ostream& operator <<(ostream& os, const LockableFullyAssociativeArray<T, V, ways
   return assoc.print(os);
 }
 
-template <typename T, typename V, int setcount, int waycount, int linesize>
+template <typename T, typename V, int setcount, int waycount, int linesize, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
 struct LockableAssociativeArray {
-  typedef LockableFullyAssociativeArray<T, V, waycount> Set;
+  typedef LockableFullyAssociativeArray<T, V, waycount, stats> Set;
   Set sets[setcount];
 
   struct ClearList {
@@ -865,8 +908,8 @@ struct LockableAssociativeArray {
     sets[setof(addr)].invalidate(tagof(addr));
   }
 
-  V* select_and_lock(T addr, bool& firstlock) {
-    V* line = sets[setof(addr)].select_and_lock(tagof(addr), firstlock);
+  V* select_and_lock(T addr, bool& firstlock, T& oldtag) {
+    V* line = sets[setof(addr)].select_and_lock(tagof(addr), firstlock, oldtag);
     if (!line) return null;
     if (firstlock) {
       int set = setof(addr);
@@ -876,6 +919,11 @@ struct LockableAssociativeArray {
       cleartail++;
     }
     return line;
+  }
+
+  V* select_and_lock(T addr, bool& firstlock) {
+    W64 dummy;
+    return select_and_lock(addr, firstlock, dummy);
   }
 
   V* select_and_lock(T addr) { bool dummy; return select_and_lock(addr, dummy); }
@@ -955,9 +1003,9 @@ ostream& operator <<(ostream& os, const LockableAssociativeArray<T, V, size, way
 // clean copies to be refetched as needed after the rollback.
 //
 
-template <typename T, typename V, int setcount, int waycount, int linesize, int maxdirty>
-struct CommitRollbackCache: public LockableAssociativeArray<T, V, setcount, waycount, linesize> {
-  typedef LockableAssociativeArray<T, V, setcount, waycount, linesize> array_t;
+template <typename T, typename V, int setcount, int waycount, int linesize, int maxdirty, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
+struct CommitRollbackCache: public LockableAssociativeArray<T, V, setcount, waycount, linesize, stats> {
+  typedef LockableAssociativeArray<T, V, setcount, waycount, linesize, stats> array_t;
   
   struct BackupCacheLine {
     W64* addr;
@@ -986,11 +1034,11 @@ struct CommitRollbackCache: public LockableAssociativeArray<T, V, setcount, wayc
     invalidate_upwards(addr);
   }
 
-  V* select_and_lock(T addr) {
+  V* select_and_lock(T addr, T& oldaddr) {
     addr = floor(addr, linesize);
 
     bool firstlock;
-    V* line = array_t::select_and_lock(addr, firstlock);
+    V* line = array_t::select_and_lock(addr, firstlock, oldaddr);
     if (!line) return null;
 
     if (firstlock) {
@@ -1001,6 +1049,11 @@ struct CommitRollbackCache: public LockableAssociativeArray<T, V, setcount, wayc
     }
 
     return line;
+  }
+
+  V* select_and_lock(T addr) {
+    T dummy;
+    return select_and_lock(addr, dummy);
   }
 
   void commit() {
@@ -1075,7 +1128,7 @@ struct FullyAssociativeTags8bit {
     return insertslot(idx, tag);
   }
 
-  bitvec<size> match(const vec16b target) const {
+  bitvec<size> match(const vec_t target) const {
     bitvec<size> m = 0;
 
     foreach (i, chunkcount) {
@@ -1085,14 +1138,34 @@ struct FullyAssociativeTags8bit {
     return m & valid;
   }
 
-  int search(const vec16b target) const {
+  bitvec<size> match(base_t target) const {
+    return match(prep(target));
+  }
+
+  bitvec<size> matchany(const vec_t target) const {
+    bitvec<size> m = 0;
+
+    vec_t zero = prep(0);
+
+    foreach (i, chunkcount) {
+      m = m.accum(i*16, 16, x86_sse_pmovmskb(x86_sse_pcmpeqb(x86_sse_pandb(tags[i], target), zero)));
+    }
+
+    return (~m) & valid;
+  }
+
+  bitvec<size> matchany(base_t target) const {
+    return matchany(prep(target));
+  }
+
+  int search(const vec_t target) const {
     bitvec<size> bitmap = match(target);
     int idx = bitmap.lsb();
     if (!bitmap) idx = -1;
     return idx;
   }
 
-  int extract(const vec16b target) {
+  int extract(const vec_t target) {
     int idx = search(target);
     if (idx >= 0) valid[idx] = 0;
     return idx;
@@ -1115,7 +1188,7 @@ struct FullyAssociativeTags8bit {
     return mask;
   }
 
-  bitvec<size> invalidate(const vec16b target) {
+  bitvec<size> invalidate(const vec_t target) {
     return invalidatemask(match(target));
   }
 
@@ -1124,12 +1197,12 @@ struct FullyAssociativeTags8bit {
   }
 
   void collapse(int index) {
-    byte* tagbase = (byte*)&tags;
-    byte* base = tagbase + index;
+    base_t* tagbase = (base_t*)&tags;
+    base_t* base = tagbase + index;
     vec_t* dp = (vec_t*)base;
     vec_t* sp = (vec_t*)(base + sizeof(base_t));
 
-    foreach (i, (ceil(size, 16) / 16)) {
+    foreach (i, chunkcount) {
       x86_sse_stvbu(dp++, x86_sse_ldvbu(sp++));
     }
 
@@ -1151,7 +1224,20 @@ struct FullyAssociativeTags8bit {
     else os << "???";
     return os;
   }
+
+  ostream& print(ostream& os) const {
+    foreach (i, size) {
+      printid(os, i);
+      os << " ";
+    }
+    return os;
+  }
 };
+
+template <int size, int padsize>
+ostream& operator <<(ostream& os, const FullyAssociativeTags8bit<size, padsize>& tags) {
+  return tags.print(os);
+}
 
 template <int size, int padsize = 0>
 struct FullyAssociativeTags16bit {
@@ -1204,24 +1290,44 @@ struct FullyAssociativeTags16bit {
     return insertslot(idx, tag);
   }
 
-  bitvec<size> match(const vec8w target) const {
+  bitvec<size> match(const vec_t target) const {
     bitvec<size> m = 0;
 
     foreach (i, chunkcount) {
-      m.accum(i*16, 16, x86_sse_pmovmskw(x86_sse_pcmpeqw(target, tags[i])));
+      m = m.accum(i*8, 8, x86_sse_pmovmskw(x86_sse_pcmpeqw(target, tags[i])));
     }
 
     return m & valid;
   }
 
-  int search(const vec8w target) const {
+  bitvec<size> match(base_t target) const {
+    return match(prep(target));
+  }
+
+  bitvec<size> matchany(const vec_t target) const {
+    bitvec<size> m = 0;
+
+    vec_t zero = prep(0);
+
+    foreach (i, chunkcount) {
+      m = m.accum(i*8, 8, x86_sse_pmovmskw(x86_sse_pcmpeqw(x86_sse_pandw(tags[i], target), zero)));
+    }
+
+    return (~m) & valid;
+  }
+
+  bitvec<size> matchany(base_t target) const {
+    return matchany(prep(target));
+  }
+
+  int search(const vec_t target) const {
     bitvec<size> bitmap = match(target);
     int idx = bitmap.lsb();
     if (!bitmap) idx = -1;
     return idx;
   }
 
-  int extract(const vec8w target) {
+  int extract(const vec_t target) {
     int idx = search(target);
     if (idx >= 0) valid[idx] = 0;
     return idx;
@@ -1253,12 +1359,12 @@ struct FullyAssociativeTags16bit {
   }
 
   void collapse(int index) {
-    byte* tagbase = (byte*)&tags;
-    byte* base = tagbase + index;
+    base_t* tagbase = (base_t*)&tags;
+    base_t* base = tagbase + index;
     vec_t* dp = (vec_t*)base;
     vec_t* sp = (vec_t*)(base + sizeof(base_t));
 
-    foreach (i, (ceil(size, 16) / 16)) {
+    foreach (i, chunkcount) {
       x86_sse_stvwu(dp++, x86_sse_ldvwu(sp++));
     }
 
@@ -1280,6 +1386,19 @@ struct FullyAssociativeTags16bit {
     else os << "???";
     return os;
   }
+
+  ostream& print(ostream& os) const {
+    foreach (i, size) {
+      printid(os, i);
+      os << " ";
+    }
+    return os;
+  }
 };
+
+template <int size, int padsize>
+ostream& operator <<(ostream& os, const FullyAssociativeTags16bit<size, padsize>& tags) {
+  return tags.print(os);
+}
 
 #endif // _LOGIC_H_

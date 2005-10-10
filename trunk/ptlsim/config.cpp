@@ -8,25 +8,6 @@
 #include <ptlsim.h>
 #include <datastore.h>
 
-class CommandLineOptions {
-public:
-  char* option;
-  int type;
-  bool ishex;
-  char* description;
-  void* variable;
-};
-
-enum {
-  OPTION_TYPE_NONE    = 0, 
-  OPTION_TYPE_W64     = 1,
-  OPTION_TYPE_FLOAT   = 2,
-  OPTION_TYPE_STRING  = 3,
-  OPTION_TYPE_TRAILER = 4,
-  OPTION_TYPE_BOOL    = 5,
-  OPTION_TYPE_SECTION = -1
-};
-
 ostream logfile;
 W64 sim_cycle = 0;
 W64 user_insn_commits = 0;
@@ -61,12 +42,11 @@ W64 flush_interval = MAX_CYCLE;
 W64 use_out_of_order_core = 1;
 W64 use_out_of_order_core_dummy;
 
-
 DataStoreNode* dsroot = null;
 W64 snapshotid;
 
 
-CommandLineOptions options[] = {
+static ConfigurationOption optionlist[] = {
   {null,                                 OPTION_TYPE_SECTION, 0, "Logging Control", null},
   {"quiet",                              OPTION_TYPE_BOOL,    0, "Do not print PTLsim system information banner", &nobanner},
   {"logfile",                            OPTION_TYPE_STRING,  0, "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)", &log_filename},
@@ -104,84 +84,53 @@ CommandLineOptions options[] = {
   {"ooo",                                OPTION_TYPE_BOOL,    0, "Use out of order core instead of PT2x core", &use_out_of_order_core_dummy},
 };
 
-void print_usage(int argc, char* argv[]) {
-  cerr << "Syntax: ptlsim <executable> <arguments...>", endl;
-  cerr << "All other options come from file /home/<username>/.ptlsim/path/to/executable", endl, endl;
-
-  cerr << "Options are:", endl;
-  foreach (i, lengthof(options)) {
+ostream& ConfigurationParser::printusage(ostream& os) const {
+  os << "Options are:", endl;
+  foreach (i, optioncount) {
     if (options[i].type == OPTION_TYPE_SECTION) {
-      cerr << options[i].description, ":", endl;
+      os << options[i].description, ":", endl;
       continue;
     }
-    cerr << "  -", padstring(options[i].option, -16), " ", options[i].description, " ";
+    os << "  -", padstring(options[i].option, -16), " ", options[i].description, " ";
     if (!options[i].variable) {
-      cerr << endl;
+      os << endl;
       continue;
     }
-    cerr << "[";
+    os << "[";
     switch (options[i].type) {
     case OPTION_TYPE_NONE:
       break;
     case OPTION_TYPE_W64:
-      cerr << *((W64*)(options[i].variable));
+      os << *((W64*)(options[i].variable));
       break;
     case OPTION_TYPE_FLOAT:
-      cerr << *((float*)(options[i].variable));
+      os << *((double*)(options[i].variable));
       break;
     case OPTION_TYPE_STRING:
-      cerr << *((char**)(options[i].variable));
+      os << *((char**)(options[i].variable));
       break;
     case OPTION_TYPE_BOOL:
-      cerr << ((*((W64**)(options[i].variable))) ? "enabled" : "disabled");
+      os << ((*((W64**)(options[i].variable))) ? "enabled" : "disabled");
       break;
     default:
       assert(false);
     }
-    cerr << "]", endl;
-  }
-  cerr << endl;
-}
-
-static char hostname[512] = "localhost";
-static char domainname[512] = "domain";
-
-void print_banner(ostream& os, int argc, char* argv[]) {
-  gethostname(hostname, sizeof(hostname));
-  getdomainname(domainname, sizeof(domainname));
-
-  os << "//  ", endl;
-  os << "//  PTLsim: Cycle Accurate x86-64 Simulator", endl;
-  os << "//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>", endl;
-  os << "// ", endl;
-  os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
-    stringify(__GNUC__), ".", stringify(__GNUC_MINOR__), endl;
-  os << "//  Running on ", hostname, ".", domainname, " (", (int)math::floor(CycleTimer::gethz() / 1000000.), " MHz)", endl;
-  os << "//  ", endl;
-  os << "//  Arguments: ";
-  foreach (i, argc) {
-    os << argv[i];
-    if (i != (argc-1)) os << ' ';
+    os << "]", endl;
   }
   os << endl;
-  os << "//  Thread ", getpid(), " is running in ", (ctx.use64 ? "64-bit x86-64" : "32-bit x86"), " mode", endl;
-  os << "//  ", endl;
-  os << endl;
+
+  return os;
 }
 
-void print_banner(int argc, char* argv[]) {
-  print_banner(cerr, argc, argv);
-}
+int ConfigurationParser::parse(int argc, char* argv[]) {
+  int i = 0;
 
-int parse_options(int argc, char* argv[], int realargc, char* realargv[]) {
-  int i = 1;
-
-  while (i <= argc) {
+  while (i < argc) {
     if ((argv[i][0] == '-') && strlen(argv[i]) > 1) {
       char* option = &argv[i][1];
       i++;
       bool found = false;
-      for (int j = 0; j < lengthof(options); j++) {
+      for (int j = 0; j < optioncount; j++) {
         if (options[j].type == OPTION_TYPE_SECTION) continue;
         if (strequal(option, options[j].option)) {
           found = true;
@@ -225,7 +174,7 @@ int parse_options(int argc, char* argv[], int realargc, char* realargv[]) {
             break;
           }
           case OPTION_TYPE_FLOAT:
-            *((float*)variable) = atof(argv[i++]);
+            *((double*)variable) = atof(argv[i++]);
             break;
           case OPTION_TYPE_STRING:
             *((char**)variable) = argv[i++];
@@ -243,71 +192,109 @@ int parse_options(int argc, char* argv[], int realargc, char* realargv[]) {
         cerr << "Warning: invalid option '", argv[i++], "'", endl;
       }
     } else {
-      // trailing arguments, if any
-      goto done;
+      return i; // trailing arguments, if any
     }
   }
-  done:
 
-  if (log_filename) {
-    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    logfile.open(log_filename);
-  }
+  // no trailing arguments
+  return -1;
+}
 
-  if (!nobanner) print_banner(cerr, realargc, realargv);
-  print_banner(logfile, realargc, realargv);
+ostream& ConfigurationParser::print(ostream& os) const {
+  os << "Active parameters:", endl;
 
-  logfile << "Active parameters:", endl;
-
-  foreach (i, lengthof(options)) {
+  foreach (i, optioncount) {
     if (!options[i].variable)
       continue;
-    logfile << "  -", padstring(options[i].option, -12), " ";
+    os << "  -", padstring(options[i].option, -12), " ";
     switch (options[i].type) {
     case OPTION_TYPE_NONE:
       break;
     case OPTION_TYPE_W64: {
       W64 v = *((W64*)(options[i].variable));
       if (v == 0) {
-        logfile << 0;
+        os << 0;
       } else if (v == MAX_CYCLE) {
-        logfile << "infinity";
+        os << "infinity";
       } else if ((v % 1000000000LL) == 0) {
-        logfile << (v / 1000000000LL), " G";
+        os << (v / 1000000000LL), " G";
       } else if ((v % 1000000LL) == 0) {
-        logfile << (v / 1000000LL), " M";
+        os << (v / 1000000LL), " M";
       } else {
-        logfile << v;
+        os << v;
       }
       break;
     } case OPTION_TYPE_FLOAT:
-      logfile << *((float*)(options[i].variable));
+      os << *((double*)(options[i].variable));
       break;
     case OPTION_TYPE_STRING:
-      logfile << *((char**)(options[i].variable));
+      os << *((char**)(options[i].variable));
       break;
     case OPTION_TYPE_BOOL:
-      logfile << *((W64*)(options[i].variable)) ? "enabled" : "disabled";
+      os << *((W64*)(options[i].variable)) ? "enabled" : "disabled";
       break;
     default:
       assert(false);
     }
-    logfile << endl;
+    os << endl;
   }
 
-  return 0;
+  return os;
 }
 
-extern char** initenv;
+ostream& operator <<(ostream& os, const ConfigurationParser& clp) {
+  return clp.print(os);
+}
 
-const char* get_full_exec_filename();
+void print_usage(int argc, char* argv[]) {
+  cerr << "Syntax: ptlsim <executable> <arguments...>", endl;
+  cerr << "All other options come from file /home/<username>/.ptlsim/path/to/executable", endl, endl;
+
+  ConfigurationParser(optionlist, lengthof(optionlist)).printusage(cerr);
+}
+
+static char hostname[512] = "localhost";
+static char domainname[512] = "domain";
+
+void print_banner(ostream& os, int argc, char* argv[]) {
+  gethostname(hostname, sizeof(hostname));
+  getdomainname(domainname, sizeof(domainname));
+
+  os << "//  ", endl;
+  os << "//  PTLsim: Cycle Accurate x86-64 Simulator", endl;
+  os << "//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>", endl;
+  os << "// ", endl;
+  os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
+    stringify(__GNUC__), ".", stringify(__GNUC_MINOR__), endl;
+  os << "//  Running on ", hostname, ".", domainname, " (", (int)math::floor(CycleTimer::gethz() / 1000000.), " MHz)", endl;
+  os << "//  ", endl;
+  os << "//  Arguments: ";
+  foreach (i, argc) {
+    os << argv[i];
+    if (i != (argc-1)) os << ' ';
+  }
+  os << endl;
+  os << "//  Thread ", getpid(), " is running in ", (ctx.use64 ? "64-bit x86-64" : "32-bit x86"), " mode", endl;
+  os << "//  ", endl;
+  os << endl;
+}
+
+void print_banner(int argc, char* argv[]) {
+  print_banner(cerr, argc, argv);
+}
+
+const char* get_full_exec_filename() {
+  static char full_exec_filename[1024];
+  int rc = readlink("/proc/self/exe", full_exec_filename, sizeof(full_exec_filename)-1);
+  assert(inrange(rc, 0, sizeof(full_exec_filename)-1));
+  full_exec_filename[rc] = 0;
+  return full_exec_filename;
+}
 
 int init_config(int argc, char** argv) {
   char confroot[1024] = "";
   stringbuf sb;
 
-  // Fix up environ to copied environment strings:
-  environ = initenv;
 
   char* homedir = getenv("HOME");
 
@@ -349,7 +336,25 @@ int init_config(int argc, char** argv) {
     while ((*p != 0) && (*p == ' ')) p++;
   }
 
-  parse_options(ptlargc, ptlargs, argc, argv);
+  ConfigurationParser options(optionlist, lengthof(optionlist));
+  // skip the leading argv[0]; just parse the options:
+  options.parse(ptlargc, ptlargs+1);
+
+  if (log_filename) {
+    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
+    logfile.open(log_filename);
+  }
+
+  if (!nobanner) print_banner(cerr, argc, argv);
+  print_banner(logfile, argc, argv);
+
+  //
+  // Fix up parameter defaults:
+  //
+  if ((start_log_at_iteration == MAX_CYCLE) && (loglevel > 0))
+    start_log_at_iteration = 0;
+
+  logfile << options;
 
   if (stats_filename) {
     dsroot = new DataStoreNode("root");

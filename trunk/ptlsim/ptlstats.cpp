@@ -9,6 +9,39 @@
 #include <ptlsim.h>
 #include <datastore.h>
 
+char* mode_subtree;
+char* mode_histogram;
+char* mode_collect;
+
+W64 format_text = 1;
+W64 format_html;
+W64 format_latex;
+
+char* graph_title;
+double graph_width = 300.0;
+double graph_height = 100.0;
+double graph_clip_percentile = 95.0;
+W64 graph_logscale = 0;
+double graph_logk = 100.;
+
+static ConfigurationOption optionlist[] = {
+  {null,                                 OPTION_TYPE_SECTION, 0, "Mode", null},
+  {"subtree",                            OPTION_TYPE_STRING,  0, "Subtree (specify path to node)", &mode_subtree},
+  {"collect",                            OPTION_TYPE_STRING,  0, "Collect specific statistic from multiple data stores", &mode_collect},
+  {"histogram",                          OPTION_TYPE_STRING,  0, "Histogram of specific node (specify path to node)", &mode_histogram},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Output Format", null},
+  {"text",                               OPTION_TYPE_BOOL,    0, "Text", &format_text},
+  {"html",                               OPTION_TYPE_BOOL,    0, "HTML", &format_html},
+  {"latex",                              OPTION_TYPE_BOOL,    0, "LaTeX", &format_latex},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Histogram Options", null},
+  {"title",                              OPTION_TYPE_STRING,  0, "Graph Title", &graph_title},
+  {"width",                              OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_width},
+  {"height",                             OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_height},
+  {"percentile",                         OPTION_TYPE_FLOAT,   0, "Clip percentile", &graph_clip_percentile},
+  {"logscale",                           OPTION_TYPE_BOOL,    0, "Use log scale", &graph_logscale},
+  {"logk",                               OPTION_TYPE_FLOAT,   0, "Log scale constant", &graph_logk},
+};
+
 
 const char* labels[] = {
   "L1hit", 
@@ -170,8 +203,6 @@ void print_short_stats_latex(ostream& os, int count) {
   os << "\\end{document}", endl;
 }
 
-//"fill:#ffffff;fill-opacity:1.0000000;fill-rule:evenodd;stroke:#8080ff;stroke-width:0.10000000;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4.0000000;stroke-opacity:1.0000000
-
 struct RGBAColor {
   float r;
   float g;
@@ -324,29 +355,34 @@ public:
   }
 };
 
-static const double logk = 100.;
-
 static inline double logscale(double x) {
-  return math::log(1 + (x*logk)) / math::log(1 + logk);
+  return math::log(1 + (x*graph_logk)) / math::log(1 + graph_logk);
 }
 
 static inline double invlogscale(double x) {
-  return (math::exp(x*math::log(1 + logk)) - 1) / logk;
+  return (math::exp(x*math::log(1 + graph_logk)) - 1) / graph_logk;
 }
 
-void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int count, double imagewidth = 300.0, double imageheight = 100.0, const RGBA& background = RGBA(225, 207, 255), bool uselogscale = 0) {
+const RGBA graph_background(225, 207, 255);
+
+void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int count, const char* title = null, double imagewidth = 300.0, double imageheight = 100.0) {
   double leftpad = 10.0;
   double toppad = 5.0;
   double rightpad = 4.0;
   double bottompad = 5.0;
+
+  if (title) toppad += 16;
 
   int maxwidth = 0;
 
   W64 total = 0;
   foreach (i, count) { total += histogram[i]; }
 
+  double cum = 0;
   foreach (i, count) { 
-    if (histogram[i] && (((double)histogram[i] / (double)total) >= 0.01)) maxwidth = i;
+    cum += ((double)histogram[i] / (double)total);
+    maxwidth++;
+    if (cum >= (graph_clip_percentile / 100.0)) break;
   }
 
   double maxheight = 0;
@@ -355,14 +391,27 @@ void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int 
   double xscale = imagewidth / ((double)maxwidth + 1);
 
   SVGCreator svg(os, imagewidth + leftpad + rightpad, imageheight + toppad + bottompad);
-  svg.setoffset(leftpad, toppad);
 
   svg.newlayer();
+
+  svg.strokewidth = 0.0;
+  svg.stroke = RGBA(255, 255, 255);
+  svg.filled = 0;
+  svg.rectangle(0, 0, imagewidth + leftpad + rightpad, imageheight + toppad + bottompad);
+
+  svg.setoffset(leftpad, toppad);
+
+  if (title) {
+    svg.fill = RGBA(0, 0, 0);
+    svg.filled = 1;
+    svg.setfont("font-size:8;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial;text-anchor:middle;writing-mode:lr-tb");
+    svg.text(title, imagewidth / 2, -6);
+  }
 
   svg.stroke = RGBA(0, 0, 0);
   svg.strokewidth = 0.0;
   svg.filled = 1;
-  svg.fill = background;
+  svg.fill = graph_background;
   svg.rectangle(0, 0, (maxwidth+1) * xscale, imageheight);
 
   svg.strokewidth = 0.0;
@@ -371,7 +420,7 @@ void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int 
 
   foreach (i, maxwidth+1) {
     double x = ((double)histogram[i] / (double)total) / maxheight;
-    if (uselogscale) x = logscale(x);
+    if (graph_logscale) x = logscale(x);
     double barsize = x * imageheight;
 
     if (barsize >= 0.1) svg.rectangle(i*xscale, imageheight - barsize, xscale, barsize);
@@ -391,7 +440,7 @@ void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int 
 
   for (double i = 0; i <= 1.0; i += 0.2) {
     stringbuf sb;
-    double value = (uselogscale) ? (invlogscale(i) * maxheight * 100.0) : (i * maxheight * 100.0);
+    double value = (graph_logscale) ? (invlogscale(i) * maxheight * 100.0) : (i * maxheight * 100.0);
     double y = ((1.0 - i)*imageheight);
     sb << floatstring(value, 0, 0), "%";
     svg.text(sb, -0.2, y - 0.2);
@@ -660,9 +709,10 @@ void print_usage() {
   cerr << "  -dumpraw          Dump raw data store tree nodes", endl;
   cerr << "  -shorthtml        Short statistics of multiple benchmarks in HTML table format", endl;
   cerr << "  -shortlatex       Short statistics of multiple benchmarks in LaTeX table format", endl;
+  cerr << "  -histogram <node> Histogram node", endl;
   cerr << "  -graph-all        Graph of numerous statistics plotted over cycles executed", endl;
   cerr << "  -graph-rawdata    Print raw data to be graphed in spreadsheet format", endl;
-  cerr << "  -examplehisto     Example histogram", endl;
+  cerr << "  -examplehisto     Graph example histogram", endl;
   cerr << endl;
 }
 
@@ -673,45 +723,107 @@ static const LineAttributes linetype_allfields[fieldcount] = {
 };
 
 
+void printbanner() {
+  cerr << "//  ", endl;
+  cerr << "//  PTLstats: PTLsim statistics data store analysis tool", endl;
+  cerr << "//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>", endl;
+  cerr << "//  ", endl;
+  cerr << endl;
+}
+
 int main(int argc, char* argv[]) {
-  argc--;
-  if (argc < 2) {
-    print_usage();
+
+  ConfigurationParser options(optionlist, lengthof(optionlist));
+
+  argc--; argv++;
+
+  if (!argc) {
+    printbanner();
+    cerr << "Syntax is:", endl;
+    cerr << "  ptlstats [-options] statsfile", endl, endl;
+    options.printusage(cerr);
     return 1;
   }
 
-  char* command = argv[1];
+  int n = options.parse(argc, argv);
 
-  const char* stats_filename = argv[2];
-  idstream is(stats_filename);
-  assert(is);
-
-  if (strequal(command, "-dumpraw")) {
-    cout << endl, "Loading stats from ", stats_filename, "...", endl, endl;
-    DataStoreNode& ds = *new DataStoreNode(is);
-    ds.print(cout, true);
-    delete &ds;
-  } else if (strequal(command, "-shorthtml")) {
-    collect_short_stats((char**)(&argv[2]), argc-1);
-    print_short_stats_html(cout, argc-1);
-  } else if (strequal(command, "-shortlatex")) {
-    collect_short_stats((char**)(&argv[2]), argc-1);
-    print_short_stats_latex(cout, argc-1);
-  } else if (strequal(command, "-graph-rawdata")) {
-    DataStoreNode& root = *new DataStoreNode(is);
-    create_time_lapse_graph(cout, root, linetype_allfields, RGBA(0, 0, 0), true);
-    delete &root;
-  } else if (strequal(command, "-graph-all")) {
-    DataStoreNode& root = *new DataStoreNode(is);
-    create_time_lapse_graph(cout, root, linetype_allfields);
-    delete &root;
-  } else if (strequal(command, "-examplehisto")) {
-    // For example purposes only: modify as needed
-    DataStoreNode& root = *new DataStoreNode(is);
-    DataStoreNode& ds = root("final")("group")("array-field-name");
-    create_svg_of_histogram_percent_bargraph(cout, (W64s*)ds, ds.count, 100.0, 25.0, RGBA(225, 207, 255), 0);
-  } else {
-    print_usage();
+  if (n < 0) {
+    printbanner();
+    logfile << "ptlstats: Error: no statistics data store filename given", endl, endl;
+    cerr << "Syntax is:", endl;
+    cerr << "  ptlstats [-options] statsfile", endl, endl;
+    options.printusage(cerr);
     return 1;
+  }
+
+  char* filename = argv[n];
+
+  if (mode_histogram) {
+    idstream is(filename);
+    if (!is) {
+      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+      return 2;
+    }
+
+    DataStoreNode* ds = new DataStoreNode(is);
+
+    ds = ds->searchpath(mode_histogram);
+    
+    if (!ds) {
+      cerr << "ptlstats: Error: cannot find subtree '", mode_histogram, "'", endl;
+      return 1;
+    }
+
+    if (!ds->histogramarray) {
+      cerr << "ptlstats: Error: subtree '", mode_histogram, "' is not a histogram array node", endl;
+      return 1;
+    }
+    create_svg_of_histogram_percent_bargraph(cout, *ds, ds->count, graph_title, graph_width, graph_height);
+    delete ds;
+  } else if (mode_collect) {
+    argv += n;
+    argc -= n;
+    foreach (i, argc) {
+      filename = argv[i];
+
+      idstream is(filename);
+      if (!is) {
+        cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+        return 2;
+      }
+
+      DataStoreNode* ds = new DataStoreNode(is);
+
+      ds = ds->searchpath(mode_collect);
+      if (!ds) {
+        cerr << "ptlstats: Error: cannot find subtree '", mode_collect, "'", endl;
+        return 1;
+      }
+
+      cout << filename, ": ";
+      ds->print(cout);
+      delete ds;
+    }      
+
+  } else {
+    idstream is(filename);
+    if (!is) {
+      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+      return 2;
+    }
+
+    DataStoreNode* ds = new DataStoreNode(is);
+
+    if (mode_subtree) {
+      ds = ds->searchpath(mode_subtree);
+
+      if (!ds) {
+        cerr << "ptlstats: Error: cannot find subtree '", mode_subtree, "'", endl;
+        return 1;
+      }
+    }
+
+    ds->print(cout);
+    delete ds;
   }
 }

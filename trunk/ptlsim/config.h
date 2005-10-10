@@ -11,11 +11,44 @@
 #include <globals.h>
 #include <stdarg.h>
 
-extern void print_banner(int argc, char* argv[]);
-extern void print_usage(int argc, char* argv[]);
-extern int parse_options(int argc, char* argv[]);
-extern int parse_options_from_env(int argc, char* argv[]);
-extern int init_config(int argc, char** argv);
+struct ConfigurationOption {
+  char* option;
+  int type;
+  bool ishex;
+  char* description;
+  void* variable;
+};
+
+enum {
+  OPTION_TYPE_NONE    = 0, 
+  OPTION_TYPE_W64     = 1,
+  OPTION_TYPE_FLOAT   = 2,
+  OPTION_TYPE_STRING  = 3,
+  OPTION_TYPE_TRAILER = 4,
+  OPTION_TYPE_BOOL    = 5,
+  OPTION_TYPE_SECTION = -1
+};
+
+struct ConfigurationParser {
+  const ConfigurationOption* options;
+  int optioncount;
+
+  ConfigurationParser(ConfigurationOption* options, int optioncount) {
+    this->options = options;
+    this->optioncount = optioncount;
+  }
+
+  int parse(int argc, char* argv[]);
+  ostream& printusage(ostream& os) const;
+  ostream& print(ostream& os) const;
+};
+
+ostream& operator <<(ostream& os, const ConfigurationParser& clp);
+
+const char* get_full_exec_filename();
+void print_banner(int argc, char* argv[]);
+void print_usage(int argc, char* argv[]);
+int init_config(int argc, char** argv);
 
 #define MAX_CYCLE (1LL << 62)
 
@@ -55,7 +88,7 @@ extern DataStoreNode* dsroot;
 extern W64 snapshotid;
 
 //inline bool analyze_in_detail() { return 0; }
-inline bool analyze_in_detail() { return ((iterations >= start_log_at_iteration) | (iterations == stop_at_iteration)); }
+inline bool analyze_in_detail() { return (loglevel > 0); }
 inline bool shortlog() { return (iterations >= start_short_log_at_iteration); }
 
 #define logable(level) (loglevel >= level)

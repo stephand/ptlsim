@@ -41,7 +41,7 @@ simsynth-offsets.h: genoffsets
 	./genoffsets > simsynth-offsets.h
 
 # Compile this fast:
-ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h
+ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h config.h
 	gcc $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -m64 -c ptlstats.cpp
 
 injectcode-64bit.o: injectcode.cpp
@@ -62,8 +62,8 @@ ptlsim: $(OBJFILES) Makefile ptlsim.lds
 ptlsim.objdump: ptlsim Makefile
 	objdump -Crtd --no-show-raw-insn ptlsim | convert-disasm-x86 > ptlsim.objdump
 
-ptlstats: ptlstats.o ptlhwdef.o superstl.o datastore.o Makefile
-	g++ -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o -o ptlstats
+ptlstats: ptlstats.o ptlhwdef.o superstl.o datastore.o config.o Makefile
+	g++ -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
 
 BASEADDR = 0
 

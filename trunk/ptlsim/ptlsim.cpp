@@ -101,6 +101,8 @@ void switch_to_sim() {
   show_stats_and_switch_to_native();
 }
 
+extern char** initenv;
+
 int main(W64 argc, char* argv[]) {
 
   if (!inside_ptlsim) {
@@ -115,6 +117,7 @@ int main(W64 argc, char* argv[]) {
   }
 
   total_time.start();
+  environ = initenv;
   init_config(argc, argv);
   init_perfctrs();
   if (ctx.use64) init_exit_callback();

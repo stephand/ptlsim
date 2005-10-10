@@ -20,7 +20,12 @@ DataStoreNode::DataStoreNode() {
   type = DS_NODE_TYPE_NULL;
   count = 0;
   name = null;
-  summable = 0; }
+  summable = 0;
+  histogramarray = 0;
+  histomin = 0;
+  histomax = 0;
+  histostride = 0;
+}
 
 DataStoreNode::DataStoreNode(const char* name) {
   init(name, DS_NODE_TYPE_NULL, 0);
@@ -119,6 +124,27 @@ DataStoreNode* DataStoreNode::search(const char* key) const {
   return (nodeptr) ? *nodeptr : null;
 }
 
+DataStoreNode* DataStoreNode::searchpath(const char* path) const {
+  char* pbase = strdup(path);
+  const DataStoreNode* ds = this;
+
+  char* p = pbase;
+
+  p = strtok(p, "/");
+  while (p) {
+    DataStoreNode* dsn = ds->search(p);
+    if (!dsn) {
+      delete pbase;
+      return null;
+    }
+    ds = dsn;
+    p = strtok(null, "/");
+  }
+
+  delete pbase;
+  return (DataStoreNode*)ds;
+}
+
 DataStoreNode& DataStoreNode::get(const char* key) {
   DataStoreNode* node = search(key);
   if (node)
@@ -142,10 +168,21 @@ DataStoreNode::DataStoreNode(const char* name, W64s value) {
   this->value.w = value;
 }
 
-DataStoreNode::DataStoreNode(const char* name, const W64s* values, int count) {
+DataStoreNode::DataStoreNode(const char* name, const W64s* values, int count, bool histogram) {
   init(name, DS_NODE_TYPE_INT, count);
   this->values = (count) ? (new DataType[count]) : null;
   if (this->values) arraycopy(this->values, (DataType*)values, count);
+}
+
+
+DataStoreNode& DataStoreNode::add(const char* key, W64s* value, int count, W64s histomin, W64s histomax, W64s histostride) {
+  DataStoreNode* ds = new DataStoreNode(key, (W64s*)value, count);
+  ds->histogramarray = 1;
+  ds->histomin = histomin;
+  ds->histomax = histomax;
+  ds->histostride = histostride;
+
+  return add(ds);
 }
 
 DataStoreNode& DataStoreNode::operator =(W64s data) {
@@ -344,8 +381,33 @@ double DataStoreNode::sum() const {
   return result;
 }
 
+DataStoreNode& DataStoreNode::histogram(const W64* values, int count) {
+  summable = 1;
+  foreach (i, count) {
+    stringbuf sb; sb << i;
+    if (values[i]) add(sb, values[i]);
+  }
+  return *this;
+}
+
+DataStoreNode& DataStoreNode::histogram(const char** names, const W64* values, int count) {
+  summable = 1;
+  foreach (i, count) {
+    if (values[i]) add(names[i], values[i]);
+  }
+  return *this;
+}
+
+static inline int digits(W64 v) {
+  stringbuf sb;
+  sb << v;
+  return strlen(sb);
+}
+
 ostream& DataStoreNode::print(ostream& os, bool percents, int depth, double supersum) const {
-  foreach (i, depth) { os << "  "; }
+  stringbuf padding;
+  foreach (i, depth) { padding << "  "; }
+  os << padding;
 
   double selfsum = sum();
 
@@ -365,9 +427,51 @@ ostream& DataStoreNode::print(ostream& os, bool percents, int depth, double supe
       os << " = ", value.w, ";";
     } else {
       os << "[", count, "] = {";
-      foreach (i, count) {
-        os << values[i].w;
-        if (i != (count-1)) os << ", ";
+
+      if (histogramarray) {
+        os << endl;
+
+        W64 total = 0;
+        W64 maxvalue = 0;
+        W64 minvalue = -1ULL;
+        foreach (i, count) {
+          total += values[i].w;
+          minvalue = min((W64)values[i].w, minvalue);
+          maxvalue = max((W64)values[i].w, maxvalue);
+        }
+
+        W64 thresh = max((W64)math::ceil((double)total / 1000.0), (W64)1);
+        W64 base = histomin;
+        int width = digits(max(histomin, histomax));
+        int valuewidth = digits(maxvalue);
+        int w = max(width, valuewidth);
+
+        os << padding, "  ", "Range:   ", intstring(histomin, w), " ", intstring(histomax, w), endl;
+        os << padding, "  ", "Stride:  ", intstring(histostride, w), endl;
+
+        os << padding, "  ", "ValRange:", intstring(minvalue, w), " ", intstring(maxvalue, w), endl;
+        os << padding, "  ", "Total:   ", intstring(total, w), endl;
+        os << padding, "  ", "Thresh:  ", intstring(thresh, w), endl;
+
+        foreach (i, count) {
+          W64 value = (W64)values[i].w;
+
+          if (value >= thresh) {
+            double percent = ((double)value / (double)total) * 100.0;
+            os << padding, "  [ ", floatstring(percent, 3, 0), "% ] ",
+              intstring(base, w), " ", 
+              intstring(base + (histostride-1), w), " ",
+              intstring(values[i].w, w), endl;
+          }
+
+          base += histostride;
+        }
+        os << padding;
+      } else {
+        foreach (i, count) {
+          os << values[i].w;
+          if (i != (count-1)) os << ", ";
+        }
       }
       os << "};";
     }
@@ -420,13 +524,20 @@ ostream& DataStoreNode::print(ostream& os, bool percents, int depth, double supe
   return os;
 }
 
+struct DataStoreNodeArrayHeader {
+  W32 count;
+  W64 histomin;
+  W64 histomax;
+  W64 histostride;
+};
+
 struct DataStoreNodeHeader {
-  char magic[4]; 
+  W32 magic;
   byte type;
   byte namelength;
-  W16 summable:1;
-  W32 count;
+  W16 isarray:1, summable:1, histogramarray:1;
   W32 subcount;
+  // (optional DataStoreNodeArrayInfo iff (isarray == 1)
   // (null-terminated name)
   // (count * sizeof(type) bytes)
   // (all subnodes)
@@ -436,19 +547,39 @@ DataStoreNode::DataStoreNode(idstream& is) {
   read(is);
 }
 
+#define DSN_MAGIC_VER_1 0x314e5344 // 'DSN1'
+
 bool DataStoreNode::read(idstream& is) {
   DataStoreNodeHeader h;
   is >> h;
 
+  // Multiple versions can be supported with different readers
+
   assert(is);
-  assert(h.magic[0] == 'D' && h.magic[1] == 'S' && h.magic[2] == 't' && h.magic[3] == 'N');
+
+  if (h.magic != DSN_MAGIC_VER_1) {
+    cerr << "DataStoreNode::read(): ERROR: stream does not have proper DSN version 1 header (0x", 
+      hexstring(h.magic, 32), ") at offset ", ftell(is), endl, flush;
+    return false;
+  }
+
+  DataStoreNodeArrayHeader ah;
+
+  if (h.isarray) {
+    is >> ah;
+    count = ah.count;
+    histomin = ah.histomin;
+    histomax = ah.histomax;
+    histostride = ah.histostride;
+  }
 
   name = new char[h.namelength+1];
   is.read((char*)name, h.namelength+1);
   type = h.type;
   summable = h.summable;
+  histogramarray = h.histogramarray;
 
-  count = h.count;
+  count = (h.isarray) ? ah.count : 1;
   subnodes = null;
   parent = null;
 
@@ -503,20 +634,30 @@ bool DataStoreNode::read(idstream& is) {
 
 odstream& DataStoreNode::write(odstream& os) const {
   DataStoreNodeHeader h;
+  DataStoreNodeArrayHeader ah;
+
   int namelen = strlen(name);
   assert(namelen < 256);
 
-  h.magic[0] = 'D';
-  h.magic[1] = 'S';
-  h.magic[2] = 't';
-  h.magic[3] = 'N';
+  h.magic = DSN_MAGIC_VER_1;
   h.type = type;
   h.namelength = (byte)namelen;
-  h.count = count;
-  h.subcount = (subnodes) ? subnodes->count : 0;
+  h.histogramarray = histogramarray;
   h.summable = summable;
 
+  h.isarray = (count > 1);
+  if (count > 1) {
+    ah.count = count;
+    ah.histomin = histomin;
+    ah.histomax = histomax;
+    ah.histostride = histostride;
+  }
+
+  h.subcount = (subnodes) ? subnodes->count : 0;
+
   os << h;
+  if (h.isarray) os << ah;
+
   os.write(name, h.namelength + 1);
 
   switch (type) {

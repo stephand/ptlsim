@@ -448,13 +448,26 @@ ostream& operator <<(ostream& os, const vec16b& v) {
   byte* b = (byte*)&v;
   for (int i = 0; i < 16; i++) {
     if (i) os << ' ';
-    //os << hexstring(b[i], 8);
     os << intstring(b[i], 3);
   }
   return os;
 }
 
 ostream& operator ,(ostream& os, const vec16b& v) {
+  return os << v;
+}
+
+ostream& operator <<(ostream& os, const vec8w& v) {
+  W16* b = (W16*)&v;
+  for (int i = 0; i < 8; i++) {
+    if (i) os << ' ';
+    os << intstring(b[i], 5);
+  }
+  return os;
+}
+
+
+ostream& operator ,(ostream& os, const vec8w& v) {
   return os << v;
 }
 

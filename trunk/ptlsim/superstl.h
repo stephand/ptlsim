@@ -2116,7 +2116,7 @@ namespace superstl {
       return (bitvec<N>(*this) >> index) % count;
     }
 
-    bitvec<N> operator ()(size_t index, size_t count) {
+    bitvec<N> operator ()(size_t index, size_t count) const {
       return extract(index, count);
     }
 

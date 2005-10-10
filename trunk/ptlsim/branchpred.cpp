@@ -71,6 +71,11 @@ struct BTBEntry {
   void reset() {
     target = 0;
   }
+
+  ostream& print(ostream& os, W64 tag) const {
+    os << (void*)target;
+    return os;
+  }
 };
 
 template <int SETCOUNT, int WAYCOUNT>

@@ -1019,6 +1019,7 @@ void switch_to_native_restore_context() {
   logfile << endl, "=== Switching to native mode at rip ", (void*)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
 
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
+
   thunkpage->call_code_addr = (W64)&thunkpage->switch_to_sim_thunk;
   thunkpage->simulated = 0;
   ptlsim_state_to_fpu_state();
@@ -1495,14 +1496,6 @@ int is_elf_64bit(const char* filename) {
   assert(h.magic == ELFMAGIC);
 
   return (h.class3264 == ELFCLASS64);
-}
-
-const char* get_full_exec_filename() {
-  static char full_exec_filename[1024];
-  int rc = readlink("/proc/self/exe", full_exec_filename, sizeof(full_exec_filename)-1);
-  assert(inrange(rc, 0, sizeof(full_exec_filename)-1));
-  full_exec_filename[rc] = 0;
-  return full_exec_filename;
 }
 
 int ptlsim_inject(int argc, char** argv) {

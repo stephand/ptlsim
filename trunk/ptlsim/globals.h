@@ -182,14 +182,18 @@ typedef v16qi vec16b;
 typedef W16 v8hi __attribute__ ((mode(V8HI)));
 typedef v8hi vec8w;
 
-inline vec16b x86_sse_pcmpeqb(vec16b a, const vec16b& b) { asm("pcmpeqb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec16b x86_sse_pcmpeqb(vec16b a, vec16b b) { asm("pcmpeqb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
 inline vec16b x86_sse_psubusb(vec16b a, vec16b b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
 inline vec16b x86_sse_paddusb(vec16b a, vec16b b) { asm("paddusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec8w x86_sse_pcmpeqw(vec8w a, const vec8w& b) { asm("pcmpeqw %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec8w x86_sse_psubusw(vec8w a, const vec8w& b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec8w x86_sse_paddusw(vec8w a, const vec8w& b) { asm("paddsub %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline W32 x86_sse_pmovmskb(const vec16b& vec) { W32 mask; asm("pmovmskb %[vec],%[mask]" : [mask] "=r" (mask) : [vec] "x" (vec)); return mask; }
-inline W32 x86_sse_pmovmskw(const vec8w& vec) { W32 mask; asm("pmovmskw %[vec],%[mask]" : [mask] "=r" (mask) : [vec] "x" (vec)); return mask; }
+inline vec16b x86_sse_pandb(vec16b a, vec16b b) { asm("pand %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_pcmpeqw(vec8w a, vec8w b) { asm("pcmpeqw %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_psubusw(vec8w a, vec8w b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_paddusw(vec8w a, vec8w b) { asm("paddsub %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_pandw(vec8w a, vec8w b) { asm("pand %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec16b x86_sse_packsswb(vec8w a, vec8w b) { asm("packsswb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return (vec16b)a; }
+inline W32 x86_sse_pmovmskb(vec16b vec) { W32 mask; asm("pmovmskb %[vec],%[mask]" : [mask] "=r" (mask) : [vec] "x" (vec)); return mask; }
+inline W32 x86_sse_pmovmskw(vec8w vec) { return x86_sse_pmovmskb(x86_sse_packsswb(vec, vec)) & 0xff; }
+
 inline vec16b x86_sse_ldvbu(const vec16b* m) { vec16b rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
 inline void x86_sse_stvbu(vec16b* m, const vec16b ra) { asm("movdqu %[ra],%[m]" : [m] "=xm" (*m) : [ra] "x" (ra) : "memory"); }
 inline vec8w x86_sse_ldvwu(const vec8w* m) { vec8w rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
@@ -416,6 +420,8 @@ inline ostream& operator <<(ostream& os, const range<scalar>& r) {
 
 ostream& operator <<(ostream& os, const vec16b& v);
 ostream& operator ,(ostream& os, const vec16b& v);
+ostream& operator <<(ostream& os, const vec8w& v);
+ostream& operator ,(ostream& os, const vec8w& v);
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #define likely(x) (x) 

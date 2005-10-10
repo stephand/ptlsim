@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <stdio.h>
+#include <errno.h>
 
 typedef unsigned char byte;
 typedef unsigned short W16;
@@ -39,11 +40,11 @@ static inline W64 ptlcall(W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W6
   if (running_under_ptlsim < 0) {
     /*
      * Quick and dirty trick to find out if a given page is mapped:
-     * If the page is valid, mremap() is basically a nop, but if
-     * it isn't, it returns -EFAULT.
+     * If the page is valid, munmap() is basically a nop, but if
+     * it isn't, it returns -ENOMEM.
      */
-    byte pagevec[1];
-    int rc = mincore(thunk, 4096, pagevec);
+
+    int rc = munlock(thunk, 4096);
     running_under_ptlsim = (rc == 0);
 
     if (running_under_ptlsim && (thunk->magic != PTLSIM_THUNK_MAGIC))

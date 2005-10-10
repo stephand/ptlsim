@@ -63,6 +63,9 @@ void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* 
 template <int size, int operandcount = MAX_OPERANDS>
 struct IssueQueue {
   typedef FullyAssociativeTags8bit<size, size> assoc_t;
+  typedef byte tag_t;
+  typedef vec16b vec_t;
+
   static const int SIZE = size;
 
   assoc_t uopids;
@@ -102,11 +105,9 @@ struct IssueQueue {
     }
   }
 
-  bool insert(byte uopid, const byte* operands, const byte* preready) {
+  bool insert(tag_t uopid, const tag_t* operands, const tag_t* preready) {
     if (count == size)
       return false;
-
-    assert(uopids.search(uopid) < 0);
 
     int slot = count++;
     assert(!bit(valid, slot));
@@ -125,10 +126,10 @@ struct IssueQueue {
     return true;
   }
 
-  void tally_broadcast_matches(byte sourceid, const bitvec<size>& mask, int operand) const;
+  void tally_broadcast_matches(tag_t sourceid, const bitvec<size>& mask, int operand) const;
 
-  bool broadcast(byte uopid) {
-    vec16b tagvec = assoc_t::prep(uopid);
+  bool broadcast(tag_t uopid) {
+    vec_t tagvec = assoc_t::prep(uopid);
 
     if (logable(1)) {
       foreach (operand, operandcount) {
@@ -166,7 +167,7 @@ struct IssueQueue {
   // Replay a uop that has already issued once.
   // The caller may add or reset dependencies here as needed.
   //
-  bool replay(int slot, const byte* operands, const byte* preready) {
+  bool replay(int slot, const tag_t* operands, const tag_t* preready) {
     assert(valid[slot]);
     assert(issued[slot]);
 
@@ -1059,7 +1060,7 @@ void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* 
 }
 
 template <int size, int operandcount>
-void IssueQueue<size, operandcount>::tally_broadcast_matches(byte sourceid, const bitvec<size>& mask, int operand) const {
+void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, operandcount>::tag_t sourceid, const bitvec<size>& mask, int operand) const {
   if (loglevel <= 0) return;
 
   const ReorderBufferEntry* source = &ROB[sourceid];
@@ -4005,23 +4006,6 @@ void dump_ooo_state() {
 
 void dcache_save_stats(DataStoreNode& ds);
 
-DataStoreNode& add_histogram(DataStoreNode& ds, W64* values, int count) {
-  ds.summable = 1;
-  foreach (i, count) {
-    stringbuf sb; sb << i;
-    if (values[i]) ds.add(sb, values[i]);
-  }
-  return ds;
-}
-
-DataStoreNode& add_histogram(DataStoreNode& ds, const char** names, W64* values, int count) {
-  ds.summable = 1;
-  foreach (i, count) {
-    if (values[i]) ds.add(names[i], values[i]);
-  }
-  return ds;
-}
-
 void ooo_capture_stats(DataStoreNode& root) {
 
   DataStoreNode& summary = root("summary"); {
@@ -4079,7 +4063,7 @@ void ooo_capture_stats(DataStoreNode& root) {
   }
 
   DataStoreNode& fetch = root("fetch"); {
-    add_histogram(fetch("width"), fetch_width_histogram, FETCH_WIDTH+1);
+    fetch("width").histogram(fetch_width_histogram, FETCH_WIDTH+1);
 
     DataStoreNode& stop = fetch("stop"); {
       stop.summable = 1;
@@ -4094,7 +4078,7 @@ void ooo_capture_stats(DataStoreNode& root) {
     fetch.add("uops", fetch_uops_fetched);
     fetch.add("user-insns", fetch_user_insns_fetched);
 
-    add_histogram(fetch("opclass"), opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
+    fetch("opclass").histogram(opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
   }
 
   DataStoreNode& frontend = root("frontend"); {
@@ -4124,7 +4108,7 @@ void ooo_capture_stats(DataStoreNode& root) {
       alloc.add("br", frontend_alloc_br);
     }
 
-    add_histogram(frontend("width"), frontend_width_histogram, FRONTEND_WIDTH+1);
+    frontend("width").histogram(frontend_width_histogram, FRONTEND_WIDTH+1);
   }
 
   DataStoreNode& dispatch = root("dispatch"); {
@@ -4166,11 +4150,11 @@ void ooo_capture_stats(DataStoreNode& root) {
 
     DataStoreNode& cluster = issue("width"); {
       foreach (i, MAX_CLUSTERS) {
-        add_histogram(cluster(clusters[i].name), issue_width_histogram[i], MAX_ISSUE_WIDTH+1);
+        cluster(clusters[i].name).histogram(issue_width_histogram[i], MAX_ISSUE_WIDTH+1);
       }
     }
 
-    add_histogram(issue("opclass"), opclass_names, issue_opclass_histogram, OPCLASS_COUNT);
+    issue("opclass").histogram(opclass_names, issue_opclass_histogram, OPCLASS_COUNT);
   }
 
   DataStoreNode& writeback = root("writeback"); {
@@ -4184,7 +4168,7 @@ void ooo_capture_stats(DataStoreNode& root) {
 
     DataStoreNode& cluster = writeback("width"); {
       foreach (i, MAX_CLUSTERS) {
-        add_histogram(cluster(clusters[i].name), writeback_width_histogram[i], WRITEBACK_WIDTH+1);
+        cluster(clusters[i].name).histogram(writeback_width_histogram[i], WRITEBACK_WIDTH+1);
       }
     }
   }
@@ -4217,9 +4201,9 @@ void ooo_capture_stats(DataStoreNode& root) {
       setflags.add("no", commit_flags_unset);
     }
 
-    add_histogram(commit("width"), commit_width_histogram, COMMIT_WIDTH+1);
+    commit("width").histogram(commit_width_histogram, COMMIT_WIDTH+1);
 
-    add_histogram(commit("opclass"), opclass_names, commit_opclass_histogram, OPCLASS_COUNT);
+    commit("opclass").histogram(opclass_names, commit_opclass_histogram, OPCLASS_COUNT);
   }
 
   DataStoreNode& branchpred = root("branchpred"); {
@@ -4269,7 +4253,8 @@ void ooo_capture_stats() {
   sb << snapshotid;
   snapshotid++;
 
-  ooo_capture_stats((*dsroot)(sb));
+  if (snapshot_cycles < MAX_CYCLE)
+    ooo_capture_stats((*dsroot)(sb));
 
   cttotal.start();
 }
@@ -4400,10 +4385,13 @@ void out_of_order_core_toplevel_loop() {
 
   cttotal.stop();
 
-  dump_ooo_state();
-
   core_to_external_state();
-  logfile << "Core State:", endl;
-  logfile << ctx.commitarf;
+
+  if (logable(1) | ((sim_cycle - last_commit_at_cycle) > 1024)) {
+    logfile << "Core State:", endl;
+    dump_ooo_state();
+    logfile << ctx.commitarf;
+  }
+
   logfile << flush;
 }
