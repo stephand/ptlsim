@@ -63,7 +63,7 @@
 
 // Line Usage Statistics
 
-#define TRACK_LINE_USAGE
+//#define TRACK_LINE_USAGE
 
 #ifdef TRACK_LINE_USAGE
 #define DCACHE_L1_LINE_LIFETIME_INTERVAL   1
