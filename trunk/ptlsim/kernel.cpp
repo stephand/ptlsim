@@ -25,10 +25,34 @@
 #include <sys/resource.h>
 #include <fcntl.h>
 
+//
+// Performance Counter Support:
+//
+// If you have a kernel compiled with the perfctr library (see below)
+// and have installed the appropriate userspace headers, edit the
+// Makefile to uncomment "ENABLE_KERNEL_PERFCTRS = 1".
+//
+// This will let PTLsim profile the native CPU for cycle counts,
+// cache hit rate, uop and x86 instruction counts, etc. This mode
+// is enabled by the "-profonly" configuration option, and can be
+// useful for comparing PTLsim against a real processor.
+//
+// Note that you will need a modified kernel that allows hooking
+// the native exit() syscall so PTLsim can regain control and
+// print the performance counters. If you don't have this, you'll
+// need to use ptlcall_switch_to_native() at the end of the
+// benchmark being profiled to make the perfctr support work.
+//
+// The perfctr library can be obtained here:
+// http://www.csd.uu.se/~mikpe/linux/perfctr
+// 
+
+#ifdef ENABLE_KERNEL_PERFCTRS
 extern "C" {
 #include <libperfctr.h>
 #include <perfctr_event_codes.h>
 }
+#endif
 
 #include <ptlsim.h>
 #include <config.h>
@@ -1321,28 +1345,14 @@ W64 handle_ptlcall(W64 rip, W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, 
 // This is where we end up after issuing opcode 0x0f37 (undocumented x86 PTL call opcode)
 void assist_ptlcall() {
   ctx.commitarf[REG_rax] = handle_ptlcall(ctx.commitarf[REG_sr1], ctx.commitarf[REG_rdi], ctx.commitarf[REG_rsi], ctx.commitarf[REG_rdx], ctx.commitarf[REG_rcx], ctx.commitarf[REG_r8], ctx.commitarf[REG_r9]);
-
-  /*
-  // REG_sr1 is return address
-  if (ctx.use64) {
-    // x86-64 passes args in registers: rdi rsi rdx rcx r8 r9
-    ctx.commitarf[REG_rax] = handle_ptlcall(ctx.commitarf[REG_rdi], ctx.commitarf[REG_rsi], ctx.commitarf[REG_rdx], ctx.commitarf[REG_rcx], ctx.commitarf[REG_r8], ctx.commitarf[REG_r9]);
-  } else {
-    // Get arguments from stack
-    if ((!asp.check((void*)(ctx.commitarf[REG_rsp] + 4), PROT_READ)) ||
-        (!asp.check((void*)(ctx.commitarf[REG_rsp] + 4 + (4*6)), PROT_READ))) {
-      ctx.commitarf[REG_rax] = -EFAULT;
-      return;
-    }
-    W32* sp = (W32*)ctx.commitarf[REG_rsp];
-    ctx.commitarf[REG_rax] = handle_ptlcall(sp[1], sp[2], sp[3], sp[4], sp[5], sp[6]);
-  }
-  */
 }
+
+CycleTimer ctperfctrs;
 
 //
 // Performance counters
 //
+#ifdef ENABLE_KERNEL_PERFCTRS
 static struct vperfctr* perfctrset = null;
 
 static void setup_perfctr_control(struct perfctr_cpu_control *cpu_control, int eventcount, const W64* events) {
@@ -1352,7 +1362,6 @@ static void setup_perfctr_control(struct perfctr_cpu_control *cpu_control, int e
   cpu_control->tsc_on = 1;
   cpu_control->nractrs = eventcount;
   cpu_control->nrictrs = 0;
-  //cpu_control->nrictrs = 2;
   foreach (i, eventcount) {
     cpu_control->evntsel[i] = events[i] | FLAGS_USERMODE_AND_ENABLED;
     cpu_control->pmc_map[i] = i;
@@ -1366,6 +1375,7 @@ void init_perfctrs() {
 
   perfctrset = vperfctr_open();
 #if 0
+  // Don't abort, just don't use the counters
   if (!perfctrset) {
     cerr << endl;
     cerr << "ptlsim: Error: cannot access CPU performance counters!", endl;
@@ -1375,8 +1385,6 @@ void init_perfctrs() {
   }
 #endif
 }
-
-CycleTimer ctperfctrs;
 
 void start_perfctrs() {
   if (!perfctrset) return;
@@ -1422,6 +1430,31 @@ void print_perfctrs(ostream& os) {
   os << "  L1 hits:                        ", intstring(dcache_hits, 15), " = ", floatstring(percent(dcache_hits, dcache_accesses), 6, 3), "% hit rate", endl;
 #undef deltaof
 }
+#else // ! ENABLE_KERNEL_PERFCTRS
+
+void init_perfctrs() {
+  // (No operation unless we have a perfctr-enabled kernel)
+}
+
+void start_perfctrs() {
+  // Use the TSC based userspace counter only
+  ctperfctrs.start();
+}
+
+void stop_perfctrs() {
+  // Use the TSC based userspace counter only
+  ctperfctrs.stop();
+}
+
+void print_perfctrs(ostream& os) {
+  W64 cycles = ctperfctrs.cycles();
+  double seconds = (double)cycles / CycleTimer::gethz();
+
+  os << "Performance Counters (K8 core):", endl;
+  os << "  Total cycles (by rdtsc):        ", intstring(ctperfctrs.cycles(), 15), " = ", floatstring(ctperfctrs.seconds(), 0, 6), " seconds", endl;
+}
+
+#endif // ! ENABLE_KERNEL_PERFCTRS
 
 //
 // Injection into target process
@@ -1506,38 +1539,38 @@ int ptlsim_inject(int argc, char** argv) {
   int x86_64_mode = is_elf_64bit(filename);
 
   if (x86_64_mode < 0) {
-    cerr << "ptlinject: cannot open ", filename, endl;
+    cerr << "ptlsim: cannot open ", filename, endl;
     sys_exit(1);
   }
 
-  if (DEBUG) cerr << "ptlinject[", gettid(), "]: ", filename, " is a ", (x86_64_mode ? "64-bit" : "32-bit"), " ELF executable", endl;
+  if (DEBUG) cerr << "ptlsim[", gettid(), "]: ", filename, " is a ", (x86_64_mode ? "64-bit" : "32-bit"), " ELF executable", endl;
 
   int pid = sys_fork();
 
   if (!pid) {
-    if (DEBUG) cerr << "ptlinject[", gettid(), "]: Executing ", filename, endl, flush;
+    if (DEBUG) cerr << "ptlsim[", gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
     int rc = sys_execve(filename, argv+1, environ);
 
     if (rc < 0) {
-      cerr << "ptlinject: rc ", rc, ": unable to exec ", filename, " (error: ", strerror(errno), ")", endl, flush;
+      cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, " (error: ", strerror(errno), ")", endl, flush;
       sys_exit(2);
     }
     assert(false);
   }
 
   if (pid < 0) {
-    cerr << "ptlinject[", gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
+    cerr << "ptlsim[", gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
     sys_exit(0);
   }
 
-  if (DEBUG) cerr << "ptlinject: waiting for child pid ", pid, "...", endl, flush;
+  if (DEBUG) cerr << "ptlsim: waiting for child pid ", pid, "...", endl, flush;
 
   int status;
   int rc = waitpid(pid, &status, 0);
   if (rc != pid) {
-    cerr << "ptlinject: waitpid returned ", rc, " (vs expected pid ", pid, "); failed with error ", strerror(errno), endl;
+    cerr << "ptlsim: waitpid returned ", rc, " (vs expected pid ", pid, "); failed with error ", strerror(errno), endl;
     sys_exit(3);
   }
 
@@ -1552,11 +1585,11 @@ int ptlsim_inject(int argc, char** argv) {
   info.origrip = regs.rip;
   info.origrsp = regs.rsp;
   const char* ptlsim_filename = get_full_exec_filename();
-  if (DEBUG) cerr << "ptlinject: PTLsim full filename is ", ptlsim_filename, endl;
+  if (DEBUG) cerr << "ptlsim: PTLsim full filename is ", ptlsim_filename, endl;
   strncpy(info.ptlsim_filename, ptlsim_filename, sizeof(info.ptlsim_filename)-1);
   info.ptlsim_filename[sizeof(info.ptlsim_filename)-1] = 0;
 
-  if (DEBUG) cerr << "ptlinject: Original process rip ", (void*)info.origrip, ", rsp ", (void*)info.origrsp, " for pid ", pid, endl;
+  if (DEBUG) cerr << "ptlsim: Original process rip ", (void*)info.origrip, ", rsp ", (void*)info.origrsp, " for pid ", pid, endl;
 
   regs.rsp -= sizeof(LoaderInfo);
 
@@ -1598,18 +1631,18 @@ int ptlsim_inject(int argc, char** argv) {
 
   assert(sys_ptrace(PTRACE_SETREGS, pid, 0, (W64)&regs) == 0);
 
-  if (DEBUG) cerr << "ptlinject: restarting child pid ", pid, " at ", (void*)regs.rip, "...", endl, flush;
+  if (DEBUG) cerr << "ptlsim: restarting child pid ", pid, " at ", (void*)regs.rip, "...", endl, flush;
 
   rc = ptrace(PTRACE_DETACH, pid, 0, 0);
   if (rc) {
-    cerr << "ptlinject: detach returned ", rc, ", error code ", strerror(errno), endl, flush;
+    cerr << "ptlsim: detach returned ", rc, ", error code ", strerror(errno), endl, flush;
     sys_exit(4);
   }
   rc = waitpid(pid, &status, 0);
 
   // (child done)
   status = WEXITSTATUS(status);
-  if (DEBUG) cerr << "ptlinject: exiting with exit code ", status, endl, flush;
+  if (DEBUG) cerr << "ptlsim: exiting with exit code ", status, endl, flush;
   return WEXITSTATUS(status);
 }
 

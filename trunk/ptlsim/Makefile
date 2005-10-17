@@ -25,6 +25,20 @@ COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.c
 OOOCPPFILES = ooocore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
+#
+# See the notes on "Performance Counter Support" in kernel.cpp
+# for how to use this. Uncomment this only if you have perfctr
+# kernel support and header files available.
+#
+# ENABLE_KERNEL_PERFCTRS = 1
+#
+
+ifdef ENABLE_KERNEL_PERFCTRS
+	LIBPERFCTR = -lperfctr
+else
+	LIBPERFCTR = 
+endif
+
 CFLAGS += -D__PTLSIM_OOO_ONLY__
 
 all: ptlsim ptlstats ptlcalls.o cpuid
@@ -57,7 +71,7 @@ ptlcalls-32bit.o: ptlcalls.c
 	gcc $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c ptlcalls.c -o ptlcalls-32bit.o
 
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
-	g++ -g -O2 $(OBJFILES) -o ptlsim -lperfctr -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
+	g++ -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
 
 ptlsim.objdump: ptlsim Makefile
 	objdump -Crtd --no-show-raw-insn ptlsim | convert-disasm-x86 > ptlsim.objdump
