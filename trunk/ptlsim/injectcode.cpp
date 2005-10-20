@@ -100,6 +100,7 @@ static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
 declare_syscall0(__NR_pause, void, sys_pause);
 
 declare_syscall2(__NR_munmap, int, sys_munmap, void*, start, size_t, length);
+declare_syscall2(__NR_fstat, int, sys_fstat, int, fd, struct stat*, buf);
 
 declare_syscall3(__NR_write, ssize_t, sys_write, int, fd, const void*, buf, size_t, count);
 declare_syscall3(__NR_lseek, off_t, sys_lseek, int, fd, off_t, offset, int, whence);
@@ -165,8 +166,9 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
   int fd = sys_open(info->ptlsim_filename, O_RDONLY, 0);
   if (fd < 0) sys_exit(250);
 
-  W64 filesize = sys_lseek(fd, 0, SEEK_END);
-  if ((W64s)filesize < 0) sys_exit(251);
+  struct stat sd;
+  rc = sys_fstat(fd, &sd);
+  if (rc < 0) sys_exit(251);
 
   void* temp = (void*)sys_mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, fd, 0);
 
@@ -205,7 +207,8 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
 #endif
   // Tell PTLsim it's running inside of target process address space now:
   ehdr->e_type = ET_PTLSIM;
-
+  // Update the PTLsim version
+  ehdr->e_version = sd.st_mtime;
   sys_munmap(temp, PAGE_SIZE);
   sys_close(fd);
 

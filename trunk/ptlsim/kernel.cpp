@@ -1816,6 +1816,8 @@ void expand_user_stack_to_addr(W64 desired_rsp) {
     expand_user_stack_to_addr(desired_rsp);
 }
 
+extern time_t ptlsim_build_timestamp;
+
 //
 // The real PTLsim entry point called by the kernel immediately after injecting
 // the ptlsim image into the target process is ptlsim_preinit_entry. This in
@@ -1836,6 +1838,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   Elf64_Ehdr* ptlsim_ehdr = (Elf64_Ehdr*)PTL_PAGE_POOL_BASE;
 
   inside_ptlsim = (ptlsim_ehdr->e_type == ET_PTLSIM);
+  ptlsim_build_timestamp = (time_t)ptlsim_ehdr->e_version;
 
   if (!inside_ptlsim) {
     // We're still a normal process - don't do anything special

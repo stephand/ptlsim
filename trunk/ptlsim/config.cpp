@@ -7,6 +7,7 @@
 
 #include <ptlsim.h>
 #include <datastore.h>
+#include <time.h>
 
 ostream logfile;
 W64 sim_cycle = 0;
@@ -291,6 +292,18 @@ const char* get_full_exec_filename() {
   return full_exec_filename;
 }
 
+time_t ptlsim_build_timestamp;
+
+static stringbuf& format_time(stringbuf& sb, time_t time) {
+  struct tm tm;
+  localtime_r(&time, &tm);
+
+  char timebuf[64];
+  strftime(timebuf, sizeof(timebuf), "%c", &tm);
+  sb << timebuf;
+  return sb;
+}
+
 int init_config(int argc, char** argv) {
   char confroot[1024] = "";
   stringbuf sb;
@@ -360,11 +373,14 @@ int init_config(int argc, char** argv) {
     dsroot = new DataStoreNode("root");
     DataStoreNode& info = (*dsroot)("ptlsim");
 
+    char timestring[64];
+
     stringbuf sb;
+    sb.reset();
+    info.add("timestamp", format_time(sb, time(null)));
 
     sb.reset();
-    sb << __DATE__, " ", __TIME__;
-    info.add("build-timestamp", sb);
+    info.add("build-timestamp", format_time(sb, ptlsim_build_timestamp));
 
     sb.reset();
     sb << stringify(BUILDHOST);

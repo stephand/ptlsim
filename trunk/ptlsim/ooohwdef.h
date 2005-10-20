@@ -41,20 +41,20 @@
 //
 // Load and Store Queues
 //
-#define LDQ_SIZE 48
-#define STQ_SIZE 32
+#define LDQ_SIZE 32
+#define STQ_SIZE 24
 
 //
 // Fetch
 //
-#define FETCH_QUEUE_SIZE 24
+#define FETCH_QUEUE_SIZE 18
 #define FETCH_WIDTH 6
 
 //
 // Frontend (Rename and Decode)
 //
 #define FRONTEND_WIDTH 3
-#define FRONTEND_STAGES 6
+#define FRONTEND_STAGES 4
 
 //
 // Dispatch
@@ -112,8 +112,8 @@ static const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
 
 IssueQueue<16> issueq_int0;
 IssueQueue<16> issueq_int1;
-IssueQueue<24> issueq_ld;
-IssueQueue<24> issueq_fp;
+IssueQueue<16> issueq_ld;
+IssueQueue<16> issueq_fp;
 
 #define foreach_issueq(expr) { issueq_int0.expr; issueq_int1.expr; issueq_ld.expr; issueq_fp.expr; }
 

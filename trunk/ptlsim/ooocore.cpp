@@ -526,13 +526,14 @@ struct ReorderBufferEntry: public selfqueuelink {
   W16s forward_cycle; // forwarding cycle after completion
   W8s cluster;
   byte fu;
-  W16s lfrqslot;
-  byte entry_valid:1, load_store_second_phase:1;
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-  byte dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1;
+  W8s lfrqslot;
   byte consumer_count;
-#endif
   W8s  iqslot;
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+  byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1;
+#else
+  byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1;
+#endif
 
   indexref<PhysicalRegister> physreg;
   indexref<PhysicalRegister> operands[MAX_OPERANDS];
@@ -565,10 +566,10 @@ struct ReorderBufferEntry: public selfqueuelink {
     lfrqslot = -1;
     lsq = 0;
     load_store_second_phase = 0;
+    consumer_count = 0;
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
     dest_renamed_before_writeback = 0;
     no_branches_between_renamings = 0;
-    consumer_count = 0;
 #endif
   }
 
@@ -1448,6 +1449,9 @@ W64 frontend_alloc_ldreg;
 W64 frontend_alloc_sfr;
 W64 frontend_alloc_br;
 
+// totals 100%:
+W64 frontend_rename_consumer_count_histogram[256];
+
 void rename() {
   int prepcount = 0;
 
@@ -1543,13 +1547,11 @@ void rename() {
       rob.operands[i]->addref(rob);
       assert(rob.operands[i]->current_state_list != &rob_free_list);
 
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
       if ((rob.operands[i]->current_state_list == &physreg_used_list) |
           (rob.operands[i]->current_state_list == &physreg_ready_list) |
           (rob.operands[i]->current_state_list == &physreg_written_list)) {
         rob.operands[i]->rob->consumer_count = min(rob.operands[i]->rob->consumer_count + 1, 255);
       }
-#endif
     }
 
     bool renamed_reg = 0;
@@ -3660,6 +3662,7 @@ int ReorderBufferEntry::commit() {
 
   bool ld = isload(uop.opcode);
   bool st = isstore(uop.opcode);
+  bool br = isbranch(uop.opcode);
 
   commit_opclass_histogram[opclassof(uop.opcode)]++;
 
@@ -3775,6 +3778,9 @@ int ReorderBufferEntry::commit() {
       commit_freereg_free++;
     }
   }
+
+  if (!(br|st)) frontend_rename_consumer_count_histogram[consumer_count]++;
+
   if (logable(1)) logfile << " [commit r", physreg->index(), "]";
 
   physreg->changestate(physreg_arch_list);
@@ -4099,6 +4105,10 @@ void ooo_capture_stats(DataStoreNode& root) {
       renamed.add("flags", frontend_renamed_flags);
       renamed.add("reg-and-flags", frontend_renamed_reg_and_flags);
     }
+
+    frontend.add("consumer-count", (W64s*)&frontend_rename_consumer_count_histogram, 
+                 lengthof(frontend_rename_consumer_count_histogram), 0, 
+                 lengthof(frontend_rename_consumer_count_histogram)-1, 1);
 
     DataStoreNode& alloc = frontend("alloc"); {
       alloc.summable = 1;
