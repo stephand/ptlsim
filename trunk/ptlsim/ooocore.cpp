@@ -20,6 +20,8 @@
 //#define ENABLE_CHECKS
 //#define ENABLE_LOGGING
 
+#define ENABLE_TRANSIENT_VALUE_TRACKING
+
 #ifndef ENABLE_CHECKS
 #undef assert
 #define assert(x) (x)

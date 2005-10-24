@@ -3094,6 +3094,54 @@ namespace TranslateX86 {
       break;
     }
 
+    case 0x1a3: // bt ra,rb
+    case 0x1bb: // btc ra,rb
+    case 0x1b3: // btr ra,rb
+    case 0x1ab: { // bts ra,rb
+      DECODE(eform, rd, v_mode);
+      DECODE(gform, ra, v_mode);
+      // Mem form is too complicated and very rare: we don't support it
+      if (rd.type != OPTYPE_REG) MakeInvalid();
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      int opcode;
+      switch (op) {
+      case 0x1a3: opcode = OP_bt; break;
+      case 0x1ab: opcode = OP_bts; break;
+      case 0x1b3: opcode = OP_btr; break;
+      case 0x1bb: opcode = OP_btc; break;
+      }
+ 
+      // bt has no output - just flags:
+      this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
+      break;
+    }
+
+    case 0x1ba: { // bt|btc|btr|bts ra,imm
+      DECODE(eform, rd, v_mode);
+      DECODE(iform, ra, b_mode);
+      // Mem form is too complicated and very rare: we don't support it
+      if (rd.type != OPTYPE_REG) MakeInvalid();
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+
+      int opcode;
+      switch (modrm.reg) {
+      case 4: opcode = OP_bt; break;
+      case 5: opcode = OP_bts; break;
+      case 6: opcode = OP_btr; break;
+      case 7: opcode = OP_btc; break;
+      default: MakeInvalid();
+      }
+
+      // bt has no output - just flags:
+      this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, REG_imm, REG_zero, 3, ra.imm.imm, 0, SETFLAG_CF);
+      break;
+    }
+
     case 0x118: {
       // prefetchN [eform]
       DECODE(eform, ra, b_mode);
