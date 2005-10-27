@@ -57,14 +57,32 @@ struct ReorderBufferEntry;
 void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand);
 
 //
+// IMPORTANT! Define this if you are using tags bigger than 255,
+// i.e. if ROB_SIZE > 256. This is defined later in ooohwdef.h
+// but we need it now.
+
+#define BIG_ROB
+
+//
 // Issue queue based scheduler with broadcast
 //
+#ifdef BIG_ROB
+typedef W16 issueq_tag_t;
+#else
+typedef byte issueq_tag_t;
+#endif
 
 template <int size, int operandcount = MAX_OPERANDS>
 struct IssueQueue {
+#ifdef BIG_ROB
+  typedef FullyAssociativeTags16bit<size, size> assoc_t;
+  typedef vec8w vec_t;
+#else
   typedef FullyAssociativeTags8bit<size, size> assoc_t;
-  typedef byte tag_t;
   typedef vec16b vec_t;
+#endif
+
+  typedef issueq_tag_t tag_t;
 
   static const int SIZE = size;
 
@@ -1999,8 +2017,8 @@ void print_lsq(ostream& os) {
 bool ReorderBufferEntry::find_sources() {
   int operands_still_needed = 0;
 
-  byte uopids[MAX_OPERANDS];
-  byte preready[MAX_OPERANDS];
+  issueq_tag_t uopids[MAX_OPERANDS];
+  issueq_tag_t preready[MAX_OPERANDS];
 
   foreach (operand, MAX_OPERANDS) {
     PhysicalRegister& source_physreg = *operands[operand];
@@ -2152,8 +2170,8 @@ void ReorderBufferEntry::replay() {
 
   int operands_still_needed = 0;
 
-  byte uopids[MAX_OPERANDS];
-  byte preready[MAX_OPERANDS];
+  issueq_tag_t uopids[MAX_OPERANDS];
+  issueq_tag_t preready[MAX_OPERANDS];
 
   foreach (operand, MAX_OPERANDS) {
     PhysicalRegister& source_physreg = *operands[operand];

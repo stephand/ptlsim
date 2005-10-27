@@ -1362,7 +1362,7 @@ struct FullyAssociativeTags16bit {
     base_t* tagbase = (base_t*)&tags;
     base_t* base = tagbase + index;
     vec_t* dp = (vec_t*)base;
-    vec_t* sp = (vec_t*)(base + sizeof(base_t));
+    vec_t* sp = (vec_t*)(base + 1);
 
     foreach (i, chunkcount) {
       x86_sse_stvwu(dp++, x86_sse_ldvwu(sp++));
