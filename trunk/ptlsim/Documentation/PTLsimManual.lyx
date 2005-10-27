@@ -3611,6 +3611,137 @@ ptlcalls.h
  header file.
 \layout Section
 
+Notes on Benchmarking Methodology
+\layout Standard
+
+The x86 instruction set requires some different benchmarking techniques
+ than classical RISC ISAs.
+ In particular, 
+\series bold 
+IPC (Instructions per Cycle) a NOT a good measure of performance for an
+ x86 processor.
+
+\series default 
+ Because one x86 instruction may be broken up into numerous uops, it is
+ never appropriate to compare IPC figures for committed x86 instructions
+ per clock with IPC values from a RISC machine.
+ Furthermore, different x86 implementations use varying numbers of uops
+ per x86 instruction as a matter of encoding, so even comparing the uop
+ based IPC between x86 implementations or RISC-like machines is inaccurate.
+\layout Standard
+
+Users are strongly advised to use relative performance measures instead.
+ Comparing the total simulated cycle count required to complete a given
+ benchmark between different simulator configurations is much more appropriate
+ than IPC with the x86 instruction set.
+ An example would be "the baseline took 100M cycles, while our improved
+ system took 50M cycles, for a 2x improvement.
+\layout Section
+
+Simulation Warmup Periods
+\layout Standard
+
+In some simulators, it is possible to quickly skip through a specific number
+ of instructions before starting to gather statistics, to avoid including
+ initialization code in the statistics.
+ In PTLsim, this is neither necessary nor desirable.
+ Because PTLsim directly executes your program on the host CPU until it
+ switches to cycle accurate simulation mode, there is no way to count instructio
+ns in this manner.
+ 
+\layout Standard
+
+Many researchers have gotten in the habit of blindly skipping a large number
+ of instructions in benchmarks to avoid profiling initialization code.
+ However, this is not a very intelligent policy: different benchmarks have
+ different startup times until the top of the main loop is reached, and
+ it is generally evident from the benchmark source code where that point
+ should be.
+ Therefore, PTLsim supports 
+\series bold 
+trigger points:
+\series default 
+ by inserting a special function call (
+\family typewriter 
+\size small 
+ptlcall_switch_to_sim
+\family default 
+\size default 
+) within the benchmark source code and recompiling, the 
+\family typewriter 
+\size small 
+-trigger
+\family default 
+\size default 
+ PTLsim option can be used to run the code on the host CPU until the trigger
+ point is reached.
+ If the source code is unavailable, the 
+\family typewriter 
+\size small 
+-startrip 
+\emph on 
+0xADDRESS
+\family default 
+\size default 
+\emph default 
+ option will start full simulation only at a specified address (e.g.
+ function entry point).
+ 
+\layout Standard
+
+If you want to warm up the cache and branch predictors prior to starting
+ statistics collection, combine the 
+\family typewriter 
+\size small 
+-trigger
+\family default 
+\size default 
+ option with the 
+\family typewriter 
+\size small 
+-snapshot 
+\emph on 
+N
+\family default 
+\size default 
+\emph default 
+ option, to start full simulation at the top of the benchmark's main loop
+ (where the trigger call is), but only start gathering statistics 
+\emph on 
+N
+\emph default 
+ cycles later, after the processor is warmed up.
+ Remember, since the trigger point is placed 
+\emph on 
+after
+\emph default 
+ all initialization code in the benchmark, in general it is only necessary
+ to use 10-20 million cycles of warmup time before taking the first statistics
+ snapshot.
+ In this time, the caches and branch predictor will almost always be completely
+ overwritten many times.
+ This approach significantly speeds up the simulation without any loss of
+ accuracy compared to the "fast simulation" mode provided by other simulators.
+ 
+\layout Standard
+
+In PTLstats, use the 
+\family typewriter 
+\size small 
+-delta
+\family default 
+\size default 
+ option to make sure the final statistics don't include the warmup period
+ before the first snapshot.
+ To subtract the final snapshot from snapshot 0 (the first snapshot after
+ the warmup period), use a command similar to the following:
+\layout LyX-Code
+
+
+\size small 
+ptlstats -deltastart 0 ptlsim.stats > ptlsim.stats.txt
+\layout Section
+
 Performance and Statistical Counters
 \layout Standard
 
