@@ -1,5 +1,5 @@
 //
-// PTLsim: Cycle Accurate x86-64 Simulator
+// Peptidal PT2x Simulation Infrastructure
 // Out-of-Order Core Simulator
 //
 // Copyright 2003-2005 Matt T. Yourst <yourst@yourst.com>
@@ -19,8 +19,6 @@
 // With these disabled, simulation is ~10-20% faster
 //#define ENABLE_CHECKS
 //#define ENABLE_LOGGING
-
-//#define ENABLE_TRANSIENT_VALUE_TRACKING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -626,7 +624,7 @@ struct ReorderBufferEntry: public selfqueuelink {
   int issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc);
   void release();
 
-  W64 annul(bool keep_misspec_uop);
+  W64 annul(bool keep_misspec_uop, bool return_first_annulled_rip = false);
 
   W64 annul_after() { return annul(true); }
   W64 annul_after_and_including() { return annul(false); }
@@ -2893,7 +2891,7 @@ W64 load_filled_callback(LoadStoreInfo lsi, W64 addr) {
 
 CycleTimer ctannul;
 
-W64 ReorderBufferEntry::annul(bool keep_misspec_uop) {
+W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_rip) {
   start_timer(ctannul);
 
   int idx;
@@ -3046,6 +3044,8 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop) {
   assert(ROB[startidx].uop.som);
 
   stop_timer(ctannul);
+
+  if (return_first_annulled_rip) return ROB[startidx].uop.rip;
 
   return (keep_misspec_uop) ? ROB[startidx].uop.riptaken : ROB[startidx].uop.rip;
 }
