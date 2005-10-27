@@ -385,7 +385,7 @@ DataStoreNode& DataStoreNode::histogram(const W64* values, int count) {
   summable = 1;
   foreach (i, count) {
     stringbuf sb; sb << i;
-    if (values[i]) add(sb, values[i]);
+    add(sb, values[i]);
   }
   return *this;
 }
@@ -393,7 +393,7 @@ DataStoreNode& DataStoreNode::histogram(const W64* values, int count) {
 DataStoreNode& DataStoreNode::histogram(const char** names, const W64* values, int count) {
   summable = 1;
   foreach (i, count) {
-    if (values[i]) add(names[i], values[i]);
+    add(names[i], values[i]);
   }
   return *this;
 }

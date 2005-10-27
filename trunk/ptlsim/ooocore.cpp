@@ -1,5 +1,5 @@
 //
-// Peptidal PT2x Simulation Infrastructure
+// PTLsim: Cycle Accurate x86-64 Simulator
 // Out-of-Order Core Simulator
 //
 // Copyright 2003-2005 Matt T. Yourst <yourst@yourst.com>
@@ -4320,6 +4320,8 @@ void check_refcounts() {
   if (errors) assert(false);
 }
 
+W64 last_stats_captured_at_cycle = 0;
+
 void out_of_order_core_toplevel_loop() {
   init_luts();
 
@@ -4356,6 +4358,11 @@ void out_of_order_core_toplevel_loop() {
 
     if (lowbits(sim_cycle, 16) == 0) 
       logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)ctx.commitarf[REG_rip], ")", endl, flush;
+
+    if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
+      ooo_capture_stats();
+      last_stats_captured_at_cycle = sim_cycle;
+    }
 
     // All FUs are available at top of cycle:
     fu_avail = bitmask(FU_COUNT);

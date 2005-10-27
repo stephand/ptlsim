@@ -24,6 +24,9 @@ double graph_clip_percentile = 95.0;
 W64 graph_logscale = 0;
 double graph_logk = 100.;
 
+char* delta_start = null;
+char* delta_end = "final";
+
 static ConfigurationOption optionlist[] = {
   {null,                                 OPTION_TYPE_SECTION, 0, "Mode", null},
   {"subtree",                            OPTION_TYPE_STRING,  0, "Subtree (specify path to node)", &mode_subtree},
@@ -33,6 +36,9 @@ static ConfigurationOption optionlist[] = {
   {"text",                               OPTION_TYPE_BOOL,    0, "Text", &format_text},
   {"html",                               OPTION_TYPE_BOOL,    0, "HTML", &format_html},
   {"latex",                              OPTION_TYPE_BOOL,    0, "LaTeX", &format_latex},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Statistics Range", null},
+  {"deltastart",                         OPTION_TYPE_STRING,  0, "Snapshot to start at", &delta_start},
+  {"deltaend",                           OPTION_TYPE_STRING,  0, "Snapshot to end at (i.e. subtract end - start)", &delta_end},
   {null,                                 OPTION_TYPE_SECTION, 0, "Histogram Options", null},
   {"title",                              OPTION_TYPE_STRING,  0, "Graph Title", &graph_title},
   {"width",                              OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_width},
@@ -803,8 +809,36 @@ int main(int argc, char* argv[]) {
       cout << filename, ": ";
       ds->print(cout);
       delete ds;
-    }      
+    } 
+  } else if (delta_start) {
+    idstream is(filename);
+    if (!is) {
+      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+      return 2;
+    }
 
+    DataStoreNode* ds = new DataStoreNode(is);
+
+    DataStoreNode* startds = ds->searchpath(delta_start);
+
+    if (!startds) {
+      cerr << "ptlstats: Error: cannot find starting snapshot '", delta_start, "'", endl;
+      return 1;
+    }
+
+    DataStoreNode* endds = ds->searchpath(delta_end);
+
+    if (!endds) {
+      cerr << "ptlstats: Error: cannot find ending snapshot '", delta_end, "'", endl;
+      return 1;
+    }
+
+    DataStoreNode* deltads = endds->subtract(*startds);
+
+    deltads->print(cout);
+
+    delete deltads;
+    delete ds;
   } else {
     idstream is(filename);
     if (!is) {
