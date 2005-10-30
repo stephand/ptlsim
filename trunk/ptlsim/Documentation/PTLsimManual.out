@@ -3,6 +3,7 @@
 \BOOKMARK [1][-]{section.1.1}{Introducing PTLsim}{chapter.1}
 \BOOKMARK [1][-]{section.1.2}{History}{chapter.1}
 \BOOKMARK [1][-]{section.1.3}{Documentation Roadmap}{chapter.1}
+\BOOKMARK [1][-]{section.1.4}{Additional Resources}{chapter.1}
 \BOOKMARK [0][-]{chapter.2}{Getting Started with PTLsim}{part.1}
 \BOOKMARK [1][-]{section.2.1}{Building PTLsim}{chapter.2}
 \BOOKMARK [1][-]{section.2.2}{Running PTLsim}{chapter.2}
@@ -23,7 +24,9 @@
 \BOOKMARK [1][-]{section.4.1}{Using PTLstats to Analyze Statistics}{chapter.4}
 \BOOKMARK [1][-]{section.4.2}{Statistics support in code}{chapter.4}
 \BOOKMARK [1][-]{section.4.3}{PTLsim Calls From User Code}{chapter.4}
-\BOOKMARK [1][-]{section.4.4}{Performance and Statistical Counters}{chapter.4}
+\BOOKMARK [1][-]{section.4.4}{Notes on Benchmarking Methodology}{chapter.4}
+\BOOKMARK [1][-]{section.4.5}{Simulation Warmup Periods}{chapter.4}
+\BOOKMARK [1][-]{section.4.6}{Performance and Statistical Counters}{chapter.4}
 \BOOKMARK [-1][-]{part.2}{II x86 Instruction Set and PTLsim Micro-Operations}{}
 \BOOKMARK [0][-]{chapter.5}{x86 Instructions and Micro-Ops \(uops\)}{part.2}
 \BOOKMARK [1][-]{section.5.1}{Micro-Ops \(uops\) and TransOps}{chapter.5}

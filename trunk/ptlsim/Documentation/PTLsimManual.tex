@@ -62,9 +62,15 @@ Order Microprocessor}\end{center}{\huge \par}
 \noindent \begin{center}{\LARGE Matt T. Yourst}\\
 \texttt{\large <yourst@yourst.com>}\end{center}{\large \par}
 
-\noindent \begin{center}Revision 20051001\end{center}
+\noindent \begin{center}Revision 20051010\end{center}
 
 \vfill{}
+\noindent \begin{center}The latest version of PTLsim and this document
+are always available at:\textsf{\textbf{\LARGE }}\\
+\textsf{\textbf{\LARGE }}\\
+\textsf{\textbf{\LARGE www.ptlsim.org}}\end{center}{\LARGE \par}
+
+\bigskip{}
 \noindent \begin{center}$\copyright$ 1999-2005 Matt T. Yourst \texttt{\small <yourst@yourst.com>}.\end{center}
 
 \noindent \begin{center}The PTLsim software and manual are free software;\\
@@ -145,6 +151,15 @@ of the PTLsim out of order core model
 uop instruction set, the performance monitoring events the simulator
 supports and a variety of other technical information.
 \end{itemize}
+
+\section{Additional Resources}
+
+The latest version of PTLsim and this document are always available
+at the PTLsim web site:
+
+\begin{quote}
+\textsf{\textbf{\large http://www.ptlsim.org}}{\large \par}
+\end{quote}
 
 \chapter{Getting Started with PTLsim}
 
@@ -232,7 +247,7 @@ program can be used to print and analyze these statistics by running
 
 \section{\label{sec:ConfigurationOptions}Configuration Options}
 
-PTLsim supports.a variety of options in the configuration file of
+PTLsim supports a variety of options in the configuration file of
 each program; you can run \char`\"{}ptlsim\char`\"{} without arguments
 to get a full list of these options. The options described below are
 used to control which code PTLsim executes and how it profiles it.
@@ -781,15 +796,36 @@ snapshots of all counters by specifying the {}``\texttt{\small -snapshot}
 
 The \emph{PTLstats} program is used to analyze the statistics data
 store files produced by PTLsim. The syntax of this command is {}``\texttt{\small ptlstats
--}\emph{command} \emph{filename}''. Presently the most useful command
-is {}``\texttt{\small -dumpraw}'', which prints out a textual representation
-of the internal tree format in which the statistics are maintained.
-PTLstats will automatically sum up all entries in certain branches
-of the tree to provide the user with a breakdown by percentages of
-the total for that subtree in addition to the raw values.
+-}\emph{options} \emph{filename}''.
+
+The following major actions) are supported:
+
+\begin{lyxlist}{WWWWWWWW}
+\item [(no~options)]Print the full PTLsim statistics tree in the textual
+format shown below.
+\item [\textbf{-subtree}\textbf{\emph{~}}\emph{root}]Print a subtree of
+the statistics tree. For instance, to print just the load unit statistics
+in the final snapshot, use {}``\texttt{\small ptlstats} \texttt{\textbf{\small -subtree
+final/dcache/load}} \texttt{\emph{\small filename.stats}}''.
+\item [\textbf{-collect}\textbf{\emph{~}}\emph{root}]Collect the same
+subtree from muliple statistics files and print all the subtrees.
+For instance, to print the L1 cache hit rate for two benchmarks, use
+{}``\texttt{\small ptlstats} \texttt{\textbf{\small -collect /final/dcache/load/hit/L1}}
+\texttt{\small bench1.stats bench2.stats ...}''. This option is useful
+for taking a cross section from all benchmarks of a specific statistic
+(or subtree of statistics).
+\item [\textbf{-histogram}\textbf{\emph{~}}\emph{root}]Generate a histogram
+graph, in SVG (Scalable Vector Graphics) format, of the specified
+statistics node. The node must be an array of integers previously
+marked as a histogram (see the source code examples for details).
+Various other options are provided to control the graph size, title,
+data percentile cutoff and log scaling. 
+\end{lyxlist}
+Additional options and their descriptions can be found by running
+\texttt{\small ptlstats} without any arguments.
 
 The following is an example of the type of output you can expect from
-the PTLstats command \texttt{\small -dumpraw}:
+PTLstats:
 
 \begin{lyxcode}
 {\small dcache~\{}{\small \par}
@@ -825,9 +861,11 @@ the PTLstats command \texttt{\small -dumpraw}:
 ~{\small ~~~\}}{\small \par}
 
 ~{\small ~~~...}{\small \par}
-
-
 \end{lyxcode}
+Notice how PTLstats will automatically sum up all entries in certain
+branches of the tree to provide the user with a breakdown by percentages
+of the total for that subtree in addition to the raw values.
+
 
 \section{Statistics support in code}
 
@@ -948,6 +986,71 @@ object file, since they cannot include C header files. The function
 names that should be used in the Fortran code remain the same as those
 from the \texttt{\small ptlcalls.h} header file.
 
+
+\section{Notes on Benchmarking Methodology}
+
+The x86 instruction set requires some different benchmarking techniques
+than classical RISC ISAs. In particular, \textbf{IPC (Instructions
+per Cycle) a NOT a good measure of performance for an x86 processor.}
+Because one x86 instruction may be broken up into numerous uops, it
+is never appropriate to compare IPC figures for committed x86 instructions
+per clock with IPC values from a RISC machine. Furthermore, different
+x86 implementations use varying numbers of uops per x86 instruction
+as a matter of encoding, so even comparing the uop based IPC between
+x86 implementations or RISC-like machines is inaccurate.
+
+Users are strongly advised to use relative performance measures instead.
+Comparing the total simulated cycle count required to complete a given
+benchmark between different simulator configurations is much more
+appropriate than IPC with the x86 instruction set. An example would
+be \char`\"{}the baseline took 100M cycles, while our improved system
+took 50M cycles, for a 2x improvement.
+
+
+\section{Simulation Warmup Periods}
+
+In some simulators, it is possible to quickly skip through a specific
+number of instructions before starting to gather statistics, to avoid
+including initialization code in the statistics. In PTLsim, this is
+neither necessary nor desirable. Because PTLsim directly executes
+your program on the host CPU until it switches to cycle accurate simulation
+mode, there is no way to count instructions in this manner. 
+
+Many researchers have gotten in the habit of blindly skipping a large
+number of instructions in benchmarks to avoid profiling initialization
+code. However, this is not a very intelligent policy: different benchmarks
+have different startup times until the top of the main loop is reached,
+and it is generally evident from the benchmark source code where that
+point should be. Therefore, PTLsim supports \textbf{trigger points:}
+by inserting a special function call (\texttt{\small ptlcall\_switch\_to\_sim})
+within the benchmark source code and recompiling, the \texttt{\small -trigger}
+PTLsim option can be used to run the code on the host CPU until the
+trigger point is reached. If the source code is unavailable, the \texttt{\small -startrip}
+\texttt{\emph{\small 0xADDRESS}} option will start full simulation
+only at a specified address (e.g. function entry point). 
+
+If you want to warm up the cache and branch predictors prior to starting
+statistics collection, combine the \texttt{\small -trigger} option
+with the \texttt{\small -snapshot} \texttt{\emph{\small N}} option,
+to start full simulation at the top of the benchmark's main loop (where
+the trigger call is), but only start gathering statistics \emph{N}
+cycles later, after the processor is warmed up. Remember, since the
+trigger point is placed \emph{after} all initialization code in the
+benchmark, in general it is only necessary to use 10-20 million cycles
+of warmup time before taking the first statistics snapshot. In this
+time, the caches and branch predictor will almost always be completely
+overwritten many times. This approach significantly speeds up the
+simulation without any loss of accuracy compared to the \char`\"{}fast
+simulation\char`\"{} mode provided by other simulators. 
+
+In PTLstats, use the \texttt{\small -delta} option to make sure the
+final statistics don't include the warmup period before the first
+snapshot. To subtract the final snapshot from snapshot 0 (the first
+snapshot after the warmup period), use a command similar to the following:
+
+\begin{lyxcode}
+{\small ptlstats~-deltastart~0~ptlsim.stats~>~ptlsim.stats.txt}{\small \par}
+\end{lyxcode}
 
 \section{Performance and Statistical Counters}
 
@@ -2782,12 +2885,12 @@ state transitions. For each active miss buffer, the \texttt{\small cycles}
 counter is decremented, and if it becomes zero, the MB's current state
 is examined. If a given miss buffer was in the \texttt{\small STATE\_DELIVER\_TO\_L3}
 state (i.e. in progress from main memory) and the cycle counter just
-became zero, a line in the L3 cache can now line is validated with
-the incoming data (this may involve evicting another line in the same
-set to make room). The MB is then moved to the next state up the cache
-hierarchy (i.e. \texttt{\small STATE\_DELIVER\_TO\_L2} in this example)
-and its cycles field is updated with the latency of the cache level
-it is now leaving (e.g. \texttt{\small L3\_LATENCY} in this example). 
+became zero, a line in the L3 cache is validated with the incoming
+data (this may involve evicting another line in the same set to make
+room). The MB is then moved to the next state up the cache hierarchy
+(i.e. \texttt{\small STATE\_DELIVER\_TO\_L2} in this example) and
+its cycles field is updated with the latency of the cache level it
+is now leaving (e.g. \texttt{\small L3\_LATENCY} in this example). 
 
 This process continues with successive levels until the MB is in the
 \texttt{\small STATE\_DELIVER\_TO\_L1} state and its cycles field

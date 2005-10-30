@@ -27,26 +27,26 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html610"
+<A NAME="tex2html622"
   HREF="node20.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html606"
+<A NAME="tex2html618"
   HREF="node9.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html600"
+<A NAME="tex2html612"
   HREF="node18.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html608"
+<A NAME="tex2html620"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html611"
+<B> Next:</B> <A NAME="tex2html623"
   HREF="node20.html">Branch Prediction</A>
-<B> Up:</B> <A NAME="tex2html607"
+<B> Up:</B> <A NAME="tex2html619"
   HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html601"
+<B> Previous:</B> <A NAME="tex2html613"
   HREF="node18.html">Commitment</A>
- &nbsp; <B>  <A NAME="tex2html609"
+ &nbsp; <B>  <A NAME="tex2html621"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -55,13 +55,13 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html612"
+<LI><A NAME="tex2html624"
   HREF="node19.html#SECTION041010000000000000000">General Configurable Parameters</A>
-<LI><A NAME="tex2html613"
+<LI><A NAME="tex2html625"
   HREF="node19.html#SECTION041020000000000000000">Initiating a Cache Miss</A>
-<LI><A NAME="tex2html614"
+<LI><A NAME="tex2html626"
   HREF="node19.html#SECTION041030000000000000000">Filling a Cache Miss</A>
-<LI><A NAME="tex2html615"
+<LI><A NAME="tex2html627"
   HREF="node19.html#SECTION041040000000000000000">Translation Lookaside Buffers</A>
 </UL>
 <!--End of Table of Child-Links-->
@@ -255,12 +255,12 @@ state transitions. For each active miss buffer, the <TT><FONT SIZE="-1">cycles</
 counter is decremented, and if it becomes zero, the MB's current state
 is examined. If a given miss buffer was in the <TT><FONT SIZE="-1">STATE_DELIVER_TO_L3</FONT></TT>
 state (i.e. in progress from main memory) and the cycle counter just
-became zero, a line in the L3 cache can now line is validated with
-the incoming data (this may involve evicting another line in the same
-set to make room). The MB is then moved to the next state up the cache
-hierarchy (i.e. <TT><FONT SIZE="-1">STATE_DELIVER_TO_L2</FONT></TT> in this example)
-and its cycles field is updated with the latency of the cache level
-it is now leaving (e.g. <TT><FONT SIZE="-1">L3_LATENCY</FONT></TT> in this example). 
+became zero, a line in the L3 cache is validated with the incoming
+data (this may involve evicting another line in the same set to make
+room). The MB is then moved to the next state up the cache hierarchy
+(i.e. <TT><FONT SIZE="-1">STATE_DELIVER_TO_L2</FONT></TT> in this example) and
+its cycles field is updated with the latency of the cache level it
+is now leaving (e.g. <TT><FONT SIZE="-1">L3_LATENCY</FONT></TT> in this example). 
 
 <P>
 This process continues with successive levels until the MB is in the
@@ -355,31 +355,31 @@ pipeline; PTLsim does not currently do this.
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html610"
+<A NAME="tex2html622"
   HREF="node20.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html606"
+<A NAME="tex2html618"
   HREF="node9.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html600"
+<A NAME="tex2html612"
   HREF="node18.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html608"
+<A NAME="tex2html620"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html611"
+<B> Next:</B> <A NAME="tex2html623"
   HREF="node20.html">Branch Prediction</A>
-<B> Up:</B> <A NAME="tex2html607"
+<B> Up:</B> <A NAME="tex2html619"
   HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html601"
+<B> Previous:</B> <A NAME="tex2html613"
   HREF="node18.html">Commitment</A>
- &nbsp; <B>  <A NAME="tex2html609"
+ &nbsp; <B>  <A NAME="tex2html621"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-03
+2005-10-26
 </ADDRESS>
 </BODY>
 </HTML>

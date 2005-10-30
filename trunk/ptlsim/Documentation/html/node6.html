@@ -26,26 +26,26 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html328"
+<A NAME="tex2html338"
   HREF="node7.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html324"
+<A NAME="tex2html334"
   HREF="node2.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html320"
+<A NAME="tex2html330"
   HREF="node5.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html326"
+<A NAME="tex2html336"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html329"
+<B> Next:</B> <A NAME="tex2html339"
   HREF="node7.html">x86 Instruction Set and</A>
-<B> Up:</B> <A NAME="tex2html325"
+<B> Up:</B> <A NAME="tex2html335"
   HREF="node2.html">PTLsim User's Guide</A>
-<B> Previous:</B> <A NAME="tex2html321"
+<B> Previous:</B> <A NAME="tex2html331"
   HREF="node5.html">PTLsim Internals</A>
- &nbsp; <B>  <A NAME="tex2html327"
+ &nbsp; <B>  <A NAME="tex2html337"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -54,14 +54,18 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html330"
+<LI><A NAME="tex2html340"
   HREF="node6.html#SECTION02410000000000000000">Using PTLstats to Analyze Statistics</A>
-<LI><A NAME="tex2html331"
+<LI><A NAME="tex2html341"
   HREF="node6.html#SECTION02420000000000000000">Statistics support in code</A>
-<LI><A NAME="tex2html332"
+<LI><A NAME="tex2html342"
   HREF="node6.html#SECTION02430000000000000000">PTLsim Calls From User Code</A>
-<LI><A NAME="tex2html333"
-  HREF="node6.html#SECTION02440000000000000000">Performance and Statistical Counters</A>
+<LI><A NAME="tex2html343"
+  HREF="node6.html#SECTION02440000000000000000">Notes on Benchmarking Methodology</A>
+<LI><A NAME="tex2html344"
+  HREF="node6.html#SECTION02450000000000000000">Simulation Warmup Periods</A>
+<LI><A NAME="tex2html345"
+  HREF="node6.html#SECTION02460000000000000000">Performance and Statistical Counters</A>
 </UL>
 <!--End of Table of Child-Links-->
 <HR>
@@ -92,16 +96,43 @@ snapshots of all counters by specifying the ``<TT><FONT SIZE="-1">-snapshot</FON
 <P>
 The <I>PTLstats</I> program is used to analyze the statistics data
 store files produced by PTLsim. The syntax of this command is ``<TT><FONT SIZE="-1">ptlstats
--</FONT></TT><I>command</I> <I>filename</I>''. Presently the most useful command
-is ``<TT><FONT SIZE="-1">-dumpraw</FONT></TT>'', which prints out a textual representation
-of the internal tree format in which the statistics are maintained.
-PTLstats will automatically sum up all entries in certain branches
-of the tree to provide the user with a breakdown by percentages of
-the total for that subtree in addition to the raw values.
+-</FONT></TT><I>options</I> <I>filename</I>''.
+
+<P>
+The following major actions) are supported:
+
+<P>
+
+<UL>
+<LI>[(no&nbsp;options)]Print the full PTLsim statistics tree in the textual
+format shown below.
+</LI>
+<LI>[<B>-subtree</B><B><I>&nbsp;</I></B><I>root</I>]Print a subtree of
+the statistics tree. For instance, to print just the load unit statistics
+in the final snapshot, use ``<TT><FONT SIZE="-1">ptlstats</FONT></TT> <TT><B><FONT SIZE="-1">-subtree
+final/dcache/load</FONT></B></TT> <TT><I><FONT SIZE="-1">filename.stats</FONT></I></TT>''.
+</LI>
+<LI>[<B>-collect</B><B><I>&nbsp;</I></B><I>root</I>]Collect the same
+subtree from muliple statistics files and print all the subtrees.
+For instance, to print the L1 cache hit rate for two benchmarks, use
+``<TT><FONT SIZE="-1">ptlstats</FONT></TT> <TT><B><FONT SIZE="-1">-collect /final/dcache/load/hit/L1</FONT></B></TT>
+<TT><FONT SIZE="-1">bench1.stats bench2.stats ...</FONT></TT>''. This option is useful
+for taking a cross section from all benchmarks of a specific statistic
+(or subtree of statistics).
+</LI>
+<LI>[<B>-histogram</B><B><I>&nbsp;</I></B><I>root</I>]Generate a histogram
+graph, in SVG (Scalable Vector Graphics) format, of the specified
+statistics node. The node must be an array of integers previously
+marked as a histogram (see the source code examples for details).
+Various other options are provided to control the graph size, title,
+data percentile cutoff and log scaling. 
+</LI>
+</UL>Additional options and their descriptions can be found by running
+<TT><FONT SIZE="-1">ptlstats</FONT></TT> without any arguments.
 
 <P>
 The following is an example of the type of output you can expect from
-the PTLstats command <TT><FONT SIZE="-1">-dumpraw</FONT></TT>:
+PTLstats:
 
 <P>
 
@@ -190,10 +221,11 @@ the PTLstats command <TT><FONT SIZE="-1">-dumpraw</FONT></TT>:
 &nbsp;<FONT SIZE="-1">&nbsp;&nbsp;&nbsp;...</FONT>
 <P>
 
-
-<P>
 </DD>
-</DL>
+</DL>Notice how PTLstats will automatically sum up all entries in certain
+branches of the tree to provide the user with a breakdown by percentages
+of the total for that subtree in addition to the raw values.
+
 <P>
 
 <H1><A NAME="SECTION02420000000000000000">
@@ -387,6 +419,89 @@ from the <TT><FONT SIZE="-1">ptlcalls.h</FONT></TT> header file.
 <P>
 
 <H1><A NAME="SECTION02440000000000000000">
+Notes on Benchmarking Methodology</A>
+</H1>
+
+<P>
+The x86 instruction set requires some different benchmarking techniques
+than classical RISC ISAs. In particular, <B>IPC (Instructions
+per Cycle) a NOT a good measure of performance for an x86 processor.</B>
+Because one x86 instruction may be broken up into numerous uops, it
+is never appropriate to compare IPC figures for committed x86 instructions
+per clock with IPC values from a RISC machine. Furthermore, different
+x86 implementations use varying numbers of uops per x86 instruction
+as a matter of encoding, so even comparing the uop based IPC between
+x86 implementations or RISC-like machines is inaccurate.
+
+<P>
+Users are strongly advised to use relative performance measures instead.
+Comparing the total simulated cycle count required to complete a given
+benchmark between different simulator configurations is much more
+appropriate than IPC with the x86 instruction set. An example would
+be &#34;the baseline took 100M cycles, while our improved system
+took 50M cycles, for a 2x improvement.
+
+<P>
+
+<H1><A NAME="SECTION02450000000000000000">
+Simulation Warmup Periods</A>
+</H1>
+
+<P>
+In some simulators, it is possible to quickly skip through a specific
+number of instructions before starting to gather statistics, to avoid
+including initialization code in the statistics. In PTLsim, this is
+neither necessary nor desirable. Because PTLsim directly executes
+your program on the host CPU until it switches to cycle accurate simulation
+mode, there is no way to count instructions in this manner. 
+
+<P>
+Many researchers have gotten in the habit of blindly skipping a large
+number of instructions in benchmarks to avoid profiling initialization
+code. However, this is not a very intelligent policy: different benchmarks
+have different startup times until the top of the main loop is reached,
+and it is generally evident from the benchmark source code where that
+point should be. Therefore, PTLsim supports <B>trigger points:</B>
+by inserting a special function call (<TT><FONT SIZE="-1">ptlcall_switch_to_sim</FONT></TT>)
+within the benchmark source code and recompiling, the <TT><FONT SIZE="-1">-trigger</FONT></TT>
+PTLsim option can be used to run the code on the host CPU until the
+trigger point is reached. If the source code is unavailable, the <TT><FONT SIZE="-1">-startrip</FONT></TT>
+<TT><I><FONT SIZE="-1">0xADDRESS</FONT></I></TT> option will start full simulation
+only at a specified address (e.g. function entry point). 
+
+<P>
+If you want to warm up the cache and branch predictors prior to starting
+statistics collection, combine the <TT><FONT SIZE="-1">-trigger</FONT></TT> option
+with the <TT><FONT SIZE="-1">-snapshot</FONT></TT> <TT><I><FONT SIZE="-1">N</FONT></I></TT> option,
+to start full simulation at the top of the benchmark's main loop (where
+the trigger call is), but only start gathering statistics <I>N</I>
+cycles later, after the processor is warmed up. Remember, since the
+trigger point is placed <I>after</I> all initialization code in the
+benchmark, in general it is only necessary to use 10-20 million cycles
+of warmup time before taking the first statistics snapshot. In this
+time, the caches and branch predictor will almost always be completely
+overwritten many times. This approach significantly speeds up the
+simulation without any loss of accuracy compared to the &#34;fast
+simulation&#34; mode provided by other simulators. 
+
+<P>
+In PTLstats, use the <TT><FONT SIZE="-1">-delta</FONT></TT> option to make sure the
+final statistics don't include the warmup period before the first
+snapshot. To subtract the final snapshot from snapshot 0 (the first
+snapshot after the warmup period), use a command similar to the following:
+
+<P>
+
+<DL COMPACT>
+<DT>
+<DD><FONT SIZE="-1">ptlstats&nbsp;-deltastart&nbsp;0&nbsp;ptlsim.stats&nbsp;&gt;&nbsp;ptlsim.stats.txt</FONT>
+<P>
+
+</DD>
+</DL>
+<P>
+
+<H1><A NAME="SECTION02460000000000000000">
 Performance and Statistical Counters</A>
 </H1>
 
@@ -397,31 +512,31 @@ in Section <A HREF="node23.html#sec:PerformanceCounters">18</A>.
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html328"
+<A NAME="tex2html338"
   HREF="node7.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html324"
+<A NAME="tex2html334"
   HREF="node2.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html320"
+<A NAME="tex2html330"
   HREF="node5.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html326"
+<A NAME="tex2html336"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html329"
+<B> Next:</B> <A NAME="tex2html339"
   HREF="node7.html">x86 Instruction Set and</A>
-<B> Up:</B> <A NAME="tex2html325"
+<B> Up:</B> <A NAME="tex2html335"
   HREF="node2.html">PTLsim User's Guide</A>
-<B> Previous:</B> <A NAME="tex2html321"
+<B> Previous:</B> <A NAME="tex2html331"
   HREF="node5.html">PTLsim Internals</A>
- &nbsp; <B>  <A NAME="tex2html327"
+ &nbsp; <B>  <A NAME="tex2html337"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-03
+2005-10-26
 </ADDRESS>
 </BODY>
 </HTML>

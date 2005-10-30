@@ -7,7 +7,12 @@ The Anatomy of an x86-64 Out of Order Microprocessor
 Matt T. Yourst
 <yourst@yourst.com>
 
-Revision 20051001
+Revision 20051010
+
+The latest version of PTLsim and this document are 
+always available at:
+
+www.ptlsim.org
 
 \copyright  1999-2005 Matt T. Yourst <yourst@yourst.com>.
 
@@ -21,6 +26,7 @@ Introducing PTLsim
     Introducing PTLsim
     History
     Documentation Roadmap
+    Additional Resources
 Getting Started with PTLsim
     Building PTLsim
     Running PTLsim
@@ -41,6 +47,8 @@ Statistics Collection and Control
     Using PTLstats to Analyze Statistics
     Statistics support in code
     PTLsim Calls From User Code
+    Notes on Benchmarking Methodology
+    Simulation Warmup Periods
     Performance and Statistical Counters
 x86 Instructions and Micro-Ops (uops)
     Micro-Ops (uops) and TransOps
@@ -206,6 +214,13 @@ This manual has been divided into several parts:
   events the simulator supports and a variety of other 
   technical information.
 
+ Additional Resources
+
+The latest version of PTLsim and this document are 
+always available at the PTLsim web site:
+
+http://www.ptlsim.org
+
 Getting Started with PTLsim
 
  Building PTLsim
@@ -297,7 +312,7 @@ analyze these statistics by running "ptlstats -dumpraw ls.stats".
 
  <sec:ConfigurationOptions>Configuration Options
 
-PTLsim supports.a variety of options in the 
+PTLsim supports a variety of options in the 
 configuration file of each program; you can run 
 "ptlsim" without arguments to get a full list of these 
 options. The options described below are used to 
@@ -951,17 +966,40 @@ final state.
 
 The PTLstats program is used to analyze the statistics 
 data store files produced by PTLsim. The syntax of this 
-command is "ptlstats -command filename". Presently the 
-most useful command is "-dumpraw", which prints out a 
-textual representation of the internal tree format in 
-which the statistics are maintained. PTLstats will 
-automatically sum up all entries in certain branches of 
-the tree to provide the user with a breakdown by 
-percentages of the total for that subtree in addition 
-to the raw values.
+command is "ptlstats -options filename".
+
+The following major actions) are supported:
+
+(no options) Print the full PTLsim statistics tree in 
+the textual format shown below.
+
+-subtree root Print a subtree of the statistics tree. 
+For instance, to print just the load unit statistics in 
+the final snapshot, use "ptlstats -subtree 
+final/dcache/load filename.stats".
+
+-collect root Collect the same subtree from muliple 
+statistics files and print all the subtrees. For 
+instance, to print the L1 cache hit rate for two 
+benchmarks, use "ptlstats -collect 
+/final/dcache/load/hit/L1 bench1.stats bench2.stats ..."
+. This option is useful for taking a cross section from 
+all benchmarks of a specific statistic (or subtree of 
+statistics).
+
+-histogram root Generate a histogram graph, in SVG 
+(Scalable Vector Graphics) format, of the specified 
+statistics node. The node must be an array of integers 
+previously marked as a histogram (see the source code 
+examples for details). Various other options are 
+provided to control the graph size, title, data 
+percentile cutoff and log scaling. 
+
+Additional options and their descriptions can be found 
+by running ptlstats without any arguments.
 
 The following is an example of the type of output you 
-can expect from the PTLstats command -dumpraw:
+can expect from PTLstats:
 
 dcache {
 
@@ -997,7 +1035,10 @@ dcache {
 
     ...
 
-
+Notice how PTLstats will automatically sum up all 
+entries in certain branches of the tree to provide the 
+user with a breakdown by percentages of the total for 
+that subtree in addition to the raw values.
 
  Statistics support in code
 
@@ -1131,6 +1172,81 @@ ptlcalls.o object file, since they cannot include C
 header files. The function names that should be used in 
 the Fortran code remain the same as those from the 
 ptlcalls.h header file.
+
+ Notes on Benchmarking Methodology
+
+The x86 instruction set requires some different 
+benchmarking techniques than classical RISC ISAs. In 
+particular, IPC (Instructions per Cycle) a NOT a good 
+measure of performance for an x86 processor. Because 
+one x86 instruction may be broken up into numerous 
+uops, it is never appropriate to compare IPC figures 
+for committed x86 instructions per clock with IPC 
+values from a RISC machine. Furthermore, different x86 
+implementations use varying numbers of uops per x86 
+instruction as a matter of encoding, so even comparing 
+the uop based IPC between x86 implementations or 
+RISC-like machines is inaccurate.
+
+Users are strongly advised to use relative performance 
+measures instead. Comparing the total simulated cycle 
+count required to complete a given benchmark between 
+different simulator configurations is much more 
+appropriate than IPC with the x86 instruction set. An 
+example would be "the baseline took 100M cycles, while 
+our improved system took 50M cycles, for a 2x improvement.
+
+ Simulation Warmup Periods
+
+In some simulators, it is possible to quickly skip 
+through a specific number of instructions before 
+starting to gather statistics, to avoid including 
+initialization code in the statistics. In PTLsim, this 
+is neither necessary nor desirable. Because PTLsim 
+directly executes your program on the host CPU until it 
+switches to cycle accurate simulation mode, there is no 
+way to count instructions in this manner. 
+
+Many researchers have gotten in the habit of blindly 
+skipping a large number of instructions in benchmarks 
+to avoid profiling initialization code. However, this 
+is not a very intelligent policy: different benchmarks 
+have different startup times until the top of the main 
+loop is reached, and it is generally evident from the 
+benchmark source code where that point should be. 
+Therefore, PTLsim supports trigger points: by inserting 
+a special function call (ptlcall_switch_to_sim) within 
+the benchmark source code and recompiling, the -trigger 
+PTLsim option can be used to run the code on the host 
+CPU until the trigger point is reached. If the source 
+code is unavailable, the -startrip 0xADDRESS option 
+will start full simulation only at a specified address 
+(e.g. function entry point). 
+
+If you want to warm up the cache and branch predictors 
+prior to starting statistics collection, combine the 
+-trigger option with the -snapshot N option, to start 
+full simulation at the top of the benchmark's main loop 
+(where the trigger call is), but only start gathering 
+statistics N cycles later, after the processor is 
+warmed up. Remember, since the trigger point is placed 
+after all initialization code in the benchmark, in 
+general it is only necessary to use 10-20 million 
+cycles of warmup time before taking the first 
+statistics snapshot. In this time, the caches and 
+branch predictor will almost always be completely 
+overwritten many times. This approach significantly 
+speeds up the simulation without any loss of accuracy 
+compared to the "fast simulation" mode provided by 
+other simulators. 
+
+In PTLstats, use the -delta option to make sure the 
+final statistics don't include the warmup period before 
+the first snapshot. To subtract the final snapshot from 
+snapshot 0 (the first snapshot after the warmup 
+period), use a command similar to the following:
+
+ptlstats -deltastart 0 ptlsim.stats > ptlsim.stats.txt
 
  Performance and Statistical Counters
 
@@ -3102,14 +3218,14 @@ buffer, the cycles counter is decremented, and if it
 becomes zero, the MB's current state is examined. If a 
 given miss buffer was in the STATE_DELIVER_TO_L3 state 
 (i.e. in progress from main memory) and the cycle 
-counter just became zero, a line in the L3 cache can 
-now line is validated with the incoming data (this may 
-involve evicting another line in the same set to make 
-room). The MB is then moved to the next state up the 
-cache hierarchy (i.e. STATE_DELIVER_TO_L2 in this 
-example) and its cycles field is updated with the 
-latency of the cache level it is now leaving (e.g. 
-L3_LATENCY in this example). 
+counter just became zero, a line in the L3 cache is 
+validated with the incoming data (this may involve 
+evicting another line in the same set to make room). 
+The MB is then moved to the next state up the cache 
+hierarchy (i.e. STATE_DELIVER_TO_L2 in this example) 
+and its cycles field is updated with the latency of the 
+cache level it is now leaving (e.g. L3_LATENCY in this 
+example). 
 
 This process continues with successive levels until the 
 MB is in the STATE_DELIVER_TO_L1 state and its cycles 

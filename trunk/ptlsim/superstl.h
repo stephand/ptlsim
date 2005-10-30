@@ -1255,7 +1255,7 @@ namespace superstl {
     B value;
   };
 
-  template <typename K>
+  template <typename K, int setcount>
   struct HashtableKeyManager {
     static inline int hash(K key);
     static inline bool equal(K a, K b);
@@ -1263,7 +1263,7 @@ namespace superstl {
     static inline void free(K key);
   };
 
-  template <typename K, typename T, int setcount = 64, typename KM = HashtableKeyManager<K> >
+  template <typename K, typename T, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
   class Hashtable {
   protected:
     struct Entry: public KeyValuePair<K, T> {
@@ -1394,46 +1394,45 @@ namespace superstl {
     return ht.print(os);
   }
 
-  //
-  // HashtableKeyManager<const char*>
-  //
-  inline int HashtableKeyManager<const char*>::hash(const char* key) {
-    int len = strlen(key);
-    CRC32 h;
-    
-    foreach (i, len) { h << key[i]; }
+  template <int setcount>
+  struct HashtableKeyManager<W64, setcount> {
+    static inline int hash(W64 key) {
+      W64 slot = 0;
 
-    return h;
-  }
+      foreach (i, (64 / log2(setcount))+1) {
+        slot ^= key;
+        key >>= log2(setcount);
+      }
 
-  inline bool HashtableKeyManager<const char*>::equal(const char* a, const char* b) {
-    return (strcmp(a, b) == 0);
-  }
+      return slot;
+    }
 
-  inline const char* HashtableKeyManager<const char*>::dup(const char* key) {
-    return strdup(key);
-  }
+    static inline bool equal(W64 a, W64 b) { return (a == b); }
+    static inline W64 dup(W64 key) { return key; }
+    static inline void free(W64 key) { }
+  };
 
-  inline void HashtableKeyManager<const char*>::free(const char* key) {
-    ::free((void*)key);
-  }
+  template <int setcount>
+  struct HashtableKeyManager<const char*, setcount> {
+    static inline int hash(const char* key) {
+      int len = strlen(key);
+      CRC32 h;
+      foreach (i, len) { h << key[i]; }
+      return h;
+    }
 
-  //
-  // HashtableKeyManager<W64>
-  //
-  inline int HashtableKeyManager<W64>::hash(W64 key) {
-    return key;
-  }
+    static inline bool equal(const char* a, const char* b) {
+      return (strcmp(a, b) == 0);
+    }
 
-  inline bool HashtableKeyManager<W64>::equal(W64 a, W64 b) {
-    return (a == b);
-  }
+    static inline const char* dup(const char* key) {
+      return strdup(key);
+    }
 
-  inline W64 HashtableKeyManager<W64>::dup(W64 key) {
-    return key;
-  }
-
-  inline void HashtableKeyManager<W64>::free(W64 key) { }
+    static inline void free(const char* key) {
+      ::free((void*)key);
+    }
+  };
 
   //
   // ChunkHashtable

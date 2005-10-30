@@ -1,4 +1,4 @@
-This is pdfeTeX, Version 3.141592-1.21a-2.2 (Web2C 7.5.4) (format=pdflatex 2005.7.13)  3 OCT 2005 19:47
+This is pdfeTeX, Version 3.141592-1.21a-2.2 (Web2C 7.5.4) (format=pdflatex 2005.7.13)  26 OCT 2005 22:59
 entering extended mode
 **PTLsimManual.tex
 (./PTLsimManual.tex
@@ -247,24 +247,26 @@ LaTeX Font Info:    Try loading font information for T1+pcr on input line 63.
 (/usr/share/texmf/tex/latex/psnfss/t1pcr.fd
 File: t1pcr.fd 2001/06/04 font definitions for T1/pcr.
 )
+LaTeX Font Info:    Font shape `T1/phv/bx/n' in size <17.28> not available
+(Font)              Font shape `T1/phv/b/n' tried instead on input line 69.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <10.95> on input line 68.
+(Font)              <10.95> on input line 74.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <8> on input line 68.
+(Font)              <8> on input line 74.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <6> on input line 68.
-LaTeX Font Info:    Try loading font information for OMS+ptm on input line 68.
+(Font)              <6> on input line 74.
+LaTeX Font Info:    Try loading font information for OMS+ptm on input line 74.
 
 (/usr/share/texmf/tex/latex/psnfss/omsptm.fd
 File: omsptm.fd 
 )
 LaTeX Font Info:    Font shape `OMS/ptm/m/n' in size <10.95> not available
-(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 68.
+(Font)              Font shape `OMS/cmsy/m/n' tried instead on input line 74.
  [1
 
 {/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}]
 LaTeX Font Info:    Font shape `T1/ptm/bx/n' in size <24.88> not available
-(Font)              Font shape `T1/ptm/b/n' tried instead on input line 73.
+(Font)              Font shape `T1/ptm/b/n' tried instead on input line 79.
  (./PTLsimManual.toc
 LaTeX Font Info:    Font shape `T1/ptm/bx/n' in size <12> not available
 (Font)              Font shape `T1/ptm/b/n' tried instead on input line 2.
@@ -279,13 +281,16 @@ LaTeX Font Info:    Font shape `T1/ptm/bx/n' in size <12> not available
 ]
 Chapter 1.
 LaTeX Font Info:    Font shape `T1/ptm/bx/n' in size <14.4> not available
-(Font)              Font shape `T1/ptm/b/n' tried instead on input line 82.
+(Font)              Font shape `T1/ptm/b/n' tried instead on input line 88.
 [7
 
-] [8]
+]
+LaTeX Font Info:    Font shape `T1/phv/bx/n' in size <12> not available
+(Font)              Font shape `T1/phv/b/n' tried instead on input line 161.
+ [8]
 Chapter 2.
 
-Overfull \hbox (32.5983pt too wide) in paragraph at lines 198--208
+Overfull \hbox (32.5983pt too wide) in paragraph at lines 213--223
 \T1/ptm/m/n/10.95 full path to the pro-gram. For ex-am-ple, to con-fig-ure \T1/
 pcr/m/n/10 /bin/ls \T1/ptm/m/n/10.95 you'll need to run "\T1/pcr/m/n/10 mkdir /
 home/\T1/ptm/m/it/10.95 username\T1/pcr/m/n/10 /.ptlsim/bin\T1/ptm/m/n/10.95 ''
@@ -296,15 +301,15 @@ home/\T1/ptm/m/it/10.95 username\T1/pcr/m/n/10 /.ptlsim/bin\T1/ptm/m/n/10.95 ''
 
 ]
 LaTeX Font Info:    Font shape `T1/ptm/bx/it' in size <10.95> not available
-(Font)              Font shape `T1/ptm/b/it' tried instead on input line 243.
+(Font)              Font shape `T1/ptm/b/it' tried instead on input line 258.
  [10] [11]
 Chapter 3.
 LaTeX Font Info:    Font shape `T1/pcr/bx/n' in size <10.95> not available
-(Font)              Font shape `T1/pcr/b/n' tried instead on input line 306.
+(Font)              Font shape `T1/pcr/b/n' tried instead on input line 321.
 LaTeX Font Info:    Font shape `T1/pcr/bx/n' in size <10> not available
-(Font)              Font shape `T1/pcr/b/n' tried instead on input line 306.
+(Font)              Font shape `T1/pcr/b/n' tried instead on input line 321.
 
-Overfull \hbox (14.91502pt too wide) in paragraph at lines 320--327
+Overfull \hbox (14.91502pt too wide) in paragraph at lines 335--342
 []\T1/pcr/b/n/10 dcache.cpp \T1/ptm/m/n/10.95 and \T1/pcr/b/n/10 dcache.h \T1/p
 tm/m/n/10.95 and \T1/pcr/b/n/10 dcacheint.h \T1/ptm/m/n/10.95 con-tain the data
  cache model. At present the full L1/L2/L3/mem
@@ -313,7 +318,7 @@ tm/m/n/10.95 and \T1/pcr/b/n/10 dcacheint.h \T1/ptm/m/n/10.95 con-tain the data
 [12
 
 ] [13]
-Overfull \hbox (29.17628pt too wide) in paragraph at lines 450--454
+Overfull \hbox (29.17628pt too wide) in paragraph at lines 465--469
 []\T1/ptm/m/n/10.95 String for-mat-ting classes (\T1/pcr/m/n/10 intstring\T1/pt
 m/m/n/10.95 , \T1/pcr/m/n/10 hexstring\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10 padstr
 ing\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10 bitstring\T1/ptm/m/n/10.95 , \T1/pcr/m/n/
@@ -322,7 +327,7 @@ ing\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10 bitstring\T1/ptm/m/n/10.95 , \T1/pcr/m/n/
  []
 
 [14]
-Overfull \hbox (22.06987pt too wide) in paragraph at lines 505--509
+Overfull \hbox (22.06987pt too wide) in paragraph at lines 520--524
 []\T1/ptm/m/n/10.95 Iterators for \T1/pcr/m/n/10 Queue \T1/ptm/m/n/10.95 ob-jec
 ts such as \T1/pcr/m/n/10 foreach_forward\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10 for
 each_forward_from\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10 foreach_forward_after\T1/pt
@@ -330,42 +335,42 @@ m/m/n/10.95 ,
  []
 
 
-Overfull \hbox (32.40718pt too wide) in paragraph at lines 522--525
+Overfull \hbox (32.40718pt too wide) in paragraph at lines 537--540
 []\T1/pcr/m/n/10 LockableFullyAssociativeTags\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10
  LockableFullyAssociativeArray \T1/ptm/m/n/10.95 and \T1/pcr/m/n/10 LockableAss
 ociativeArray
  []
 
 
-Overfull \hbox (0.30847pt too wide) in paragraph at lines 525--529
+Overfull \hbox (0.30847pt too wide) in paragraph at lines 540--544
 []\T1/pcr/m/n/10 CommitRollbackCache \T1/ptm/m/n/10.95 lever-ages the \T1/pcr/m
 /n/10 LockableFullyAssociativeArray \T1/ptm/m/n/10.95 class to pro-vide a cache
  struc-
  []
 
 
-Overfull \hbox (21.04756pt too wide) in paragraph at lines 529--539
+Overfull \hbox (21.04756pt too wide) in paragraph at lines 544--554
 []\T1/pcr/m/n/10 FullyAssociativeTags8bit \T1/ptm/m/n/10.95 and \T1/pcr/m/n/10 
 FullyAssociativeTags16bit \T1/ptm/m/n/10.95 work just like \T1/pcr/m/n/10 Fully
 AssociativeTags\T1/ptm/m/n/10.95 ,
  []
 
 [15]
-Overfull \hbox (7.9857pt too wide) in paragraph at lines 578--591
+Overfull \hbox (7.9857pt too wide) in paragraph at lines 593--606
 \T1/pcr/m/n/10 ptlsim_preinit_entry\T1/ptm/m/n/10.95 , and if not, PTL-sim en-t
 ers in-ject mode. In this mode, \T1/pcr/m/n/10 ptlsim_inject() \T1/ptm/m/n/10.9
 5 in \T1/pcr/m/n/10 kernel.cpp
  []
 
 [16] [17]
-Overfull \hbox (32.85559pt too wide) in paragraph at lines 699--716
+Overfull \hbox (32.85559pt too wide) in paragraph at lines 714--731
 \T1/pcr/m/n/10 mmap()\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10 munmap()\T1/ptm/m/n/10.
 95 , etc. There-fore, at ev-ery switch from na-tive to sim-u-la-tion mode, the 
 \T1/pcr/m/n/10 resync_with_process_maps()
  []
 
 
-Overfull \hbox (23.05998pt too wide) in paragraph at lines 743--749
+Overfull \hbox (23.05998pt too wide) in paragraph at lines 758--764
 \T1/ptm/m/n/10.95 may be turned off by de-fault for im-proved per-for-mance, bu
 t they can be eas-ily re-enabled by defin-ing the \T1/pcr/m/n/10 ENABLE_CHECKS
  []
@@ -373,186 +378,192 @@ t they can be eas-ily re-enabled by defin-ing the \T1/pcr/m/n/10 ENABLE_CHECKS
 [18]
 Chapter 4.
 LaTeX Font Info:    Font shape `T1/pcr/m/it' in size <10.95> not available
-(Font)              Font shape `T1/pcr/m/sl' tried instead on input line 840.
+(Font)              Font shape `T1/pcr/m/sl' tried instead on input line 809.
 LaTeX Font Info:    Font shape `T1/pcr/m/it' in size <10> not available
-(Font)              Font shape `T1/pcr/m/sl' tried instead on input line 840.
+(Font)              Font shape `T1/pcr/m/sl' tried instead on input line 809.
 
-Overfull \hbox (11.41278pt too wide) in paragraph at lines 834--843
+Overfull \hbox (60.61298pt too wide) in paragraph at lines 810--817
+\T1/ptm/m/n/10.95 print the L1 cache hit rate for two bench-marks, use ``\T1/pc
+r/m/n/10 ptlstats \T1/pcr/b/n/10 -collect /final/dcache/load/hit/L1
+ []
+
+[19
+
+]
+Overfull \hbox (11.41278pt too wide) in paragraph at lines 872--881
 \T1/ptm/m/n/10.95 Internally, PTL-sim rep-re-sents data store nodes in a tree f
 or-mat via the \T1/pcr/m/n/10 DataStoreNode \T1/ptm/m/n/10.95 class de-fined in
  \T1/pcr/m/n/10 datastore.h\T1/ptm/m/n/10.95 .
  []
 
-[19
-
-] [20] [21] [22
+[20] [21] [22] [23
 
 ]
 Chapter 5.
-[23
+[24
 
-] [24] [25] [26] [27] [28
+] [25] [26] [27] [28] [29
 
 ]
 Chapter 6.
-[29
+[30
 
-] [30]
+] [31]
 Chapter 7.
 
-Overfull \hbox (6.53748pt too wide) in paragraph at lines 1352--1371
+Overfull \hbox (6.53748pt too wide) in paragraph at lines 1455--1474
 \T1/ptm/m/n/10.95 trans-lated uop (\T1/ptm/m/it/10.95 tran-sop\T1/ptm/m/n/10.95
  ) se-quence for pre-vi-ously de-coded ba-sic blocks in the pro-gram. Each ba-s
 ic block (\T1/pcr/m/n/10 BasicBlock
  []
 
 
-Overfull \hbox (2.23056pt too wide) in paragraph at lines 1382--1392
+Overfull \hbox (2.23056pt too wide) in paragraph at lines 1485--1495
 \T1/ptm/m/n/10.95 each tran-sop (such as the uop's uuid and the RIP of the cor-
 re-spond-ing x86 in-struc-tion) to form a \T1/pcr/m/n/10 FetchBufferEntry
  []
 
-[31
+[32
 
-] [32]
+] [33]
 Chapter 8.
-[33
+[34
 
 ]
-Overfull \hbox (70.93097pt too wide) in paragraph at lines 1491--1496
+Overfull \hbox (70.93097pt too wide) in paragraph at lines 1594--1599
 \T1/ptm/m/n/10.95 Each phys-i-cal reg-is-ter can be in one of sev-eral states a
 t any given time; PTL-sim main-tains linked lists (the \T1/pcr/m/n/10 physreg_\
 T1/ptm/m/it/10.95 statename\T1/pcr/m/n/10 _list
  []
 
-[34] [35] [36]
+[35] [36] [37]
 Chapter 9.
 
-Overfull \hbox (20.5759pt too wide) in paragraph at lines 1785--1796
+Overfull \hbox (20.5759pt too wide) in paragraph at lines 1888--1899
 \T1/ptm/m/n/10.95 ta-tion, the size can be from 1 to 64 slots. The macros \T1/p
 cr/m/n/10 foreach_issueq()\T1/ptm/m/n/10.95 , \T1/pcr/m/n/10 sched_get_all_issu
 eq_free_slots()
  []
 
-[37
+[38
 
-] [38]
-Overfull \hbox (31.80025pt too wide) in paragraph at lines 1969--1978
+] [39]
+Overfull \hbox (31.80025pt too wide) in paragraph at lines 2072--2081
 \T1/ptm/m/n/10.95 max-i-mum num-ber of uops to is-sue from each clus-ter. The \
 T1/pcr/m/n/10 issueq_operation_on_cluster_with_result(cluster,
  []
 
-[39] [40]
+[40] [41]
 Chapter 10.
-[41
+[42
 
-] [42]
+] [43]
 Chapter 11.
-[43
+[44
 
-] [44]
+] [45]
 Chapter 12.
-[45
+[46
 
 ]
 
-LaTeX Warning: Reference `sec:MisspeculationAnnulment' on page 46 undefined on 
-input line 2342.
+LaTeX Warning: Reference `sec:MisspeculationAnnulment' on page 47 undefined on 
+input line 2445.
 
-[46]
+[47]
 Chapter 13.
-[47
+[48
 
-] [48]
+] [49]
 Chapter 14.
-[49
+[50
 
-] [50] [51]
+] [51] [52]
 Chapter 15.
-[52
+[53
 
-] [53]
-Overfull \hbox (25.74605pt too wide) in paragraph at lines 2804--2813
+] [54]
+Overfull \hbox (25.74605pt too wide) in paragraph at lines 2907--2916
 \T1/pcr/m/n/10 MAX_WAKEUPS_PER_CYCLE \T1/ptm/m/n/10.95 LFRQ slots in the \T1/pt
 m/m/it/10.95 ready \T1/ptm/m/n/10.95 state and wakes them up by call-ing the \T
 1/pcr/m/n/10 load_filled_callback()
  []
 
-[54] [55]
+[55] [56]
 Chapter 16.
 
-Overfull \hbox (46.70256pt too wide) in paragraph at lines 2926--2932
+Overfull \hbox (46.70256pt too wide) in paragraph at lines 3029--3035
 []\T1/ptm/m/n/10.95 As each uop com-mits, the \T1/pcr/m/n/10 BranchPredictorInt
 erface::update() \T1/ptm/m/n/10.95 method is passed the uop's saved \T1/pcr/m/n
 /10 PredictorUpdate
  []
 
-[56
+[57
 
-] [57]
-Overfull \hbox (72.7884pt too wide) in paragraph at lines 3006--3020
+] [58]
+Overfull \hbox (72.7884pt too wide) in paragraph at lines 3109--3123
 []\T1/ptm/m/n/10.95 If uops must be an-nulled, the \T1/pcr/m/n/10 ReorderBuffer
 Entry::annul() \T1/ptm/m/n/10.95 method calls the \T1/pcr/m/n/10 BranchPredicto
 rInterface::annulras()
  []
 
-[58] [59
+[59] [60
 
 ]
 Chapter 17.
-[60
+[61
 
 ]
 LaTeX Font Info:    Font shape `T1/pcr/bx/n' in size <12> not available
-(Font)              Font shape `T1/pcr/b/n' tried instead on input line 3034.
+(Font)              Font shape `T1/pcr/b/n' tried instead on input line 3137.
 LaTeX Font Info:    Font shape `T1/phv/m/it' in size <10.95> not available
-(Font)              Font shape `T1/phv/m/sl' tried instead on input line 3045.
+(Font)              Font shape `T1/phv/m/sl' tried instead on input line 3148.
 LaTeX Font Info:    Font shape `T1/phv/bx/it' in size <10.95> not available
-(Font)              Font shape `T1/phv/b/it' tried instead on input line 3084.
+(Font)              Font shape `T1/phv/b/it' tried instead on input line 3187.
 LaTeX Font Info:    Font shape `T1/phv/b/it' in size <10.95> not available
-(Font)              Font shape `T1/phv/b/sl' tried instead on input line 3084.
- [61] [62] [63]
+(Font)              Font shape `T1/phv/b/sl' tried instead on input line 3187.
+ [62] [63] [64]
 LaTeX Font Info:    Font shape `T1/pcr/bx/it' in size <10.95> not available
-(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3234.
+(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3337.
 LaTeX Font Info:    Font shape `T1/pcr/b/it' in size <10.95> not available
-(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3234.
+(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3337.
 LaTeX Font Info:    Font shape `T1/pcr/bx/it' in size <10> not available
-(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3234.
+(Font)              Font shape `T1/pcr/b/it' tried instead on input line 3337.
 LaTeX Font Info:    Font shape `T1/pcr/b/it' in size <10> not available
-(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3234.
- [64] [65] [66] [67] [68] [69] [70] [71] [72] [73] [74]
-[75] [76] [77] [78] [79] [80] [81] [82] [83]
-Overfull \hbox (4.1546pt too wide) in paragraph at lines 4022--4036
+(Font)              Font shape `T1/pcr/b/sl' tried instead on input line 3337.
+ [65] [66] [67] [68] [69] [70] [71] [72] [73] [74] [75]
+[76] [77] [78] [79] [80] [81] [82] [83] [84]
+Overfull \hbox (4.1546pt too wide) in paragraph at lines 4125--4139
 [][] 
  []
 
-[84] [85] [86] [87] [88] [89] [90] [91] [92] [93] [94] [95] [96] [97] [98]
-[99] [100] [101] [102] [103] [104] [105]
+[85] [86] [87] [88] [89] [90] [91] [92] [93] [94] [95] [96] [97] [98] [99]
+[100] [101] [102] [103] [104] [105] [106]
 Chapter 18.
-[106
+[107
 
 ]
-Underfull \hbox (badness 10000) in paragraph at lines 4857--4869
+Underfull \hbox (badness 10000) in paragraph at lines 4960--4972
 
  []
 
-[107] [108] [109] [110] [111] [112] [113] [114] [115] (./PTLsimManual.aux)
+[108] [109] [110] [111] [112] [113] [114] [115] [116] (./PTLsimManual.aux)
 
 LaTeX Warning: There were undefined references.
 
  ) 
 Here is how much of TeX's memory you used:
- 3570 strings out of 94499
- 46431 string characters out of 1176748
+ 3583 strings out of 94499
+ 46583 string characters out of 1176748
  795166 words of memory out of 4246818
- 6462 multiletter control sequences out of 10000+50000
- 69353 words of font info for 81 fonts, out of 500000 for 2000
+ 6469 multiletter control sequences out of 10000+50000
+ 74813 words of font info for 85 fonts, out of 500000 for 2000
  580 hyphenation exceptions out of 1000
  27i,11n,36p,263b,328s stack positions out of 1500i,500n,5000p,200000b,5000s
 PDF statistics:
- 1185 PDF objects out of 300000
- 225 named destinations out of 131072
- 865 words of extra memory for PDF output out of 65536
+ 1204 PDF objects out of 300000
+ 229 named destinations out of 131072
+ 889 words of extra memory for PDF output out of 65536
 {/usr/share/texmf/fonts/enc/dvips/psnfss/8r.enc}</usr/share/texmf/fonts/type1
 /urw/courier/ucrbo8a.pfb></usr/share/texmf/fonts/type1/urw/helvetic/uhvbo8a.pfb
 ></usr/share/texmf/fonts/type1/urw/helvetic/uhvro8a.pfb></usr/share/texmf/fonts
@@ -564,4 +575,4 @@ pfb></usr/share/texmf/fonts/type1/urw/times/utmbi8a.pfb></usr/share/texmf/fonts
 ></usr/share/texmf/fonts/type1/urw/courier/ucrr8a.pfb></usr/share/texmf/fonts/t
 ype1/urw/times/utmr8a.pfb></usr/share/texmf/fonts/type1/urw/times/utmri8a.pfb><
 /usr/share/texmf/fonts/type1/urw/helvetic/uhvb8a.pfb>
-Output written on PTLsimManual.pdf (115 pages, 525390 bytes).
+Output written on PTLsimManual.pdf (116 pages, 534516 bytes).
