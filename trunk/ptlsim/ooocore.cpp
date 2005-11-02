@@ -17,8 +17,8 @@
 #include <logic.h>
 
 // With these disabled, simulation is ~10-20% faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -1859,8 +1859,11 @@ W64 dispatch_cluster_histogram[MAX_CLUSTERS];
 W64 dispatch_cluster_none_avail;
 
 int ReorderBufferEntry::select_cluster() {
-  if (MAX_CLUSTERS == 1)
-    return 0;
+  if (MAX_CLUSTERS == 1) {
+    int cluster_issue_queue_avail_count[MAX_CLUSTERS];
+    sched_get_all_issueq_free_slots(cluster_issue_queue_avail_count);
+    return (cluster_issue_queue_avail_count[0] > 0) ? 0 : -1;
+  }
 
   W32 executable_on_cluster = uop_executable_on_cluster[uop.opcode];
 
@@ -2086,7 +2089,7 @@ int dispatch() {
     // abort dispatching for this cycle.
     //
     if (rob->cluster < 0) {
-      if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " cannot dispatch (no cluster)", endl, flush;
+      if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " cannot dispatch (no cluster)", endl;
       break;
     }
 
@@ -2268,6 +2271,9 @@ extern W64 virt_addr_mask;
 //
 
 CycleTimer ctstore;
+
+int loads_in_this_cycle = 0;
+W32 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
 
 int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc, bool rcready) {
   int sizeshift = uop.size;
@@ -2469,6 +2475,36 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
     //
 
     if ((!ldbuf.store) & ldbuf.addrvalid & (ldbuf.physaddr == state.physaddr)) {
+      //
+      // Check for the extremely rare case where:
+      // - load is in the ready_to_load state at the start of the simulated 
+      //   cycle, and is processed by load_issue()
+      // - that load gets its data forwarded from a store (i.e., the store
+      //   being handled here) scheduled for execution in the same cycle
+      // - the load and the store alias each other
+      //
+      // Handle this by checking the list of addresses for loads processed
+      // in the same cycle, and only signal a load speculation failure if
+      // the aliased load truly came at least one cycle before the store.
+      //
+      int i;
+      int parallel_forwarding_match = 0;
+      foreach (i, loads_in_this_cycle) {
+        parallel_forwarding_match |= (load_to_store_parallel_forwarding_buffer[i] == state.physaddr);
+      }
+
+      if (parallel_forwarding_match) {
+        if (logable(1)) logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
+          " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ", "0x", hexstring(addr, 48), 
+          " ignored parallel forwarding match with ldq ", ldbuf.index(), " (uuid ", ldbuf.rob->uop.uuid, " rob", ldbuf.rob->index(), 
+          " r", ldbuf.rob->physreg->index(), ")", endl;
+      }
+
+      if (parallel_forwarding_match) {
+        store_parallel_aliasing++;
+        continue;
+      }
+
       state.invalid = 1;
       state.data = EXCEPTION_LoadStoreAliasing;
       state.datavalid = 1;
@@ -2477,7 +2513,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
         logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
           " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ", "0x", hexstring(addr, 48), 
           " aliased with ldbuf ", ldbuf.index(), " (uuid ", ldbuf.rob->uop.uuid, " rob", ldbuf.rob->index(), 
-          " r", ldbuf.rob->physreg->index(), ")", " (add colliding load rip ", (void*)ldbuf.rob->uop.rip, "; replay from rip ", (void*)uop.rip, ")", endl, flush;
+          " r", ldbuf.rob->physreg->index(), ")", " (add colliding load rip ", (void*)ldbuf.rob->uop.rip, "; replay from rip ", (void*)uop.rip, ")", endl;
       }
 
       // Add the rip to the load to the load/store alias predictor:
@@ -2795,6 +2831,9 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
       if (sfra) logfile << " inherit from ", (*sfra), " (uuid ", sfra->rob->uop.uuid, ")";
       logfile << " = 0x", hexstring(state.data, 64), endl;
     }
+
+    assert(loads_in_this_cycle < LOAD_FU_COUNT);
+    load_to_store_parallel_forwarding_buffer[loads_in_this_cycle++] = floor(addr, 8);
     
     load_store_second_phase = 1;
     state.datavalid = 1;
@@ -2845,6 +2884,9 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
     replay();
     return ISSUE_NEEDS_REPLAY;
   }
+
+  assert(loads_in_this_cycle < LOAD_FU_COUNT);
+  load_to_store_parallel_forwarding_buffer[loads_in_this_cycle++] = floor(addr, 8);
 
   return ISSUE_COMPLETED;
 }
@@ -4384,6 +4426,7 @@ void out_of_order_core_toplevel_loop() {
 
     // All FUs are available at top of cycle:
     fu_avail = bitmask(FU_COUNT);
+    loads_in_this_cycle = 0;
 
     dcache_clock();
 

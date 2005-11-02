@@ -107,6 +107,9 @@ W64 store_type_internal;
 // totals 100%:
 W64 store_size[4];
 
+// n/a:
+W64 store_parallel_aliasing;
+
 // totals 100%:
 W64 store_commit_direct;
 W64 store_commit_deferred;
@@ -281,13 +284,15 @@ void dcache_save_stats(DataStoreNode& ds) {
       type.add("internal", store_type_internal);
     }
 
-    DataStoreNode& size = loads("size"); {
+    DataStoreNode& size = stores("size"); {
       size.summable = 1;
       size.add("1", store_size[0]);
       size.add("2", store_size[1]);
       size.add("4", store_size[2]);
       size.add("8", store_size[3]);
     }
+
+    stores.add("parallel-aliasing", store_parallel_aliasing);
 
     DataStoreNode& commit = stores("commit"); {
       commit.summable = 1;

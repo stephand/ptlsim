@@ -108,6 +108,9 @@ extern W64 store_type_unaligned;
 extern W64 store_type_internal;
 extern W64 store_size[4];
 
+// n/a:
+extern W64 store_parallel_aliasing;
+
 // sum of 100%:
 extern W64 dtlb_hits;
 extern W64 dtlb_misses;

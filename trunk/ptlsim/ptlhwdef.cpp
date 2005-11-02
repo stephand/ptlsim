@@ -27,12 +27,12 @@ const char* opclass_names[OPCLASS_COUNT] = {
 // Functional Units
 //
 struct FunctionalUnit FU[FU_COUNT] = {
+  {"ldu0"},
+  {"stu0"},
+  {"ldu1"},
+  {"stu1"},
   {"alu0"},
   {"alu1"},
-  {"stu0"},
-  {"stu1"},
-  {"ldu0"},
-  {"ldu1"},
   {"fpu0"},
   {"fpu1"},
 };

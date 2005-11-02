@@ -1677,11 +1677,11 @@ void init_exit_callback() {
   sa.sa_sigaction = thread_exit_callback;
   sa.sa_flags = SA_SIGINFO;
   assert(sigaction(SIGXCPU, &sa, NULL) == 0);
-  assert(arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)1) == 0);
+  arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)1);
 }
 
 void remove_exit_callback() {
-  assert(arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)0) == 0);
+  arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)0);
 }
 
 //

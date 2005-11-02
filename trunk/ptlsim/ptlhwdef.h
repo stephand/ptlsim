@@ -298,15 +298,17 @@ enum {
 //
 // Functional Units
 //
-#define FU_ALU0       (1 << 0)
-#define FU_ALU1       (1 << 1)
-#define FU_STU0       (1 << 2)
+#define FU_LDU0       (1 << 0)
+#define FU_STU0       (1 << 1)
+#define FU_LDU1       (1 << 2)
 #define FU_STU1       (1 << 3)
-#define FU_LDU0       (1 << 4)
-#define FU_LDU1       (1 << 5)
+#define FU_ALU0       (1 << 4)
+#define FU_ALU1       (1 << 5)
 #define FU_FPU0       (1 << 6)
 #define FU_FPU1       (1 << 7)
 #define FU_COUNT      8
+
+#define LOAD_FU_COUNT 2
 
 struct FunctionalUnit {
   const char* name;

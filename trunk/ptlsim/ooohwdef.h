@@ -24,17 +24,17 @@
 // but this is not tested yet.
 //
 
-#define MAX_ISSUE_WIDTH 8
+#define MAX_ISSUE_WIDTH 4
 
 //
 // Reorder Buffer
 //
-#define ROB_SIZE 128
+#define ROB_SIZE 256
 
 //
 // Physical Register File
 //
-#define PHYS_REG_FILE_SIZE 192
+#define PHYS_REG_FILE_SIZE 256
 #define PHYS_REG_NULL (PHYS_REG_FILE_SIZE - 1)
 #define PHYS_REG_ARCH_BASE (PHYS_REG_FILE_SIZE - 64) // 256 - 64 = 192
 
@@ -42,30 +42,30 @@
 // Load and Store Queues
 //
 #define LDQ_SIZE 32
-#define STQ_SIZE 24
+#define STQ_SIZE 32
 
 //
 // Fetch
 //
-#define FETCH_QUEUE_SIZE 18
-#define FETCH_WIDTH 6
+#define FETCH_QUEUE_SIZE 24
+#define FETCH_WIDTH 4
 
 //
 // Frontend (Rename and Decode)
 //
-#define FRONTEND_WIDTH 3
-#define FRONTEND_STAGES 4
+#define FRONTEND_WIDTH 4
+#define FRONTEND_STAGES 9
 
 //
 // Dispatch
 //
-#define DISPATCH_WIDTH 3
+#define DISPATCH_WIDTH 4
 
 //
 // Clustering, Issue Queues and Bypass Network
 //
 #define MAX_FORWARDING_LATENCY 2
-#define MAX_CLUSTERS 4
+#define MAX_CLUSTERS 1
 
 //
 // IMPORTANT: 
@@ -88,57 +88,39 @@
 //
 
 const Cluster clusters[MAX_CLUSTERS] = {
-  {"int0",  2, (FU_ALU0|FU_STU0)},
-  {"int1",  2, (FU_ALU1|FU_STU1)},
-  {"ld",    2, (FU_LDU0|FU_LDU1)},
-  {"fp",    2, (FU_FPU0|FU_FPU1)},
+  {"int0",  4, (FU_ALU0|FU_STU0|FU_ALU1|FU_STU1|FU_FPU0|FU_FPU1|FU_LDU0|FU_LDU1)},
 };
 
 static const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
-// I0 I1 LD FP <-to
-  {0, 1, 0, 2}, // from I0
-  {1, 0, 0, 2}, // from I1
-  {0, 0, 0, 2}, // from LD
-  {2, 2, 2, 0}, // from FP
+// I0 LD <-to
+  {0}, // from I0
 };
 
 static const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
-// I0 I1 LD FP <-to
-  {2, 2, 1, 1}, // from I0
-  {2, 2, 1, 1}, // from I1
-  {1, 1, 2, 2}, // from LD
-  {1, 1, 1, 2}, // from FP
+// I0 LD <-to
+  {4}, // from I0
 };
 
-IssueQueue<16> issueq_int0;
-IssueQueue<16> issueq_int1;
-IssueQueue<16> issueq_ld;
-IssueQueue<16> issueq_fp;
+IssueQueue<64> issueq_int0;
 
-#define foreach_issueq(expr) { issueq_int0.expr; issueq_int1.expr; issueq_ld.expr; issueq_fp.expr; }
+#define foreach_issueq(expr) { issueq_int0.expr; }
 
 void sched_get_all_issueq_free_slots(int* a) {
   a[0] = issueq_int0.remaining();
-  a[1] = issueq_int1.remaining();
-  a[2] = issueq_ld.remaining();
-  a[3] = issueq_fp.remaining();
 }
 
 #define issueq_operation_on_cluster_with_result(cluster, rc, expr) \
   switch (cluster) { \
   case 0: rc = issueq_int0.expr; break; \
-  case 1: rc = issueq_int1.expr; break; \
-  case 2: rc = issueq_ld.expr; break; \
-  case 3: rc = issueq_fp.expr; break; \
   }
 
 //
 // Writeback
 //
-#define WRITEBACK_WIDTH 3
+#define WRITEBACK_WIDTH 4
 
 //
 // Commit
 //
-#define COMMIT_WIDTH 3
+#define COMMIT_WIDTH 4
 
