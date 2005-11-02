@@ -17,8 +17,8 @@
 #include <logic.h>
 
 // With these disabled, simulation is ~10-20% faster
-#define ENABLE_CHECKS
-#define ENABLE_LOGGING
+//#define ENABLE_CHECKS
+//#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
