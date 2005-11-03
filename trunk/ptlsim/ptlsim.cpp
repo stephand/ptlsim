@@ -122,6 +122,14 @@ int main(W64 argc, char* argv[]) {
   init_perfctrs();
   if (ctx.use64) init_exit_callback();
 
+  if (pause_at_startup) {
+    logfile << "ptlsim: Paused for ", pause_at_startup, " seconds; attach debugger to PID ", getpid(), " now...", endl, flush;
+    cerr << "ptlsim: Paused for ", pause_at_startup, " seconds; attach debugger to PID ", getpid(), " now...", endl, flush;
+    sleep(pause_at_startup);
+    cerr << "ptlsim: Continuing...", endl, flush;
+    logfile << "ptlsim: Continuing...", endl, flush;
+  }
+
   init_cache();
   init_translate();
 

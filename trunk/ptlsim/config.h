@@ -81,6 +81,7 @@ extern W64 flush_interval;
 extern W64 perfect_cache;
 extern char* dumpcode_filename;
 extern W64 use_out_of_order_core;
+extern W64 pause_at_startup;
 
 
 struct DataStoreNode;

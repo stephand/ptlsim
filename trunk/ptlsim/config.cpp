@@ -38,6 +38,7 @@ char* dumpcode_filename = null;
 W64 perfect_cache = 0;
 W64 snapshot_cycles = MAX_CYCLE;
 W64 flush_interval = MAX_CYCLE;
+W64 pause_at_startup = 0;
 
 
 W64 use_out_of_order_core = 1;
@@ -80,6 +81,7 @@ static ConfigurationOption optionlist[] = {
 
   {null,                                 OPTION_TYPE_SECTION, 0, "Debugging", null},
   {"dumpcode",                           OPTION_TYPE_STRING,  0, "Save page of user code at final rip to file <dumpcode>", &dumpcode_filename},
+  {"pause-at-startup",                   OPTION_TYPE_W64,     0, "Pause for N seconds after starting up (to allow debugger to attach)", &pause_at_startup},
   {"perfect-cache",                      OPTION_TYPE_BOOL,    0, "Perfect cache hit rate", &perfect_cache},
 
   {"ooo",                                OPTION_TYPE_BOOL,    0, "Use out of order core instead of PT2x core", &use_out_of_order_core_dummy},
