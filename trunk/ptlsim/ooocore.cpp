@@ -61,7 +61,7 @@ void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* 
 // i.e. if ROB_SIZE > 256. This is defined later in ooohwdef.h
 // but we need it now.
 
-#define BIG_ROB
+//#define BIG_ROB
 
 //
 // Issue queue based scheduler with broadcast
