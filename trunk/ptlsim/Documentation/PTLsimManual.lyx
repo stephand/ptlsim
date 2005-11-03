@@ -917,6 +917,20 @@ file
 
 
 \series bold 
+-pause-at-startup
+\series default 
+ Pause for N seconds at startup to let a debugger attach [disabled] (see
+ Section 
+\begin_inset LatexCommand \ref{sec:DebuggingHints}
+
+\end_inset 
+
+)
+\layout List
+\labelwidthstring WWWWWWWW
+
+
+\series bold 
 -perfect-cache
 \series default 
  Perfect cache hit rate [disabled]
@@ -2849,6 +2863,11 @@ not
  be accessible to user code.
 \layout Section
 
+
+\begin_inset LatexCommand \label{sec:DebuggingHints}
+
+\end_inset 
+
 Debugging Hints
 \layout Standard
 
@@ -2892,6 +2911,136 @@ ooocore.cpp
 .
  Additional check functions are in the code but commented out; these may
  be used as well.
+\layout Standard
+
+You can also debug PTLsim with 
+\family typewriter 
+\size small 
+gdb
+\family default 
+\size default 
+, although the process is non-standard due to PTLsim's co-simulation architectur
+e:
+\layout Itemize
+
+Start PTLsim on the target program like normal.
+ Notice the 
+\family typewriter 
+\size small 
+Thread 
+\emph on 
+N
+\emph default 
+ is running in XX-bit mode
+\family default 
+\size default 
+ message printed at startup: this is the PID you will be debugging, not
+ the 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+ptlsim
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ process that may also be running.
+\layout Itemize
+
+Start GDB and type 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+attach 12345
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ if 
+\emph on 
+12345
+\emph default 
+ was the PID listed above
+\layout Itemize
+
+Type 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+symbol-file ptlsim
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ to load the PTLsim internal symbols (otherwise gdb only knows about the
+ benchmark code itself).
+ You should specify the full path to the PTLsim executable here.
+\layout Itemize
+
+You're now debugging PTLsim.
+ If you run the 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+bt
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ command to get a backtrace, it should show the PTLsim functions starting
+ at address 0x70000000.
+\layout Standard
+
+If the backtrace does not display enough information, go to the 
+\family typewriter 
+\size small 
+Makefile
+\family default 
+\size default 
+ and enable the "no optimization" options (the "-O0" line instead of "-O99")
+ since that will make more debugging information available to you.
+\layout Standard
+
+The 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+-pause-at-startup
+\family default 
+\size default 
+ 
+\emph on 
+seconds
+\emph default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ configuration option may be useful here, to give you time to attach with
+ a debugger before starting the simulation.
 \layout Section
 
 

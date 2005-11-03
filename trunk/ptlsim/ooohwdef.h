@@ -29,6 +29,10 @@
 //
 // Reorder Buffer
 //
+// IMPORTANT! If you change this to be greater than 256, you MUST
+// #define BIG_ROB in ooocore.cpp to use the correct associative
+// search logic (16-bit tags vs 8-bit tags).
+//
 #define ROB_SIZE 128
 
 //
