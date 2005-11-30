@@ -107,7 +107,7 @@ struct Queue: public array<T, SIZE> {
   void reset() {
     head = tail = count = 0;
     foreach (i, SIZE) {
-      (*this)[i].init();
+      (*this)[i].init(i);
     }
   }
 

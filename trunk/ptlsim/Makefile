@@ -45,39 +45,38 @@ all: ptlsim ptlstats ptlcalls.o cpuid
 	@echo "Compiled successfully..."
 
 genoffsets: genoffsets.o superstl.o
-	g++ -g -O2 genoffsets.o superstl.o -o genoffsets
-
+	$(CC) -g -O2 genoffsets.o superstl.o -o genoffsets
 
 cpuid: cpuid.o
-	g++ -O2 cpuid.o superstl.o -o cpuid
+	$(CC) -O2 cpuid.o superstl.o -o cpuid
 
 simsynth-offsets.h: genoffsets
 	./genoffsets > simsynth-offsets.h
 
 # Compile this fast:
 ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h config.h
-	gcc $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -m64 -c ptlstats.cpp
+	$(CC) $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -m64 -c ptlstats.cpp
 
 injectcode-64bit.o: injectcode.cpp
-	g++ $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
+	$(CC) $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
 
 injectcode-32bit.o: injectcode.cpp
-	g++ $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
+	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
 
 lowlevel-32bit.o: lowlevel-32bit.S
-	gcc -c -m32 -O3 lowlevel-32bit.S
+	$(CC) -c -m32 -O3 lowlevel-32bit.S
 
 ptlcalls-32bit.o: ptlcalls.c
-	gcc $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c ptlcalls.c -o ptlcalls-32bit.o
+	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c ptlcalls.c -o ptlcalls-32bit.o
 
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
-	g++ -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
+	$(CC) -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
 
 ptlsim.objdump: ptlsim Makefile
 	objdump -Crtd --no-show-raw-insn ptlsim | convert-disasm-x86 > ptlsim.objdump
 
 ptlstats: ptlstats.o ptlhwdef.o superstl.o datastore.o config.o Makefile
-	g++ -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
+	$(CC) -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
 
 BASEADDR = 0
 

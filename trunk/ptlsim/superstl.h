@@ -118,7 +118,7 @@ namespace superstl {
 
   template <class T>
   inline ostream& operator <<(ostream& os, const T* v) {
-    if (os.ok()) fprintf(os.fd, "%#llx", (void*)v);
+    if (os.ok()) fprintf(os.fd, "%p", (void*)v);
     return os;
   }
 
@@ -134,7 +134,7 @@ namespace superstl {
   // String buffer
   //
 
-#define stringbuf_smallbufsize 32
+#define stringbuf_smallbufsize 256
 
   class stringbuf {
   public:

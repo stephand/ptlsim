@@ -18,6 +18,7 @@
 
 #ifdef __x86_64__
 
+#define __syscall_clobber "r11","rcx","memory"
 #define __syscall "syscall"
 
 #define declare_syscall0(sysid,type,name) static inline type name(void) { long __res; asm volatile \
@@ -78,23 +79,26 @@
 
 #endif // 32-bit
 
-static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
-  struct FarJumpDescriptor {
-    W32 offset;
-    W16 seg;
-  };
+struct FarJumpDescriptor {
+  W32 offset;
+  W16 seg;
+};
 
+static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
   FarJumpDescriptor desc;
-  desc.offset = (W64)code;
+  desc.offset = LO32((W64)code);
   desc.seg = (use64) ? 0x33 : 0x23;
 
   asm volatile(
 #ifdef __x86_64__
+               "lea %[desc],%%rax\n"
                "mov %[stack],%%rsp\n"
+               "ljmp *(%%rax)\n" : : [desc] "m" (desc), [stack] "m" (stack));
 #else
+               "lea %[desc],%%eax\n"
                "mov %[stack],%%esp\n"
+               "ljmp *(%%eax)\n" : : [desc] "m" (desc), [stack] "m" (stack));
 #endif
-               "ljmp *(%[desc])\n" : : [desc] "r" (&desc), [stack] "m" (stack));
 }
 
 declare_syscall0(__NR_pause, void, sys_pause);

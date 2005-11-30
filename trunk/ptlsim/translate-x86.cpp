@@ -10,6 +10,7 @@
 
 Hashtable<W64, BasicBlock*, 16384> bbcache;
 
+template <>
 int ChunkHashtable<W64, 1024, ChunkHashtableBlock_fit_in_bytes(W64, 64)>::setof(const W64& entry) {
   return bits(entry, 0, log2(1024));
 }
@@ -1297,7 +1298,7 @@ namespace TranslateX86 {
       sizeflag ^= AFLAG;
     }
 
-    W32 op = *rip++;
+    int op = *rip++;
     bool need_modrm = onebyte_has_modrm[op];
     if (op == 0x0f) {
       op = *rip++;

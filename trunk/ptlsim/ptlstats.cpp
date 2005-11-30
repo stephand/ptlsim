@@ -567,7 +567,7 @@ void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcoun
         double x = xpoints[i] * xscale;
         double y = imageheight - (yy * yscale);
         if (i == 0) x = 0; else if (i == xcount-1) x = imagewidth;
-        y = clipto(y, 0, imageheight);
+        y = clipto(y, 0.0, imageheight);
         if (i == 0) { if (line.filled) svg.startpath(0, imageheight); else svg.startpath(x, y); }
         svg.nextpoint(x, y);
       }

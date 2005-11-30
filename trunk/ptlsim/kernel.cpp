@@ -603,7 +603,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
   MemoryMapExtent* map = startmap;
 
   // Atomically capture process memory: otherwise we may allocate our own memory while reading /proc/self/maps 
-#define MAX_PROC_MAPS_SIZE 16*1024*1024
+#define MAX_PROC_MAPS_SIZE (16*1024*1024)
 
   char* mapdata = (char*)ptl_alloc_private_pages(MAX_PROC_MAPS_SIZE);
   int mapsize = 0;
@@ -615,7 +615,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
     int rc = read(fd, mapdata + mapsize, MAX_PROC_MAPS_SIZE-PAGE_SIZE);
     if (rc <= 0) break;
     mapsize += rc;
-    assert(inrange(mapsize, 0, MAX_PROC_MAPS_SIZE-PAGE_SIZE));
+    assert(inrange(mapsize, 0, (int)(MAX_PROC_MAPS_SIZE-PAGE_SIZE)));
   }
   mapdata[mapsize] = 0;
 
@@ -897,7 +897,7 @@ struct FarJumpDescriptor {
   FarJumpDescriptor() { }
 
   FarJumpDescriptor(void* target) {
-    offset = (W32)target;
+    offset = LO32((W64)target);
     seg = 0x33;
   }
 };
@@ -942,7 +942,7 @@ struct SwitchToSimThunkCode {
       opcode[1] = 0xff;
       opcode[2] = 0x2d;
     }
-    indirtarget = LO32((W32)&target);
+    indirtarget = LO32((W64)&target);
   }
 
   void indircall(W64& ptr) {
@@ -953,7 +953,7 @@ struct SwitchToSimThunkCode {
       // 90 ff 15 xx xx xx xx = nop | call ds:[imm32]
       opcode[0] = 0x90; opcode[1] = 0xff; opcode[2] = 0x15;
     }
-    indirtarget = LO32((W32)&ptr);
+    indirtarget = LO32((W64)&ptr);
   }
 
   void indirjump(W64& ptr) {
@@ -964,7 +964,7 @@ struct SwitchToSimThunkCode {
       // 90 ff 25 xx xx xx xx = nop | jmp ds:[imm32]
       opcode[0] = 0x90; opcode[1] = 0xff; opcode[2] = 0x25;
     }
-    indirtarget = LO32((W32)&ptr);
+    indirtarget = LO32((W64)&ptr);
   }
 } __attribute__((packed));
 

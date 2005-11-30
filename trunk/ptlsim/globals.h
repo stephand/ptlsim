@@ -59,15 +59,14 @@ static inline const W64 DoubleToW64(double x) { union W64orDouble c; c.d = x; re
 // Functional constructor
 //
 
-template <typename T> static inline T min(const T& a, const T& b) { return a <? b; }
-template <typename T> static inline T max(const T& a, const T& b) { return a >? b; }
-
-template <typename T> static inline T abs(T x) { return (x < 0) ? -x : x; }
+template <typename T> static inline T min(const T& a, const T& b) { typeof (a) _a = a; typeof (b) _b = b; return _a > _b ? _b : _a; }
+template <typename T> static inline T max(const T& a, const T& b) { typeof (a) _a = a; typeof (b) _b = b; return _a > _b ? _a : _b; }
+template <typename T> static inline T clipto(const T& v, const T& minv, const T& maxv) { return min(max(v, minv), maxv); }
+template <typename T> static inline bool inrange(const T& v, const T& minv, const T& maxv) { typeof (v) _v = v; return ((_v >= minv) & (_v <= maxv)); }
+template <typename T> static inline T abs(T x) { typeof (x) _x = x; return (_x < 0) ? -_x : _x; }
 
 #define sqr(x) ((x)*(x))
 #define cube(x) ((x)*(x)*(x))
-#define inrange(x, lo, hi) (((x) >= (lo)) && ((x) <= (hi)))
-#define clipto(v, minv, maxv) (((v) >? (minv)) <? (maxv))
 #define bit(x, n) (((x) >> (n)) & 1)
 
 #define bitmask(l) (((l) == 64) ? (W64)(-1LL) : ((1LL << (l))-1LL))
@@ -177,9 +176,9 @@ static inline int popcount64(W64 x) {
   return popcount(LO32(x)) + popcount(HI32(x));
 }
 
-typedef byte v16qi __attribute__ ((mode(V16QI)));
+typedef byte v16qi __attribute__ ((vector_size(16)));
 typedef v16qi vec16b;
-typedef W16 v8hi __attribute__ ((mode(V8HI)));
+typedef W16 v8hi __attribute__ ((vector_size(16)));
 typedef v8hi vec8w;
 
 inline vec16b x86_sse_pcmpeqb(vec16b a, vec16b b) { asm("pcmpeqb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
@@ -215,8 +214,8 @@ inline vec8w x86_sse_dupw(const W16 b) {
   return v;
 }
 
-inline void x86_ldmxcsr(W32 value) { asm volatile("ldmxcsr %[value]" : : [value] "m" (&value)); }
-inline W32 x86_stmxcsr() { W32 value; asm volatile("stmxcsr %[value]" : [value] "=m" (*&value)); return value; }
+inline void x86_ldmxcsr(W32 value) { asm volatile("ldmxcsr %[value]" : : [value] "m" (value)); }
+inline W32 x86_stmxcsr() { W32 value; asm volatile("stmxcsr %[value]" : [value] "=m" (value)); return value; }
 
 inline W32 x86_bsf32(W32 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 inline W64 x86_bsf64(W64 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
@@ -234,7 +233,11 @@ inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
 extern const W64 expand_8bit_to_64bit_lut[256];
 
 // Only call this for functions guaranteed to never return!
+#ifdef __x86_64__
 inline volatile void align_rsp() { asm volatile("and $-16,%rsp"); }
+#else
+inline volatile void align_rsp() { asm volatile("and $-16,%esp"); }
+#endif
 
 // LSB index:
 

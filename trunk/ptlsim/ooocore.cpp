@@ -527,19 +527,21 @@ struct BranchPredictorUpdateInfo: public PredictorUpdate {
 
 struct FetchBufferEntry: public TransOp {
   W64 rip;
+  W64 bbrip;
   W64 uuid;
   const byte* synthop;
   BranchPredictorUpdateInfo predinfo;
 
   int index() const;
 
-  int init() { return 0; }
+  int init(int idx) { return 0; }
   void validate() { }
 };
 
 struct ReorderBufferEntry: public selfqueuelink {
   struct StateList* current_state_list;
   FetchBufferEntry uop;
+  W16s idx;
   W16s cycles_left; // execution latency counter, decremented every cycle when executing
   W16s forward_cycle; // forwarding cycle after completion
   W8s cluster;
@@ -553,17 +555,17 @@ struct ReorderBufferEntry: public selfqueuelink {
   byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1;
 #endif
 
-  indexref<PhysicalRegister> physreg;
-  indexref<PhysicalRegister> operands[MAX_OPERANDS];
+  PhysicalRegister* physreg;
+  PhysicalRegister* operands[MAX_OPERANDS];
 
   // Loads and stores only:
-  indexref<LoadStoreQueueEntry> lsq;
+  LoadStoreQueueEntry* lsq;
 
-  int index() const;
+  int index() const { return idx; }
 
-  void init() {
+  void init(int idx) {
+    this->idx = idx;
     entry_valid = 0;
-
     foreach_issueq(reset());
     selfqueuelink::reset();
     current_state_list = NULL;
@@ -580,7 +582,7 @@ struct ReorderBufferEntry: public selfqueuelink {
     // Deallocate ROB entry
     entry_valid = false;
     cycles_left = 0;
-    physreg = (const PhysicalRegister*)null;
+    physreg = (PhysicalRegister*)null;
     lfrqslot = -1;
     lsq = 0;
     load_store_second_phase = 0;
@@ -668,7 +670,7 @@ void check_rob() {
   foreach (i, ROB_SIZE) {
     ReorderBufferEntry& rob = ROB[i];
     if (!rob.entry_valid) continue;
-    assert(inrange(rob.forward_cycle, 0, (MAX_FORWARDING_LATENCY+1)-1));
+    assert(inrange((int)rob.forward_cycle, 0, (MAX_FORWARDING_LATENCY+1)-1));
   }
 
   foreach (i, rob_states.count) {
@@ -686,16 +688,7 @@ void check_rob() {
   }
 }
 
-int ReorderBufferEntry::index() const {
-  int i = (this - ROB.data);
-  //assert(inrange(i, 0, ROB_SIZE-1));
-  return i;
-}
-
-ReorderBufferEntry& indexref<ReorderBufferEntry>::get(int i) const {
-  return ROB[i];
-}
-
+template <>
 void Queue<ReorderBufferEntry, ROB_SIZE>::prepfree(ReorderBufferEntry& rob) {
   rob.reset();
 }
@@ -704,13 +697,14 @@ void Queue<ReorderBufferEntry, ROB_SIZE>::prepfree(ReorderBufferEntry& rob) {
 
 struct LoadStoreQueueEntry: public SFR {
   ReorderBufferEntry* rob;
-  W16s mbtag;
-  W16 store:1, entry_valid:1;
+  W16 idx;
+  W8s mbtag;
+  W8 store:1, entry_valid:1;
   W32 padding;
 
   LoadStoreQueueEntry() { }
 
-  int index() const;
+  int index() const { return idx; }
 
   void reset() {
     rob = null;
@@ -726,7 +720,8 @@ struct LoadStoreQueueEntry: public SFR {
     physaddr = 0;
   }
 
-  void init() {
+  void init(int idx) {
+    this->idx = idx;
     reset();
   }
 
@@ -753,21 +748,14 @@ ostream& operator <<(ostream& os, const LoadStoreQueueEntry& lsq) {
 
 static Queue<LoadStoreQueueEntry, LSQ_SIZE> LSQ;
 
-LoadStoreQueueEntry& indexref<LoadStoreQueueEntry>::get(int i) const {
-  return LSQ[i];
-}
-
 int loads_in_flight = 0;
 int stores_in_flight = 0;
 
+template <>
 void Queue<LoadStoreQueueEntry, LSQ_SIZE>::prepfree(LoadStoreQueueEntry& lsq) {
   loads_in_flight -= (lsq.store == 0);
   stores_in_flight -= (lsq.store == 1);
   lsq.reset();
-}
-
-int LoadStoreQueueEntry::index() const {
-  return (this - LSQ.data);
 }
 
 //
@@ -857,9 +845,10 @@ StateList physreg_pendingfree_list("pendingfree", physreg_states);
 struct PhysicalRegister: public selfqueuelink {
 public:
   StateList* current_state_list;
+  ReorderBufferEntry* rob;
   W64 data;
   W16 flags;
-  indexref<ReorderBufferEntry> rob;
+  W16 state;
   W8 archreg;
   W8 all_consumers_sourced_from_bypass:1;
   W16s refcount;
@@ -987,9 +976,11 @@ int PhysicalRegister::index() const {
   return (this - physregs.data);
 }
 
+/*
 PhysicalRegister& indexref<PhysicalRegister>::get(int i) const {
   return physregs[i];
 }
+*/
 
 bool ReorderBufferEntry::operand_ready(int operand) const {
   return ((operands[operand]->flags & FLAG_WAIT) == 0);
@@ -1002,7 +993,7 @@ ostream& operator <<(ostream& os, const PhysicalRegisterFile& physregs) {
   return os;
 }
 
-struct RegisterRenameTable: public array<indexref<PhysicalRegister>, TRANSREG_COUNT> {
+struct RegisterRenameTable: public array<PhysicalRegister*, TRANSREG_COUNT> {
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
   bitvec<TRANSREG_COUNT> renamed_in_this_basic_block;
 #endif
@@ -1015,7 +1006,7 @@ struct RegisterRenameTable: public array<indexref<PhysicalRegister>, TRANSREG_CO
     RegisterRenameTable& rrt = *this;
 
     for (int i = 0; i < ARCHREG_COUNT; i++) {
-      rrt[i] = PHYS_REG_ARCH_BASE + i;
+      rrt[i] = &physregs[PHYS_REG_ARCH_BASE + i];
     }
 
     //
@@ -1023,15 +1014,15 @@ struct RegisterRenameTable: public array<indexref<PhysicalRegister>, TRANSREG_CO
     // they are written for the first time:
     //
     for (int i = ARCHREG_COUNT; i < TRANSREG_COUNT; i++) {
-      rrt[i] = PHYS_REG_NULL;
+      rrt[i] = &physregs[PHYS_REG_NULL];
     }
 
-    rrt[REG_zf] = PHYS_REG_ARCH_BASE + REG_flags;
-    rrt[REG_cf] = PHYS_REG_ARCH_BASE + REG_flags;
-    rrt[REG_of] = PHYS_REG_ARCH_BASE + REG_flags;
-    rrt[REG_imm] = PHYS_REG_NULL;
-    rrt[REG_mem] = PHYS_REG_NULL;
-    rrt[REG_zero] = PHYS_REG_NULL;
+    rrt[REG_zf] = &physregs[PHYS_REG_ARCH_BASE + REG_flags];
+    rrt[REG_cf] = &physregs[PHYS_REG_ARCH_BASE + REG_flags];
+    rrt[REG_of] = &physregs[PHYS_REG_ARCH_BASE + REG_flags];
+    rrt[REG_imm] = &physregs[PHYS_REG_NULL];
+    rrt[REG_mem] = &physregs[PHYS_REG_NULL];
+    rrt[REG_zero] = &physregs[PHYS_REG_NULL];
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
     renamed_in_this_basic_block.reset();
 #endif
@@ -1101,6 +1092,7 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
 // Fetch Stage
 //
 
+W64 current_basic_block_rip = 0;
 BasicBlock* current_basic_block = null;
 const byte* current_basic_block_transop = null;
 int current_basic_block_transop_index = 0;
@@ -1132,6 +1124,7 @@ void reset_fetch_unit(W64 realrip) {
   waiting_for_icache_fill = 0;
   fetchq.reset();
   current_basic_block = null;
+  current_basic_block_rip = realrip;
   current_basic_block_transop = null;
   current_basic_block_transop_index = 0;
 }
@@ -1300,9 +1293,11 @@ void fetch() {
 
       if (bb) {
         current_basic_block = *bb;
+        current_basic_block_rip = fetchrip;
       } else {
         start_timer(cttrans);
         current_basic_block = translate_basic_block((byte*)fetchrip);
+        current_basic_block_rip = fetchrip;
         assert(current_basic_block);
         synth_uops_for_bb(*current_basic_block);
         stop_timer(cttrans);
@@ -1343,6 +1338,7 @@ void fetch() {
     }
 
     transop.rip = fetchrip;
+    transop.bbrip = current_basic_block_rip;
     transop.uuid = fetch_uuid++;
 
     // Set up branches so mispredicts can be calculated correctly:
@@ -1530,12 +1526,12 @@ void rename() {
     LoadStoreQueueEntry& lsq = *lsqp;
 
     rob.reset();
-    rob.physreg = physreg;
+    rob.physreg = &physreg;
     rob.uop = transop;
     rob.entry_valid = 1;
     rob.cycles_left = FRONTEND_STAGES;
     if (ld|st) {
-      rob.lsq = lsq.index();
+      rob.lsq = &lsq;
       lsq.rob = &rob;
       lsq.store = st;
       lsq.datavalid = 0;
@@ -1548,7 +1544,7 @@ void rename() {
     frontend_alloc_sfr += st;
     frontend_alloc_br += br;
 
-    physreg.rob = rob;
+    physreg.rob = &rob;
     physreg.archreg = rob.uop.rd;
 
     //
@@ -1558,7 +1554,7 @@ void rename() {
     rob.operands[RA] = specrrt[transop.ra];
     rob.operands[RB] = specrrt[transop.rb];
     rob.operands[RC] = specrrt[transop.rc];
-    rob.operands[RS] = PHYS_REG_NULL; // used for loads and stores only
+    rob.operands[RS] = &physregs[PHYS_REG_NULL]; // used for loads and stores only
 
     // See notes above on Physical Register Recycling Complications
     foreach (i, MAX_OPERANDS) {
@@ -2120,9 +2116,6 @@ int dispatch() {
   return dispatchcount;
 }
 
-W32 fu_avail = bitmask(FU_COUNT);
-indexref<ReorderBufferEntry> robs_on_fu[FU_COUNT];
-
 struct IssueInput {
   W64 ra;
   W64 rb;
@@ -2131,6 +2124,9 @@ struct IssueInput {
   W16 rbflags;
   W16 rcflags;
 };
+
+W32 fu_avail = bitmask(FU_COUNT);
+ReorderBufferEntry* robs_on_fu[FU_COUNT];
 
 //
 // Release the ROB from the issue queue after there is
@@ -2369,7 +2365,8 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
       //
       if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
 
-      BasicBlock* bb = bbcache.remove(uop.rip);
+      //++MTY CHECKME Shouldn't this be the start of the basic block, instead of in the middle?
+      BasicBlock* bb = bbcache.remove(uop.bbrip);
       bbcache_removes++;
       if (bb) bb->free();
       // NOTE: bb must not be accessed after this point!
@@ -2655,7 +2652,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
       // (see notes above for issuestore case)
       if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
 
-      BasicBlock* bb = bbcache.remove(uop.rip);
+      BasicBlock* bb = bbcache.remove(uop.bbrip);
       bbcache_removes++;
       if (bb) bb->free();
       // NOTE: bb must not be accessed after this point!
@@ -3446,7 +3443,7 @@ int ReorderBufferEntry::forward() {
   ReorderBufferEntry* target;
   int wakeupcount = 0;
 
-  assert(inrange(forward_cycle, 0, (MAX_FORWARDING_LATENCY+1)-1));
+  assert(inrange((int)forward_cycle, 0, (MAX_FORWARDING_LATENCY+1)-1));
 
   W32 targets = forward_at_cycle_lut[cluster][forward_cycle];
   foreach (i, MAX_CLUSTERS) {
@@ -3805,7 +3802,7 @@ int ReorderBufferEntry::commit() {
       commitrrt[REG_of]->addcommitref(REG_of);
     }
   }
-    
+
   if (st) {
     assert(commitstore_unlocked(*lsq) == 0);
     if (logable(1)) logfile << " [mem ", (void*)(lsq->physaddr << 3), " = ", bytemaskstring((const byte*)&lsq->data, lsq->bytemask, 8), "]";

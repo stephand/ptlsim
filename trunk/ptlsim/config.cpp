@@ -110,7 +110,7 @@ ostream& ConfigurationParser::printusage(ostream& os) const {
       os << *((double*)(options[i].variable));
       break;
     case OPTION_TYPE_STRING:
-      os << *((char**)(options[i].variable));
+      os << (*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)";
       break;
     case OPTION_TYPE_BOOL:
       os << ((*((W64**)(options[i].variable))) ? "enabled" : "disabled");
@@ -231,7 +231,7 @@ ostream& ConfigurationParser::print(ostream& os) const {
       os << *((double*)(options[i].variable));
       break;
     case OPTION_TYPE_STRING:
-      os << *((char**)(options[i].variable));
+      os << (*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)";
       break;
     case OPTION_TYPE_BOOL:
       os << *((W64*)(options[i].variable)) ? "enabled" : "disabled";
@@ -289,7 +289,7 @@ void print_banner(int argc, char* argv[]) {
 const char* get_full_exec_filename() {
   static char full_exec_filename[1024];
   int rc = readlink("/proc/self/exe", full_exec_filename, sizeof(full_exec_filename)-1);
-  assert(inrange(rc, 0, sizeof(full_exec_filename)-1));
+  assert(inrange(rc, 0, (int)sizeof(full_exec_filename)-1));
   full_exec_filename[rc] = 0;
   return full_exec_filename;
 }
