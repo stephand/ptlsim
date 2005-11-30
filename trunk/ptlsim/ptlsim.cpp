@@ -134,7 +134,7 @@ int main(W64 argc, char* argv[]) {
   init_translate();
 
   void* interp_entry = (void*)ctx.commitarf[REG_rip];
-  void* program_entry = find_auxv_entry(AT_ENTRY)->a_un.a_ptr;
+  void* program_entry = (void*)find_auxv_entry(AT_ENTRY)->a_un.a_val;
 
   logfile << "loader: interp_entry ", interp_entry, ", program_entry ", program_entry, endl, flush;
 
