@@ -228,8 +228,16 @@ struct IssueState {
   };
 };
 
-
 ostream& operator <<(ostream& os, const IssueState& ctx);
+
+struct IssueInput {
+  W64 ra;
+  W64 rb;
+  W64 rc;
+  W16 raflags;
+  W16 rbflags;
+  W16 rcflags;
+};
 
 typedef W64 UserContext[ARCHREG_COUNT];
 
@@ -419,11 +427,7 @@ enum {
   OP_st,
   OP_st_lm,
 
-  OP_inshb,
-  OP_exthb,
-  OP_movhb,
-  OP_movhl,
-  OP_movl,
+  OP_mask,
 
   OP_rotl,
   OP_rotr,
@@ -433,12 +437,7 @@ enum {
   OP_shr,
   OP_dupbit,
   OP_sar,
-  OP_extr,
-  OP_extrx,
-  OP_insr,
 
-  OP_sxt,
-  OP_zxt,
   OP_bswap,
 
   OP_collcc,
@@ -512,6 +511,11 @@ inline bool iscondbranch(int opcode) { return isclass(opcode, OPCLASS_COND_BRANC
 inline bool isbranch(int opcode) { return isclass(opcode, OPCLASS_BRANCH); }
 inline bool isbarrier(int opcode) { return isclass(opcode, OPCLASS_BARRIER); }
 inline const char* nameof(int opcode) { return (opcode < OP_MAX_OPCODE) ? opinfo[opcode].name : "INVALID"; }
+
+// Mask uop control
+static inline W32 make_mask_control_info(int ms, int mc, int ds) {
+  return (ms) | (mc << 6) | (ds << 12);
+}
 
 // These go in the extshift field of branch and/or jump operations; they are used as hints only: 
 #define BRANCH_HINT_PUSH_RAS (1 << 0)

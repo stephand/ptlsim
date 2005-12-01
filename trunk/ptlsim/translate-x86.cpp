@@ -1043,10 +1043,11 @@ namespace TranslateX86 {
       bool rahigh = (isimm) ? 0 : reginfo[ra.reg.reg].hibyte;
 
       int rareg = destreg;
-      if (rdhigh) { this << TransOp(OP_exthb, REG_temp2, rareg, REG_zero, REG_zero, 3); rareg = REG_temp2; }
+      if (rdhigh) { this << TransOp(OP_mask, REG_temp2, REG_zero, rareg, REG_imm, 3, 0, make_mask_control_info(0, 8, 8)); rareg = REG_temp2; }
 
       int rbreg = srcreg;
-      if (rahigh) { this << TransOp(OP_exthb, REG_temp3, srcreg, REG_zero, REG_zero, 3); rbreg = REG_temp3; }
+      if (rahigh) { this << TransOp(OP_mask, REG_temp3, REG_zero, srcreg, REG_imm, 3, 0, make_mask_control_info(0, 8, 8)); rbreg = REG_temp3; }
+
       if (flagsonly) {
         this << TransOp(opcode, REG_temp0, rareg, rbreg, rcreg, sizeshift, (isimm) ? ra.imm.imm : 0, 0, setflags);
       } else {
@@ -1056,7 +1057,7 @@ namespace TranslateX86 {
         } else {
           this << TransOp(opcode, (rdhigh) ? REG_temp2 : destreg, rareg, rbreg, rcreg, sizeshift,
                           (isimm) ? ra.imm.imm : 0, 0, setflags);
-          if (rdhigh) { this << TransOp(OP_inshb, destreg, destreg, REG_temp2, REG_zero, 3); } 
+          if (rdhigh) { this << TransOp(OP_mask, destreg, destreg, REG_temp2, REG_imm, 3, 0, make_mask_control_info(56, 8, 56)); }
         }
       }
     } else if ((rd.type == OPTYPE_REG) && (ra.type == OPTYPE_MEM)) {
@@ -1074,7 +1075,7 @@ namespace TranslateX86 {
       bool rdhigh = reginfo[rd.reg.reg].hibyte;
 
       int rareg = destreg;
-      if (rdhigh) { this << TransOp(OP_exthb, REG_temp2, destreg, REG_zero, REG_zero, 3); rareg = REG_temp2; }
+      if (rdhigh) { this << TransOp(OP_mask, REG_temp2, REG_zero, destreg, REG_imm, 3, 0, make_mask_control_info(0, 8, 8)); rareg = REG_temp2; }
 
       int sizeshift = reginfo[rd.reg.reg].sizeshift;
       if (flagsonly) {
@@ -1084,7 +1085,7 @@ namespace TranslateX86 {
           this << TransOp(opcode, destreg, REG_temp0, REG_imm, (sizeshift >= 2) ? REG_zero : destreg, sizeshift, ra_rb_imm_form_rbimm, 0, setflags);
         } else {
           this << TransOp(opcode, (rdhigh) ? REG_temp2 : destreg, rareg, REG_temp0, rcreg, sizeshift, 0, 0, setflags);
-          if (rdhigh) { this << TransOp(OP_inshb, destreg, destreg, REG_temp2, REG_zero, 3); }
+          if (rdhigh) this << TransOp(OP_mask, destreg, destreg, REG_temp2, REG_imm, 3, 0, make_mask_control_info(56, 8, 56));
         }
       }
     } else if ((rd.type == OPTYPE_MEM) && ((ra.type == OPTYPE_REG) || (ra.type == OPTYPE_IMM))) {
@@ -1102,7 +1103,8 @@ namespace TranslateX86 {
 
       int sizeshift = (isimm) ? rd.mem.size : reginfo[ra.reg.reg].sizeshift;
       bool rahigh = (isimm) ? 0 : reginfo[ra.reg.reg].hibyte;
-      if (rahigh) { this << TransOp(OP_exthb, REG_temp2, srcreg, REG_zero, REG_zero, 3); srcreg = REG_temp2; }
+
+      if (rahigh) { this << TransOp(OP_mask, REG_temp2, REG_zero, srcreg, REG_imm, 3, 0, make_mask_control_info(0, 8, 8)); srcreg = REG_temp2; }
 
       if (isimm) {
         this << TransOp(opcode, REG_temp0, REG_temp0, REG_imm, rcreg, sizeshift, ra.imm.imm, 0, setflags);
@@ -1141,8 +1143,12 @@ namespace TranslateX86 {
       bool rahigh = (isimm) ? 0 : reginfo[ra.reg.reg].hibyte;
 
       if (rdhigh || rahigh) {
-        int opcode = (rdhigh) ? ((isimm || (!rahigh)) ? OP_inshb : OP_movhb) : (rahigh) ? OP_exthb : OP_nop;
-        this << TransOp(opcode, destreg, destreg, srcreg, REG_zero, 3, (isimm) ? ra.imm.imm : 0);
+        int maskctl = 
+          (rdhigh && !rahigh) ? make_mask_control_info(56, 8, 56) : // insert high byte
+          (!rdhigh && rahigh) ? make_mask_control_info(0, 8, 8) : // extract high byte
+          (rdhigh && rahigh) ? make_mask_control_info(56, 8, 0) : // move between high bytes
+          make_mask_control_info(0, 8, 0); // move between low bytes
+        this << TransOp(OP_mask, destreg, destreg, srcreg, REG_imm, 3, (isimm) ? ra.imm.imm : 0, maskctl);
       } else {
         // must be at least 16 bits
         // On x86-64, only 8-bit and 16-bit ops need to be merged; 32-bit is zero extended to full 64 bits:
@@ -1161,7 +1167,9 @@ namespace TranslateX86 {
       } else {
         // need to merge 8-bit or 16-bit data:
         operand_load(REG_temp0, ra);
-        this << TransOp((reginfo[rd.reg.reg].hibyte) ? OP_inshb : OP_mov, destreg, destreg, REG_temp0, REG_zero, (reginfo[rd.reg.reg].hibyte) ? 3 : sizeshift);
+        if (reginfo[rd.reg.reg].hibyte) 
+          this << TransOp(OP_mask, destreg, destreg, REG_temp0, REG_imm, 3, 0, make_mask_control_info(56, 8, 56));
+        else this << TransOp(OP_mov, destreg, destreg, REG_temp0, REG_zero, sizeshift);
       }
     } else if ((rd.type == OPTYPE_MEM) && ((ra.type == OPTYPE_REG) || (ra.type == OPTYPE_IMM))) {
       //
@@ -1176,7 +1184,7 @@ namespace TranslateX86 {
         this << TransOp(OP_mov, REG_temp1, REG_zero, REG_imm, REG_zero, 3, ra.imm.imm);
         result_store(REG_temp1, REG_temp0, rd);
       } else if (rahigh) { 
-        this << TransOp(OP_exthb, REG_temp1, srcreg, REG_zero, REG_zero, 3);
+        this << TransOp(OP_mask, REG_temp1, REG_zero, srcreg, REG_imm, 3, 0, make_mask_control_info(0, 8, 8));
         result_store(REG_temp1, REG_temp0, rd);
       } else {
         result_store(srcreg, REG_temp0, rd);
@@ -1200,13 +1208,13 @@ namespace TranslateX86 {
 
       // For movsx, it is not possible to have rd be 8 bits: it's always 16/32/64 bits.
       if (rahigh) {
-        this << TransOp(OP_exthb, REG_temp0, rareg, REG_zero, REG_zero, 3);
+        this << TransOp(OP_mask, REG_temp0, REG_zero, rareg, REG_imm, 3, 0, make_mask_control_info(0, 8, 8));
         rareg = REG_temp0;
       }
 
       // On x86-64, only 8-bit and 16-bit ops need to be merged; 32-bit is zero extended to full 64 bits:
-      TransOp transop((zeroext) ? OP_zxt : OP_sxt, rdreg, (rdsize < 2) ? rdreg : REG_zero, rareg, REG_zero, rdsize);
-      transop.cond = rasize;
+      TransOp transop(OP_mask, rdreg, (rdsize < 2) ? rdreg : REG_zero, rareg, REG_imm, rdsize, 0, make_mask_control_info(0, (1<<rasize)*8, 0));
+      transop.cond = (zeroext) ? 1 : 2;
       this << transop;
     } else if ((rd.type == OPTYPE_REG) && (ra.type == OPTYPE_MEM)) {
       //
@@ -1387,8 +1395,9 @@ namespace TranslateX86 {
 
       if (op < 0x58) {
         // push
+        this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, r, sizeshift, -size);
         this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (ctx.use64 ? 3 : 2), size);
-        this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, r, sizeshift);
+
       } else {
         // pop
         this << TransOp(OP_ld, r, REG_rsp, REG_zero, REG_zero, sizeshift);
@@ -1456,8 +1465,9 @@ namespace TranslateX86 {
       int r = REG_temp0;
       immediate(r, (op == 0x68) ? 2 : 0, ra.imm.imm);
 
+      this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, r, sizeshift, -size);
       this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
-      this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, r, sizeshift);
+
       break;
     }
 
@@ -1573,13 +1583,32 @@ namespace TranslateX86 {
 
         this << TransOp(OP_mov, REG_temp0, REG_zero, rdreg, REG_zero, 3); // save old rdreg
 
-        int opcode1 = (rdhigh && !rahigh) ? OP_inshb : (!rdhigh && rahigh) ? OP_exthb : (rdhigh && rahigh) ? OP_movhb : OP_mov;
-        int opcode2 = (rdhigh && !rahigh) ? OP_exthb : (!rdhigh && rahigh) ? OP_inshb : (rdhigh && rahigh) ? OP_movhb : OP_mov;
-        this << TransOp(opcode1, rdreg, rdreg, rareg, REG_zero, (opcode1 == OP_mov) ? sizeshift : 3); // dl = al
-        this << TransOp(opcode2, rareg, rareg, REG_temp0, REG_zero, (opcode2 == OP_mov) ? sizeshift : 3); // al = olddl
+        bool moveonly = (!rdhigh && !rahigh);
+
+        int maskctl1 = 
+          (rdhigh && !rahigh) ? make_mask_control_info(56, 8, 56) : // insert high byte
+          (!rdhigh && rahigh) ? make_mask_control_info(0, 8, 8) : // extract high byte
+          (rdhigh && rahigh) ? make_mask_control_info(56, 8, 0) : // move between high bytes
+          make_mask_control_info(0, 64, 0); // straight move (but cannot synthesize from mask uop)
+
+        int maskctl2 = 
+          (rdhigh && !rahigh) ? make_mask_control_info(0, 8, 8) : // extract high byte
+          (!rdhigh && rahigh) ? make_mask_control_info(56, 8, 56) : // insert high byte
+          (rdhigh && rahigh) ? make_mask_control_info(56, 8, 0) : // move between high bytes
+          make_mask_control_info(0, 64, 0); // straight move (but cannot synthesize from mask uop)
+
+        if (moveonly) {
+          this << TransOp(OP_mov, rdreg, rdreg, rareg, REG_zero, sizeshift);
+          this << TransOp(OP_mov, rareg, rareg, REG_temp0, REG_zero, sizeshift);
+        } else {
+          this << TransOp(OP_mask, rdreg, rdreg, rareg, REG_imm, 3, 0, maskctl1);
+          this << TransOp(OP_mask, rareg, rareg, REG_temp0, REG_imm, 3, 0, maskctl2);
+        }
       } else {
-        this << TransOp((rahigh) ? OP_exthb : OP_mov, REG_temp7, REG_zero, rareg, REG_zero, 3);
-        
+        if (rahigh)
+          this << TransOp(OP_mask, REG_temp7, REG_zero, rareg, REG_imm, 3, 0, make_mask_control_info(0, 8, 8));
+        else this << TransOp(OP_mov, REG_temp7, REG_zero, rareg, REG_zero, 3);
+
         //
         // ld ra = [mem],ra
         //
@@ -1591,7 +1620,9 @@ namespace TranslateX86 {
         } else {
           // need to merge 8-bit or 16-bit data:
           operand_load(REG_temp0, rd);
-          this << TransOp((reginfo[rd.reg.reg].hibyte) ? OP_inshb : OP_mov, destreg, destreg, REG_temp0, REG_zero, sizeshift);
+          if (reginfo[rd.reg.reg].hibyte)
+            this << TransOp(OP_mask, destreg, destreg, REG_temp0, REG_imm, 3, 0, make_mask_control_info(56, 8, 56));
+          else this << TransOp(OP_mov, destreg, destreg, REG_temp0, REG_zero, sizeshift);
         }
 
         //
@@ -1716,15 +1747,26 @@ namespace TranslateX86 {
       int rashift = (sizeflag & DFLAG) ? ((rex.mode64) ? 2 : 1) : 0;
       int rdshift = rashift + 1;
 
-      TransOp transop(OP_sxt, REG_rax, (rdshift < 3) ? REG_rax : REG_zero, REG_rax, REG_zero, rdshift);
-      transop.cond = rashift;
+      TransOp transop(OP_mask, REG_rax, (rdshift < 3) ? REG_rax : REG_zero, REG_rax, REG_imm, rdshift, 0, make_mask_control_info(0, (1<<rashift)*8, 0));
+      transop.cond = 2; // sign extend
       this << transop;
       break;
     }
     case 0x99: {
       // cwd cdq cqo
       int rashift = (sizeflag & DFLAG) ? ((rex.mode64) ? 3 : 2) : 1;
-      this << TransOp(OP_dupbit, REG_rdx, (rashift < 2) ? REG_rdx : REG_zero, REG_rax, REG_imm, rashift, 0, ((1<<rashift)*8)-1);
+
+      TransOp bt(OP_bt, REG_temp0, REG_rax, REG_imm, REG_zero, 2, ((1<<rashift)*8)-1, 0, SETFLAG_CF);
+      bt.nouserflags = 1; // it still generates flags, but does not rename the user flags
+      this << bt;
+
+      TransOp sel(OP_sel, REG_temp0, REG_temp0, REG_imm, REG_imm, 3, 0, -1LL);
+      sel.cond = COND_c;
+      this << sel, endl;
+
+      // move in value
+      this << TransOp(OP_mov, REG_rdx, (rashift < 2) ? REG_rdx : REG_zero, REG_temp0, REG_zero, rashift);
+
       // zero out high bits of rax since technically both rdx and rax are modified:
       if (rashift == 2) this << TransOp(OP_mov, REG_rax, REG_zero, REG_rax, REG_zero, 2);
       break;
@@ -2195,8 +2237,10 @@ namespace TranslateX86 {
       // push %rbp
       // mov %rbp,%rsp
       // sub %rsp,imm8
+
+      this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_rbp, sizeshift, -(1 << sizeshift));
       this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
-      this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_rbp, sizeshift);
+
       this << TransOp(OP_mov, REG_rbp, REG_zero, REG_rsp, REG_zero, sizeshift);
       this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, bytes);
       break;
@@ -2208,9 +2252,14 @@ namespace TranslateX86 {
       // Exactly equivalent to:
       // mov %rsp,%rbp
       // pop %rbp
+
+      // Make idempotent by checking new rsp (aka rbp) alignment first:
+      this << TransOp(OP_ld, REG_temp0, REG_rbp, REG_zero, REG_zero, sizeshift);
+
       this << TransOp(OP_mov, REG_rsp, REG_zero, REG_rbp, REG_zero, sizeshift);
       this << TransOp(OP_ld, REG_rbp, REG_rsp, REG_zero, REG_zero, sizeshift);
       this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
+
       break;
     }
 
@@ -2279,13 +2328,15 @@ namespace TranslateX86 {
       // 0x670 (0xdf): fild fisttp fist fistp fbld fild fbstp fistp
       //
 
+#define FP_STACK_MASK 0x3f
+
       /*
         ++MTY TODO: support full x87 FP
     case 0x600 .. 0x607: { // fOP mem32 or fOP reg
       if (modrm.mod == 3) {
         // replace st(0) with st(0) OP st(modrm.rm):
         TransOp ldp0(OP_ld, REG_temp1, REG_fptos, REG_imm, REG_zero, 3, (W64)&fpregs); ldp0.internal = 1; this << ldp0;
-        this << TransOp(OP_addm, REG_temp0, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, 6);
+        this << TransOp(OP_addm, REG_temp0, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
         TransOp ldp1(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, (W64)&fpregs); ldp1.internal = 1; this << ldp1;
 
         // fadd fmul fcom fcomp fsub fsubr fdiv fdivr
@@ -2293,7 +2344,7 @@ namespace TranslateX86 {
         int translated_opcode = translate_opcode[modrm.reg];
 
 
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       } else {
@@ -2301,12 +2352,12 @@ namespace TranslateX86 {
         // ldd          t0 = [mem]
         // fcvt.s2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         DECODE(eform, ra, d_mode);
         CheckInvalid();
         operand_load(REG_temp0, ra, OP_ld, 1);
         this << TransOp(OP_cvtf_s2d_lo, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       }
@@ -2317,9 +2368,9 @@ namespace TranslateX86 {
     case 0x610: { // fld mem32 or fld reg
       if (modrm.mod == 3) {
         // load from FP stack register
-        this << TransOp(OP_addm, REG_temp0, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, 6);
+        this << TransOp(OP_addm, REG_temp0, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
         TransOp ldp(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, (W64)&fpregs); ldp.internal = 1; this << ldp;
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       } else {
@@ -2327,12 +2378,12 @@ namespace TranslateX86 {
         // ldd          t0 = [mem]
         // fcvt.s2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         DECODE(eform, ra, d_mode);
         CheckInvalid();
         operand_load(REG_temp0, ra, OP_ld, 1);
         this << TransOp(OP_cvtf_s2d_lo, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       }
@@ -2347,11 +2398,11 @@ namespace TranslateX86 {
         // load from memory
         // ldq          t0 = [mem]
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         DECODE(eform, ra, q_mode);
         CheckInvalid();
         operand_load(REG_temp0, ra, OP_ld, 1);
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       }
@@ -2368,7 +2419,7 @@ namespace TranslateX86 {
         // ldd          t0 = [mem]
         // fcvt.s2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         DECODE(eform, rd, d_mode);
         CheckInvalid();
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (W64)&fpregs); ldp.internal = 1; this << ldp;
@@ -2377,7 +2428,7 @@ namespace TranslateX86 {
 
         if (bit(op, 0)) {
           this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
-          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // pop: fstp
+          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: fstp
         }
       }
       break;
@@ -2387,18 +2438,18 @@ namespace TranslateX86 {
     case 0x653: { // fst/fstp mem64 or fst st(0) to FP stack reg
       if (modrm.mod == 0x3) {
         // fst st(0) to FP stack reg
-        this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, 6);
+        this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
 
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (W64)&fpregs); ldp.internal = 1; this << ldp;
         TransOp stp(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
 
-        if (bit(op, 0)) this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // pop: fstp
+        if (bit(op, 0)) this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: fstp
       } else {
         // store st0 to memory
         // ldd          t0 = [mem]
         // fcvt.s2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         DECODE(eform, rd, q_mode);
         CheckInvalid();
 
@@ -2409,7 +2460,7 @@ namespace TranslateX86 {
 
         if (bit(op, 0)) {
           this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
-          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // pop: fstp
+          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: fstp
         }
       }
       break;
@@ -2418,7 +2469,7 @@ namespace TranslateX86 {
     case 0x611: { // fxch
       if (modrm.mod == 0x3) {
         // load from FP stack register
-        this << TransOp(OP_addm, REG_temp2, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, 6);
+        this << TransOp(OP_addm, REG_temp2, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
         TransOp ldptos(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (W64)&fpregs); ldptos.internal = 1; this << ldptos;
         TransOp ldpalt(OP_ld, REG_temp1, REG_temp2, REG_imm, REG_zero, 3, (W64)&fpregs); ldpalt.internal = 1; this << ldpalt;
 
@@ -2436,7 +2487,7 @@ namespace TranslateX86 {
         static const double constants[8] = {1.0, 3.3219280948873623479, 1.4426950408889634074, 3.1415926535897932385, .30102999566398119521, .69314718055994530942, 0, 0};
         // load from constant
         this << TransOp(OP_mov, REG_temp0, REG_zero, REG_imm, REG_zero, 3, ((W64*)&constants)[modrm.rm]);
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // push: set used bit in tag word
       } else {
@@ -2450,19 +2501,19 @@ namespace TranslateX86 {
       if (modrm.mod == 0x3) {
         // ffreep
         this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: clear used bit in tag word
-        this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // pop
+        this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop
       } else {
         // fild mem16
         // ldxw         t0 = [mem]
         // fcvt.q2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         // bts          fptags = fptags,fptos
         DECODE(eform, ra, w_mode);
         CheckInvalid();
         operand_load(REG_temp0, ra, OP_ldx, 1);
         this << TransOp(OP_cvtf_q2d, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       }
@@ -2496,19 +2547,19 @@ namespace TranslateX86 {
         // ldxd         t0 = [mem]
         // fcvt.q2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         // bts          fptags = fptags,fptos
         DECODE(eform, ra, d_mode);
         CheckInvalid();
         operand_load(REG_temp0, ra, OP_ldx, 1);
 
         this << TransOp(OP_cvtf_q2d, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       } else {
         // fcmovCC
-        this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, 6);
+        this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
         TransOp ldp0(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (W64)&fpregs); ldp0.internal = 1; this << ldp0;
         TransOp ldp1(OP_ld, REG_temp1, REG_temp1, REG_imm, REG_zero, 3, (W64)&fpregs); ldp1.internal = 1; this << ldp1;
         
@@ -2558,13 +2609,13 @@ namespace TranslateX86 {
         // ldq          t0 = [mem]
         // fcvt.q2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
-        // subm         fptos = fptos,8,6
+        // subm         fptos = fptos,8,0x3f
         // bts          fptags = fptags,fptos
         DECODE(eform, ra, q_mode);
         CheckInvalid();
         operand_load(REG_temp0, ra, OP_ldx, 1);
         this << TransOp(OP_cvtf_q2d, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
-        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // push stack
+        this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (W64)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       } else {
@@ -2575,7 +2626,7 @@ namespace TranslateX86 {
         // 10 = double precision ordered compare
         // 11 = double precision unordered compare
         //
-        this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, 6);
+        this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
         TransOp ldp0(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (W64)&fpregs); ldp0.internal = 1; this << ldp0;
         TransOp ldp1(OP_ld, REG_temp1, REG_temp1, REG_imm, REG_zero, 3, (W64)&fpregs); ldp1.internal = 1; this << ldp1;
         
@@ -2589,7 +2640,7 @@ namespace TranslateX86 {
         
         if (bit(op, 0)) {
           this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
-          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, 6); // pop: fstp
+          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: fstp
         }
       }
       break;
@@ -2602,11 +2653,37 @@ namespace TranslateX86 {
       break;
     }
 
-    case 0xe0 ... 0xe3: {
-      // loopne loope loop jcxz
+    case 0xe0 ... 0xe2: {
+      // loopne loope loop
       MakeInvalid();
       break;
     };
+
+    case 0xe3: {
+      // jcxz
+      // near conditional branches with 8-bit displacement:
+      DECODE(iform, ra, b_mode);
+      CheckInvalid();
+
+      int sizeshift = (ctx.use64) ? ((sizeflag & DFLAG) ? 3 : 2) : ((sizeflag & DFLAG) ? 2 : 1);
+
+      TransOp testop(OP_and, REG_temp1, REG_rcx, REG_rcx, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
+      testop.nouserflags = 1;
+      this << testop;
+
+      if (!last_flags_update_was_atomic)
+        this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+
+      TransOp transop(OP_br, REG_rip, REG_temp1, REG_zero, REG_zero, 3, 0);
+      transop.cond = COND_e;
+      transop.riptaken = (W64)rip + ra.imm.imm;
+      transop.ripseq = (W64)rip;
+      bb.rip_taken = (W64)rip + ra.imm.imm;
+      bb.rip_not_taken = (W64)rip;
+      this << transop;
+      end_of_block = true;
+      break;
+    }
 
     case 0xe4 ... 0xe7: {
       // inb/inw/outb/outw imm8/imm16: NOT SUPPORTED
@@ -2630,8 +2707,8 @@ namespace TranslateX86 {
 
       if (iscall) {
         immediate(REG_temp0, 3, (W64)rip);
+        this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp0, sizeshift, -(1 << sizeshift));
         this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, (1 << sizeshift));
-        this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_temp0, sizeshift);
       }
 
       if (!last_flags_update_was_atomic)
@@ -2797,8 +2874,8 @@ namespace TranslateX86 {
           if (ctx.use64 && (rashift == 2)) rashift = 3;
           if (iscall) {
             immediate(REG_temp6, 3, (W64)rip);
+            this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp6, sizeshift, -(1 << sizeshift));
             this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, 1 << sizeshift);
-            this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_temp6, sizeshift);
           }
           // We do not know the taken or not-taken directions yet so just leave them as zero:
           TransOp transop(OP_jmp, REG_rip, rareg, REG_zero, REG_zero, rashift);
@@ -2810,8 +2887,8 @@ namespace TranslateX86 {
           operand_load(REG_temp0, ra);
           if (iscall) {
             immediate(REG_temp6, 3, (W64)rip);
+            this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp6, sizeshift, -(1 << sizeshift));
             this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, 1 << sizeshift);
-            this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_temp6, sizeshift);
           }
           // We do not know the taken or not-taken directions yet so just leave them as zero:
           TransOp transop(OP_jmp, REG_rip, REG_temp0, REG_zero, REG_zero, ra.mem.size);
@@ -2834,8 +2911,8 @@ namespace TranslateX86 {
 
         int sizeshift = (ra.type == OPTYPE_REG) ? reginfo[ra.reg.reg].sizeshift : ra.mem.size;
         if (ctx.use64 && sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
+        this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp7, sizeshift, -(1 << sizeshift));
         this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (ctx.use64 ? 3 : 2), (1 << sizeshift));
-        this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_temp7, sizeshift);
 
         break;
       }
@@ -2949,8 +3026,8 @@ namespace TranslateX86 {
 
       // Form a 64-bit register to shift
       if (right)
-        this << TransOp(OP_movhl, REG_temp0, rareg, rdreg, REG_zero, 3);
-      else this << TransOp(OP_movhl, REG_temp0, rdreg, rareg, REG_zero, 3);
+        this << TransOp(OP_mask, REG_temp0, rareg, rdreg, REG_imm, 3, 0, make_mask_control_info(32, 32, 32));
+      else this << TransOp(OP_mask, REG_temp0, rdreg, rareg, REG_imm, 3, 0, make_mask_control_info(32, 32, 32));
 
       // Collect the old flags here in case the shift count was zero:
       this << TransOp(OP_collcc, REG_temp5, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
@@ -3580,6 +3657,7 @@ namespace TranslateX86 {
 
       if (ra.type == OPTYPE_MEM) {
         // Load
+        // This is still idempotent since if the second one was unaligned, the first one must be too
         operand_load(rdreg+0, ra, OP_ld, 1);
         ra.mem.offset += 8;
         operand_load(rdreg+1, ra, OP_ld, 1);
@@ -3602,6 +3680,7 @@ namespace TranslateX86 {
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       if (rd.type == OPTYPE_MEM) {
         // Store
+        // This is still idempotent since if the second one was unaligned, the first one must be too
         result_store(rareg+0, REG_temp0, rd);
         rd.mem.offset += 8;
         result_store(rareg+1, REG_temp1, rd);
@@ -3629,7 +3708,9 @@ namespace TranslateX86 {
       } else {
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
         // Strange semantics: iff the source operand is a register, insert into low 32 bits only; leave high 32 bits and bits 64-127 alone
-        this << TransOp((isdouble) ? OP_mov : OP_movl, rdreg, (isdouble) ? REG_zero : rdreg, rareg, REG_zero, 3);
+        if (isdouble)
+          this << TransOp(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3);
+        else this << TransOp(OP_mask, rdreg, rdreg, rareg, REG_imm, 3, 0, make_mask_control_info(0, 32, 0));
       }
       break;
     }
@@ -3649,7 +3730,9 @@ namespace TranslateX86 {
         // Register to register
         int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
         // Strange semantics: iff the source operand is a register, insert into low 32 bits only; leave high 32 bits and bits 64-127 alone
-        this << TransOp((isdouble) ? OP_mov : OP_movl, rdreg, (isdouble) ? REG_zero : rdreg, rareg, REG_zero, 3);
+        if (isdouble)
+          this << TransOp(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3);
+        else this << TransOp(OP_mask, rdreg, rdreg, rareg, REG_imm, 3, 0, make_mask_control_info(0, 32, 0));
       }
       break;
     }

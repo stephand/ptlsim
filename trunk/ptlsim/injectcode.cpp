@@ -18,7 +18,6 @@
 
 #ifdef __x86_64__
 
-#define __syscall_clobber "r11","rcx","memory"
 #define __syscall "syscall"
 
 #define declare_syscall0(sysid,type,name) static inline type name(void) { long __res; asm volatile \
@@ -79,6 +78,17 @@
 
 #endif // 32-bit
 
+#ifdef PTLSIM_FORCE_32BIT_ONLY
+// Building PTLsim32 only:
+
+static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
+  asm volatile("mov %[code],%%eax\n"
+               "mov %[stack],%%esp\n"
+               "jmp *%%eax\n" : : [code] "r" (code), [stack] "m" (stack));
+}
+
+#else
+
 struct FarJumpDescriptor {
   W32 offset;
   W16 seg;
@@ -100,6 +110,8 @@ static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
                "ljmp *(%%eax)\n" : : [desc] "m" (desc), [stack] "m" (stack));
 #endif
 }
+
+#endif // ! PTLSIM_FORCE_32BIT_ONLY
 
 declare_syscall0(__NR_pause, void, sys_pause);
 
@@ -141,6 +153,14 @@ extern "C" void ptlsim_loader_thunk_name(LoaderInfo* info);
 
 #define PTLSIM_THUNK_PAGE 0x1000
 
+#ifdef PTLSIM_FORCE_32BIT_ONLY
+typedef Elf32_Ehdr PTLsim_Elf_Ehdr;
+typedef Elf32_Phdr PTLsim_Elf_Phdr;
+#else
+typedef Elf64_Ehdr PTLsim_Elf_Ehdr;
+typedef Elf64_Phdr PTLsim_Elf_Phdr;
+#endif
+
 void ptlsim_loader_thunk_name(LoaderInfo* info) {
   if (info->initialize) {
     byte* loader_temp_code = (byte*)PTLSIM_THUNK_PAGE;
@@ -176,27 +196,40 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
 
   void* temp = (void*)sys_mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, fd, 0);
 
-  Elf64_Ehdr* ehdr = (Elf64_Ehdr*)temp;
+  PTLsim_Elf_Ehdr* ehdr = (PTLsim_Elf_Ehdr*)temp;
+  PTLsim_Elf_Phdr* phdr = (PTLsim_Elf_Phdr*)(((byte*)ehdr) + ehdr->e_phoff);
 
-  Elf64_Phdr* phdr = (Elf64_Phdr*)(((byte*)ehdr) + ehdr->e_phoff);
+  W64 phdr_vaddr, phdr_filesz, phdr_memsz, phdr_offset;
+  W64 image_base = floor(phdr->p_vaddr, PAGE_SIZE);
 
-  // First segment in ELF image must be LOAD segment
-  byte* baseaddr = (byte*)sys_mmap((void*)phdr->p_vaddr, ceil(phdr->p_filesz, PAGE_SIZE), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED, fd, phdr->p_offset);
-  if ((W64)baseaddr != phdr->p_vaddr) sys_exit(253);
+  while (phdr->p_type == PT_LOAD) {
+    phdr_vaddr = floor(phdr->p_vaddr, PAGE_SIZE);
+    phdr_filesz = phdr->p_filesz + (phdr->p_vaddr % PAGE_SIZE);
+    phdr_offset = floor(phdr->p_offset, PAGE_SIZE);
+    phdr_memsz = phdr->p_memsz + (phdr->p_vaddr % PAGE_SIZE);
+
+    byte* baseaddr = (byte*)sys_mmap((void*)phdr_vaddr, ceil(phdr_filesz, PAGE_SIZE), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED, fd, phdr_offset);
+    if ((W64)baseaddr != phdr_vaddr) { sys_exit(253); }
+
+    phdr++;
+  }
+
+  phdr--;
 
   // Zero-fill remainder of page
-  byte* p = baseaddr + phdr->p_filesz;
-  byte* bssp = (byte*)ceil(phdr->p_vaddr + phdr->p_filesz, PAGE_SIZE);
+  byte* p = (byte*)(phdr_vaddr + phdr_filesz);
+  byte* bssp = (byte*)ceil(phdr_vaddr + phdr_filesz, PAGE_SIZE);
   while (p < bssp) *p++ = 0;
 
-  byte* endp = (byte*)ceil(phdr->p_vaddr + phdr->p_memsz, PAGE_SIZE);
+  byte* endp = (byte*)ceil(phdr_vaddr + phdr_memsz, PAGE_SIZE);
 
   // Map zero pages for remainder of segment
   byte* bssaddr = (byte*)sys_mmap(bssp, endp - bssp, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
+
   if (bssaddr != bssp) sys_exit(254);
 
   // ELF header can now be accessed at base of PTLsim image:
-  ehdr = (Elf64_Ehdr*)baseaddr;
+  ehdr = (PTLsim_Elf_Ehdr*)image_base;
 
   void* func = (void*)ehdr->e_entry;
 

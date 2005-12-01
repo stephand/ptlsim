@@ -803,10 +803,20 @@ void flush_cpu_caches() {
 
 typedef byte X87Reg[10];
 
+union X87StatusWord {
+  struct { W16 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, sf:1, es:1, c0:1, c1:1, c2:1, tos:3, c3:1, b:1; } fields;
+  W16 data;
+};
+
+union X87ControlWord {
+  struct { W16 im:1, dm:1, zm:1, om:1, um:1, pm:1, res1:2, pc:2, rc:2, y:1, res2:3; } fields;
+  W16 data;
+};
+
 struct X87State {
-  W16 cw;
+  X87ControlWord cw;
   W16 reserved1;
-  W16 sw;
+  X87StatusWord sw;
   W16 reserved2;
   W16 tw;
   W16 reserved3;
@@ -847,10 +857,9 @@ void cpu_frstor(X87State& state) {
 }
 
 void fpu_state_to_ptlsim_state() {
-  int tos = bits(x87state.sw, 11, 3);
-  ctx.commitarf[REG_fptos] = tos * 8;
-  ctx.commitarf[REG_fpsw] = x87state.sw;
-  ctx.commitarf[REG_fpcw] = x87state.cw;
+  ctx.commitarf[REG_fptos] = x87state.sw.fields.tos * 8;
+  ctx.commitarf[REG_fpsw] = x87state.sw.data;
+  ctx.commitarf[REG_fpcw] = x87state.cw.data;
 
   ctx.commitarf[REG_fptags] = 0;
   foreach (i, 8) {
@@ -860,21 +869,24 @@ void fpu_state_to_ptlsim_state() {
 
   // x86 FSAVE state is in order of stack rather than physical registers:
   foreach (i, 8) {
-    fpregs[lowbits(tos + i, 3)] = x87_fp_80bit_to_64bit(x87state.stack[i]);
+    fpregs[lowbits(x87state.sw.fields.tos + i, 3)] = x87_fp_80bit_to_64bit(x87state.stack[i]);
   }
 }
 
 void ptlsim_state_to_fpu_state() {
   // x87state.cw already filled and assumed not to be modified
-  x87state.sw &= ~(7 << 11);
+  x87state.sw.data = 0; // clear all exceptions
   int tos = ctx.commitarf[REG_fptos] >> 3;
   assert(inrange(tos, 0, 7));
-  x87state.sw |= tos << 11;
-  //x87state.tw = 0;
+  x87state.sw.fields.tos = tos;
+  x87state.tw = 0;
+
+  // Prepare tag word
   foreach (i, 8) {
     x87state.tw |= (bit(ctx.commitarf[REG_fptags], i*8) ? 0 : 3) << (i*2);
   }
 
+  // Prepare actual registers
   foreach (i, 8) {
     x87_fp_64bit_to_80bit(x87state.stack[i], fpregs[lowbits(tos + i, 3)]);
   }
@@ -1047,7 +1059,6 @@ void switch_to_native_restore_context() {
   thunkpage->call_code_addr = (W64)&thunkpage->switch_to_sim_thunk;
   thunkpage->simulated = 0;
   ptlsim_state_to_fpu_state();
-
   switch_to_native_restore_context_lowlevel(ctx.commitarf, !ctx.use64);
 }
 
@@ -1063,6 +1074,10 @@ extern "C" void save_context_switch_to_sim() {
     // REG_rip set from first word on stack, but REG_rsp needs to be incremented
     ctx.commitarf[REG_rsp] += (ctx.use64) ? 8 : 4;
   }
+
+#ifdef __x86_64__
+  if (!ctx.use64) ctx.commitarf[REG_rip] &= 0xffffffff;
+#endif
 
   logfile << endl, "=== Switching to simulation mode at rip ", (void*)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
 
@@ -1082,6 +1097,12 @@ extern "C" void save_context_switch_to_sim() {
     start_perfctrs();
     switch_to_native_restore_context();
   }
+
+  //
+  // Revoke user signal handlers: we don't want them messing with PTLsim
+  // since it makes debugging significantly more difficult
+  // 
+  assert(signal(SIGTRAP, SIG_DFL) != SIG_ERR);
 
   switch_to_sim();
 }
@@ -1596,6 +1617,8 @@ int ptlsim_inject(int argc, char** argv) {
   void* thunk_source = (void*)(x86_64_mode ? &ptlsim_loader_thunk_64bit : &ptlsim_loader_thunk_32bit);
   int thunk_size = LOADER_THUNK_SIZE;
 
+  static const W64 thunk_base = 0x1000;
+
   if (DEBUG) cerr << "Saving old code (", thunk_size, " bytes) at thunk rip ", (void*)regs.rip, " in pid ", pid, endl;
   copy_from_process_memory(pid, &info.saved_thunk, (void*)info.origrip, LOADER_THUNK_SIZE);
 
@@ -1833,10 +1856,8 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   // We don't yet have any I/O streams or console output at this point
   // so we are limited to things we can do without using libc:
   //
-
   // The loader thunk patched our ELF header with the real RIP to enter at:
   Elf64_Ehdr* ptlsim_ehdr = (Elf64_Ehdr*)PTL_PAGE_POOL_BASE;
-
   inside_ptlsim = (ptlsim_ehdr->e_type == ET_PTLSIM);
   ptlsim_build_timestamp = (time_t)ptlsim_ehdr->e_version;
 
@@ -1851,6 +1872,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   ctx.commitarf[REG_rip] = (W64)ptlsim_ehdr->e_entry;
   ctx.commitarf[REG_flags] = 0;
   ctx.use64 = (ptlsim_ehdr->e_machine == EM_X86_64);
+
   cpu_fsave(x87state);
   fpu_state_to_ptlsim_state();
   ctx.commitarf[REG_mxcsr] = x86_stmxcsr();

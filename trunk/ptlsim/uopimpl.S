@@ -9,7 +9,153 @@
 .intel_syntax
 .align 4096
 
-#include <uopimpl.h>
+#define __ASM_ONLY__
+#include <ptlhwdef.h>
+#include <simsynth-offsets.h>
+
+.extern ctx
+
+#
+# NOTES: 
+# - Registers have been specifically chosen to favor the low 8 for the most common references.
+#   In x86-64, r8-r15 may require an extra byte to encode them. Example: %rbp and %rdi
+# - FLAG_INV and FLAG_WAIT **MUST** be in the low 8 bits of the flag byte or word. This is
+#   used to reduce the code size.
+#
+
+/*
+	struct IssueState {
+	  union {
+	    struct {
+	      W64 rddata;
+	      W32 pad1;
+	      W16 pad2;
+	      W16 rdflags;
+	    } reg;
+
+	    struct {
+	      W64 rddata;
+	      W64 physaddr:48, flags:16;
+	    } ldreg;
+
+	    struct { 
+	      W64 riptaken;
+	      W64 ripseq;
+	    } brreg;
+
+	    SFR st;
+	  };
+	};
+*/
+
+#define IssueState_size       16
+
+#define rstate                rsi               /* (caller arg 2) */
+#define IssueState_rddata     %rstate + 0
+#define IssueState_rdflags    %rstate + 14
+
+#define IssueState_physaddr   %rstate + 8        /* low 48 bits only! */
+
+#define IssueState_riptaken   %rstate + 0
+#define IssueState_ripseq     %rstate + 8
+
+#define rraflags              r15d
+#define rrbflags              r13d
+#define rrcflags              r9d
+#define rsfra                 r11
+
+#define rraflagsw             r15w
+#define rrbflagsw             r13w
+#define rrcflagsw             r9w
+
+#define rlsi                  r8      /* (load/store info word:  only used for loads and stores) */
+
+/*
+ * Cleverness alert: FLAG_INV is bit 1 in both regular ALU flags
+ * AND bit 1 in the lowest byte of SFR.physaddr. This is critical
+ * to making the synthesized simulator code work efficiently.
+ *
+ * struct SFR {
+ *   W64 data;
+ *   W64 pad0:1, invalid:1, pad2:1, physaddr:45, bytemask:8, tag:8;
+ * };
+ */
+
+#define sfr_data              0
+#define sfr_addr              8
+#define sfr_mask              14
+#define sfr_memid             15
+#define sfr_flags             8
+
+#define IssueState_sfrd_data  %rstate + sfr_data
+#define IssueState_sfrd_addr  %rstate + sfr_addr
+#define IssueState_sfrd_mask  %rstate + sfr_mask
+#define IssueState_sfrd_flags %rstate + sfr_flags
+
+.macro invalid a=0 b=0 c=0
+  int3
+.endm
+
+.macro som label
+.align 16
+template_\label:
+1:
+.data
+  .quad 1b
+.previous
+  jc      9f     # If regfetch determined that one or more operands were invalid
+.endm
+
+.macro eom label
+9:
+  add     %rstate,IssueState_size
+  ret
+1:
+.data
+  .quad 1b
+.previous
+.endm
+
+.macro eomret label
+9:
+  add     %rstate,IssueState_size
+  ret
+1:
+.data
+  .quad 1b
+.previous
+.endm
+
+.macro somnp label
+.align 16
+template_\label:
+1:
+.data
+  .quad 1b
+.previous
+.endm
+
+.macro eomnp label
+1:
+.data
+  .quad 1b
+.previous
+.endm
+
+.macro grouplabel label
+.data
+templatemap_\label:
+.global templatemap_\label
+.previous
+.endm
+
+/*
+  Callee must preserve:
+  rbx rsp rbp r12 r13 r14 r15 r15
+
+  Args passed in:
+  rdi rsi
+*/
 
 # Load sign extended 32 bit constant
 .macro ldcsxt destreg loreg imm
@@ -70,16 +216,6 @@ som \PTOPCODE\SIZE
   mov     word ptr [IssueState_rdflags],0
   eom     \PTOPCODE\SIZE
 .endm
-
-.macro generate_aluop_allsize PTOPCODE OPCODE
-grouplabel mov
-  generate_aluop \PTOPCODE \OPCODE 1 al bl
-  generate_aluop \PTOPCODE \OPCODE 2 ax bx
-  generate_aluop \PTOPCODE \OPCODE 4 eax ebx
-  generate_aluop \PTOPCODE \OPCODE 8 rax rbx
-.endm
-
-generate_aluop_allsize mov mov
 
 grouplabel bswap
   generate_aluop bswap mov 1 al bl
@@ -209,6 +345,7 @@ som dummy_\PTOPCODE
   generate_aluop_setflags \PTOPCODE \OPCODE 8 rax rbx
 .endm
 
+generate_aluop_allsize_setflags mov mov
 generate_aluop_allsize_setflags and and
 generate_aluop_allsize_setflags or or
 generate_aluop_allsize_setflags xor xor
@@ -228,22 +365,16 @@ generate_aluop_allsize_setflags ctz bsf 1
 generate_aluop_allsize_setflags clz bsr 1
 generate_aluop_allsize_setflags ctpop ctpop 1
 
-.macro generate_aluop_and_mask PTOPCODE OPCODE SIZE REG REGB
+.macro generate_aluop_and_mask PTOPCODE OPCODE SIZE REG REGB REGC
 som nf_\PTOPCODE\SIZE
   \OPCODE %\REG,%\REGB
-  mov     %ebx,1
-  shl     %rbx,%cl
-  dec     %rbx
-  and     %\REG,%\REGB
+  and     %\REG,%\REGC
   mov     [IssueState_rddata],%rax
   mov     word ptr [IssueState_rdflags],0 # Don't set flags in this variant
   eom     nf_\PTOPCODE\SIZE
 som \PTOPCODE\SIZE
   \OPCODE %\REG,%\REGB
-  mov     %ebx,1
-  shl     %rbx,%cl
-  dec     %rbx
-  and     %\REG,%\REGB
+  and     %\REG,%\REGC
   mov     [IssueState_rddata],%rax
   stflags IssueState_rdflags
   eom     \PTOPCODE\SIZE
@@ -251,10 +382,10 @@ som \PTOPCODE\SIZE
 
 .macro generate_aluop_and_mask_allsize_setflags PTOPCODE OPCODE
 grouplabel \PTOPCODE
-  generate_aluop_and_mask \PTOPCODE \OPCODE 1 al bl
-  generate_aluop_and_mask \PTOPCODE \OPCODE 2 ax bx
-  generate_aluop_and_mask \PTOPCODE \OPCODE 4 eax ebx
-  generate_aluop_and_mask \PTOPCODE \OPCODE 8 rax rbx
+  generate_aluop_and_mask \PTOPCODE \OPCODE 1 al bl cl
+  generate_aluop_and_mask \PTOPCODE \OPCODE 2 ax bx cx
+  generate_aluop_and_mask \PTOPCODE \OPCODE 4 eax ebx ecx
+  generate_aluop_and_mask \PTOPCODE \OPCODE 8 rax rbx rcx
 .endm
 
 generate_aluop_and_mask_allsize_setflags addm add
@@ -1189,6 +1320,281 @@ som jmp_excepting
   mov     word ptr [IssueState_rdflags],0
 2:
   eom     jmp_excepting
+
+/* 
+  mask, mask.x, mask.z: Insert/Extract via rotate (insr, extr, extrx)
+ 
+  mask rd = ra,rb,[ds,ms,mc]
+  rc = extract info (18 bits)
+ 
+  Zero extend form zero extends bit field from bit (ms+mc) to full result size
+  Sign extend form sign extends bit field from bit (ms+mc) to full result size
+ 
+  Semantics:
+ 
+  M = (((1 << mc)-1) >>> ms)
+  T = (ra & ~M) | ((rb >>> ds) & M)
+  if (zeroext) {
+    rd = ra <- (T & 1'[(ms+mc-1):0])
+  else if (signext) {
+    rd = ra <- (T[ms+mc-1]) ? (T | 1'[63:(ms+mc)]) : (T & 1'[(ms+mc-1):0])
+  } else {
+    rd = ra <- T
+  }
+  
+  Example:
+ 
+  rd abc34567
+  ra 01234567
+  rb 0123abc7
+     MMM
+  mx 00001110
+  sr   >>4
+  tm xxxxabcx
+  z  (01234567 & 11110001) | (xxxxabcx & 00001110)
+  z  (0123abc7)
+  zxt 0100abc7
+ 
+  Extract:
+  Mx = 00000111
+  sh = 5
+  ra = zero (to zero extend)
+ 
+  Can also do high byte inserts this way:
+ 
+  inshb:
+    rot << by 1*8 = 8
+    mask 00000010
+    ra as specified
+ 
+          76543210
+          65432107
+ 
+  Encoding in imm18: 18 ds[6] mc[6] ms[6]
+     0 6 ms (mask rotate right amount)
+     6 6 mc (mask bit count)
+    12 6 ds (data rotate right amount)
+ 
+  Encoded in rcimm as 24 bits
+ 
+  Syntax:
+ 
+  mask rd = ra,rb,[ds,ms,mc]
+ 
+  NOTE: Sign extension is more complex than this (use separate sxt uop)
+ 
+  sxt rd = ra,rb,bits    ra <- SignExt(rb, bits)
+  zxt: done with ra = %zero, set size field (1/2/4/8) as appropriate
+
+  Encoding in imm18: 18 ds[6] mc[6] ms[6]
+     0 6 ms (mask rotate right amount)
+     6 6 mc (mask bit count)
+    12 6 ds (data rotate right amount)
+
+	inline W64 x86_rotr(W64 r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r; }
+	inline W64 x86_rotl(W64 r, int n) { asm("rol %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r; }
+
+	//inline W64 x86_mov(W64 ra, W64 rb) {
+	//  asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r;
+	//}
+
+	W64 mask_gen_lut[64*64]; // (((1 << mc)-1) >>> ms)
+	W64 mask_bt_lut[64*64];  // mask[mc+ms] = 1
+	W64 mask_zxt_lut[64*64]; // 1'[(ms+mc-1):0]
+	W64 mask_sxt_lut[64*64]; // 1'[63:(ms+mc)]
+
+	void print_mask(const char* name, W64* w, int n) {
+	  cout << endl, "W64 ", name, "[", n, "] = {", endl;
+	  foreach (i, n) {
+	    if ((i % 4) == 0) cout << "  ";
+	    cout << "0x", hexstring(w[i], 64), ", ";
+	    if ((i % 4) == 3) cout << endl;
+	  }
+	  cout << "};", endl;
+	}
+
+	W64 mask_gen_lut[64*64]; // (((1 << mc)-1) >>> ms)
+	W64 mask_bt_lut[64*64];  // mask[mc+ms] = 1
+	W64 mask_zxt_lut[64*64]; // 1'[(ms+mc-1):0]
+	W64 mask_sxt_lut[64*64]; // 1'[63:(ms+mc)]
+
+	void print_mask(const char* name, W64* w, int n) {
+	  cout << endl, "W64 ", name, "[", n, "] = {", endl;
+	  foreach (i, n) {
+	    if ((i % 4) == 0) cout << "  ";
+	    cout << "0x", hexstring(w[i], 64), ", ";
+	    if ((i % 4) == 3) cout << endl;
+	  }
+	  cout << "};", endl;
+	}
+
+	void gen_masks() {
+	  foreach (mc, 64) {
+	    foreach (ms, 64) {
+	      W64 t = x86_rotr(bitmask(mc), ms);
+	      mask_gen_lut[(mc << 6) + ms] = t;
+	    }
+	  }
+
+	  print_mask("mask_gen_lut", mask_gen_lut, 64*64);
+
+	  foreach (mc, 64) {
+	    foreach (ms, 64) {
+	      W64 t = 0;
+	      setbit(t, (mc+ms-1));
+	      mask_bt_lut[(mc << 6) + ms] = t;
+	    }
+	  }
+
+	  print_mask("mask_bt_lut", mask_bt_lut, 64*64);
+
+	  foreach (mc, 64) {
+	    foreach (ms, 64) {
+	      W64 t = 0;
+	      for (int i = (ms+mc-1); i >= 0; i--) setbit(t, i);
+	      mask_zxt_lut[(mc << 6) + ms] = t;
+	    }
+	  }
+
+	  print_mask("mask_zxt_lut", mask_zxt_lut, 64*64);
+
+	  foreach (mc, 64) {
+	    foreach (ms, 64) {
+	      W64 t = 0;
+	      int limit = (ms+mc);
+	      for (int i = 63; i >= limit; i--) setbit(t, i);
+	      mask_sxt_lut[(mc << 6) + ms] = t;
+	    }
+	  }
+
+	  print_mask("mask_sxt_lut", mask_sxt_lut, 64*64);
+
+	}
+
+	template <int SIZE, bool ZEROEXT, bool SIGNEXT>
+	void uop_mask(IssueState& state, IssueInput& input) {
+	  int ms = bits(input.rc, 0, 6);
+	  int mc = bits(input.rc, 6, 6);
+	  int ds = bits(input.rc, 12, 6);
+
+	  int mcms = bits(input.rc, 0, 12);
+
+	  W64 M = mask_gen_lut[mcms]; // mask_gen_lut[] = (((1 << mc)-1), ms);
+	  W64 T = (input.ra & ~M) | (x86_rotr(input.rb, ds) & M);
+	  if (ZEROEXT) {
+	    state.reg.rddata = T & mask_zxt_lut[mcms]; // mask_zxt_lut[] = 1'[(ms+mc-1):0]
+	  } else if (SIGNEXT) {
+	    // mask_sxt_lut[] = 1'[63:(ms+mc)]
+	    W64 sxt = (T | mask_sxt_lut[mcms]);
+	    W64 zxt = (T & mask_zxt_lut[mcms]);
+	    state.reg.rddata = (T & mask_bt_lut[mcms]) ? sxt : zxt;
+	  } else {
+	    state.reg.rddata = T;
+	  }
+	}
+
+	template void uop_mask<8, 0, 1>(IssueState& state, IssueInput& input);
+
+*/
+
+.extern mask_gen_lut
+.extern mask_bt_lut
+.extern mask_zxt_lut
+.extern mask_sxt_lut
+
+/*
+ 
+  M = (((1 << mc)-1) >>> ms)
+  T = (ra & ~M) | ((rb >>> ds) & M)
+  if (zeroext) {
+    rd = ra <- (T & 1'[(ms+mc-1):0])
+  else if (signext) {
+    rd = ra <- (T[ms+mc]) ? (T | 1'[63:(ms+mc)]) : (T & 1'[(ms+mc-1):0])
+  } else {
+    rd = ra <- T
+  }
+*/
+
+.macro generate_mask PTOPCODE SIZE EXTTYPE
+som \PTOPCODE\SIZE\EXTTYPE
+# Only in PTLsim32: 
+# mov     %rax,[IssueInput_ra]
+# mov     %rbx,[IssueInput_rb]
+# mov     %rcx,[IssueInput_rc]
+  mov     %r8,%rax                        # Save ra for later
+  mov     %edx,%ecx                       # Copy mask to temp var
+  and     %edx,0xfff                      # Get MC|MS fields
+  mov     %ebp,%edx                       # Save MC|MS for later
+  mov     %rdx,[mask_gen_lut + %rdx*8]    # Get mask data
+  shr     %ecx,12                         # Get data shift into %cl
+  ror     %rbx,%cl                        # Rotate rb into position for masking
+  and     %rbx,%rdx                       # Perform extract mask ((rb >>> ds) & M)
+  not     %rdx                            # Form ~mask
+  and     %rax,%rdx                       # Make (ra & ~M)
+#  int3
+  or      %rax,%rbx                       # Merge output
+.if (\EXTTYPE == 1)
+  # Zero extend:
+  # rd = ra <- (T & 1'[(ms+mc-1):0])
+  and     %rax,[mask_zxt_lut + %rbp*8]    # Zero extend starting at field width
+.endif
+.if (\EXTTYPE == 2)
+  # Sign extend:
+  # rd = ra <- (T[ms+mc]) ? (T | 1'[63:(ms+mc)]) : (T & 1'[(ms+mc-1):0])
+  mov     %rcx,%rax
+  mov     %rdx,%rax
+  and     %rax,[mask_zxt_lut + %rbp*8]    # Zero extend starting at field width
+  or      %rdx,[mask_sxt_lut + %rbp*8]    # Sign extend starting at field width
+  test    %rcx,[mask_bt_lut + %rbp*8]     # Test bit (MS+MC)
+  cmovnz  %rax,%rdx                       # Select sign extended case if sign bit set
+.endif
+  # Merge into final output
+  mov     %rdx,%rax
+  mov     %rax,%r8
+.if (\SIZE == 1)
+  mov     %al,%dl
+  test    %al,%al
+.endif
+.if (\SIZE == 2)
+  mov     %ax,%dx
+  test    %ax,%ax
+.endif
+.if (\SIZE == 4)
+  mov     %eax,%edx
+  test    %eax,%eax
+.endif
+.if (\SIZE == 8)
+  mov     %rax,%rdx
+  test    %rax,%rax
+.endif
+  mov     [IssueState_rddata],%rax
+  # Capture ZPS flags (CF and OF are zero)
+  sets    %al         # %al = SF
+  setz    %bl         # %bl = ZF
+  setp    %cl         # %cl = PF
+  shl     %al,7       # SF bit 7
+  shl     %bl,6       # ZF bit 6
+  shl     %cl,2       # PF bit 2
+  or      %eax,%ebx   # Merge flags
+  or      %eax,%ecx   # Merge flags
+  movzx   %eax,%al    # Extend to full width
+  mov     word ptr [IssueState_rdflags],%ax
+  eom     \PTOPCODE\SIZE\EXTTYPE
+.endm
+
+grouplabel mask
+  generate_mask mask 1 0
+  generate_mask mask 1 1
+  generate_mask mask 1 2
+  generate_mask mask 2 0
+  generate_mask mask 2 1
+  generate_mask mask 2 2
+  generate_mask mask 4 0
+  generate_mask mask 4 1
+  generate_mask mask 4 2
+  generate_mask mask 8 0
+  generate_mask mask 8 1
+  generate_mask mask 8 2
 
 /*
  * Floating point and vector operations

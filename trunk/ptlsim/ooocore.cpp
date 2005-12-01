@@ -15,6 +15,7 @@
 #include <branchpred.h>
 #include <datastore.h>
 #include <logic.h>
+#include <ooohwdef.h>
 
 // With these disabled, simulation is ~10-20% faster
 //#define ENABLE_CHECKS
@@ -55,13 +56,6 @@ void check_refcounts();
 
 struct ReorderBufferEntry;
 void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand);
-
-//
-// IMPORTANT! Define this if you are using tags bigger than 255,
-// i.e. if ROB_SIZE > 256. This is defined later in ooohwdef.h
-// but we need it now.
-
-//#define BIG_ROB
 
 //
 // Issue queue based scheduler with broadcast
@@ -319,13 +313,17 @@ struct StateList: public selfqueuelink {
 
   StateList() { }
 
-  StateList(const char* name, ListOfStateLists& lol) {
+  void init(const char* name, ListOfStateLists& lol) {
     reset();
     this->name = name;
     count = 0;
     listid = lol.add(this);
     dispatch_source_counter = 0;
     issue_source_counter = 0;
+  }
+
+  StateList(const char* name, ListOfStateLists& lol) {
+    init(name, lol);
   }
 
   void reset() {
@@ -423,71 +421,9 @@ struct Cluster {
 //
 // Include the simulator configuration
 //
+#define DECLARE_CLUSTERS
 #include <ooohwdef.h>
-
-#if (MAX_CLUSTERS == 1)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-};
-#elif (MAX_CLUSTERS == 2)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-  StateList("" description "-cl1", rob_states), \
-};
-#elif (MAX_CLUSTERS == 3)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-  StateList("" description "-cl1", rob_states), \
-  StateList("" description "-cl2", rob_states), \
-};
-#elif (MAX_CLUSTERS == 4)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-  StateList("" description "-cl1", rob_states), \
-  StateList("" description "-cl2", rob_states), \
-  StateList("" description "-cl3", rob_states), \
-};
-#elif (MAX_CLUSTERS == 5)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-  StateList("" description "-cl1", rob_states), \
-  StateList("" description "-cl2", rob_states), \
-  StateList("" description "-cl3", rob_states), \
-  StateList("" description "-cl4", rob_states), \
-};
-#elif (MAX_CLUSTERS == 6)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-  StateList("" description "-cl1", rob_states), \
-  StateList("" description "-cl2", rob_states), \
-  StateList("" description "-cl3", rob_states), \
-  StateList("" description "-cl4", rob_states), \
-  StateList("" description "-cl5", rob_states), \
-};
-#elif (MAX_CLUSTERS == 7)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-  StateList("" description "-cl1", rob_states), \
-  StateList("" description "-cl2", rob_states), \
-  StateList("" description "-cl3", rob_states), \
-  StateList("" description "-cl4", rob_states), \
-  StateList("" description "-cl5", rob_states), \
-  StateList("" description "-cl6", rob_states), \
-};
-#elif (MAX_CLUSTERS == 8)
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-cl0", rob_states), \
-  StateList("" description "-cl1", rob_states), \
-  StateList("" description "-cl2", rob_states), \
-  StateList("" description "-cl3", rob_states), \
-  StateList("" description "-cl4", rob_states), \
-  StateList("" description "-cl5", rob_states), \
-  StateList("" description "-cl6", rob_states), \
-  StateList("" description "-cl7", rob_states), \
-};
-#else
-#error Maximum number of supported clusters is 8!
-#endif
+#undef DECLARE_CLUSTERS
 
 #define for_each_cluster(iter) for (int iter = 0; iter < MAX_CLUSTERS; iter++)
 #define for_each_operand(iter) for (int iter = 0; iter < MAX_OPERANDS; iter++)
@@ -540,6 +476,9 @@ struct FetchBufferEntry: public TransOp {
 
 struct ReorderBufferEntry: public selfqueuelink {
   struct StateList* current_state_list;
+  PhysicalRegister* physreg;
+  PhysicalRegister* operands[MAX_OPERANDS];
+  LoadStoreQueueEntry* lsq;
   FetchBufferEntry uop;
   W16s idx;
   W16s cycles_left; // execution latency counter, decremented every cycle when executing
@@ -554,12 +493,7 @@ struct ReorderBufferEntry: public selfqueuelink {
 #else
   byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1;
 #endif
-
-  PhysicalRegister* physreg;
-  PhysicalRegister* operands[MAX_OPERANDS];
-
-  // Loads and stores only:
-  LoadStoreQueueEntry* lsq;
+  W16 executable_on_cluster_mask;
 
   int index() const { return idx; }
 
@@ -568,8 +502,7 @@ struct ReorderBufferEntry: public selfqueuelink {
     entry_valid = 0;
     foreach_issueq(reset());
     selfqueuelink::reset();
-    current_state_list = NULL;
-
+    current_state_list = null;
     reset();
   }
 
@@ -587,6 +520,7 @@ struct ReorderBufferEntry: public selfqueuelink {
     lsq = 0;
     load_store_second_phase = 0;
     consumer_count = 0;
+    executable_on_cluster_mask = 0;
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
     dest_renamed_before_writeback = 0;
     no_branches_between_renamings = 0;
@@ -766,24 +700,8 @@ struct PhysicalRegisterFile;
 
 // NOTE: the counter fields of the following total 100%:
 
-// Free to be reallocated
-StateList physreg_free_list("free", physreg_states);
-
-// Allocated by rename stage but value not ready
-StateList physreg_used_list("used", physreg_states);
-
-// Value ready, but not yet written to physical register file
-StateList physreg_ready_list("ready", physreg_states);
-
-// Written and ready in physical register file
-StateList physreg_written_list("written", physreg_states);
-
-// Mapped to architectural register
-StateList physreg_arch_list("arch", physreg_states);
-
-// Old architectural register mapping overwritten, but consumers are
-// still in the pipeline so it cannot be freed yet
-StateList physreg_pendingfree_list("pendingfree", physreg_states);
+enum { PHYSREG_NONE, PHYSREG_FREE, PHYSREG_WAITING, PHYSREG_BYPASS, PHYSREG_WRITTEN, PHYSREG_ARCH, PHYSREG_PENDINGFREE, MAX_PHYSREG_STATE };
+static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
 
 //
 // Physical Register Recycling Complications
@@ -844,24 +762,34 @@ StateList physreg_pendingfree_list("pendingfree", physreg_states);
 
 struct PhysicalRegister: public selfqueuelink {
 public:
-  StateList* current_state_list;
   ReorderBufferEntry* rob;
   W64 data;
   W16 flags;
-  W16 state;
+  W16 idx;
+  W8  rfid;
+  W8  state;
   W8 archreg;
   W8 all_consumers_sourced_from_bypass:1;
   W16s refcount;
 
-  void changestate(StateList& newqueue) {
-    if (current_state_list)
-      current_state_list->remove(this);
-    current_state_list = &newqueue;
-    newqueue.enqueue(this);
+  StateList& get_state_list(int state) const;
+
+  StateList& get_state_list() const { return get_state_list(this->state); }
+
+  void changestate(int newstate) {
+    if (state != PHYSREG_NONE) get_state_list(state).remove(this);
+    state = newstate;
+    get_state_list(state).enqueue(this);
   }
 
-  void addref() { if (nonnull()) refcount++; }
-  void unref() { if (nonnull()) refcount--; assert(refcount >= 0); }
+  void PhysicalRegister::init(int rfid, int idx) {
+    this->rfid = rfid;
+    this->idx = idx;
+    reset();
+  }
+
+  void addref() { refcount++; }
+  void unref() { refcount--; assert(refcount >= 0); }
 
   void addref(const ReorderBufferEntry& rob) { addref(); }
   void unref(const ReorderBufferEntry& rob) { unref(); }
@@ -872,125 +800,135 @@ public:
   bool referenced() const { return (refcount > 0); }
 
   bool nonnull() const { return (index() != PHYS_REG_NULL); }
-  bool allocated() const { return (current_state_list != &physreg_free_list); }
+  bool allocated() const { return (state != PHYSREG_FREE); }
 
-  void commit() { changestate(physreg_arch_list); }
-  void complete() { changestate(physreg_ready_list); }
-  void writeback() { changestate(physreg_written_list); }
+  void commit() { changestate(PHYSREG_ARCH); }
+  void complete() { changestate(PHYSREG_BYPASS); }
+  void writeback() { changestate(PHYSREG_WRITTEN); }
 
   void free() {
-    changestate(physreg_free_list);
+    changestate(PHYSREG_FREE);
     rob = 0;
     refcount = 0;
     all_consumers_sourced_from_bypass = 1;
   }
 
-  //
-  // Notice that this does NOT change the physical register
-  // values, since these are needed in fixed positions across
-  // exceptions.
-  //
   void reset() {
     selfqueuelink::reset();
-    current_state_list = null;
+    state = PHYSREG_NONE;
     free();
   }
 
-  int index() const;
+  int index() const { return idx; }
 
-  bool valid() const {
-    return ((flags & FLAG_INV) == 0);
-  }
+  bool valid() const { return ((flags & FLAG_INV) == 0);  }
 
   bool ready() const {
     return ((flags & FLAG_WAIT) == 0);
   }
 };
 
-bool ReorderBufferEntry::has_exception() const {
-  return ((physreg->flags & FLAG_INV) != 0);
-}
-
 ostream& operator <<(ostream& os, const PhysicalRegister& physreg) {
   stringbuf sb;
   print_value_and_flags(sb, physreg.data, physreg.flags);
 
-  os << "  r", intstring(physreg.index(), -3), " state ", padstring(physreg.current_state_list->name, -12), " ", sb;
+  os << "  r", intstring(physreg.index(), -3), " state ", padstring(physreg.get_state_list().name, -12), " ", sb;
   if (physreg.rob) os << " rob ", physreg.rob->index(), " (uuid ", physreg.rob->uop.uuid, ")";
   os << " refcount ", physreg.refcount;
 
   return os;
 }
 
-struct PhysicalRegisterFile: public array<PhysicalRegister, PHYS_REG_FILE_SIZE> {
-  PhysicalRegisterFile() {
+struct PhysicalRegisterFile: public array<PhysicalRegister, MAX_PHYS_REG_FILE_SIZE> {
+  int rfid;
+  int size;
+  const char* name;
+  StateList states[MAX_PHYSREG_STATE];
+  W64 allocations;
+  W64 frees;
+
+  PhysicalRegisterFile() { }
+
+  void init(const char* name, int rfid, int size) {
+    assert(rfid < PHYS_REG_FILE_COUNT);
+    assert(size < MAX_PHYS_REG_FILE_SIZE);
+    this->size = size;
+    this->rfid = rfid;
+    this->name = name;
+    this->allocations = 0;
+    this->frees = 0;
+
+    foreach (i, MAX_PHYSREG_STATE) {
+      states[i].init(physreg_state_names[i], physreg_states);
+    }
+
+    foreach (i, size) {
+      (*this)[i].init(rfid, i);
+    }
+
+  }
+
+  PhysicalRegisterFile(const char* name, int rfid, int size) {
+    init(name, rfid, size);
     reset();
   }
 
-  //
-  // Reset to initial state, for instance after major exceptions.
-  // The physical register values themselves are preserved, since
-  // they may have been updated by external_to_core_state().
-  //
   void reset() {
-    physreg_free_list.reset();
-    physreg_used_list.reset();
-    physreg_ready_list.reset();
-    physreg_written_list.reset();
-    physreg_arch_list.reset();
-    physreg_pendingfree_list.reset();
-
-    foreach (i, PHYS_REG_FILE_SIZE) {
-      PhysicalRegister& physreg = (*this)[i];
-      physreg.reset();
+    foreach (i, MAX_PHYSREG_STATE) {
+      states[i].reset();
     }
 
-    for (int i = PHYS_REG_ARCH_BASE; i < PHYS_REG_FILE_SIZE; i++) {
-      PhysicalRegister& physreg = (*this)[i];
-      physreg.commit();
+    foreach (i, size) {
+      (*this)[i].reset();
     }
-
-    PhysicalRegister& zeroreg = (*this)[PHYS_REG_NULL];
-    zeroreg.changestate(physreg_arch_list);
-    zeroreg.data = 0;
   }
 
   bool remaining() const {
-    return (!physreg_free_list.empty());
+    return (!states[PHYSREG_FREE].empty());
   }
 
-  PhysicalRegister* alloc() {
-    PhysicalRegister* physreg = (PhysicalRegister*)physreg_free_list.dequeue();
-    if (!physreg)
-      return null;
-    physreg->current_state_list = null;
-    physreg->changestate(physreg_used_list);
+  PhysicalRegister* alloc(int r = -1) {
+    PhysicalRegister* physreg = (PhysicalRegister*)((r >= 0) ? states[PHYSREG_FREE].remove(&(*this)[r]): states[PHYSREG_FREE].dequeue());
+    if (!physreg) return null;
+    physreg->state = PHYSREG_NONE;
+    physreg->changestate(PHYSREG_WAITING);
     physreg->flags = FLAG_WAIT;
+    allocations++;
     return physreg;
+  }
+
+  ostream& print(ostream& os) const {
+    os << "PhysicalRegisterFile<", name, ", rfid ", rfid, ", size ", size, ">:", endl;
+    foreach (i, size) {
+      os << (*this)[i], endl;
+    }
+    return os;
   }
 };
 
-PhysicalRegisterFile physregs;
-
-int PhysicalRegister::index() const {
-  return (this - physregs.data);
+ostream& operator <<(ostream& os, const PhysicalRegisterFile& physregs) {
+  return physregs.print(os);
 }
 
-/*
-PhysicalRegister& indexref<PhysicalRegister>::get(int i) const {
-  return physregs[i];
+#define DECLARE_PHYS_REG_FILES
+#include <ooohwdef.h>
+#undef DECLARE_PHYS_REG_FILES
+
+StateList& PhysicalRegister::get_state_list(int s) const {
+  return physregfiles[rfid].states[s];
 }
-*/
+
+void reset_fetch_unit(W64 realrip);
+void flush_pipeline(W64 realrip);
+void external_to_core_state();
+void core_to_external_state();
+
+bool ReorderBufferEntry::has_exception() const {
+  return ((physreg->flags & FLAG_INV) != 0);
+}
 
 bool ReorderBufferEntry::operand_ready(int operand) const {
   return ((operands[operand]->flags & FLAG_WAIT) == 0);
-}
-
-ostream& operator <<(ostream& os, const PhysicalRegisterFile& physregs) {
-  foreach (i, PHYS_REG_FILE_SIZE) {
-    os << physregs[i], endl;
-  }
-  return os;
 }
 
 struct RegisterRenameTable: public array<PhysicalRegister*, TRANSREG_COUNT> {
@@ -1003,29 +941,7 @@ struct RegisterRenameTable: public array<PhysicalRegister*, TRANSREG_COUNT> {
   }
 
   void reset() {
-    RegisterRenameTable& rrt = *this;
-
-    for (int i = 0; i < ARCHREG_COUNT; i++) {
-      rrt[i] = &physregs[PHYS_REG_ARCH_BASE + i];
-    }
-
-    //
-    // Internal translation registers are never used before
-    // they are written for the first time:
-    //
-    for (int i = ARCHREG_COUNT; i < TRANSREG_COUNT; i++) {
-      rrt[i] = &physregs[PHYS_REG_NULL];
-    }
-
-    rrt[REG_zf] = &physregs[PHYS_REG_ARCH_BASE + REG_flags];
-    rrt[REG_cf] = &physregs[PHYS_REG_ARCH_BASE + REG_flags];
-    rrt[REG_of] = &physregs[PHYS_REG_ARCH_BASE + REG_flags];
-    rrt[REG_imm] = &physregs[PHYS_REG_NULL];
-    rrt[REG_mem] = &physregs[PHYS_REG_NULL];
-    rrt[REG_zero] = &physregs[PHYS_REG_NULL];
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-    renamed_in_this_basic_block.reset();
-#endif
+    // external_to_core_state() does this instead
   }
 
   ostream& print(ostream& os) const {
@@ -1067,6 +983,90 @@ void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* 
   if (target->ready_to_issue()) logfile << " READY";
   logfile << "]";
   logfile << endl;
+}
+
+//
+// Flush everything in pipeline immediately
+//
+void flush_pipeline(W64 realrip) {
+  dcache_complete();
+  reset_fetch_unit(realrip);
+  rob_states.reset();
+  // physreg_states.reset();
+
+  ROB.reset();
+  foreach (i, ROB_SIZE) ROB[i].changestate(rob_free_list);
+  LSQ.reset();
+  loads_in_flight = 0;
+  stores_in_flight = 0;
+
+  foreach (i, PHYS_REG_FILE_COUNT) physregfiles[i].reset();
+  commitrrt.reset();
+  specrrt.reset();
+}
+
+//
+// Copy external archregs to physregs and reset all rename tables
+//
+void external_to_core_state() {
+  foreach (i, PHYS_REG_FILE_COUNT) {
+    PhysicalRegisterFile& rf = physregfiles[i];
+    PhysicalRegister* zeroreg = rf.alloc(PHYS_REG_NULL);
+    zeroreg->addref();
+    zeroreg->commit();
+    zeroreg->data = 0;
+    zeroreg->flags = 0;
+  }
+
+  // Always start out on cluster 0:
+  PhysicalRegisterFile& physregs = physregfiles[0];
+  PhysicalRegister* zeroreg = &physregs[PHYS_REG_NULL];
+
+  //
+  // Allocate and commit each architectural register
+  //
+  foreach (i, ARCHREG_COUNT) {
+    PhysicalRegister* physreg = (i == REG_zero) ? zeroreg : physregs.alloc();
+    physreg->data = ctx.commitarf[i];
+    physreg->flags = 0;
+    commitrrt[i] = physreg;
+  }
+
+  commitrrt[REG_flags]->flags = (W16)commitrrt[REG_flags]->data;
+
+  //
+  // Internal translation registers are never used before
+  // they are written for the first time:
+  //
+  for (int i = ARCHREG_COUNT; i < TRANSREG_COUNT; i++) {
+    commitrrt[i] = zeroreg;
+  }
+
+  //
+  // Set renamable flags
+  // 
+  commitrrt[REG_zf] = commitrrt[REG_flags];
+  commitrrt[REG_cf] = commitrrt[REG_flags];
+  commitrrt[REG_of] = commitrrt[REG_flags];
+
+  //
+  // Copy commitrrt to specrrt and update refcounts
+  //
+  foreach (i, TRANSREG_COUNT) {
+    commitrrt[i]->commit();
+    specrrt[i] = commitrrt[i];
+    specrrt[i]->addspecref(i);
+    commitrrt[i]->addcommitref(i);
+  }
+
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+  specrrt.renamed_in_this_basic_block.reset();
+  commitrrt.renamed_in_this_basic_block.reset();
+#endif
+}
+
+void core_to_external_state() {
+  // External state in ctx.commitarf is updated at each commit: no action here
 }
 
 template <int size, int operandcount>
@@ -1127,59 +1127,6 @@ void reset_fetch_unit(W64 realrip) {
   current_basic_block_rip = realrip;
   current_basic_block_transop = null;
   current_basic_block_transop_index = 0;
-}
-
-//
-// Flush everything in pipeline immediately
-//
-void flush_pipeline(W64 realrip) {
-  dcache_complete();
-  reset_fetch_unit(realrip);
-  rob_states.reset();
-  physreg_states.reset();
-
-  ROB.reset();
-  foreach (i, ROB_SIZE) {
-    ROB[i].changestate(rob_free_list);
-  }
-  LSQ.reset();
-  loads_in_flight = 0;
-  stores_in_flight = 0;
-  physregs.reset();
-  specrrt.reset();
-  commitrrt.reset();
-  foreach (i, TRANSREG_COUNT) { specrrt[i]->addspecref(i); }
-  foreach (i, TRANSREG_COUNT) { commitrrt[i]->addcommitref(i); }
-}
-
-void external_to_core_state() {
-  foreach (i, ARCHREG_COUNT) {
-    commitrrt[i]->data = ctx.commitarf[i];
-    commitrrt[i]->flags = 0;
-  }
-  physregs[PHYS_REG_ARCH_BASE + REG_flags].data = (W16)ctx.commitarf[REG_flags];
-  physregs[PHYS_REG_ARCH_BASE + REG_flags].flags = (W16)ctx.commitarf[REG_flags];
-}
-
-void core_to_external_state() {
-  W64 rip = ctx.commitarf[REG_rip];
-  W64 flags = ctx.commitarf[REG_flags];
-
-  foreach (i, ARCHREG_COUNT) {
-    ctx.commitarf[i] = physregs[commitrrt[i]->index()].data;
-  }
-
-  ctx.commitarf[REG_rip] = rip;
-  ctx.commitarf[REG_flags] = flags;
-
-  /*
-    // Same thing:
-
-  ctx.commitarf[REG_flags] = 
-    (commitrrt[REG_zf]->flags & (FLAG_ZAPS)) | 
-    (commitrrt[REG_cf]->flags & (FLAG_CF)) | 
-    (commitrrt[REG_of] & (FLAG_OF));
-  */
 }
 
 int FetchBufferEntry::index() const {
@@ -1436,6 +1383,9 @@ static const byte archdest_can_rename[TRANSREG_COUNT] = {
   1, 1, 1, 0, 1, 0, 0, 0,
 };
 
+byte uop_executable_on_cluster[OP_MAX_OPCODE];
+W32 phys_reg_files_writable_by_uop[OP_MAX_OPCODE];
+
 #define archdest_can_commit archdest_can_rename
 
 CycleTimer ctrename;
@@ -1466,6 +1416,12 @@ W64 frontend_alloc_br;
 // totals 100%:
 W64 frontend_rename_consumer_count_histogram[256];
 
+//
+// Physical register file ID (rfid) where the search
+// for a free register should begin each cycle:
+//
+int round_robin_reg_file_offset = 0;
+
 void rename() {
   int prepcount = 0;
 
@@ -1486,7 +1442,18 @@ void rename() {
 
     FetchBufferEntry& fetchbuf = *fetchq.peek();
 
-    if (!physregs.remaining()) {
+    int phys_reg_file = -1;
+
+    W32 acceptable_phys_reg_files = phys_reg_files_writable_by_uop[fetchbuf.opcode];
+
+    foreach (i, PHYS_REG_FILE_COUNT) {
+      int reg_file_to_check = add_index_modulo(round_robin_reg_file_offset, i, PHYS_REG_FILE_COUNT);
+      if (bit(acceptable_phys_reg_files, reg_file_to_check) && physregfiles[reg_file_to_check].remaining()) {
+        phys_reg_file = reg_file_to_check; break;
+      }
+    }
+
+    if (phys_reg_file < 0) {
       if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename physregs full", endl;
       frontend_status_physregs_full++;
       break;
@@ -1517,16 +1484,12 @@ void rename() {
 
     FetchBufferEntry& transop = *fetchq.dequeue();
     ReorderBufferEntry& rob = *ROB.alloc();
-    PhysicalRegister& physreg = *physregs.alloc();
-    // For debugging purposes:
-    physreg.flags = FLAG_WAIT;
-    physreg.data = 0xdeadbeefdeadbeef;
+    PhysicalRegister* physreg = null;
 
     LoadStoreQueueEntry* lsqp = (ld|st) ? LSQ.alloc() : null;
     LoadStoreQueueEntry& lsq = *lsqp;
 
     rob.reset();
-    rob.physreg = &physreg;
     rob.uop = transop;
     rob.entry_valid = 1;
     rob.cycles_left = FRONTEND_STAGES;
@@ -1544,9 +1507,6 @@ void rename() {
     frontend_alloc_sfr += st;
     frontend_alloc_br += br;
 
-    physreg.rob = &rob;
-    physreg.archreg = rob.uop.rd;
-
     //
     // Rename operands:
     //
@@ -1554,25 +1514,67 @@ void rename() {
     rob.operands[RA] = specrrt[transop.ra];
     rob.operands[RB] = specrrt[transop.rb];
     rob.operands[RC] = specrrt[transop.rc];
-    rob.operands[RS] = &physregs[PHYS_REG_NULL]; // used for loads and stores only
+    rob.operands[RS] = &physregfiles[0][PHYS_REG_NULL]; // used for loads and stores only
 
     // See notes above on Physical Register Recycling Complications
     foreach (i, MAX_OPERANDS) {
       rob.operands[i]->addref(rob);
-      assert(rob.operands[i]->current_state_list != &rob_free_list);
+      assert(rob.operands[i]->state != PHYSREG_FREE);
 
-      if ((rob.operands[i]->current_state_list == &physreg_used_list) |
-          (rob.operands[i]->current_state_list == &physreg_ready_list) |
-          (rob.operands[i]->current_state_list == &physreg_written_list)) {
+      if ((rob.operands[i]->state == PHYSREG_WAITING) |
+          (rob.operands[i]->state == PHYSREG_BYPASS) |
+          (rob.operands[i]->state == PHYSREG_WRITTEN)) {
         rob.operands[i]->rob->consumer_count = min(rob.operands[i]->rob->consumer_count + 1, 255);
       }
     }
+
+    //
+    // Select a physical register file based on desired
+    // heuristics. We only consider a given register
+    // file N if bit N in the acceptable_phys_reg_files
+    // bitmap is set (otherwise it is off limits for
+    // the type of functional unit or cluster the uop
+    // must execute on).
+    //
+    // The phys_reg_file variable should be set to the
+    // register file ID selected by the heuristics.
+    //
+
+    //
+    // Default heuristics from above: phys_reg_file is already
+    // set to the first acceptable physical register file ID
+    // which has free registers.
+    //
+    rob.executable_on_cluster_mask = uop_executable_on_cluster[transop.opcode];
+
+    // This is used if there is exactly one physical register file per cluster:
+    // rob.executable_on_cluster_mask = (1 << phys_reg_file);
+
+    // For assignment only:
+    assert(bit(acceptable_phys_reg_files, phys_reg_file));
+
+    //
+    // Allocate the physical register
+    //
+
+    physreg = physregfiles[phys_reg_file].alloc();
+    assert(physreg);
+    physreg->flags = FLAG_WAIT;
+    physreg->data = 0xdeadbeefdeadbeef;
+    physreg->rob = &rob;
+    physreg->archreg = rob.uop.rd;
+    rob.physreg = physreg;
+
+    //
+    // Logging
+    //
 
     bool renamed_reg = 0;
     bool renamed_flags = 0;
 
     if (logable(1)) {
       logfile << intstring(transop.uuid, 20), " rename rob ", intstring(rob.index(), -3), " r", rob.physreg->index();
+      if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[physreg->rfid].name;
       if (ld|st) logfile << ", lsq", lsq.index();
 
       logfile << " = ";
@@ -1592,12 +1594,12 @@ void rename() {
 
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
       PhysicalRegister* oldmapping = specrrt[transop.rd];
-      if ((oldmapping->current_state_list == &physreg_used_list) |
+      if ((oldmapping->current_state_list == &physreg_waiting_list) |
           (oldmapping->current_state_list == &physreg_ready_list)) {
         oldmapping->rob->dest_renamed_before_writeback = 1;
       }
 
-      if ((oldmapping->current_state_list == &physreg_used_list) |
+      if ((oldmapping->current_state_list == &physreg_waiting_list) |
           (oldmapping->current_state_list == &physreg_ready_list) | 
           (oldmapping->current_state_list == &physreg_written_list)) {
         oldmapping->rob->no_branches_between_renamings = specrrt.renamed_in_this_basic_block[transop.rd];
@@ -1826,8 +1828,6 @@ int find_random_set_bit(W32 v, int randsource) {
   return bit_indices_set_8bits[v & 0xff][randsource & 0x7];
 }
 
-byte uop_executable_on_cluster[OP_MAX_OPCODE];
-
 void init_luts() {
   // Initialize opcode maps
   foreach (i, OP_MAX_OPCODE) {
@@ -1837,6 +1837,35 @@ void init_luts() {
       if (clusters[cl].fu_mask & allowedfu) setbit(allowedcl, cl);
     }
     uop_executable_on_cluster[i] = allowedcl;
+  }
+
+  //
+  // Initialize LUTs to determine which physical register files may
+  // be used to allocate a destination for a given uop
+  //
+
+  foreach (op, OP_MAX_OPCODE) {
+    W32 clustermap = uop_executable_on_cluster[op];
+    W32 accessible_phys_reg_files = 0;
+    foreach (c, MAX_CLUSTERS) {
+      if (bit(clustermap, c)) {
+        //
+        // A given physreg file may be accessible from more than one cluster,
+        // and a given cluster may have access to multiple physreg files.
+        //
+        accessible_phys_reg_files |= phys_reg_files_accessible_from_cluster[c];
+      }
+    }
+
+    phys_reg_files_writable_by_uop[op] = accessible_phys_reg_files;
+
+#if 0
+    logfile << "Phys reg files writable by ", padstring(opinfo[op].name, -10), " = ";
+    foreach (i, PHYS_REG_FILE_COUNT) {
+      if (bit(phys_reg_files_writable_by_uop[op], i)) logfile << padstring(physregfiles[i].name, -12), " ";
+    }
+    logfile << endl;
+#endif
   }
 
   // Initialize forward-at-cycle LUTs
@@ -1861,13 +1890,13 @@ int ReorderBufferEntry::select_cluster() {
     return (cluster_issue_queue_avail_count[0] > 0) ? 0 : -1;
   }
 
-  W32 executable_on_cluster = uop_executable_on_cluster[uop.opcode];
+  W32 executable_on_cluster = executable_on_cluster_mask;
 
   int cluster_operand_tally[MAX_CLUSTERS];
   foreach (i, MAX_CLUSTERS) { cluster_operand_tally[i] = 0; }
   foreach (i, MAX_OPERANDS) {
     PhysicalRegister& r = *operands[i];
-    if ((&r) && ((r.current_state_list == &physreg_used_list) || (r.current_state_list == &physreg_ready_list))) cluster_operand_tally[r.rob->cluster]++;
+    if ((&r) && ((r.state == PHYSREG_WAITING) || (r.state == PHYSREG_BYPASS))) cluster_operand_tally[r.rob->cluster]++;
   }
 
   assert(executable_on_cluster);
@@ -1886,7 +1915,7 @@ int ReorderBufferEntry::select_cluster() {
 
   if (logable(1)) {
     logfile << intstring(uop.uuid, 20), " clustr rob ", intstring(index(), -3), " allowed FUs = ", 
-      bitstring(opinfo[uop.opcode].fu, FU_COUNT, true), " -> clusters ", bitstring(executable_on_cluster, MAX_CLUSTERS, true), " avail";
+      bitstring(opinfo[uop.opcode].fu, FU_COUNT, true), " -> clusters ", bitstring(executable_on_cluster_mask, MAX_CLUSTERS, true), " avail";
     foreach (i, MAX_CLUSTERS) logfile << " ", cluster_issue_queue_avail_count[i];
     logfile << endl;
   }
@@ -1914,24 +1943,24 @@ int ReorderBufferEntry::select_cluster() {
 stringbuf& ReorderBufferEntry::get_operand_info(stringbuf& sb, int operand) const {
   PhysicalRegister& physreg = *operands[operand];
   ReorderBufferEntry& sourcerob = *physreg.rob;
-  StateList* state = physreg.current_state_list;
 
   sb << "r", physreg.index();
+  if (PHYS_REG_FILE_COUNT > 1) sb << "@", physregfiles[physreg.rfid].name;
 
-  if (state == &physreg_written_list) {
-    sb << " (written)";
-  } else if (state == &physreg_ready_list) {
-    sb << " (ready)";
-  } else if (state == &physreg_used_list) {
-    sb << " (wait rob ", sourcerob.index(), " uuid ", sourcerob.uop.uuid, ")";
-  } else if (state == &physreg_arch_list) {
-    if (physreg.index() == PHYS_REG_NULL)  sb << " (zero)"; else sb << " (arch ", arch_reg_names[physreg.archreg], ")";
-  } else if (state == &physreg_pendingfree_list) {
-    sb << " (pending free for ", arch_reg_names[physreg.archreg], ")";
-  } else {
-    // cannot be in free state!
-    sb << " (FREE)";
-    //assert(false);
+  switch (physreg.state) {
+  case PHYSREG_WRITTEN:
+    sb << " (written)"; break;
+  case PHYSREG_BYPASS:
+    sb << " (ready)"; break;
+  case PHYSREG_WAITING:
+    sb << " (wait rob ", sourcerob.index(), " uuid ", sourcerob.uop.uuid, ")"; break;
+  case PHYSREG_ARCH: break;
+    if (physreg.index() == PHYS_REG_NULL)  sb << " (zero)"; else sb << " (arch ", arch_reg_names[physreg.archreg], ")"; break;
+  case PHYSREG_PENDINGFREE:
+    sb << " (pending free for ", arch_reg_names[physreg.archreg], ")"; break;
+  default:
+    // Cannot be in free state!
+    sb << " (FREE)"; assert(false); break;
   }
 
   return sb;
@@ -1971,7 +2000,9 @@ ostream& LoadStoreQueueEntry::print(ostream& os) const {
   os << (store ? "st" : "ld"), intstring(index(), -3), " ";
   os << "uuid ", intstring(rob->uop.uuid, 10), " ";
   os << "rob ", intstring(rob->index(), -3), " ";
-  os << "r", intstring(rob->physreg->index(), -3), " ";
+  os << "r", intstring(rob->physreg->index(), -3);
+  if (PHYS_REG_FILE_COUNT > 1) os << "@", physregfiles[rob->physreg->rfid].name;
+  os << " ";
   if (invalid) {
     os << "< Invalid: fault 0x", hexstring(data, 8), " > ";
   } else {
@@ -2021,11 +2052,9 @@ bool ReorderBufferEntry::find_sources() {
 
   foreach (operand, MAX_OPERANDS) {
     PhysicalRegister& source_physreg = *operands[operand];
-
     ReorderBufferEntry& source_rob = *source_physreg.rob;
-    StateList* state = source_physreg.current_state_list;
 
-    if (state == &physreg_used_list) {
+    if (source_physreg.state == PHYSREG_WAITING) {
       uopids[operand] = source_rob.index();
       preready[operand] = 0;
       operands_still_needed++;
@@ -2035,7 +2064,7 @@ bool ReorderBufferEntry::find_sources() {
       preready[operand] = 1;
     }
 
-    if (source_physreg.nonnull()) state->dispatch_source_counter++;
+    if (source_physreg.nonnull()) source_physreg.get_state_list().dispatch_source_counter++;
   }
 
   //
@@ -2104,7 +2133,9 @@ int dispatch() {
       rob->get_operand_info(rcinfo, 2);
 
       logfile << intstring(rob->uop.uuid, 20), " disptc rob ", intstring(rob->index(), -3), " to cluster ", clusters[rob->cluster].name,
-        ": r", rob->physreg->index(), " = ", rainfo, "  ", rbinfo, "  ", rcinfo, endl;
+        ": r", rob->physreg->index();
+      if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[rob->physreg->rfid].name;
+      logfile << " = ", rainfo, "  ", rbinfo, "  ", rcinfo, endl;
     }
 
     dispatchcount++;
@@ -2115,15 +2146,6 @@ int dispatch() {
   stop_timer(ctdispatch);
   return dispatchcount;
 }
-
-struct IssueInput {
-  W64 ra;
-  W64 rb;
-  W64 rc;
-  W16 raflags;
-  W16 rbflags;
-  W16 rcflags;
-};
 
 W32 fu_avail = bitmask(FU_COUNT);
 ReorderBufferEntry* robs_on_fu[FU_COUNT];
@@ -2154,8 +2176,9 @@ void ReorderBufferEntry::release() {
 //
 void ReorderBufferEntry::replay() {
   if (logable(1)) {
-    logfile << intstring(uop.uuid, 20), " replay rob ", intstring(index(), -3), " r", intstring(physreg->index(), -3), 
-      " on cluster ", clusters[cluster].name, ": waiting on ";
+    logfile << intstring(uop.uuid, 20), " replay rob ", intstring(index(), -3), " r", intstring(physreg->index(), -3);
+    if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[physreg->rfid].name;
+    logfile << " on cluster ", clusters[cluster].name, ": waiting on ";
 
     foreach (i, MAX_OPERANDS) {
       if (!operands[i]->ready()) {
@@ -2174,11 +2197,9 @@ void ReorderBufferEntry::replay() {
 
   foreach (operand, MAX_OPERANDS) {
     PhysicalRegister& source_physreg = *operands[operand];
-
     ReorderBufferEntry& source_rob = *source_physreg.rob;
-    StateList* state = source_physreg.current_state_list;
 
-    if (state == &physreg_used_list) {
+    if (source_physreg.state == PHYSREG_WAITING) {
       uopids[operand] = source_rob.index();
       preready[operand] = 0;
       operands_still_needed++;
@@ -2365,7 +2386,6 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
       //
       if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
 
-      //++MTY CHECKME Shouldn't this be the start of the basic block, instead of in the middle?
       BasicBlock* bb = bbcache.remove(uop.bbrip);
       bbcache_removes++;
       if (bb) bb->free();
@@ -2429,7 +2449,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   if (!ready) {
     // See notes above on Physical Register Recycling Complications
     operands[RS]->unref(*this);
-    operands[RS] = (sfra) ? sfra->rob->physreg : &physregs[PHYS_REG_NULL];
+    operands[RS] = (sfra) ? sfra->rob->physreg : &physregfiles[0][PHYS_REG_NULL];
     operands[RS]->addref(*this);
 
     if (logable(1)) {
@@ -3120,6 +3140,7 @@ W64 issue_total_uops;
 
 // totals 100%:
 W64 issue_result_no_fu;
+W64 issue_result_no_intercluster_bandwidth;
 W64 issue_result_replay;
 W64 issue_result_misspeculation;
 W64 issue_result_branch_mispredict;
@@ -3160,6 +3181,16 @@ int ReorderBufferEntry::issue() {
 
   start_timer(ctsubexec);
 
+  PhysicalRegister& ra = *operands[RA];
+  PhysicalRegister& rb = *operands[RB];
+  PhysicalRegister& rc = *operands[RC];
+
+  //
+  // Check if any other resources are missing that we didn't
+  // know about earlier, and replay like we did above if
+  // needed. This is our last chance to do so.
+  //
+
   issue_total_uops++;
 
   fu = lsbindex(executable_on_fu);
@@ -3168,10 +3199,6 @@ int ReorderBufferEntry::issue() {
   cycles_left = opinfo[uop.opcode].latency;
 
   changestate(rob_issued_list[cluster]);
-
-  PhysicalRegister& ra = *operands[RA];
-  PhysicalRegister& rb = *operands[RB];
-  PhysicalRegister& rc = *operands[RC];
 
   IssueState state;
   state.reg.rdflags = 0;
@@ -3195,18 +3222,18 @@ int ReorderBufferEntry::issue() {
   if (!st) assert(operands[RS]->ready());
 
   if (ra.nonnull()) {
-    ra.current_state_list->issue_source_counter++;
-    ra.all_consumers_sourced_from_bypass &= (ra.current_state_list == &physreg_ready_list);
+    ra.get_state_list().issue_source_counter++;
+    ra.all_consumers_sourced_from_bypass &= (ra.state == PHYSREG_BYPASS);
   }
 
   if ((!uop.rbimm) & (rb.nonnull())) { 
-    rb.current_state_list->issue_source_counter++; 
-    rb.all_consumers_sourced_from_bypass &= (rb.current_state_list == &physreg_ready_list);
+    rb.get_state_list().issue_source_counter++;
+    rb.all_consumers_sourced_from_bypass &= (rb.state == PHYSREG_BYPASS);
   }
 
   if ((!uop.rcimm) & (rc.nonnull())) {
-    rc.current_state_list->issue_source_counter++;
-    rc.all_consumers_sourced_from_bypass &= (rc.current_state_list == &physreg_ready_list);
+    rc.get_state_list().issue_source_counter++;
+    rc.all_consumers_sourced_from_bypass &= (rc.state == PHYSREG_BYPASS);
   }
 
   bool propagated_exception = 0;
@@ -3280,8 +3307,9 @@ int ReorderBufferEntry::issue() {
     stringbuf rbstr; print_value_and_flags(rbstr, rb.data, rb.flags);
     stringbuf rcstr; print_value_and_flags(rcstr, rc.data, rc.flags);
 
-    logfile << intstring(uop.uuid, 20), " issue  rob ", intstring(index(), -3), " on ", padstring(FU[fu].name, -4), ": r", intstring(physreg->index(), -3), " ";
-    logfile << rdstr, " = ", rastr, ", ", rbstr, ", ", rcstr, " (", cycles_left, " left)";
+    logfile << intstring(uop.uuid, 20), " issue  rob ", intstring(index(), -3), " on ", padstring(FU[fu].name, -4), ": r", intstring(physreg->index(), -3);
+    if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[physreg->rfid].name;
+    logfile << " ", rdstr, " = ", rastr, ", ", rbstr, ", ", rcstr, " (", cycles_left, " left)";
 
     if (br & mispredicted) logfile << "; mispredicted (real ", (void*)physreg->data, " vs expected ", (void*)uop.riptaken, ")";
     logfile << endl;
@@ -3757,6 +3785,9 @@ int ReorderBufferEntry::commit() {
     commitrrt[uop.rd]->uncommitref(uop.rd);
     commitrrt[uop.rd] = physreg;
     commitrrt[uop.rd]->addcommitref(uop.rd);
+
+    if (uop.rd < ARCHREG_COUNT) ctx.commitarf[uop.rd] = physreg->data;
+
     if (logable(1)) {
       logfile << " [rrt ", arch_reg_names[uop.rd], " = r", physreg->index(), " 0x", hexstring(physreg->data, 64), "]";
     }
@@ -3817,7 +3848,7 @@ int ReorderBufferEntry::commit() {
   }
 
   assert(archdest_can_commit[uop.rd]);
-  assert(oldphysreg->current_state_list == &physreg_arch_list);
+  assert(oldphysreg->state == PHYSREG_ARCH);
 
   if (oldphysreg->nonnull()) {
     if (logable(1)) {
@@ -3830,7 +3861,7 @@ int ReorderBufferEntry::commit() {
       }
     }
     if (oldphysreg->referenced()) {
-      oldphysreg->changestate(physreg_pendingfree_list); 
+      oldphysreg->changestate(PHYSREG_PENDINGFREE); 
       commit_freereg_pending++;
     } else  {
       oldphysreg->free();
@@ -3842,7 +3873,7 @@ int ReorderBufferEntry::commit() {
 
   if (logable(1)) logfile << " [commit r", physreg->index(), "]";
 
-  physreg->changestate(physreg_arch_list);
+  physreg->changestate(PHYSREG_ARCH);
 
   //
   // Unlock operand physregs since we no longer need to worry about speculation recovery
@@ -3908,9 +3939,10 @@ int commit() {
   //
   start_timer(ctcommit);
 
-  {
+  foreach (rfid, PHYS_REG_FILE_COUNT) {
+    StateList& statelist = physregfiles[rfid].states[PHYSREG_PENDINGFREE];
     PhysicalRegister* physreg;
-    foreach_list_mutable(physreg_pendingfree_list, physreg, entry, nextentry) {
+    foreach_list_mutable(statelist, physreg, entry, nextentry) {
       if (!physreg->referenced()) {
         if (logable(1)) logfile << padstring("", 20), " free   r", physreg->index(), " no longer referenced; moving to free state", endl;
         physreg->free();
@@ -4064,8 +4096,9 @@ void dump_ooo_state() {
   print_lsq(logfile);
   logfile << "Issue Queues:", endl;
   foreach_issueq(print(logfile));
-  logfile << "Physical Register File:", endl;
-  logfile << physregs;
+  foreach (i, PHYS_REG_FILE_COUNT) {
+    logfile << physregfiles[i];
+  }
   logfile << flush;
 }
 
@@ -4177,16 +4210,32 @@ void ooo_capture_stats(DataStoreNode& root) {
       alloc.add("br", frontend_alloc_br);
     }
 
+    DataStoreNode& rfalloc = frontend("rf"); {
+      rfalloc.summable = 1;
+      foreach (rfid, PHYS_REG_FILE_COUNT) {
+        const PhysicalRegisterFile& rf = physregfiles[rfid];
+        stringbuf sb; sb << rf.name;
+        rfalloc.add(rf.name, rf.allocations);
+      }
+    }
+
     frontend("width").histogram(frontend_width_histogram, FRONTEND_WIDTH+1);
   }
 
   DataStoreNode& dispatch = root("dispatch"); {
     DataStoreNode& source = dispatch("source"); {
-      source.summable = 1;
-      source.add("waiting", physreg_used_list.dispatch_source_counter);
-      source.add("bypass", physreg_ready_list.dispatch_source_counter);
-      source.add("physreg", physreg_written_list.dispatch_source_counter);
-      source.add("archreg", physreg_arch_list.dispatch_source_counter);
+      foreach (rfid, PHYS_REG_FILE_COUNT) {
+        const PhysicalRegisterFile& rf = physregfiles[rfid];
+        stringbuf sb; sb << rf.name;
+        DataStoreNode& rfsource = source(sb); {
+          rfsource.summable = 1;
+          rfsource.add("waiting", rf.states[PHYSREG_WAITING].dispatch_source_counter);
+          rfsource.add("bypass", rf.states[PHYSREG_BYPASS].dispatch_source_counter);
+          rfsource.add("physreg", rf.states[PHYSREG_WRITTEN].dispatch_source_counter);
+          rfsource.add("archreg", rf.states[PHYSREG_ARCH].dispatch_source_counter);
+          rfsource.add("pendingfree", rf.states[PHYSREG_PENDINGFREE].dispatch_source_counter);
+        }
+      }
     }
 
     DataStoreNode& cluster = dispatch("cluster"); {
@@ -4211,10 +4260,17 @@ void ooo_capture_stats(DataStoreNode& root) {
     }
 
     DataStoreNode& source = issue("source"); {
-      source.summable = 1;
-      source.add("bypass", physreg_ready_list.issue_source_counter);
-      source.add("physreg", physreg_written_list.issue_source_counter);
-      source.add("archreg", physreg_arch_list.issue_source_counter);
+      foreach (rfid, PHYS_REG_FILE_COUNT) {
+        const PhysicalRegisterFile& rf = physregfiles[rfid];
+        stringbuf sb; sb << rf.name;
+        DataStoreNode& rfsource = source(sb); {
+          rfsource.summable = 1;
+          rfsource.add("bypass", rf.states[PHYSREG_BYPASS].issue_source_counter);
+          rfsource.add("physreg", rf.states[PHYSREG_WRITTEN].issue_source_counter);
+          rfsource.add("archreg", rf.states[PHYSREG_ARCH].issue_source_counter);
+          rfsource.add("pendingfree", rf.states[PHYSREG_PENDINGFREE].issue_source_counter);
+        }
+      }
     }
 
     DataStoreNode& cluster = issue("width"); {
@@ -4335,42 +4391,48 @@ void ooo_capture_stats() {
 // This is for debugging only.
 //
 void check_refcounts() {
-  int refcounts[PHYS_REG_FILE_SIZE];
+  int refcounts[PHYS_REG_FILE_COUNT][MAX_PHYS_REG_FILE_SIZE];
   memset(refcounts, 0, sizeof(refcounts));
+
+  foreach (rfid, PHYS_REG_FILE_COUNT) {
+    // Null physreg in each register file is special and can never be freed:
+    refcounts[rfid][PHYS_REG_NULL]++;
+  }
 
   foreach_forward(ROB, i) {
     ReorderBufferEntry& rob = ROB[i];
     foreach (j, MAX_OPERANDS) {
-      refcounts[rob.operands[j]->index()]++;
+      refcounts[rob.operands[j]->rfid][rob.operands[j]->index()]++;
     }
   }
 
   foreach (i, TRANSREG_COUNT) {
-    refcounts[commitrrt[i]->index()]++;
-    refcounts[specrrt[i]->index()]++;
+    refcounts[commitrrt[i]->rfid][commitrrt[i]->index()]++;
+    refcounts[specrrt[i]->rfid][specrrt[i]->index()]++;
   }
-
-  refcounts[PHYS_REG_NULL] = 0;
 
   bool errors = 0;
 
-  foreach (i, PHYS_REG_FILE_SIZE) {
-    if (physregs[i].refcount != refcounts[i]) {
-      logfile << "ERROR: r", i, " refcount is ", physregs[i].refcount, " but should be ", refcounts[i], endl;
-
-      foreach_forward(ROB, r) {
-        ReorderBufferEntry& rob = ROB[r];
-        foreach (j, MAX_OPERANDS) {
-          if (rob.operands[j]->index() == i) logfile << "  ROB ", r, " operand ", j, endl;
+  foreach (rfid, PHYS_REG_FILE_COUNT) {
+    PhysicalRegisterFile& physregs = physregfiles[rfid];
+    foreach (i, physregs.size) {
+      if (physregs[i].refcount != refcounts[rfid][i]) {
+        logfile << "ERROR: r", i, " refcount is ", physregs[i].refcount, " but should be ", refcounts[rfid][i], endl;
+        
+        foreach_forward(ROB, r) {
+          ReorderBufferEntry& rob = ROB[r];
+          foreach (j, MAX_OPERANDS) {
+            if ((rob.operands[j]->index() == i) & (rob.operands[j]->rfid == rfid)) logfile << "  ROB ", r, " operand ", j, endl;
+          }
         }
+        
+        foreach (j, TRANSREG_COUNT) {
+          if ((commitrrt[j]->index() == i) & (commitrrt[j]->rfid == rfid)) logfile << "  CommitRRT ", arch_reg_names[j], endl;
+          if ((specrrt[j]->index() == i) & (specrrt[j]->rfid == rfid)) logfile << "  SpecRRT ", arch_reg_names[j], endl;
+        }
+        
+        errors = 1;
       }
-
-      foreach (j, TRANSREG_COUNT) {
-        if (commitrrt[j]->index() == i) logfile << "  CommitRRT ", arch_reg_names[j], endl;
-        if (specrrt[j]->index() == i) logfile << "  SpecRRT ", arch_reg_names[j], endl;
-      }
-
-      errors = 1;
     }
   }
 
@@ -4445,7 +4507,8 @@ void out_of_order_core_toplevel_loop() {
     foreach_issueq(clock());
 
 #ifdef ENABLE_CHECKS
-    check_refcounts();
+    // This significantly slows down simulation; only enable it if absolutely needed:
+    // check_refcounts();
 #endif
 
     if (commitrc == COMMIT_RESULT_BARRIER) {

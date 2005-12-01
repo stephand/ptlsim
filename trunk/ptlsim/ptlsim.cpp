@@ -10,9 +10,6 @@
 #include <stdio.h>
 #include <elf.h>
 #include <asm/unistd.h>
-#include <asm/prctl.h>
-#include <sys/prctl.h>
-#include <sys/personality.h>
 
 #include <ptlsim.h>
 #include <datastore.h>
@@ -24,6 +21,8 @@ void save_stats() {
   total_time.stop();
 
   logfile << "(Capturing final stats bundle ", snapshotid, " at cycle ", sim_cycle, ")", endl, flush;
+
+#ifdef __x86_64__
   if (use_out_of_order_core)
     ooo_capture_stats();
 
@@ -31,6 +30,7 @@ void save_stats() {
     if (use_out_of_order_core) 
       ooo_capture_stats((*dsroot)("final")); 
   }
+#endif
 
   if (stats_filename) {
     logfile << "Saving stats to data store ", stats_filename, " at cycle ", sim_cycle, "...", endl, flush;
@@ -42,7 +42,6 @@ void save_stats() {
 }
 
 void user_process_terminated(int rc) {
-  align_rsp();
   logfile << "user_process_terminated(rc = ", rc, "): initiating PTL shutdown...", endl, flush;
   save_stats();
   logfile << "PTLsim exiting...", endl, flush;
@@ -52,7 +51,6 @@ void user_process_terminated(int rc) {
 }
 
 void show_stats_and_switch_to_native() {
-  align_rsp();
   save_stats();
 
   if (exit_after_fullsim) {
@@ -69,6 +67,7 @@ void show_stats_and_switch_to_native() {
 
 extern void enable_ptlsim_call_gate();
 extern void disable_ptlsim_call_gate();
+extern void out_of_order_core_toplevel_loop();
 
 void switch_to_sim() {
   static const bool DEBUG = 0;
@@ -78,8 +77,10 @@ void switch_to_sim() {
   logfile << ctx.commitarf;
   // Sanitize flags (AMD and Intel CPUs also use bits 1 and 3 for reserved bits, but not for INV and WAIT like we do).
 
-  if (use_out_of_order_core) 
+#ifdef __x86_64__
+  if (use_out_of_order_core)
     out_of_order_core_toplevel_loop();
+#endif
 
   ctx.commitarf[REG_flags] &= FLAG_NOT_WAIT_INV; // sanitize flags
 
@@ -103,8 +104,7 @@ void switch_to_sim() {
 
 extern char** initenv;
 
-int main(W64 argc, char* argv[]) {
-
+int main(int argc, char* argv[]) {
   if (!inside_ptlsim) {
     int rc = 0;
     if (argc < 2) {
@@ -131,7 +131,9 @@ int main(W64 argc, char* argv[]) {
   }
 
   init_cache();
+#ifdef __x86_64__
   init_translate();
+#endif
 
   void* interp_entry = (void*)ctx.commitarf[REG_rip];
   void* program_entry = (void*)find_auxv_entry(AT_ENTRY)->a_un.a_val;
@@ -148,8 +150,6 @@ int main(W64 argc, char* argv[]) {
 
   if (!trigger_mode) start_perfctrs();
   if (!trigger_mode) disable_ptlsim_call_gate();
-
-  asm("cld"); // obey the ABI w.r.t. flags
 
   // Context switch into virtual machine:
   switch_to_native_restore_context();

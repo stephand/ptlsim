@@ -94,6 +94,7 @@
 .endm
 
 .macro som label
+.align 16
 template_\label:
 1:
 .data
@@ -123,6 +124,7 @@ template_\label:
 .endm
 
 .macro somnp label
+.align 16
 template_\label:
 1:
 .data

@@ -27,7 +27,6 @@ extern bool split_unaligned_memops_during_translate;
 
 void ooo_capture_stats();
 void ooo_capture_stats(DataStoreNode& root);
-void out_of_order_core_toplevel_loop();
 void save_stats();
 
 extern "C" void switch_to_sim();

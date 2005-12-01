@@ -103,27 +103,18 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"ld.pre",         OPCLASS_PREFETCH,      1, ANYALU}, // prefetch
   {"st",             OPCLASS_STORE,         1, ANYSTU}, // store
   {"st.lm",          OPCLASS_STORE,         1, ANYSTU}, // store to local memory
-  // Byte operations
-  {"inshb",          OPCLASS_BYTEOP,        1, ANYALU},
-  {"exthb",          OPCLASS_BYTEOP,        1, ANYALU},
-  {"movhb",          OPCLASS_BYTEOP,        1, ANYALU},
-  {"movhl",          OPCLASS_LOGIC,         A, ANYINT}, // movhl rd = ra,rb | Set high 32 bits to ra, low 32 bits to rb. Used with two ldc results.
-  {"movl",           OPCLASS_LOGIC,         A, ANYINT}, // move into low 32 bits, leave high 32 bits as is (exception to usual x86-64 zero ext if size >= 4)
+  // Masking, insert and extract
+  {"mask",           OPCLASS_SHIFTROT,      1, ANYALU},        // mask rd = ra,rb,[ds,ms,mc]
   // Shifts and rotates
   {"rotl",           OPCLASS_SHIFTROT,      1, ANYALU},  
   {"rotr",           OPCLASS_SHIFTROT,      1, ANYALU},   
-  {"rotcl",          OPCLASS_SHIFTROT,      1, ALU0},
-  {"rotcr",          OPCLASS_SHIFTROT,      1, ALU1},  
+  {"rotcl",          OPCLASS_SHIFTROT,      1, ANYALU},
+  {"rotcr",          OPCLASS_SHIFTROT,      1, ANYALU},  
   {"shl",            OPCLASS_SHIFTROT,      1, ANYALU},
   {"shr",            OPCLASS_SHIFTROT,      1, ANYALU},
   {"dupbit",         OPCLASS_LOGIC,         1, ANYALU},          // duplicate the specified bit into all bits of output
-  {"sra",            OPCLASS_SHIFTROT,      1, ANYALU},   
-  {"extr",           OPCLASS_SHIFTROT,      1, ANYALU},        // extr  rd = ra,srlamt,bitcnt  (extr with zero extend)
-  {"extrx",          OPCLASS_SHIFTROT,      1, ANYALU},        // extrx rd = ra,srlamt,bitcnt  (extr with sign extend)
-  {"insr",           OPCLASS_SHIFTROT,      1, ANYALU},        // insr  rd = ra,rb,srlamt,bitcnt  (insert)
-  // Sign and zero extensions
-  {"sxt",            OPCLASS_LOGIC,         A, ANYINT},
-  {"zxt",            OPCLASS_LOGIC,         A, ANYINT},
+  {"sar",            OPCLASS_SHIFTROT,      1, ANYALU},   
+  // Endian byte swap
   {"bswap",          OPCLASS_LOGIC,         A, ANYINT},
   // Flag operations
   {"collcc",         OPCLASS_FLAGS,         A, ANYALU},
@@ -299,9 +290,11 @@ stringbuf& operator <<(stringbuf& sb, const TransOp& op) {
   sbname << (fp ? fptype_names[op.size] : size_names[op.size]);
 
   if (isclass(op.opcode, OPCLASS_USECOND)) sbname << ".", cond_code_names[op.cond];
-  if (op.opcode == OP_sxt || op.opcode == OP_zxt || op.opcode == OP_ldx || op.opcode == OP_ldx_lm) sbname << (char)('0' + (1 << op.extshift));
+  if (op.opcode == OP_ldx || op.opcode == OP_ldx_lm) sbname << (char)('0' + (1 << op.extshift));
   if (isload(op.opcode) || isstore(op.opcode)) {
     sbname << ((op.cond == LDST_ALIGN_LO) ? ".low" : (op.cond == LDST_ALIGN_HI) ? ".high" : "");
+  } else if (op.opcode == OP_mask) {
+    sbname << ((op.cond == 0) ? "" : (op.cond == 1) ? ".z" : (op.cond == 2) ? ".x" : ".???");
   }
 
   if ((ld|st) && (op.cachelevel > 0)) sbname << ".L", (char)('1' + op.cachelevel);
@@ -314,7 +307,11 @@ stringbuf& operator <<(stringbuf& sb, const TransOp& op) {
   sb << arch_reg_names[op.ra];
   if (op.rb == REG_imm) { sb << ",", op.rbimm; } else  { sb << ",", arch_reg_names[op.rb]; }
   if (ld|st) sb << "]";
-  if (op.rc != REG_zero) { if (op.rc == REG_imm) sb << ",", op.rcimm; else sb << ",", arch_reg_names[op.rc]; }
+  if (op.opcode == OP_mask) {
+    sb << ",[ms=", bits(op.rcimm, 0, 6), " mc=", bits(op.rcimm, 6, 6), " ds=", bits(op.rcimm, 12, 6), "]";
+  } else {
+    if (op.rc != REG_zero) { if (op.rc == REG_imm) sb << ",", op.rcimm; else sb << ",", arch_reg_names[op.rc]; }
+  }
   if ((op.opcode == OP_adda || op.opcode == OP_adds || op.opcode == OP_suba || op.opcode == OP_subs) && (op.extshift != 0)) sb << "*", (1 << op.extshift);
 
   if (op.setflags) {
@@ -431,7 +428,7 @@ stringbuf& nameof(stringbuf& sbname, const TransOp& uop) {
 
   if (isclass(op, OPCLASS_USECOND))
     sbname << ".", cond_code_names[uop.cond];
-  if (op == OP_sxt || op == OP_zxt || op == OP_ldx || op == OP_ldx_lm) sbname << (char)('0' + (1 << uop.cond));
+  if (op == OP_ldx || op == OP_ldx_lm) sbname << (char)('0' + (1 << uop.cond));
 
   if (ld|st) {
     sbname << ((uop.cond == LDST_ALIGN_LO) ? ".low" : (uop.cond == LDST_ALIGN_HI) ? ".high" : "");

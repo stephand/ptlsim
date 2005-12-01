@@ -8,9 +8,11 @@
 #include <globals.h>
 #include <ptlsim.h>
 
+#include <maskluts.h>
+
 extern "C" {
   extern const AddrPair templatemap_nop[1];
-  extern const AddrPair templatemap_mov[4];
+  extern const AddrPair templatemap_mov[4][2];
   extern const AddrPair templatemap_and[4][2];
   extern const AddrPair templatemap_or[4][2];
   extern const AddrPair templatemap_xor[4][2];
@@ -29,6 +31,7 @@ extern "C" {
   extern const AddrPair templatemap_subm[4][2];
   extern const AddrPair templatemap_addc[4][2];
   extern const AddrPair templatemap_subc[4][2];
+  extern const AddrPair templatemap_mask[4][3]; // [size][exttype]
   extern const AddrPair templatemap_rotl[4][2];
   extern const AddrPair templatemap_rotr[4][2];
   extern const AddrPair templatemap_rotcl[4][2];
@@ -42,7 +45,6 @@ extern "C" {
   extern const AddrPair templatemap_bts[4][2];
   extern const AddrPair templatemap_btr[4][2];
   extern const AddrPair templatemap_btc[4][2];
-  extern const AddrPair templatemap_dupbit[4][2];
   extern const AddrPair templatemap_ctz[4][2];
   extern const AddrPair templatemap_clz[4][2];
   extern const AddrPair templatemap_ctpop[4][2];
@@ -113,7 +115,7 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
   case OP_nop:
     cp = &templatemap_nop[0]; break;
   case OP_mov: 
-    cp = &templatemap_mov[size]; break;
+    cp = &templatemap_mov[size][0]; break;
   case OP_and:
     cp = &templatemap_and[size][setflags]; break;
   case OP_or: 
@@ -176,8 +178,6 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
     cp = &templatemap_btr[size][setflags]; break;
   case OP_btc:
     cp = &templatemap_btc[size][setflags]; break;
-  case OP_dupbit:
-    cp = &templatemap_dupbit[size][0]; break;
   case OP_ctz: 
     cp = &templatemap_ctz[size][setflags]; break;
   case OP_clz: 
@@ -208,18 +208,10 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
   case OP_ld_pre:
   case OP_st:
     cp = &templatemap_nop[0]; break;
-  case OP_zxt:
-    cp = &templatemap_zxt[size][cond]; break;
-  case OP_sxt:
-    cp = &templatemap_sxt[size][cond]; break;
+  case OP_mask:
+    cp = &templatemap_mask[size][cond]; break;
   case OP_bswap:
     cp = &templatemap_bswap[size]; break;
-  case OP_inshb:
-    cp = &templatemap_inshb[0]; break;
-  case OP_exthb:
-    cp = &templatemap_exthb[0]; break;
-  case OP_movhb:
-    cp = &templatemap_movhb[0]; break;
   case OP_movccr:
     cp = &templatemap_movccr[0]; break;
   case OP_movrcc:
@@ -236,10 +228,6 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
     cp = &templatemap_jmp[except]; break;
   case OP_collcc:
     cp = &templatemap_collcc[0]; break;
-  case OP_movhl:
-    cp = &templatemap_movhl[0]; break;
-  case OP_movl:
-    cp = &templatemap_movl[0]; break;
   case OP_addf:
     cp = &templatemap_addf[size]; break;
   case OP_subf:
@@ -344,3 +332,129 @@ const byte* get_synthcode_for_cond_branch(int opcode, int cond, int size, bool e
 
   return cp->start;
 }
+
+inline W64 x86_rotr64(W64 r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r; }
+inline W64 x86_rotl64(W64 r, int n) { asm("rol %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r; }
+
+//
+// Flags generation (all but CF and OF)
+//
+template <typename T>
+inline byte x86_genflags(T r) {
+  byte sf, zf, pf;
+  asm("test %[r],%[r]\n"
+      "sets %[sf]\n"
+      "setz %[zf]\n"
+      "setp %[pf]\n"
+      "shl  $7,%[sf]\n"
+      "shl  $6,%[zf]\n"
+      "shl  $2,%[pf]\n"
+      : [sf] "=q" (sf), [zf] "=q" (zf), [pf] "=q" (pf)
+      : [r] "r" (r));
+
+  return (sf|zf|pf);
+}
+
+template <typename T>
+inline byte x86_genflags_separate(T sr, T zr, T pr) {
+  byte sf, zf, pf;
+  asm("test %[sr],%[sr]\n"
+      "sets %[sf]\n"
+      "test %[zr],%[zr]\n"
+      "setz %[zf]\n"
+      "test %[pr],%[pr]\n"
+      "setp %[pf]\n"
+      "shl  $7,%[sf]\n"
+      "shl  $6,%[zf]\n"
+      "shl  $2,%[pf]\n"
+      : [sf] "=q" (sf), [zf] "=q" (zf), [pf] "=q" (pf)
+      : [sr] "r" (sr), [zr] "r" (zr), [pr] "r" (pr));
+
+  return (sf|zf|pf);
+}
+
+template byte x86_genflags<byte>(byte r);
+template byte x86_genflags<W16>(W16 r);
+template byte x86_genflags<W32>(W32 r);
+
+#ifdef __x86_64__
+template byte x86_genflags<W64>(W64 r);
+#else
+template <>
+byte x86_genflags<W64>(W64 r) {
+
+  W32 l = LO32(r);
+  W32 h = HI32(r);
+  return x86_genflags_separate(h, l|h, l^h);
+}
+#endif
+
+//
+// Rotates
+//
+#ifdef __x86_64__
+W64 rotr64(W64 w, int c) { return x86_rotr64(w, c); }
+#else
+W64 rotr64(W64 w, int c) {
+  return (w >> c) | (w << (64 - c));
+}
+#endif
+
+// See testmasks.cpp for more information
+
+template <int SIZE, int ZEROEXT, int SIGNEXT>
+void uop_mask(IssueState& state, IssueInput& input) {
+  int ms = bits(input.rc, 0, 6);
+  int mc = bits(input.rc, 6, 6);
+  int ds = bits(input.rc, 12, 6);
+  
+  int mcms = bits(input.rc, 0, 12);
+
+  // mask_gen_lut[] = (((1 << mc)-1), ms);
+  W64 M = mask_gen_lut[mcms];
+  W64 T = (input.ra & ~M) | (rotr64(input.rb, ds) & M);
+  W64 Tx;
+
+  if (ZEROEXT) {
+    // mask_zxt_lut[] = 1'[(ms+mc-1):0]
+    Tx = T & mask_zxt_lut[mcms];
+  } else if (SIGNEXT) {
+    // mask_sxt_lut[] = 1'[63:(ms+mc)]
+    W64 sxt = (T | mask_sxt_lut[mcms]);
+    W64 zxt = (T & mask_zxt_lut[mcms]);
+    // mask_zxt_lut[] = 1'[(ms+mc-1):0]
+    // mask_bt_lut[] = 1'[mc+ms-1];
+    Tx = (T & mask_bt_lut[mcms]) ? sxt : zxt;
+  } else {
+    Tx = T;
+  }
+
+  W64 z = input.ra;
+  W64 f;
+
+  switch (SIZE) {
+  case 1: *((byte*)&z) = Tx; f = x86_genflags<byte>((byte)z); break;
+  case 2: *((W16*)&z) = Tx; f = x86_genflags<W16>((W16)z); break;
+  case 4: z = LO32(Tx); f = x86_genflags<W32>((W32)z); break;
+  case 8: z = Tx; f = x86_genflags<W64>((W64)z); break;
+  }
+
+  state.reg.rddata = z;
+  state.reg.rdflags = f;
+}
+
+template void uop_mask<1, 0, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<1, 1, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<1, 0, 1>(IssueState& state, IssueInput& input);
+
+template void uop_mask<2, 0, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<2, 1, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<2, 0, 1>(IssueState& state, IssueInput& input);
+
+template void uop_mask<4, 0, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<4, 1, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<4, 0, 1>(IssueState& state, IssueInput& input);
+
+template void uop_mask<8, 0, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<8, 1, 0>(IssueState& state, IssueInput& input);
+template void uop_mask<8, 0, 1>(IssueState& state, IssueInput& input);

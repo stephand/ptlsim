@@ -17,7 +17,7 @@ COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o uopimpl.o l
 OOOOBJS = ooocore.o branchpred.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h uopimpl.h loader.h
+COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h loader.h maskluts.h
 OOOINCLUDES = branchpred.h ooohwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
@@ -45,38 +45,39 @@ all: ptlsim ptlstats ptlcalls.o cpuid
 	@echo "Compiled successfully..."
 
 genoffsets: genoffsets.o superstl.o
-	$(CC) -g -O2 genoffsets.o superstl.o -o genoffsets
+	g++ -g -O2 genoffsets.o superstl.o -o genoffsets
+
 
 cpuid: cpuid.o
-	$(CC) -O2 cpuid.o superstl.o -o cpuid
+	g++ -O2 cpuid.o superstl.o -o cpuid
 
 simsynth-offsets.h: genoffsets
 	./genoffsets > simsynth-offsets.h
 
 # Compile this fast:
 ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h config.h
-	$(CC) $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -m64 -c ptlstats.cpp
+	gcc $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -m64 -c ptlstats.cpp
 
 injectcode-64bit.o: injectcode.cpp
-	$(CC) $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
+	g++ $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
 
 injectcode-32bit.o: injectcode.cpp
-	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
+	g++ $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
 
 lowlevel-32bit.o: lowlevel-32bit.S
-	$(CC) -c -m32 -O3 lowlevel-32bit.S
+	gcc -c -m32 -O3 lowlevel-32bit.S
 
 ptlcalls-32bit.o: ptlcalls.c
-	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c ptlcalls.c -o ptlcalls-32bit.o
+	gcc $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c ptlcalls.c -o ptlcalls-32bit.o
 
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
-	$(CC) -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
+	g++ -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
 
 ptlsim.objdump: ptlsim Makefile
 	objdump -Crtd --no-show-raw-insn ptlsim | convert-disasm-x86 > ptlsim.objdump
 
 ptlstats: ptlstats.o ptlhwdef.o superstl.o datastore.o config.o Makefile
-	$(CC) -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
+	g++ -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
 
 BASEADDR = 0
 
@@ -111,6 +112,7 @@ simsynth.out.S: simsynth.out
 # Miscellaneous:
 #
 
+DISTFILES = $(CPPFILES) $(INCLUDEFILES) Makefile ptlsim.lds COPYING README 
 
 dist: $(DISTFILES)
 	tar zcvf ptlsim-`date "+%Y%m%d%H%M%S"`.tar.gz $(DISTFILES)

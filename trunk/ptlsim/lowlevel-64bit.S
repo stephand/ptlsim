@@ -121,8 +121,9 @@ save_context_switch_to_sim_lowlevel:
   mov      [fsreg],%fs
   mov      [gsreg],%gs
 
-  sub      %rsp,8                                # Realign stack
-  jmp      save_context_switch_to_sim
+  sub      %rsp,64
+  and      %rsp,-16
+  call     save_context_switch_to_sim
 
 .data
 switch_to_native_restore_context_temp_64_to_64:

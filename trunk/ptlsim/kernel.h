@@ -15,7 +15,7 @@
 
 #undef __syscall_return
 #define __syscall_return(type, res) return (type)(res);
-#define __syscall_clobber "r11","rcx","memory"
+#define __syscall_clobber "r11","rcx","memory" 
 #define __syscall "syscall"
 
 #define declare_syscall0(sysid,type,name) type name(void) { long __res; asm volatile \
