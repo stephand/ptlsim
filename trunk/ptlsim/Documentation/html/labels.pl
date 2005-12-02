@@ -3,7 +3,7 @@
 
 
 $key = q/sub:AliasCheck/;
-$external_labels{$key} = "$URL/" . q|node16.html|; 
+$external_labels{$key} = "$URL/" . q|node15.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:ConfigurationOptions/;
@@ -15,7 +15,7 @@ $external_labels{$key} = "$URL/" . q|node5.html|;
 $noresave{$key} = "$nosave";
 
 $key = q/sec:UopReference/;
-$external_labels{$key} = "$URL/" . q|node22.html|; 
+$external_labels{$key} = "$URL/" . q|node21.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/part:Introduction/;
@@ -23,31 +23,31 @@ $external_labels{$key} = "$URL/" . q|node2.html|;
 $noresave{$key} = "$nosave";
 
 $key = q/sec:StoreMerging/;
-$external_labels{$key} = "$URL/" . q|node16.html|; 
+$external_labels{$key} = "$URL/" . q|node15.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:Clustering/;
-$external_labels{$key} = "$URL/" . q|node13.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sec:Scheduling/;
-$external_labels{$key} = "$URL/" . q|node13.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sec:LoadStoreQueueEntry/;
 $external_labels{$key} = "$URL/" . q|node12.html|; 
 $noresave{$key} = "$nosave";
 
-$key = q/part:OutOfOrderModel/;
-$external_labels{$key} = "$URL/" . q|node9.html|; 
+$key = q/sec:Scheduling/;
+$external_labels{$key} = "$URL/" . q|node12.html|; 
 $noresave{$key} = "$nosave";
 
-$key = q/sec:ShiftRotateProblems/;
+$key = q/sec:LoadStoreQueueEntry/;
+$external_labels{$key} = "$URL/" . q|node11.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/part:OutOfOrderModel/;
 $external_labels{$key} = "$URL/" . q|node8.html|; 
 $noresave{$key} = "$nosave";
 
+$key = q/sec:ShiftRotateProblems/;
+$external_labels{$key} = "$URL/" . q|node7.html|; 
+$noresave{$key} = "$nosave";
+
 $key = q/sec:CacheMissHandling/;
-$external_labels{$key} = "$URL/" . q|node15.html|; 
+$external_labels{$key} = "$URL/" . q|node14.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:RunningPTLsim/;
@@ -59,15 +59,19 @@ $external_labels{$key} = "$URL/" . q|node6.html|;
 $noresave{$key} = "$nosave";
 
 $key = q/sec:ClusterDispatchScheduleIssue/;
-$external_labels{$key} = "$URL/" . q|node13.html|; 
+$external_labels{$key} = "$URL/" . q|node12.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:PipelineFlushesAndBarriers/;
+$external_labels{$key} = "$URL/" . q|node17.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:Issue/;
-$external_labels{$key} = "$URL/" . q|node13.html|; 
+$external_labels{$key} = "$URL/" . q|node12.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:OutOfOrderFeatures/;
-$external_labels{$key} = "$URL/" . q|node10.html|; 
+$external_labels{$key} = "$URL/" . q|node9.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:Timing/;
@@ -83,51 +87,51 @@ $external_labels{$key} = "$URL/" . q|node7.html|;
 $noresave{$key} = "$nosave";
 
 $key = q/sec:PhysicalRegisters/;
-$external_labels{$key} = "$URL/" . q|node12.html|; 
+$external_labels{$key} = "$URL/" . q|node11.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/part:Appendices/;
-$external_labels{$key} = "$URL/" . q|node21.html|; 
+$external_labels{$key} = "$URL/" . q|node20.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:InitiatingCacheMiss/;
-$external_labels{$key} = "$URL/" . q|node19.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sec:IssuingLoads/;
-$external_labels{$key} = "$URL/" . q|node15.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sub:RegisterRenaming/;
-$external_labels{$key} = "$URL/" . q|node12.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sub:x87-Floating-Point/;
-$external_labels{$key} = "$URL/" . q|node8.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sub:FlagsManagement/;
-$external_labels{$key} = "$URL/" . q|node8.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sec:TranslationLookasideBuffers/;
-$external_labels{$key} = "$URL/" . q|node19.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sec:SpeculationAndRecovery/;
-$external_labels{$key} = "$URL/" . q|node14.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sec:SpeculationRecovery/;
-$external_labels{$key} = "$URL/" . q|node14.html|; 
-$noresave{$key} = "$nosave";
-
-$key = q/sec:CommitStage/;
 $external_labels{$key} = "$URL/" . q|node18.html|; 
 $noresave{$key} = "$nosave";
 
+$key = q/sec:IssuingLoads/;
+$external_labels{$key} = "$URL/" . q|node14.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sub:RegisterRenaming/;
+$external_labels{$key} = "$URL/" . q|node11.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sub:x87-Floating-Point/;
+$external_labels{$key} = "$URL/" . q|node7.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sub:FlagsManagement/;
+$external_labels{$key} = "$URL/" . q|node7.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:TranslationLookasideBuffers/;
+$external_labels{$key} = "$URL/" . q|node18.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:SpeculationAndRecovery/;
+$external_labels{$key} = "$URL/" . q|node13.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:SpeculationRecovery/;
+$external_labels{$key} = "$URL/" . q|node13.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:CommitStage/;
+$external_labels{$key} = "$URL/" . q|node17.html|; 
+$noresave{$key} = "$nosave";
+
 $key = q/sec:OperationSizes/;
-$external_labels{$key} = "$URL/" . q|node8.html|; 
+$external_labels{$key} = "$URL/" . q|node7.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:PTLsimInternals/;
@@ -135,31 +139,31 @@ $external_labels{$key} = "$URL/" . q|node5.html|;
 $noresave{$key} = "$nosave";
 
 $key = q/sec:UopIntro/;
-$external_labels{$key} = "$URL/" . q|node8.html|; 
+$external_labels{$key} = "$URL/" . q|node7.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:PerformanceCounters/;
-$external_labels{$key} = "$URL/" . q|node23.html|; 
+$external_labels{$key} = "$URL/" . q|node22.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sub:UnalignedLoadsAndStores/;
-$external_labels{$key} = "$URL/" . q|node8.html|; 
+$external_labels{$key} = "$URL/" . q|node7.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sub:PhysicalRegisterRecyclingComplications/;
-$external_labels{$key} = "$URL/" . q|node18.html|; 
+$external_labels{$key} = "$URL/" . q|node17.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:FetchStage/;
-$external_labels{$key} = "$URL/" . q|node11.html|; 
+$external_labels{$key} = "$URL/" . q|node10.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:SplitPhaseStores/;
-$external_labels{$key} = "$URL/" . q|node16.html|; 
+$external_labels{$key} = "$URL/" . q|node15.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:FillingCacheMiss/;
-$external_labels{$key} = "$URL/" . q|node19.html|; 
+$external_labels{$key} = "$URL/" . q|node18.html|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:TriggerMode/;
@@ -167,7 +171,11 @@ $external_labels{$key} = "$URL/" . q|node6.html|;
 $noresave{$key} = "$nosave";
 
 $key = q/sec:CacheHierarchy/;
-$external_labels{$key} = "$URL/" . q|node19.html|; 
+$external_labels{$key} = "$URL/" . q|node18.html|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:DebuggingHints/;
+$external_labels{$key} = "$URL/" . q|node5.html|; 
 $noresave{$key} = "$nosave";
 
 1;
@@ -226,7 +234,7 @@ $external_latex_labels{$key} = q|5.9|;
 $noresave{$key} = "$nosave";
 
 $key = q/part:OutOfOrderModel/;
-$external_latex_labels{$key} = q|III|; 
+$external_latex_labels{$key} = q|II|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:CacheMissHandling/;
@@ -243,6 +251,10 @@ $noresave{$key} = "$nosave";
 
 $key = q/sec:ClusterDispatchScheduleIssue/;
 $external_latex_labels{$key} = q|9|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:PipelineFlushesAndBarriers/;
+$external_latex_labels{$key} = q|14.5|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:OutOfOrderFeatures/;
@@ -262,7 +274,7 @@ $external_latex_labels{$key} = q|3.3|;
 $noresave{$key} = "$nosave";
 
 $key = q/part:x86andUops/;
-$external_latex_labels{$key} = q|II|; 
+$external_latex_labels{$key} = q|5|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:PhysicalRegisters/;
@@ -270,7 +282,7 @@ $external_latex_labels{$key} = q|8.3|;
 $noresave{$key} = "$nosave";
 
 $key = q/part:Appendices/;
-$external_latex_labels{$key} = q|IV|; 
+$external_latex_labels{$key} = q|III|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:InitiatingCacheMiss/;
@@ -347,6 +359,10 @@ $noresave{$key} = "$nosave";
 
 $key = q/sec:TriggerMode/;
 $external_latex_labels{$key} = q|4.3|; 
+$noresave{$key} = "$nosave";
+
+$key = q/sec:DebuggingHints/;
+$external_latex_labels{$key} = q|3.6|; 
 $noresave{$key} = "$nosave";
 
 $key = q/sec:CacheHierarchy/;

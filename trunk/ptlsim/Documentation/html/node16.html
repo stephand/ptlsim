@@ -7,8 +7,8 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
   Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
 <HTML>
 <HEAD>
-<TITLE>Stores</TITLE>
-<META NAME="description" CONTENT="Stores">
+<TITLE>Forwarding, Wakeup and Writeback</TITLE>
+<META NAME="description" CONTENT="Forwarding, Wakeup and Writeback">
 <META NAME="keywords" CONTENT="PTLsimManual">
 <META NAME="resource-type" CONTENT="document">
 <META NAME="distribution" CONTENT="global">
@@ -21,32 +21,32 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <LINK REL="next" HREF="node17.html">
 <LINK REL="previous" HREF="node15.html">
-<LINK REL="up" HREF="node9.html">
+<LINK REL="up" HREF="node8.html">
 <LINK REL="next" HREF="node17.html">
 </HEAD>
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html573"
+<A NAME="tex2html580"
   HREF="node17.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html569"
-  HREF="node9.html">
+<A NAME="tex2html576"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html563"
+<A NAME="tex2html570"
   HREF="node15.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html571"
+<A NAME="tex2html578"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html574"
-  HREF="node17.html">Forwarding, Wakeup and Writeback</A>
-<B> Up:</B> <A NAME="tex2html570"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html564"
-  HREF="node15.html">Load Issue</A>
- &nbsp; <B>  <A NAME="tex2html572"
+<B> Next:</B> <A NAME="tex2html581"
+  HREF="node17.html">Commitment</A>
+<B> Up:</B> <A NAME="tex2html577"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html571"
+  HREF="node15.html">Stores</A>
+ &nbsp; <B>  <A NAME="tex2html579"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -55,210 +55,119 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html575"
-  HREF="node16.html#SECTION04710000000000000000">Store to Store Forwarding and Merging</A>
-<LI><A NAME="tex2html576"
-  HREF="node16.html#SECTION04720000000000000000">Split Phase Stores</A>
-<UL>
-<LI><A NAME="tex2html577"
-  HREF="node16.html#SECTION04721000000000000000">Load Queue Search (Alias Check)</A>
-<LI><A NAME="tex2html578"
-  HREF="node16.html#SECTION04722000000000000000">Store Queue Search (Merge Check)</A>
-</UL></UL>
+<LI><A NAME="tex2html582"
+  HREF="node16.html#SECTION03810000000000000000">Forwarding and the Clustered Bypass Network</A>
+<LI><A NAME="tex2html583"
+  HREF="node16.html#SECTION03820000000000000000">Writeback</A>
+</UL>
 <!--End of Table of Child-Links-->
 <HR>
 
-<H1><A NAME="SECTION04700000000000000000">
-Stores</A>
+<H1><A NAME="SECTION03800000000000000000">
+Forwarding, Wakeup and Writeback</A>
 </H1>
 
 <P>
 
-<H1><A NAME="SECTION04710000000000000000"></A><A NAME="sec:StoreMerging"></A>
-<BR>
-Store to Store Forwarding and Merging
+<H1><A NAME="SECTION03810000000000000000">
+Forwarding and the Clustered Bypass Network</A>
 </H1>
 
 <P>
-In the PTLsim out of order model, a given store may merge its data
-with that of a previous store in program order. This ensures that
-loads which may need to forward data from a store always reference
-exactly one store queue entry, rather than having to merge data from
-multiple smaller prior stores to cover the entire byte range being
-loaded. In this model, physical memory is divided up into 8 byte (64
-bit) chunks. As each store issues, it scans the store queue backwards
-in program order to find the most recent prior store to the same 8
-byte aligned physical address. If there is a match, the current store
-depends on the matching prior store, and cannot complete and forward
-its data to other consuming loads and stores until the prior store
-in question also completes. This ensures that the current store's
-data can be composited on top of the older store's data to form a
-single up to date 8-byte chunk. As described in Section <A HREF="node12.html#sec:LoadStoreQueueEntry">8.4</A>,
-each store queue entry contains a byte mask to indicate which of the
-8 bytes in each chunk are currently modified by stores in flight versus
-those bytes which must come from the data cache.
+Immediately after each uop is issued and the <TT><FONT SIZE="-1">ReorderBufferEntry::issue()</FONT></TT>
+method actually generates its result, the <TT><FONT SIZE="-1">cycles_left</FONT></TT>
+field of the ROB is set to the expected latency of the uop (e.g. between
+1 and 5 cycles). The uop is then moved to the <I>issued</I> state
+and placed on the <TT><FONT SIZE="-1">rob_issued_list</FONT></TT>. Every cycle,
+the <TT><FONT SIZE="-1">complete()</FONT></TT> method iterates through each ROB in
+issued state and decrements its <TT><FONT SIZE="-1">cycles_left</FONT></TT> field.
+If <TT><FONT SIZE="-1">cycles_left</FONT></TT> becomes zero, the corresponding uop
+has completed execution. The ROB is moved to the <I>completed</I>
+state (on <TT><FONT SIZE="-1">rob_completed_list</FONT></TT>) and its physical register
+or store queue entry is moved to the <TT><FONT SIZE="-1">bypass</FONT></TT> state
+so newly dispatched uops do not try to wait for it.
 
 <P>
-Technically there are more efficient approaches, such as allowing
-stores to issue in any order so long as they do not overlap on the
-basis of individual bytes. However, no modern processor allows such
-arbitrary forwarding since the circuit complexity involved with scanning
-the store queue for partial address matches would be prohibitive and
-slow. Instead, most processors only support store to load forwarding
-when a single larger prior store covers the entire byte range accessed
-by a smaller or same sized load; all other combinations stall the
-load until the overlapping prior stores commit to the data cache. 
+The <TT><FONT SIZE="-1">transfer()</FONT></TT> function is also called every cycle.
+This function examines the list of ROBs in the <I>completed</I> state
+and is responsible for broadcasting the completed ROB's tag (ROB index)
+to the issue queues. Because of clustering (Section <A HREF="node12.html#sec:Clustering">9.1</A>),
+some issue queues will receive the broadcast later than others. Specifically,
+the ROB's <TT><FONT SIZE="-1">forward_cycle</FONT></TT> field determines which issue
+queues and remote clusters are visible <TT><FONT SIZE="-1">forward_cycle</FONT></TT>
+cycles after the uop completed. The <TT><FONT SIZE="-1">forward()</FONT></TT> method,
+called by <TT><FONT SIZE="-1">transfer()</FONT></TT> for each uop in the <I>completed</I>
+state, indexes into a lookup table <TT><FONT SIZE="-1">forward_at_cycle_lut[</FONT></TT><I>cluster</I><TT><FONT SIZE="-1">][</FONT></TT><I>forward_cycle</I><TT><FONT SIZE="-1">]</FONT></TT>
+to get a bitmap of which remote clusters are accessible <TT><FONT SIZE="-1">forward_cycle</FONT></TT>
+cycles after he uop completed, relative to the original cluster.the
+uop issued in. The <TT><FONT SIZE="-1">IssueQueue::broadcast()</FONT></TT> method
+(Section <A HREF="node12.html#sec:Scheduling">9.3</A>) is then called for each applicable
+cluster to wake up any operands of uops in that cluster waiting on
+the newly completed uop.
 
 <P>
-The store inheritance scheme used by PTLsim (described first) is an
-improvement to the more common ``stall on size mismatch'' scheme
-above, but may incur more store dependency replays (since stores now
-depend on other stores when they target the same 8-byte chunk) compared
-to a stall on size mismatch scheme. As a case study, the Pentium 4
-processor (Prescott core) implements a combination of these approaches.
+The <TT><FONT SIZE="-1">MAX_FORWARDING_LATENCY</FONT></TT> constant (in <TT><FONT SIZE="-1">ooohwdef.h</FONT></TT>)
+specifies the maximum number of cycles between any two clusters. After
+the ROB has progressed through <TT><FONT SIZE="-1">MAX_FORWARDING_LATENCY</FONT></TT>
+cycles in the <I>completed</I> state, it is moved to the <TT><FONT SIZE="-1">ready-to-writeback</FONT></TT>
+state, effectively meaning the result has arrived at the physical
+register file and is eligible for writeback in the next cycle.
 
 <P>
 
-<H1><A NAME="SECTION04720000000000000000"></A><A NAME="sec:SplitPhaseStores"></A>
-<BR>
-Split Phase Stores
+<H1><A NAME="SECTION03820000000000000000">
+Writeback</A>
 </H1>
 
 <P>
-The <TT><FONT SIZE="-1">ReorderBufferEntry::issuestore()</FONT></TT> function is responsible
-for issuing all store uops. Stores are unusual in that they can issue
-even if their <TT><FONT SIZE="-1">rc</FONT></TT> operand (the value to store) is not
-ready at the same time as the <TT><FONT SIZE="-1">ra</FONT></TT> and <TT><FONT SIZE="-1">rb</FONT></TT>
-operands forming the effective address. This property is useful since
-it allows a store to establish an entry in the store queue as soon
-as the effective address can be generated, even if the data to store
-is not ready. By establishing addresses in the store queue as soon
-as possible, we can avoid performance losses associated with the unnecessary
-replay of loads that may depend on a store whose address is unavailable
-at the time the load issues. In effect, this means that each store
-uop may actually issue twice.
+Every cycle, the <TT><FONT SIZE="-1">writeback()</FONT></TT> function scans the list
+of ROBs in the <I>ready-to-writeback</I> state and selects at most
+<TT><FONT SIZE="-1">WRITEBACK_WIDTH</FONT></TT> results to write to the physical
+register file. The <TT><FONT SIZE="-1">forward()</FONT></TT> method is first called
+one final time to catch the corner case in which a dependent uop was
+dispatched while producer uop was waiting in the <I>ready-to-writeback</I>
+state.
 
 <P>
-In the first phase issue, which occurs as soon as the <TT><FONT SIZE="-1">ra</FONT></TT>
-and <TT><FONT SIZE="-1">rb</FONT></TT> operands become ready, the store uop computes
-its effective physical address, checks that address for all exceptions
-(such as alignment problems and page faults) and writes the address
-into the corresponding <TT><FONT SIZE="-1">LoadStoreQueueEntry</FONT></TT> structure
-before setting its the <TT><FONT SIZE="-1">addrvalid</FONT></TT> bit as described
-in Section <A HREF="node12.html#sec:LoadStoreQueueEntry">8.4</A>. If an exception is detected
-at this point, the <TT><FONT SIZE="-1">invalid</FONT></TT> bit in the store queue
-entry is set and the destination physical register's <TT><FONT SIZE="-1">FLAG_inv</FONT></TT>
-flag is set so any attempt to commit the store will fail.
-
-<P>
-
-<H2><A NAME="SECTION04721000000000000000"></A><A NAME="sub:AliasCheck"></A>
-<BR>
-Load Queue Search (Alias Check)
-</H2>
-
-<P>
-The load queue is then searched to find any loads after the current
-store in program order which have already issued but have done so
-without forwarding data from the current store. These loads erroneously
-issued before the current store (now known to overlap the load's address)
-was able to forward the correct data to the offending load(s). This
-situation is known as <I>aliasing</I>, and is effectively a mis-speculation
-requiring the annulment of all instructions after and including the
-store. The annulment is performed in accordance with Section <A HREF="#sec:MisspeculationAnnulment"><IMG  ALIGN="BOTTOM" BORDER="1" ALT="[*]" SRC="crossref.png"></A>,
-similar to how uops after a mispredicted branch would be annulled.
-Unlike branches, technically we do not need to re-fetch instructions
-starting at the mis-speculated store, but in the current implementation
-of the simulator this is done for simplicity reasons.
-
-<P>
-Since the annulment process required to correct aliasing violations
-is expensive, it is desirable to predict in advance which loads and
-stores are likely to alias each other such that loads predicted to
-alias are never issued when prior stores in the store queue still
-have unknown addresses. This works because in most out of order processors,
-statistically speaking, very few loads alias stores compared to normal
-loads from the cache. When an aliasing mis-speculation occurs, an
-entry is added to a small fully associative structure (typically <IMG
- WIDTH="40" HEIGHT="32" ALIGN="MIDDLE" BORDER="0"
- SRC="img4.png"
- ALT="$\le16$">
-entries) called the Load Store Alias Predictor (LSAP). This structure
-is indexed by a portion of the address of the load instruction that
-aliased. This allows the load unit to avoid issuing any load uop that
-matches any address in the LSAP if any prior store addresses are still
-unresolved; if this is the case, a dependency is created on the first
-unresolved store such that the load is replayed (and the load and
-store queues are again scanned) once that store resolves. Similar
-methods of aliasing prediction are used by the Pentium 4 (Prescott
-core only) and Alpha 21264.
-
-<P>
-
-<H2><A NAME="SECTION04722000000000000000">
-Store Queue Search (Merge Check)</A>
-</H2>
-
-<P>
-At this point the store queue is searched for prior stores to the
-same 8-byte block as described above in Section <A HREF="#sec:StoreMerging">12.1</A>;
-if the store depends on a prior store, the scheduler structures are
-updated to add an additional dependency (in <TT><FONT SIZE="-1">operands[RS]</FONT></TT>)
-on this prior store before the store is replayed in accordance with
-Section <A HREF="node13.html#sec:Scheduling">9.3</A> to wait for the prior store to complete.
-If no prior store is found, or the prior store is ready, the current
-store is marked as a second phase store by setting the <TT><FONT SIZE="-1">load_store_second_phase</FONT></TT>
-flag in its ROB entry. Finally, the store is replayed in accordance
-with Section <A HREF="node13.html#sec:Scheduling">9.3</A>.
-
-<P>
-In the second phase of store uop scheduling, the store uop is only
-re-issued when all four operands (<TT><FONT SIZE="-1">ra</FONT></TT> + <TT><FONT SIZE="-1">rb</FONT></TT>
-address, <TT><FONT SIZE="-1">rc</FONT></TT> data and <TT><FONT SIZE="-1">rs</FONT></TT> source store
-queue entry) are valid. The second phase repeats the scan of the load
-and store queues described above to catch any loads and stores that
-may have issued between the first and second phase issues; the store
-is replayed a third time if necessary. Otherwise, the <TT><FONT SIZE="-1">rc</FONT></TT>
-operand data is merged with the data from the prior store (if any)
-store queue entry, and the combined data and bytemask is written into
-the current store's store queue entry. Finally, the entry's <TT><FONT SIZE="-1">dataready</FONT></TT>
-bit is set to make the entry available for forwarding to other waiting
-loads and stores.
-
-<P>
-The first and second phases may be combined into a single issue without
-replay if both the address and data operands of the store are all
-ready at the same time and the prior store (if any) the current store
-inherits from has already successfully issued.
+As mentioned in Section <A HREF="node12.html#sec:Issue">9.4</A>, for simulation purposes
+only, each uop puts its result directly into its assigned physical
+register at the time of issue, even though the data technically does
+not appear there until writeback. This is done to simplify the simulator
+implementation; it is assumed that any data ``read'' from physical
+registers before writeback is in fact being read from the bypass network
+instead. Therefore, no actual data movement occurs in the <TT><FONT SIZE="-1">writeback()</FONT></TT>
+function; its sole purpose is to place the uop's physical register
+into the written state (via the <TT><FONT SIZE="-1">PhysicalRegister::writeback()</FONT></TT>
+method) and to move the ROB into its terminal state, <I>ready-to-commit</I>.
 
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html573"
+<A NAME="tex2html580"
   HREF="node17.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html569"
-  HREF="node9.html">
+<A NAME="tex2html576"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html563"
+<A NAME="tex2html570"
   HREF="node15.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html571"
+<A NAME="tex2html578"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html574"
-  HREF="node17.html">Forwarding, Wakeup and Writeback</A>
-<B> Up:</B> <A NAME="tex2html570"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html564"
-  HREF="node15.html">Load Issue</A>
- &nbsp; <B>  <A NAME="tex2html572"
+<B> Next:</B> <A NAME="tex2html581"
+  HREF="node17.html">Commitment</A>
+<B> Up:</B> <A NAME="tex2html577"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html571"
+  HREF="node15.html">Stores</A>
+ &nbsp; <B>  <A NAME="tex2html579"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

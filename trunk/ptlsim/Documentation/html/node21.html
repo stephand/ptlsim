@@ -7,8 +7,8 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
   Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
 <HTML>
 <HEAD>
-<TITLE>Appendices</TITLE>
-<META NAME="description" CONTENT="Appendices">
+<TITLE>PTLsim uop Reference</TITLE>
+<META NAME="description" CONTENT="PTLsim uop Reference">
 <META NAME="keywords" CONTENT="PTLsimManual">
 <META NAME="resource-type" CONTENT="document">
 <META NAME="distribution" CONTENT="global">
@@ -19,66 +19,2258 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <LINK REL="STYLESHEET" HREF="PTLsimManual.css">
 
-<LINK REL="previous" HREF="node9.html">
-<LINK REL="up" HREF="PTLsimManual.html">
+<LINK REL="next" HREF="node22.html">
+<LINK REL="previous" HREF="node20.html">
+<LINK REL="up" HREF="node20.html">
 <LINK REL="next" HREF="node22.html">
 </HEAD>
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html650"
+<A NAME="tex2html659"
   HREF="node22.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html646"
-  HREF="PTLsimManual.html">
+<A NAME="tex2html655"
+  HREF="node20.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html642"
+<A NAME="tex2html649"
   HREF="node20.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html648"
+<A NAME="tex2html657"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html651"
-  HREF="node22.html">PTLsim uop Reference</A>
-<B> Up:</B> <A NAME="tex2html647"
-  HREF="PTLsimManual.html">PTLsimManual</A>
-<B> Previous:</B> <A NAME="tex2html643"
-  HREF="node20.html">Branch Prediction</A>
- &nbsp; <B>  <A NAME="tex2html649"
+<B> Next:</B> <A NAME="tex2html660"
+  HREF="node22.html">Performance Counters</A>
+<B> Up:</B> <A NAME="tex2html656"
+  HREF="node20.html">Appendices</A>
+<B> Previous:</B> <A NAME="tex2html650"
+  HREF="node20.html">Appendices</A>
+ &nbsp; <B>  <A NAME="tex2html658"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
 <!--End of Navigation Panel-->
 
-<H1><A NAME="SECTION05000000000000000000"></A><A NAME="part:Appendices"></A>
+<H1><A NAME="SECTION04100000000000000000"></A><A NAME="sec:UopReference"></A>
 <BR>
-Appendices
+PTLsim uop Reference
 </H1>
 
 <P>
-<BR><HR>
-<!--Table of Child-Links-->
-<A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
+The following sections document the semantics and encoding of each
+micro-operation (uop) supported by the PTLsim processor core. The
+<TT><FONT SIZE="-1">opinfo[]</FONT></TT> table in <TT><FONT SIZE="-1">ptlhwdef.cpp</FONT></TT>
+and constants in <TT><FONT SIZE="-1">ptlhwdef.h</FONT></TT> give actual numerical
+values for the opcodes and other fields described below.
+
+<P>
+
+<TT><B><FONT SIZE="+1">&nbsp;</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Merging Rules</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">op</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Merging Rules:</B></I>
+
+<P>
+<I>The x86 compatible ALUs implement operations on 1, 2, 4 or
+8 byte quantities. Unless otherwise indicated, all operations take
+a 2-bit size shift field (</I><TT><FONT SIZE="-1">sz</FONT></TT><I>) used to determine
+the effective size in bytes of the operation as follows:</I>
+
+<P>
 
 <UL>
-<LI><A NAME="tex2html652"
-  HREF="node22.html">PTLsim uop Reference</A>
-<LI><A NAME="tex2html653"
-  HREF="node23.html">Performance Counters</A>
+<LI><I><B>sz = 0:</B></I> <I>Low byte of</I> <I><I>rd</I></I>
+<I>is set to the 8-bit result; high 7 bytes of</I> <I><I>rd</I></I>
+<I>are set to corresponding bytes of</I> <I><I>ra</I></I><I>.</I>
+</LI>
+<LI><I><B>sz = 1:</B></I> <I>Low two bytes of</I> <I><I>rd</I></I>
+<I>is set to the 16-bit result; high 6 bytes of</I> <I><I>rd</I></I>
+<I>are set to corresponding bytes of</I> <I><I>ra</I></I><I>.</I>
+</LI>
+<LI><I><B>sz = 2:</B></I> <I>Low four bytes of</I> <I><I>rd</I></I>
+<I>is set to the 32-bit result; high 4 bytes of</I> <I><I>rd</I></I>
+<I>are cleared to zero in accordance with x86-64 zero extension
+semantics. The</I> <I><I>ra</I></I> <I>operand is unused and should
+be</I> <TT><FONT SIZE="-1">REG_zero</FONT></TT><I>.</I>
+</LI>
+<LI><I><B>sz = 3:</B></I> <I>All 8 bytes of</I> <I><I>rd</I></I>
+<I>are set to the 64-bit result.</I> <I><I>ra</I></I> <I>is
+unused and should be</I> <TT><FONT SIZE="-1">REG_zero</FONT></TT><I>.</I>
+</LI>
+</UL>
+<I>Flags are calculated based on the</I> <I><I>sz</I></I><I>-byte
+value produced by the ALU, not the final 64-bit result in</I> <I><I>rd</I></I><I>.</I>
+
+<P>
+
+<P><P>
+<BR>
+
+<I><FONT SIZE="+2">Other Pseudo-Operators</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+
+<P>
+<BR>
+
+<I>The descriptions in this reference use various pseudo-operators
+to describe the semantics of each uop. These operators are described
+below.</I>
+
+<P>
+<I><B>EvalFlags(</B></I><I><B><I>ra</I></B></I><I><B>)</B></I>
+
+<P>
+<I>The</I> <I><I>EvalFlags</I></I> <I>pseudo-operator evaluates
+the ZAPS, CF, OF flags attached to the source operand</I> <I><I>ra</I></I>
+<I>in accordance with the type of condition code evaluation specified
+by the uop. The operator returns 1 if the evaluation is true; otherwise
+0 is returned.</I>
+
+<P>
+<I><B>SignExt(</B></I><I><B><I>ra</I></B></I><I><B>,
+N)</B></I>
+
+<P>
+<I>The</I> <I><I>SignExt</I></I> <I>operator sign extends
+the ra operand by the number of bits specified by N. Specifically,
+bit</I> <I><I>ra</I></I><I>[N] is copied to all high order
+bits from bit 63 down to bit</I> <I><I>N</I></I><I>. If N is not
+specified, it is assumed to mean the number of bits in the effective
+size of the uop's result (as described under Merging Rules).</I>
+
+<P>
+<I><B>MergeWithSFR(mem, sfr)</B></I>
+
+<P>
+<I>The</I> <I><I>MergeWithSFR</I></I> <I>pseudo-operator
+is described in the reference page for load uops.</I>
+
+<P>
+<I><B>MergeAlign(mem, sfr)</B></I>
+
+<P>
+<I>The</I> <I><I>MergeAlign</I></I> <I>pseudo-operator is
+described in the reference page for load uops.</I>
+
+<P>
+
+<TT><B><FONT SIZE="+1">mov and or xor andnot ornot nand nor eqv</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Logical Operations</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="CENTER"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">mov</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
 <UL>
-<LI><A NAME="tex2html654"
-  HREF="node23.html#SECTION05210000000000000000">General</A>
-<LI><A NAME="tex2html655"
-  HREF="node23.html#SECTION05220000000000000000">Out of Order Core</A>
-<LI><A NAME="tex2html656"
-  HREF="node23.html#SECTION05230000000000000000">Cache Subsystem</A>
-</UL></UL>
-<!--End of Table of Child-Links-->
-<BR><HR>
+<LI><I>All operations merge the ALU result with</I> <I><I>ra</I></I>
+<I>and generate flags in accordance with the standard x86 merging
+rules described previously.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">add sub addadd addsub subadd subsub addm subm
+addc subc</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Add and Subtract</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">add</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>All operations merge the ALU result with</I> <I><I>ra</I></I>
+<I>and generate flags in accordance with the standard x86 merging
+rules described previously.</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">adda</FONT></TT><I>,</I> <TT><FONT SIZE="-1">adds</FONT></TT><I>,</I>
+<TT><FONT SIZE="-1">suba</FONT></TT><I>,</I> <TT><FONT SIZE="-1">subs</FONT></TT> <I>uops are
+useful for small shifts and x86 three-operand</I> <TT><FONT SIZE="-1">LEA</FONT></TT><I>-style
+address generation.</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">addc</FONT></TT> <I>and</I> <TT><FONT SIZE="-1">subc</FONT></TT>
+<I>uops use only the carry flag field of their rc operand; the
+value is unused.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">sel</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Conditional Select</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">sel.</B></FONT><B><I><FONT SIZE="-1">cc</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I><B><I>cc</I></B></I> <I>is any valid condition code flag
+evaluation</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">sel</FONT></TT> <I>uop merges the selected operand
+with</I> <I><I>rb</I></I> <I>in accordance with the standard x86
+merging rules described previously (except that</I> <TT><FONT SIZE="-1">sel</FONT></TT>
+<I>uses</I> <I><I>rb</I></I> <I>as the merge target instead
+of</I> <I><I>ra</I></I><I>)</I>
+</LI>
+<LI><I>The 64-bit result and all flags are treated as a single value
+for selection purposes, i.e. the flags attached to the selected input
+are passed to the output</I>
+</LI>
+<LI><I>If one of the (rb, rc) operands is not valid (has</I> <TT><FONT SIZE="-1">FLAG_INV</FONT></TT>
+<I>set) but the selected operand is valid, the result is valid.
+This is an exception to the invalid bit propagation rule only when
+the selected input is valid. If the</I> <I><I>ra</I></I> <I>operand
+is invalid, the result is always invalid.</I>
+</LI>
+<LI><I>If any of the inputs are waiting (</I><TT><FONT SIZE="-1">FLAG_WAIT</FONT></TT>
+<I>is set), the uop does not issue, even if the selected input
+was ready. This is a pipeline simplification.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">set</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Conditional Set</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">set.</B></FONT><B><I><FONT SIZE="-1">cc</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I><B><I>cc</I></B></I> <I>is any valid condition code flag
+evaluation</I>
+</LI>
+<LI><I>The value 0 or 1 is zero extended to the operation size and
+merged with</I> <I><I>rb</I></I> <I>in accordance with the standard
+x86 merging rules described previously (except that</I> <TT><FONT SIZE="-1">set</FONT></TT>
+<I>uses</I> <I><I>rb</I></I> <I>as the merge target instead
+of</I> <I><I>ra</I></I><I>)</I>
+</LI>
+<LI><I>Flags attached to</I> <I><I>ra</I></I> <I>(condition code)
+are passed through to the output</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">set.sub set.and</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Conditional Compare and Set </FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">set.sub.</B></FONT><B><I><FONT SIZE="-1">cc</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">set.sub</FONT></TT> <I>and</I> <TT><FONT SIZE="-1">set.and</FONT></TT>
+<I>uops take the place of a</I> <TT><FONT SIZE="-1">sub</FONT></TT> <I>or</I>
+<TT><FONT SIZE="-1">and</FONT></TT> <I>uop immediately consumed by a</I> <TT><FONT SIZE="-1">set</FONT></TT>
+<I>uop; this is intended to shorten the critical path if uop
+merging is performed by the processor</I>
+</LI>
+<LI><I><B><I>cc</I></B></I> <I>is any valid condition code flag
+evaluation</I>
+</LI>
+<LI><I>The value 0 or 1 is zero extended to the operation size and
+then merged with</I> <I><I>rc</I></I> <I>in accordance with the
+standard x86 merging rules described previously (except that</I> <TT><FONT SIZE="-1">set.sub</FONT></TT>
+<I>and</I> <TT><FONT SIZE="-1">set.and</FONT></TT> <I>use</I> <I><I>rc</I></I>
+<I>as the merge target instead of</I> <I><I>ra</I></I><I>)</I>
+</LI>
+<LI><I>Flags generated as the result of the comparison are passed
+through with the result</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">br</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Conditional Branch</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">br</B></FONT><B><I><FONT SIZE="-1">.cc</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I><B><I>cc</I></B></I> <I>is any valid condition code flag
+evaluation</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">rip</FONT></TT> <I>(user-visible instruction
+pointer register) is reset to one of two immediates. If the flags
+evaluation is true, the</I> <I><I>riptaken</I></I> <I>immediate
+is selected; otherwise the</I> <I><I>ripseq</I></I> <I>immediate
+is selected.</I>
+</LI>
+<LI><I>If the flag evaluation is false (i.e., ripseq is selected),
+the</I> <TT><FONT SIZE="-1">BranchMispredict</FONT></TT> <I>internal exception is
+raised. The processor should annul all uops after the branch and restart
+fetching at the RIP specified by the result (in this case,</I> <I><I>ripseq</I></I><I>).</I>
+</LI>
+<LI><I>Branches are always assumed to be taken. If the branch is
+predicted as not taken (i.e. future uops come from the next sequential
+RIP after the branch), it is the responsibility of the decoder or
+frontend to swap the</I> <I><I>riptaken</I></I> <I>and</I> <I><I>ripseq</I></I>
+<I>immediates and invert the condition of the branch.</I>
+</LI>
+<LI><I>The destination register should always be</I> <TT><FONT SIZE="-1">REG_rip</FONT></TT><I>;
+otherwise this uop is undefined.</I>
+</LI>
+<LI><I>If the target RIP falls within an unmapped page, not present
+page or a marked as no-execute (NX), the</I> <TT><FONT SIZE="-1">PageFaultOnExec</FONT></TT>
+<I>exception is taken.</I>
+</LI>
+<LI><I>No flags are generated by this uop</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">br.sub br.and</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Compare and Conditional Branch</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">br</B></FONT><B><I><FONT SIZE="-1">.cc</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">br.sub</FONT></TT> <I>and</I> <TT><FONT SIZE="-1">br.and</FONT></TT>
+<I>uops take the place of a</I> <TT><FONT SIZE="-1">sub</FONT></TT> <I>or</I>
+<TT><FONT SIZE="-1">and</FONT></TT> <I>uop immediately consumed by a</I> <TT><FONT SIZE="-1">br</FONT></TT>
+<I>uop; this is intended to shorten the critical path if uop
+merging is performed by the processor</I>
+</LI>
+<LI><I><B><I>cc</I></B></I> <I>is any valid condition code flag
+evaluation</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">rip</FONT></TT> <I>(user-visible instruction
+pointer register) is reset to one of two immediates. If the flags
+evaluation is true, the</I> <I><I>riptaken</I></I> <I>immediate
+is selected; otherwise the</I> <I><I>ripseq</I></I> <I>immediate
+is selected</I>
+</LI>
+<LI><I>If the flag evaluation is false (i.e., ripseq is selected),
+the</I> <TT><FONT SIZE="-1">BranchMispredict</FONT></TT> <I>internal exception is
+raised. The processor should annul all uops after the branch and restart
+fetching at the RIP specified by the result (in this case,</I> <I><I>ripseq</I></I><I>)</I>
+</LI>
+<LI><I>Branches are always assumed to be taken. If the branch is
+predicted as not taken (i.e. future uops come from the next sequential
+RIP after the branch), it is the responsibility of the decoder or
+frontend to swap the</I> <I><I>riptaken</I></I> <I>and</I> <I><I>ripseq</I></I>
+<I>immediates and invert the condition of the branch</I>
+</LI>
+<LI><I>The destination register should always be</I> <TT><FONT SIZE="-1">REG_rip</FONT></TT><I>;
+otherwise this uop is undefined</I>
+</LI>
+<LI><I>If the target RIP falls within an unmapped page, not present
+page or a marked as no-execute (NX), the</I> <TT><FONT SIZE="-1">PageFaultOnExec</FONT></TT>
+<I>exception is taken.</I>
+</LI>
+<LI><I>Flags generated as the result of the comparison are passed
+through with the result</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">jmp</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Indirect Jump</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">jmp</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">rip</FONT></TT> <I>(user-visible instruction
+pointer register) is reset to the target address specified by</I> <I><I>ra</I></I>
+</LI>
+<LI><I>If the</I> <I><I>ra</I></I> <I>operand does not match
+the</I> <I><I>riptaken</I></I> <I>immediate, the</I> <TT><FONT SIZE="-1">BranchMispredict</FONT></TT>
+<I>internal exception is raised. The processor should annul all
+uops after the branch and restart fetching at the RIP specified by
+the result (in this case,</I> <I><I>ra</I></I><I>)</I>
+</LI>
+<LI><I>Indirect jumps are always assumed to match the predicted target
+in</I> <I><I>riptaken</I></I><I>. If some other target is predicted,
+it is the responsibility of the decoder or frontend to set the</I> <I><I>riptaken</I></I>
+<I>immediate to that predicted target</I>
+</LI>
+<LI><I>The destination register should always be</I> <TT><FONT SIZE="-1">REG_rip</FONT></TT><I>;
+otherwise this uop is undefined</I>
+</LI>
+<LI><I>If the target RIP falls within an unmapped page, not present
+page or a marked as no-execute (NX), the</I> <TT><FONT SIZE="-1">PageFaultOnExec</FONT></TT>
+<I>exception is taken.</I>
+</LI>
+<LI><I>No flags are generated by this uop</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">jmpp</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Indirect Jump Within Microcode</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">jmpp</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">jmpp</FONT></TT> <I>uop redirects uop fetching
+into microcode not accessible as x86 instructions. The target address
+(inside PTLsim, not x86 space) is specified by</I> <I><I>ra</I></I>
+</LI>
+<LI><I>If the</I> <I><I>ra</I></I> <I>operand does not match
+the</I> <I><I>riptaken</I></I> <I>immediate, the</I> <TT><FONT SIZE="-1">BranchMispredict</FONT></TT>
+<I>internal exception is raised. The processor should annul all
+uops after the branch and restart fetching at the RIP specified by
+the result (in this case,</I> <I><I>ra</I></I><I>)</I>
+</LI>
+<LI><I>Indirect jumps are always assumed to match the predicted target
+in</I> <I><I>riptaken</I></I><I>. If some other target is predicted,
+it is the responsibility of the decoder or frontend to set the</I> <I><I>riptaken</I></I>
+<I>immediate to that predicted target</I>
+</LI>
+<LI><I>The destination register should always be</I> <TT><FONT SIZE="-1">REG_rip</FONT></TT><I>;
+otherwise this uop is undefined</I>
+</LI>
+<LI><I>The user visible rip register is not updated after this uop
+issues; otherwise it would point into PTLsim space not accessible
+to x86 code. Updating is resumed after a normal</I> <TT><FONT SIZE="-1">jmp</FONT></TT>
+<I>issues to return to user code. It is the responsibility of
+the decoder to move the user address to return to into some temporary
+register (traditionally</I> <TT><FONT SIZE="-1">REG_sr2</FONT></TT> <I>but this
+is not required).</I>
+</LI>
+<LI><I>No flags are generated by this uop</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">bru</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Unconditional Branch</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">bru</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">rip</FONT></TT> <I>(user-visible instruction
+pointer register) is reset to the specified immediate. The processor
+may redirect fetching from the new RIP</I>
+</LI>
+<LI><I>No exceptions are possible with unconditional branches</I>
+</LI>
+<LI><I>If the target RIP falls within an unmapped page, not present
+page or a marked as no-execute (NX), the</I> <TT><FONT SIZE="-1">PageFaultOnExec</FONT></TT>
+<I>exception is taken.</I>
+</LI>
+<LI><I>No flags are generated by this uop</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">brp</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Unconditional Branch Within Microcode</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">bru</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">brp</FONT></TT> <I>uop redirects uop fetching
+into microcode not accessible as x86 instructions. The target address
+(inside PTLsim, not x86 space) is specified by the</I> <I><I>riptaken</I></I>
+<I>immediate</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">rip</FONT></TT> <I>(user-visible instruction
+pointer register) is reset to the specified</I> <I><I>riptaken</I></I>
+<I>immediate. The processor may redirect fetching from the new
+RIP</I>
+</LI>
+<LI><I>No exceptions are possible with unconditional branches</I>
+</LI>
+<LI><I>The user visible rip register is not updated after this uop
+issues; otherwise it would point into PTLsim space not accessible
+to x86 code. Updating is resumed after a normal</I> <TT><FONT SIZE="-1">jmp</FONT></TT>
+<I>uop issues to return to user code. It is the responsibility
+of the decoder to move the user address to return to into some temporary
+register (traditionally</I> <TT><FONT SIZE="-1">REG_sr2</FONT></TT> <I>but this
+is not required).</I>
+</LI>
+<LI><I>No flags are generated by this uop</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">chk</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Check Speculation</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">chk</B></FONT><B><I><FONT SIZE="-1">.cc</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">chk</FONT></TT> <I>uop verifies</I> <I><I>certain</I></I>
+<I>properties about ra. If this verification check passes, no
+action is taken. If the check fails,</I> <TT><FONT SIZE="-1">chk</FONT></TT> <I>signals
+an exception of the user specified type in the</I> <I><I>rc</I></I>
+<I>immediate. The result of the</I> <TT><FONT SIZE="-1">chk</FONT></TT> <I>uop
+in this case is the user specified RIP to recover at after the check
+failure is handled in microcode. This recovery RIP is saved in the</I>
+<TT><FONT SIZE="-1">recoveryrip</FONT></TT> <I>internal register.</I>
+</LI>
+<LI><I>This mechanism is intended to allow simple inlined uop sequences
+to branch into microcode if certain conditions fail, since normally
+inlined uop sequences cannot contain embedded branches. One example
+use is in the</I> <TT><FONT SIZE="-1">REP</FONT></TT> <I>series of instructions
+to ensure that the count is not zero on entry (a special corner case).</I>
+</LI>
+<LI><I>Unlike most conditional uops, the</I> <TT><FONT SIZE="-1">chk</FONT></TT> <I>uop
+directly checks the numerical value of</I> <I><I>ra</I></I> <I>against
+zero, and ignores any attached flags. Therefore, the</I> <I><B><I>cc</I></B></I>
+<I>condition code flag evaluation type is restricted to the subset
+(e, ne, be, nbe, l, nl, le, nle).</I>
+</LI>
+<LI><I>No flags are generated by this uop</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">ld ld.lo ld.hi ldx ldx.lo ldx.hi</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Load</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">ld</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I><I>The PTLsim load unit model is described in substantial
+detail in Section <A HREF="node14.html#sec:IssuingLoads">11.1</A>; this section only gives
+an overview of the load uop semantics.</I></I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">ld</FONT></TT> <I>family of uops loads values
+from the virtual address specified by the sum</I> <I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>. The</I> <TT><FONT SIZE="-1">ld</FONT></TT> <I>form
+zero extends the loaded value, while the</I> <TT><FONT SIZE="-1">ldx</FONT></TT> <I>form
+sign extends the loaded value to 64 bits.</I>
+</LI>
+<LI><I>All values are zero or sign extended to 64 bits; no subword
+merging takes place as with ALU uops. The decoder is responsible for
+following the load with an explicit</I> <TT><FONT SIZE="-1">mov</FONT></TT> <I>uop
+to merge 8-bit and 16-bit loads with their old destination register.</I>
+</LI>
+<LI><I>The</I> <I><I>sfra</I></I> <I>operand specifies the store
+forwarding register (a.k.a. store buffer) to merge with data from
+the cache to form the final result. The inherited SFR may be determined
+dynamically by querying a store queue or can be predicted statically.</I>
+</LI>
+<LI><I>If the load misses the cache, the</I> <TT><FONT SIZE="-1">FLAG_WAIT</FONT></TT>
+<I>flag of the result is set.</I>
+</LI>
+<LI><I>Load uops do not generate any other condition code flags</I>
+</LI>
+</UL>
+<I><B>Unaligned Load Support:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The processor supports unaligned loads via a pair of</I> <TT><FONT SIZE="-1">ld.lo</FONT></TT>
+<I>and</I> <TT><FONT SIZE="-1">ld.hi</FONT></TT> <I>uops; an overview can be
+found in Section <A HREF="node7.html#sub:UnalignedLoadsAndStores">5.7</A>. The alignment
+type of the load is stored in the uop's cond field (0 =</I> <TT><FONT SIZE="-1">ld</FONT></TT><I>,
+1 =</I> <TT><FONT SIZE="-1">ld.lo</FONT></TT><I>, 2 =</I> <TT><FONT SIZE="-1">ld.hi</FONT></TT><I>).</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">ld.lo</FONT></TT> <I>uop rounds down its effective
+address <!-- MATH
+ $\left\lfloor ra+rb\right\rfloor$
+ -->
+<IMG
+ WIDTH="75" HEIGHT="36" ALIGN="MIDDLE" BORDER="0"
+ SRC="img7.png"
+ ALT="$\left\lfloor ra+rb\right\rfloor $"> to the nearest 64-bit
+boundary and performs the load. The</I> <TT><FONT SIZE="-1">ld.hi</FONT></TT> <I>uop
+rounds <!-- MATH
+ $\left\lceil ra+rb+8\right\rceil$
+ -->
+<IMG
+ WIDTH="105" HEIGHT="36" ALIGN="MIDDLE" BORDER="0"
+ SRC="img8.png"
+ ALT="$\left\lceil ra+rb+8\right\rceil $"> up to the next 64-bit boundary,
+performs a load at that address, then takes as its third rc operand
+the first (</I><TT><FONT SIZE="-1">ld.lo</FONT></TT><I>) load's result. The two
+loads are concatenated into a 128-bit word and the final unaligned
+data is extracted (and sign extended if the</I> <TT><FONT SIZE="-1">ldx</FONT></TT> <I>form
+was used). </I>
+</LI>
+<LI><I>Special corner case for when the actual user address (</I><I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>) did not actually require any
+bytes in the 8-byte range loaded by the</I> <TT><FONT SIZE="-1">ld.hi</FONT></TT> <I>uop
+(i.e. the load was contained entirely within the low 64-bit aligned
+chunk). Since it is perfectly legal to do an unaligned load to the
+very end of the page such that the next 64 bit chunk is not mapped
+to a valid page, the</I> <TT><FONT SIZE="-1">ld.hi</FONT></TT> <I>uop does not actually
+access memory; the entire result is extracted from the prior</I> <TT><FONT SIZE="-1">ld.lo</FONT></TT>
+<I>result in the</I> <I><I>rc</I></I> <I>operand.</I>
+</LI>
+</UL>
+<I><B>Exceptions:</B></I>
+
+<P>
+
+<UL>
+<LI><TT><FONT SIZE="-1">UnalignedAccess</FONT></TT> <I>if the address (</I><I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>) is not aligned to an integral
+multiple of the size in bytes of the load. Unaligned loads (</I><TT><FONT SIZE="-1">ld.lo</FONT></TT>
+<I>and</I> <TT><FONT SIZE="-1">ld.hi</FONT></TT><I>) do not generate this exception.
+Since x86 automatically corrects alignment problems, microcode must
+handle this exception as described in Section <A HREF="node7.html#sub:UnalignedLoadsAndStores">5.7</A>.</I>
+</LI>
+<LI><TT><FONT SIZE="-1">PageFaultOnRead</FONT></TT> <I>if the virtual address (</I><I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>) falls on a page not accessible
+to the caller in the current operating mode, or a page marked as not
+present.</I>
+</LI>
+<LI><I>Various other exceptions and replay conditions may exist depending
+on the specific processor core model.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">st</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Store</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">st</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I><I>The PTLsim store unit model is described in substantial
+detail in Section <A HREF="node15.html#sec:StoreMerging">12.1</A>; this section only gives
+an overview of the store uop semantics.</I></I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">st</FONT></TT> <I>family of uops prepares values
+to be stored to the virtual address specified by the sum</I> <I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>.</I>
+</LI>
+<LI><I>The</I> <I><I>sfra</I></I> <I>operand specifies the store
+forwarding register (a.k.a. store buffer) to merge the data to be
+stored (the</I> <I><I>rc</I></I> <I>operand) into. The inherited
+SFR may be determined dynamically by querying a store queue or can
+be predicted statically, as described in</I> <I><I><A HREF="node15.html#sec:StoreMerging">12.1</A>.</I></I>
+</LI>
+<LI><I>Store uops only generate the SFR for tracking purposes; the
+cache is only written when the SFR is committed.</I>
+</LI>
+<LI><I>The store uop may issue as soon as the</I> <I><I>ra</I></I>
+<I>and</I> <I><I>rb</I></I> <I>operands are ready, even if
+the</I> <I><I>rc</I></I> <I>and</I> <I><I>sfra</I></I> <I>operands
+are not known. The store must be replayed once these operands become
+known, in accordance with Section <A HREF="node15.html#sec:SplitPhaseStores">12.2</A>.</I>
+</LI>
+<LI><I>Store uops do not generate any other condition code flags</I>
+</LI>
+</UL>
+<I><B>Unaligned Store Support:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The processor supports unaligned stores via a pair of</I> <TT><FONT SIZE="-1">st.lo</FONT></TT>
+<I>and</I> <TT><FONT SIZE="-1">st.hi</FONT></TT> <I>uops; an overview can be
+found in Section <A HREF="node7.html#sub:UnalignedLoadsAndStores">5.7</A>. The alignment
+type of the load is stored in the uop's cond field (0 =</I> <TT><FONT SIZE="-1">st</FONT></TT><I>,
+1 =</I> <TT><FONT SIZE="-1">st.lo</FONT></TT><I>, 2 =</I> <TT><FONT SIZE="-1">st.hi</FONT></TT><I>).</I>
+</LI>
+<LI>Stores are handled in a similar manner, with <TT><FONT SIZE="-1">st.lo</FONT></TT>
+and <TT><FONT SIZE="-1">st.hi</FONT></TT> rounding down and up to store parts of the
+unaligned value in adjacent 64-bit blocks. 
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">st.lo</FONT></TT> <I>uop rounds down its effective
+address <!-- MATH
+ $\left\lfloor ra+rb\right\rfloor$
+ -->
+<IMG
+ WIDTH="75" HEIGHT="36" ALIGN="MIDDLE" BORDER="0"
+ SRC="img7.png"
+ ALT="$\left\lfloor ra+rb\right\rfloor $"> to the nearest 64-bit
+boundary and stores the appropriately aligned portion of the</I> <TT><FONT SIZE="-1">rc</FONT></TT>
+<I>operand that actually falls within that range of 8 bytes.
+The</I> <TT><FONT SIZE="-1">ld.hi</FONT></TT> <I>uop rounds <!-- MATH
+ $\left\lceil ra+rb+8\right\rceil$
+ -->
+<IMG
+ WIDTH="105" HEIGHT="36" ALIGN="MIDDLE" BORDER="0"
+ SRC="img8.png"
+ ALT="$\left\lceil ra+rb+8\right\rceil $">
+up to the next 64-bit boundary and similarly stores the appropriately
+aligned portion of the</I> <TT><FONT SIZE="-1">rc</FONT></TT> <I>operand that actually
+falls within that high range of 8 bytes.</I>
+</LI>
+<LI><I>Special corner case for when the actual user address (</I><I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>) did not actually touch any
+bytes in the 8-byte range normally written by the</I> <TT><FONT SIZE="-1">st.hi</FONT></TT>
+<I>uop (i.e. the store was contained entirely within the low
+64-bit aligned chunk). Since it is perfectly legal to do an unaligned
+store to the very end of the page such that the next 64 bit chunk
+is not mapped to a valid page, the</I> <TT><FONT SIZE="-1">st.hi</FONT></TT> <I>uop
+does not actually do anything in this case (the bytemask of the generated
+SFR is set to zero and no exceptions are checked).</I>
+</LI>
+</UL>
+<I><B>Exceptions:</B></I>
+
+<P>
+
+<UL>
+<LI><TT><FONT SIZE="-1">UnalignedAccess</FONT></TT> <I>if the address (</I><I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>) is not aligned to an integral
+multiple of the size in bytes of the store. Unaligned stores (</I><TT><FONT SIZE="-1">st.lo</FONT></TT>
+<I>and</I> <TT><FONT SIZE="-1">st.hi</FONT></TT><I>) do not generate this exception.
+Since x86 automatically corrects alignment problems, microcode must
+handle this exception as described in Section <A HREF="node7.html#sub:UnalignedLoadsAndStores">5.7</A>.</I>
+</LI>
+<LI><TT><FONT SIZE="-1">PageFaultOnWrite</FONT></TT> <I>if the virtual address (</I><I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>) falls on a write protected
+page, a page not accessible to the caller in the current operating
+mode, or a page marked as not present.</I>
+</LI>
+<LI><TT><FONT SIZE="-1">LoadStoreAliasing</FONT></TT> <I>if a prior load is found
+to alias the store (see Section <A HREF="node15.html#sub:AliasCheck">12.2.1</A>).</I>
+</LI>
+<LI><I>Various other exceptions and replay conditions may exist depending
+on the specific processor core model.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">ldp ldxp</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Load from Internal Space</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">ldp</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">ldp</FONT></TT> <I>and</I> <TT><FONT SIZE="-1">ldxp</FONT></TT>
+<I>uops load values from the internal PTLsim address space not
+accessible to x86 code. Typically this address space is mapped to
+internal machine state registers (MSRs) and microcode scratch space.
+The internal address to access is specified by the sum</I> <I><I>ra</I></I>
+<I>+</I> <I><I>rb</I></I><I>. The</I> <TT><FONT SIZE="-1">ldp</FONT></TT> <I>form
+zero extends the loaded value, while the</I> <TT><FONT SIZE="-1">ldxp</FONT></TT> <I>form
+sign extends the loaded value to 64 bits.</I>
+</LI>
+<LI><I>Load uops do not generate any other condition code flags</I>
+</LI>
+<LI><I>Internal loads may not be unaligned, and never stall or generate
+exceptions.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">stp</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Store to Internal Space</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">stp</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">stp</FONT></TT> <I>uop stores a value to the
+internal PTLsim address space not accessible to x86 code. Typically
+this address space is mapped to internal machine state registers (MSRs)
+and microcode scratch space. The internal address to store is specified
+by the sum</I> <I><I>ra</I></I> <I>+</I> <I><I>rb</I></I> <I>and
+the value to store is specified by</I> <I><I>rc</I></I><I>.</I>
+</LI>
+<LI><I>Store uops do not generate any other condition code flags</I>
+</LI>
+<LI><I>Internal stores may not be unaligned, and never stall or generate
+exceptions.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">shl shr sar rotl rotr rotcl rotcr</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Shifts and Rotates</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">shl</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The shift and rotate instructions have some of the most bizarre
+semantics in the entire x86 instruction set: they may or may not modify
+flags depending on the rotation count operand, which we may not even
+know until the instruction issues. This is introduced in Section <A HREF="node7.html#sec:ShiftRotateProblems">5.9</A>.</I>
+</LI>
+<LI><I>The specific rules are as follows:</I>
+
+<P>
+
+<UL>
+<LI><I>If the count <IMG
+ WIDTH="52" HEIGHT="15" ALIGN="BOTTOM" BORDER="0"
+ SRC="img9.png"
+ ALT="$rb=0$"> is zero, no flags are modified</I>
+</LI>
+<LI><I>If the count <IMG
+ WIDTH="52" HEIGHT="15" ALIGN="BOTTOM" BORDER="0"
+ SRC="img10.png"
+ ALT="$rb=1$">, both OF and CF are modified, but ZAPS
+is preserved</I>
+</LI>
+<LI><I>If the count <IMG
+ WIDTH="52" HEIGHT="34" ALIGN="MIDDLE" BORDER="0"
+ SRC="img11.png"
+ ALT="$rb&gt;1$">, only the CF is modified. (Technically
+the value in OF is undefined, but on K8 and P4, it retains the old
+value, so we try to be compatible).</I>
+</LI>
+<LI><I>Shifts also alter the ZAPS flags while rotates do not.</I>
+</LI>
+</UL>
+</LI>
+<LI><I>For constant counts (immediate</I> <I><I>rb</I></I> <I>values),
+the semantics are easy to determine in advance.</I>
+</LI>
+<LI><I>For variable counts (</I><I><I>rb</I></I> <I>comes from
+register), things are more complex. Since the shift needs to determine
+its output flags at runtime based on both the shift count and the
+input flags (CF, OF, ZAPS), we need to specify the latest versions
+in program order of all the existing flags. However, this would require
+three operands to the shift uop not even counting the value and count
+operands. Therefore, we use a</I> <TT><FONT SIZE="-1">collcc</FONT></TT> <I>(collect
+condition code flags, see Section <A HREF="node7.html#sub:FlagsManagement">5.6</A>) uop
+to get all the most up to date flags into one result, using three
+operands for ZAPS, CF, OF. This forms a zero word with all the correct
+flags attached, which is then forwarded as the</I> <I><I>rc</I></I>
+<I>operand to the shift. This may add additional scheduling constraints
+in the case that one of the operands to the shift itself sets the
+flags, but this is fairly rare. Conveniently, this also lets us directly
+implement the 65-bit</I> <TT><FONT SIZE="-1">rotcl</FONT></TT><I>/</I><TT><FONT SIZE="-1">rotcr</FONT></TT>
+<I>uops in hardware with little additional complexity.</I>
+</LI>
+<LI><I>All operations merge the ALU result with</I> <I><I>ra</I></I>
+<I>and generate flags in accordance with the standard x86 merging
+rules described previously.</I>
+</LI>
+<LI><I>The specific flags attached to the result depend on the input
+conditions described above. The user should always assume these uops
+always produce the latest version of each of the ZAPS, CF, OF flag
+sets.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">mask</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Masking, Insertion and Extraction</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">mask</B></FONT><B><I><FONT SIZE="-1">.x|z</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">mask</FONT></TT> <I>uop and its variants are
+used for generalized bit field extraction, insertion, sign and zero
+extension using the 18-bit control field in the immediate</I>
+</LI>
+<LI><I>These uops are used extensively within PTLsim microcode, but
+are also useful if the processor supports dynamically merging a chain
+of</I> <TT><FONT SIZE="-1">shr</FONT></TT><I>,</I> <TT><FONT SIZE="-1">and</FONT></TT><I>,</I> <TT><FONT SIZE="-1">or</FONT></TT>
+<I>uops.</I>
+</LI>
+<LI><I>The condition code flags (ZAPS, CF, OF) are the flags logically
+generated by the final AND operation.</I>
+</LI>
+</UL>
+
+<P>
+<BR>
+
+<I><B>Control Field Format</B></I>
+
+<P>
+<I>The 18-bit</I> <I><I>rc</I></I> <I>immediate has the following
+three 6-bit fields:</I>
+
+<P>
+<DIV ALIGN="CENTER"><TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="CENTER"><I><B>DS</B></I></TH>
+<TH ALIGN="CENTER"><I><B>MC</B></I></TH>
+<TH ALIGN="CENTER"><I><B>MS</B></I>
+<BR> 
+<I>12</I></TH>
+</TR>
+</TABLE>
+</DIV>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">mask</FONT></TT> <I>uop and its variants are
+used for generalized bit field extraction, insertion, sign and zero
+extension using the 18-bit control field in the immediate</I>
+</LI>
+</UL>
+
+<P>
+<BR>
+
+<I><B>Operation:</B></I>
+
+<P>
+
+<DL COMPACT>
+<DT>
+<DD><FONT SIZE="-1">M&nbsp;=&nbsp;1'[(ms+mc-1):ms]</FONT>
+<P>
+
+
+<P>
+<FONT SIZE="-1">T&nbsp;=&nbsp;(ra&nbsp;&amp;&nbsp;~M)&nbsp;|&nbsp;((rb&nbsp;&gt;&gt;&gt;&nbsp;ds)&nbsp;&amp;&nbsp;M)</FONT>
+<P>
+
+
+<P>
+<FONT SIZE="-1">if&nbsp;(Z)&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;#&nbsp;Zero&nbsp;extend</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;rd&nbsp;=&nbsp;ra&nbsp;<IMG
+ WIDTH="22" HEIGHT="17" ALIGN="BOTTOM" BORDER="0"
+ SRC="img6.png"
+ ALT="$\leftarrow$">&nbsp;(T&nbsp;&amp;&nbsp;1'[(ms+mc-1):0])</FONT>
+<P>
+
+
+<P>
+<FONT SIZE="-1">else&nbsp;if&nbsp;(X)&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;#&nbsp;Sign&nbsp;extend</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;rd&nbsp;=&nbsp;ra&nbsp;<IMG
+ WIDTH="22" HEIGHT="17" ALIGN="BOTTOM" BORDER="0"
+ SRC="img6.png"
+ ALT="$\leftarrow$">&nbsp;(T[ms+mc-1])&nbsp;?&nbsp;(T&nbsp;|&nbsp;1'[63:(ms+mc)])&nbsp;:&nbsp;(T&nbsp;&amp;&nbsp;1'[(ms+mc-1):0])</FONT>
+<P>
+
+
+<P>
+<FONT SIZE="-1">}&nbsp;else&nbsp;{</FONT>
+<P>
+
+
+<P>
+&nbsp;<FONT SIZE="-1">&nbsp;rd&nbsp;=&nbsp;ra&nbsp;<IMG
+ WIDTH="22" HEIGHT="17" ALIGN="BOTTOM" BORDER="0"
+ SRC="img6.png"
+ ALT="$\leftarrow$">&nbsp;T</FONT>
+<P>
+
+
+<P>
+<FONT SIZE="-1">}</FONT>
+<P>
+
+
+<P>
+</DD>
+</DL>
+<TT><B><FONT SIZE="+1">bswap</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Byte Swap</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">bswap</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">bswap</FONT></TT> <I>uop reverses the endianness
+of the</I> <I><I>ra</I></I> <I>operand. The uop's effective result
+size determines the range of bytes which are reversed.</I>
+</LI>
+<LI><I>This uop's semantics are identical to the x86</I> <TT><FONT SIZE="-1">bswap</FONT></TT>
+<I>instruction.</I>
+</LI>
+<LI><I>This uop does not generate any condition code flags.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">collcc</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Collect Condition Codes</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">collcc</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">collcc</FONT></TT> <I>uop collects the condition
+code flags from three potentially distinct source operands into a
+single output with the combined condition code flags in both its appended
+flags and data.</I>
+</LI>
+<LI><I>This uop is useful for collecting all flags before passing
+them as input to another uop which only supports one source of flags
+(for instance, the shift and rotate uops).</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">movccr movrcc</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Move Condition Code Flags Between Register Value and
+Flag Parts</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">movccr</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">movccr</FONT></TT> <I>uop takes the condition
+code flag bits attached to</I> <I><I>ra</I></I> <I>and copies
+them into the 64-bit register part of the result.</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">movrcc</FONT></TT> <I>uop takes the low bits
+of the</I> <I><I>ra</I></I> <I>operand and moves those bits into
+the condition code flag bits attached to the result.</I>
+</LI>
+<LI><I>The bits moved consist of the ZF, PF, SF, CF, OF flags</I>
+</LI>
+<LI><I>The WAIT and INV flags of the result are always cleared since
+the uop would not even issue if these were set in</I> <I><I>ra</I></I><I>.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">andcc orcc ornotcc xorcc</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Logical Operations on Condition Codes</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">andcc</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops are used to perform logical operations on the condition
+code flags attached to</I> <I><I>ra</I></I> <I>and</I> <I><I>rb</I></I><I>.</I>
+</LI>
+<LI><I>If the</I> <I><I>rb</I></I> <I>operand is an immediate,
+the immediate data is used instead of the flags normally attached
+to a register operand.</I>
+</LI>
+<LI><I>The 64-bit value of the output is always set to zero.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">mull mulh</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Integer Multiplication</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">mull</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops multiply</I> <I><I>ra</I></I> <I>and</I> <I><I>rb</I></I><I>,
+then retain only the low</I> <I><I>N</I></I> <I>bits or high</I>
+<I><I>N</I></I> <I>bits of the result (where N is the uop's
+effective result size in bits). This result is then merged into</I> <I><I>ra</I></I><I>.</I>
+</LI>
+<LI><I>The condition code flags generated by these uops correspond
+to the normal x86 semantics for integer multiplication (</I><TT><FONT SIZE="-1">imul</FONT></TT><I>);
+the flags are calculated relative to the effective result size.</I>
+</LI>
+<LI><I>The</I> <I><I>rb</I></I> <I>operand may be an immediate</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">bt bts btr btc</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Bit Testing and Manipulation</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">bt</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops test a given bit in</I> <I><I>ra</I></I> <I>and
+then atomically modify (set, reset or complement) that bit in the
+result.</I>
+</LI>
+<LI><I>The CF flag of the output is set to the original value in
+bit position</I> <I><I>rb</I></I> <I>of</I> <I><I>ra</I></I><I>.
+Other condition code flag bits in the output are undefined.</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">bt</FONT></TT> <I>(bit test) uop is special:
+it generates a value of -1 or +1 if the tested bit is 1 or 0, respectively.
+This is used in microcode for setting up an increment for the</I> <TT><FONT SIZE="-1">rep</FONT></TT>
+<I>x86 instructions.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">ctz clz</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Count Trailing or Leading Zeros</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">ctz</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops find the bit index of the first '1' bit in</I> <I><I>ra</I></I><I>,
+starting from the lowest bit 0 (for</I> <TT><FONT SIZE="-1">ctz</FONT></TT><I>)
+or the highest bit 63 (for</I> <TT><FONT SIZE="-1">clz</FONT></TT><I>).</I>
+</LI>
+<LI><I>The result is zero (technically, undefined) if ra is zero.</I>
+</LI>
+<LI><I>The ZF flag of the result is 1 if</I> <I><I>ra</I></I> <I>was
+zero, or 0 if</I> <I><I>ra</I></I> <I>was nonzero. Other condition
+code flags are undefined.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">ctpop</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Count Population of '1' Bits</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">ctpop</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">ctpop</FONT></TT> <I>uop counts the number of
+'1' bits in the</I> <I><I>ra</I></I> <I>operand.</I>
+</LI>
+<LI><I>The ZF flag of the result is 1 if</I> <I><I>ra</I></I> <I>was
+zero, or 0 if</I> <I><I>ra</I></I> <I>was nonzero. Other condition
+code flags are undefined.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">&nbsp;</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Floating Point Format and Merging</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+
+<P>
+<BR>
+
+<I>All floating point uops use the same encoding to specify the
+precision and vector format of the operands. The uop's</I> <I><I>size</I></I>
+<I>field is encoded as follows:</I>
+
+<P>
+
+<UL>
+<LI><TT><B><FONT SIZE="-1">00:</FONT></B></TT> <I>Single precision scalar floating
+point (</I><TT><I><FONT SIZE="-1">op</FONT></I><B><FONT SIZE="-1">fp</FONT></B></TT> <I>mnemonic).
+The operation is only performed on the low 32 bits (in IEEE single
+precision format) of the 64-bit inputs; the high 32 bits of the ra
+operand are copied to the high 32 bits of the output.</I>
+</LI>
+<LI><TT><B><FONT SIZE="-1">01:</FONT></B></TT> <I>Single precision vector floating
+point (</I><TT><I><FONT SIZE="-1">op</FONT></I><B><FONT SIZE="-1">fv</FONT></B></TT> <I>mnemonic).
+The operation is performed on both 32 bit halves (in IEEE single precision
+format) of the 64-bit inputs in parallel</I>
+</LI>
+<LI><TT><B><FONT SIZE="-1">1x:</FONT></B></TT> <I>Double precision scalar floating
+point (</I><TT><I><FONT SIZE="-1">op</FONT></I><B><FONT SIZE="-1">fd</FONT></B></TT> <I>mnemonic).
+The operation is performed on the full 64 bit inputs (in IEEE double
+precision format)</I>
+</LI>
+</UL>
+<I>Most floating point operations merge the result with the</I>
+<I><I>ra</I></I> <I>operand to prepare the destination. Since
+a full 64-bit result is generated with the vector and double formats,
+the</I> <I><I>ra</I></I> <I>operand is not needed and may be specified
+as zero to reduce dependencies.</I>
+
+<P>
+<I>Exceptions to this encoding are listed where appropriate.</I>
+
+<P>
+<I>Unless otherwise noted, all operations update the internal
+floating point status register (FPSR, equivalent to the MXCSR register
+in x86 code) by ORing in any exceptions that occur. If the uop is
+encoded to generate an actual exception on excepting conditions, the</I>
+<TT><FONT SIZE="-1">FLAG_INV</FONT></TT> <I>flag is attached to the output to
+cause an exception at commit time.</I>
+
+<P>
+<I>No condition code flags are generated by floating point uops
+unless otherwise noted.</I>
+
+<P>
+
+<TT><B><FONT SIZE="+1">addf subf mulf divf minf maxf</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Floating Point Arithmetic</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">addf</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops do arithmetic on floating point numbers in various
+formats as specified in the</I> <I><I>Floating Point Format and
+Merging</I></I> <I>page.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">maddf msubf</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Fused Multiply Add and Subtract</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">maddf</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>The</I> <TT><FONT SIZE="-1">maddf</FONT></TT> <I>and</I> <TT><FONT SIZE="-1">msubf</FONT></TT>
+<I>uops perform fused multiply and accumulate operations on three
+operands.</I>
+</LI>
+<LI><I>The full internal precision is preserved between the multiply
+and add operations; rounding only occurs at the end.</I>
+</LI>
+<LI><I>These uops are primarily used by microcode to calculate floating
+point division, square root and reciprocal.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">sqrtf rcpf rsqrtf</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Square Root, Reciprocal and Reciprocal Square Root</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">sqrtf</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops perform the specified unary operation on rb and
+merge the result into ra (for a single precision scalar mode only)</I>
+</LI>
+<LI><I>The</I> <TT><FONT SIZE="-1">rcpf</FONT></TT> <I>and</I> <TT><FONT SIZE="-1">rsqrtf</FONT></TT>
+<I>uops are approximates - they do not provide the full precision
+results. These approximations are in accordance with the standard
+x86 SSE/SSE2 semantics.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">cmpf</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Compare Floating Point</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">cmpf</B></FONT><B><I><FONT SIZE="-1">.type</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>This uop performs the specified comparison of</I> <I><I>ra</I></I>
+<I>and</I> <I><I>rb</I></I><I>. If the comparison is true,
+the result is set to all '1' bits; otherwise it is zero. The result
+is then merged into ra.</I>
+</LI>
+<LI><I>The</I> <I><I>cond</I></I> <I>field in the uop encoding
+holds the comparison type. The set of compare types matches the x86
+SSE/SSE2 CMPxx instructions.</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">cmpccf</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Compare Floating Point and Generate Condition Codes</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Operation</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">cmpccf</B></FONT><B><I><FONT SIZE="-1">.type</I></B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>This uop performs all comparisons of</I> <I><I>ra</I></I> <I>and</I>
+<I><I>rb</I></I> <I>and produces x86 condition code flags (ZF,
+PF, CF) to represent the result.</I>
+</LI>
+<LI><I>The semantics of the generated condition code flags exactly
+matches the x86 SSE/SSE2 instructions</I> <TT><FONT SIZE="-1">COMISS</FONT></TT><I>/</I><TT><FONT SIZE="-1">COMISD</FONT></TT><I>/</I><TT><FONT SIZE="-1">UCOMISS</FONT></TT><I>/</I><TT><FONT SIZE="-1">UCOMISD</FONT></TT><I>.</I>
+</LI>
+<LI><I>Unlike most encodings, the</I> <I><I>size</I></I> <I>field
+holds the comparison type of the two values as follows:</I>
+
+<P>
+
+<UL>
+<LI><TT><B><FONT SIZE="-1">00:</FONT></B></TT> <TT><FONT SIZE="-1">cmpccfp</FONT></TT><I>: single
+precision ordered compare (same semantics as x86 SSE</I> <TT><FONT SIZE="-1">COMISS</FONT></TT><I>)</I>
+</LI>
+<LI><TT><B><FONT SIZE="-1">01:</FONT></B></TT> <TT><FONT SIZE="-1">cmpccfp.u</FONT></TT><I>: single
+precision unordered compare (same semantics as x86 SSE</I> <TT><FONT SIZE="-1">UCOMISS</FONT></TT><I>)</I>
+</LI>
+<LI><TT><B><FONT SIZE="-1">10:</FONT></B></TT> <TT><FONT SIZE="-1">cmpccfd</FONT></TT><I>: double
+precision ordered compare (same semantics as x86 SSE2</I> <TT><FONT SIZE="-1">COMISD</FONT></TT><I>)</I>
+</LI>
+<LI><TT><B><FONT SIZE="-1">11:</FONT></B></TT> <TT><FONT SIZE="-1">cmpccfd.u</FONT></TT><I>: double
+precision ordered compare (same semantics as x86 SSE2</I> <TT><FONT SIZE="-1">UCOMISD</FONT></TT><I>)</I>
+</LI>
+</UL>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">cvtf.i2s.ins cvtf.i2s.p cvtf.i2d.lo cvtf.i2d.hi</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Convert 32-bit Integer to Floating Point</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Used By</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">cvtf.i2s.ins</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops convert 32-bit integers to single or double precision
+floating point</I>
+</LI>
+<LI><I>The semantics of these instructions are identical to the semantics
+of the x86 SSE/SSE2 instructions shown in the table</I>
+</LI>
+<LI><I>The uop</I> <I><I>size</I></I> <I>field is not used by
+these uops</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">cvtf.q2s.ins cvtf.q2d</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Convert 64-bit Integer to Floating Point</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Used By</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">cvtf.q2s.ins</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops convert 64-bit integers to single or double precision
+floating point</I>
+</LI>
+<LI><I>The semantics of these instructions are identical to the semantics
+of the x86 SSE/SSE2 instructions shown in the table</I>
+</LI>
+<LI><I>The uop</I> <I><I>size</I></I> <I>field is not used by
+these uops</I>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">cvtf.s2i cvt.s2q cvtf.s2i.p</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Convert Single Precision Floating Point to Integer</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Used By</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">cvtf.s2i</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops convert single precision floating point values
+to 32-bit or 64-bit integers</I>
+</LI>
+<LI><I>The semantics of these instructions are identical to the semantics
+of the x86 SSE/SSE2 instructions shown in the table</I>
+</LI>
+<LI><I>Unlike most encodings, the</I> <I><I>size</I></I> <I>field
+holds the rounding type of the result as follows:</I>
+
+<P>
+
+<UL>
+<LI><TT><B><FONT SIZE="-1">x0:</FONT></B></TT> <I>normal IEEE rounding (as determined
+by FPSR)</I>
+</LI>
+<LI><TT><B><FONT SIZE="-1">x1:</FONT></B></TT> <I>truncate to zero</I>
+</LI>
+</UL>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">cvtf.d2i cvtf.d2q cvtf.d2i.p</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Convert Double Precision Floating Point to Integer</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Used By</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">cvtf.d2i</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops convert double precision floating point values
+to 32-bit or 64-bit integers</I>
+</LI>
+<LI><I>The semantics of these instructions are identical to the semantics
+of the x86 SSE/SSE2 instructions shown in the table</I>
+</LI>
+<LI><I>Unlike most encodings, the</I> <I><I>size</I></I> <I>field
+holds the rounding type of the result as follows:</I>
+
+<P>
+
+<UL>
+<LI><TT><B><FONT SIZE="-1">x0:</FONT></B></TT> <I>normal IEEE rounding (as determined
+by FPSR)</I>
+</LI>
+<LI><TT><B><FONT SIZE="-1">x1:</FONT></B></TT> <I>truncate to zero</I>
+</LI>
+</UL>
+</LI>
+</UL>
+
+<TT><B><FONT SIZE="+1">cvtf.d2s.ins cvtf.d2s.p cvtf.s2d.lo cvtf.s2d.hi</FONT></B></TT>
+<BR><I><FONT SIZE="+2">Convert Between Double Precision and Single Precision
+Floating Point</FONT></I>
+<P>
+
+
+  <FONT SIZE="+2">
+<BR>
+<BR> </FONT><FONT SIZE="+2"><HR>width <BR>
+<BR></FONT>
+
+<P>
+<TABLE CELLPADDING=3 BORDER="1">
+<TR><TH ALIGN="LEFT"><I><B>Mnemonic</B></I></TH>
+<TH ALIGN="LEFT"><I><B>Syntax</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Operation</B></I></TH>
+<TH ALIGN="LEFT" VALIGN="TOP" WIDTH=0><I><B>Used By</B></I>
+<BR>
+<TT><B><FONT SIZE="-1">cvtf.d2s.ins</B></FONT></TT></TH>
+</TR>
+</TABLE>
+
+<P>
+
+<P>
+<BR>
+
+<I><B>Notes:</B></I>
+
+<P>
+
+<UL>
+<LI><I>These uops convert single precision floating point values
+to double precision floating point values</I>
+</LI>
+<LI><I>The semantics of these instructions are identical to the semantics
+of the x86 SSE/SSE2 instructions shown in the table</I>
+</LI>
+<LI><I>The uop</I> <I><I>size</I></I> <I>field is not used by
+these uops</I>
+</LI>
+</UL>
+
+<P>
+<HR>
+<!--Navigation Panel-->
+<A NAME="tex2html659"
+  HREF="node22.html">
+<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
+<A NAME="tex2html655"
+  HREF="node20.html">
+<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
+<A NAME="tex2html649"
+  HREF="node20.html">
+<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
+<A NAME="tex2html657"
+  HREF="node1.html">
+<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<BR>
+<B> Next:</B> <A NAME="tex2html660"
+  HREF="node22.html">Performance Counters</A>
+<B> Up:</B> <A NAME="tex2html656"
+  HREF="node20.html">Appendices</A>
+<B> Previous:</B> <A NAME="tex2html650"
+  HREF="node20.html">Appendices</A>
+ &nbsp; <B>  <A NAME="tex2html658"
+  HREF="node1.html">Contents</A></B> 
+<!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

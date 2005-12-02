@@ -7,8 +7,8 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
   Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
 <HTML>
 <HEAD>
-<TITLE>Forwarding, Wakeup and Writeback</TITLE>
-<META NAME="description" CONTENT="Forwarding, Wakeup and Writeback">
+<TITLE>Commitment</TITLE>
+<META NAME="description" CONTENT="Commitment">
 <META NAME="keywords" CONTENT="PTLsimManual">
 <META NAME="resource-type" CONTENT="document">
 <META NAME="distribution" CONTENT="global">
@@ -21,32 +21,32 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <LINK REL="next" HREF="node18.html">
 <LINK REL="previous" HREF="node16.html">
-<LINK REL="up" HREF="node9.html">
+<LINK REL="up" HREF="node8.html">
 <LINK REL="next" HREF="node18.html">
 </HEAD>
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html589"
+<A NAME="tex2html594"
   HREF="node18.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html585"
-  HREF="node9.html">
+<A NAME="tex2html590"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html579"
+<A NAME="tex2html584"
   HREF="node16.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html587"
+<A NAME="tex2html592"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html590"
-  HREF="node18.html">Commitment</A>
-<B> Up:</B> <A NAME="tex2html586"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html580"
-  HREF="node16.html">Stores</A>
- &nbsp; <B>  <A NAME="tex2html588"
+<B> Next:</B> <A NAME="tex2html595"
+  HREF="node18.html">Cache Hierarchy</A>
+<B> Up:</B> <A NAME="tex2html591"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html585"
+  HREF="node16.html">Forwarding, Wakeup and Writeback</A>
+ &nbsp; <B>  <A NAME="tex2html593"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -55,119 +55,333 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html591"
-  HREF="node17.html#SECTION04810000000000000000">Forwarding and the Clustered Bypass Network</A>
-<LI><A NAME="tex2html592"
-  HREF="node17.html#SECTION04820000000000000000">Writeback</A>
+<LI><A NAME="tex2html596"
+  HREF="node17.html#SECTION03910000000000000000">Introduction</A>
+<LI><A NAME="tex2html597"
+  HREF="node17.html#SECTION03920000000000000000">Atomicity of x86 instructions</A>
+<LI><A NAME="tex2html598"
+  HREF="node17.html#SECTION03930000000000000000">Commitment</A>
+<LI><A NAME="tex2html599"
+  HREF="node17.html#SECTION03940000000000000000">Physical Register
+Recycling Complications</A>
+<UL>
+<LI><A NAME="tex2html600"
+  HREF="node17.html#SECTION03941000000000000000">Problem Scenarios</A>
+<LI><A NAME="tex2html601"
+  HREF="node17.html#SECTION03942000000000000000">Reference Counting</A>
+<LI><A NAME="tex2html602"
+  HREF="node17.html#SECTION03943000000000000000">Hardware Implementation</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html603"
+  HREF="node17.html#SECTION03950000000000000000">Pipeline Flushes and Barriers</A>
 </UL>
 <!--End of Table of Child-Links-->
 <HR>
 
-<H1><A NAME="SECTION04800000000000000000">
-Forwarding, Wakeup and Writeback</A>
+<H1><A NAME="SECTION03900000000000000000"></A><A NAME="sec:CommitStage"></A>
+<BR>
+Commitment
 </H1>
 
 <P>
 
-<H1><A NAME="SECTION04810000000000000000">
-Forwarding and the Clustered Bypass Network</A>
+<H1><A NAME="SECTION03910000000000000000">
+Introduction</A>
 </H1>
 
 <P>
-Immediately after each uop is issued and the <TT><FONT SIZE="-1">ReorderBufferEntry::issue()</FONT></TT>
-method actually generates its result, the <TT><FONT SIZE="-1">cycles_left</FONT></TT>
-field of the ROB is set to the expected latency of the uop (e.g. between
-1 and 5 cycles). The uop is then moved to the <I>issued</I> state
-and placed on the <TT><FONT SIZE="-1">rob_issued_list</FONT></TT>. Every cycle,
-the <TT><FONT SIZE="-1">complete()</FONT></TT> method iterates through each ROB in
-issued state and decrements its <TT><FONT SIZE="-1">cycles_left</FONT></TT> field.
-If <TT><FONT SIZE="-1">cycles_left</FONT></TT> becomes zero, the corresponding uop
-has completed execution. The ROB is moved to the <I>completed</I>
-state (on <TT><FONT SIZE="-1">rob_completed_list</FONT></TT>) and its physical register
-or store queue entry is moved to the <TT><FONT SIZE="-1">ready</FONT></TT> state so
-newly dispatched uops do not try to wait for it.
-
-<P>
-The <TT><FONT SIZE="-1">transfer()</FONT></TT> function is also called every cycle.
-This function examines the list of ROBs in the <I>completed</I> state
-and is responsible for broadcasting the completed ROB's tag (ROB index)
-to the issue queues. Because of clustering (Section <A HREF="node13.html#sec:Clustering">9.1</A>),
-some issue queues will receive the broadcast later than others. Specifically,
-the ROB's <TT><FONT SIZE="-1">forward_cycle</FONT></TT> field determines which issue
-queues and remote clusters are visible <TT><FONT SIZE="-1">forward_cycle</FONT></TT>
-cycles after the uop completed. The <TT><FONT SIZE="-1">forward()</FONT></TT> method,
-called by <TT><FONT SIZE="-1">transfer()</FONT></TT> for each uop in the <I>completed</I>
-state, indexes into a lookup table <TT><FONT SIZE="-1">forward_at_cycle_lut[</FONT></TT><I>cluster</I><TT><FONT SIZE="-1">][</FONT></TT><I>forward_cycle</I><TT><FONT SIZE="-1">]</FONT></TT>
-to get a bitmap of which remote clusters are accessible <TT><FONT SIZE="-1">forward_cycle</FONT></TT>
-cycles after he uop completed, relative to the original cluster.the
-uop issued in. The <TT><FONT SIZE="-1">IssueQueue::broadcast()</FONT></TT> method
-(Section <A HREF="node13.html#sec:Scheduling">9.3</A>) is then called for each applicable
-cluster to wake up any operands of uops in that cluster waiting on
-the newly completed uop.
-
-<P>
-The <TT><FONT SIZE="-1">MAX_FORWARDING_LATENCY</FONT></TT> constant (in ooohwdef.h)
-specifies the maximum number of cycles between any two clusters. After
-the ROB has progressed through <TT><FONT SIZE="-1">MAX_FORWARDING_LATENCY</FONT></TT>
-cycles in the <I>completed</I> state, it is moved to the <TT><FONT SIZE="-1">ready-to-writeback</FONT></TT>
-state, effectively meaning the result has arrived at the physical
-register file and is eligible for writeback in the next cycle.
+The commit stage examines uops from the head of the ROB, blocks until
+all uops comprising a given x86 instruction are ready to commit, commits
+the results of those uops to the architectural state and finally frees
+the resources associated with each uop.
 
 <P>
 
-<H1><A NAME="SECTION04820000000000000000">
-Writeback</A>
+<H1><A NAME="SECTION03920000000000000000">
+Atomicity of x86 instructions</A>
 </H1>
 
 <P>
-Every cycle, the <TT><FONT SIZE="-1">writeback()</FONT></TT> function scans the list
-of ROBs in the <I>ready-to-writeback</I> state and selects at most
-<TT><FONT SIZE="-1">WRITEBACK_WIDTH</FONT></TT> results to write to the physical
-register file. The <TT><FONT SIZE="-1">forward()</FONT></TT> method is first called
-one final time to catch the corner case in which a dependent uop was
-dispatched while producer uop was waiting in the <I>ready-to-writeback</I>
-state.
+The x86 architecture specifies <I>atomic execution</I> for all distinct
+x86 instructions. This means that since each x86 instruction may be
+comprised of multiple uops; none of these uops may commit until <I>all</I>
+uops in the instruction are ready to commit. In PTLsim, this is accomplished
+by checking if the uop at the head of the ROB (next to commit) has
+its SOM (start of macro-op) bit set. If so, the ROB is scanned forwards
+from the SOM uop to the next uop in program order with its EOM (end
+of macro-op) bit set. If all uops in this range are ready to commit
+and exception-free, the SOM uop is allowed to commit, effectively
+unlocking the ROB head pointer until the next uop with a SOM bit set
+is encountered. However, any exception in any uop comprising the x86
+instruction at the head of the ROB causes the pipeline to be flushed
+and an exception to be taken. Similarly, external interrupts are only
+acknowledged at the boundary between x86 instructions (i.e. after
+the EOM uop of each instruction).
 
 <P>
-As mentioned in Section <A HREF="node13.html#sec:Issue">9.4</A>, for simulation purposes
-only, each uop puts its result directly into its assigned physical
-register at the time of issue, even though the data technically does
-not appear there until writeback. This is done to simplify the simulator
-implementation; it is assumed that any data ``read'' from physical
-registers before writeback is in fact being read from the bypass network
-instead. Therefore, no actual data movement occurs in the <TT><FONT SIZE="-1">writeback()</FONT></TT>
-function; its sole purpose is to place the uop's physical register
-into the written state (via the <TT><FONT SIZE="-1">PhysicalRegister::writeback()</FONT></TT>
-method) and to move the ROB into its terminal state, <I>ready-to-commit</I>.
+
+<H1><A NAME="SECTION03930000000000000000">
+Commitment</A>
+</H1>
+
+<P>
+As each uop commits, it may update several components of the architectural
+state. 
+
+<P>
+Integer ALU and floating point uops obviously update their destination
+architectural register (<I>rd</I>). In PTLsim, this is done by simply
+updating the committed register rename table (<TT><FONT SIZE="-1">commitrrt</FONT></TT>)
+rather than actually copying register values. However, the old physical
+register mapped to architectural register <I>rd</I> will normally
+become inaccessible after the Commit RRT mapping for <I>rd</I> is
+overwritten with the committing uop's physical register index. The
+old physical register previously mapped to <I>rd</I> can then be freed.
+Technically physical registers allocated to intermediate uops (such
+as those used to hold temporary values) can be immediately freed without
+updating any Commit RRT entries, but for consistency we do not do
+this.
+
+<P>
+In PTLsim, a physical register is freed by moving it to the <TT><FONT SIZE="-1">PHYSREG_FREE</FONT></TT>
+state. Unfortunately for various reasons related to long pipelines
+and the renaming of x86 flags, register reclamation is not so simple,
+but this will be discussed below in Section <A HREF="#sub:PhysicalRegisterRecyclingComplications">14.4</A>.
+
+<P>
+Some uops may also commit to a subset of the x86 flags, as specified
+in the uop encoding. For these uops, in theory no rename tables need
+updating, since the flags can be directly masked into the <TT><FONT SIZE="-1">REG_flags</FONT></TT>
+architectural pseudo-register. Should the pipeline be flushed, the
+rename table entries for the ZAPS, CF, OF flag sets will all be reset
+to point to the <TT><FONT SIZE="-1">REG_flags</FONT></TT> pseudo-register anyway.
+However, for the speculation recovery scheme described in Section
+<A HREF="node13.html#sec:SpeculationRecovery">10.2</A>, the <TT><FONT SIZE="-1">REG_zf</FONT></TT>, <TT><FONT SIZE="-1">REG_cf</FONT></TT>,
+and <TT><FONT SIZE="-1">REG_of</FONT></TT> commit RRT entries are updated as well
+to match the updates done to the speculative RRT.
+
+<P>
+Branches and jumps update the <TT><FONT SIZE="-1">REG_rip</FONT></TT> pseudo architectural
+register, while all other uops simply increment <TT><FONT SIZE="-1">REG_rip</FONT></TT>
+by the number of bytes in the x86 instruction being committed. The
+number of bytes (1-15) is stored in a 4-bit field of the first uop
+in each x86 instruction (i.e. the uop with its SOM bit set).
+
+<P>
+Stores commit to the architectural state by writing directly to the
+data cache. Remember that a series of stores into a given 64-bit chunk
+of memory are merged within the store queue to the store uop's corresponding
+STQ entry as the store uop issues, so the commit unit always writes
+64 bits to the cache at a time. The byte mask associated with the
+STQ entry of the store uop is used to only update the modified bytes
+in each chunk of memory in program order.
+
+<P>
+
+<H1><A NAME="SECTION03940000000000000000"></A><A NAME="sub:PhysicalRegisterRecyclingComplications"></A>
+<BR>
+Physical Register
+Recycling Complications
+</H1>
+
+<P>
+
+<H2><A NAME="SECTION03941000000000000000">
+Problem Scenarios</A>
+</H2>
+
+<P>
+In some processor designs, it is not always possible to immediately
+free the physical register mapped to a given architectural register
+when that old architectural register mapping is overwritten during
+commit as described above. Out of order x86 processors must maintain
+three separate rename table entries for the ZAPS, CF, OF flags in
+addition to the register rename table entry, any or all of which may
+be updated when uops rename and retire, depending on the uop's flag
+renaming semantics (see Section <A HREF="node7.html#sub:FlagsManagement">5.6</A>), For this
+reason, even though a given physical register value may become inaccessible
+and hence dead at commit time, the flags associated with that physical
+register are frequently still referenced within the pipeline, so the
+physical register itself must remain allocated.
+
+<P>
+Consider the following specific example, with uops listed in program
+order:
+
+<P>
+
+<UL>
+<LI><TT><FONT SIZE="-1">sub rax = rax,rbx</FONT></TT>
+<BR>
+Assign RRT[<TT><FONT SIZE="-1">rax</FONT></TT>] = phys reg r0
+<BR>
+Assign RRT[<TT><FONT SIZE="-1">flags</FONT></TT>] = <I>r0</I> (since SUB all updates
+flags)
+</LI>
+<LI><TT><FONT SIZE="-1">mov rax = rcx</FONT></TT>
+<BR>
+Assign RRT[<TT><FONT SIZE="-1">rax</FONT></TT>] = phys reg r1
+<BR><I>No flags renamed:</I> MOV never updates flags, so RRT[<TT><FONT SIZE="-1">flags</FONT></TT>]
+is still <I>r0</I>.
+</LI>
+<LI><TT><FONT SIZE="-1">br.e target</FONT></TT>
+<BR>
+Depends on flags attached to <I>r0</I>, even though actual architectural
+register (<TT><FONT SIZE="-1">rax</FONT></TT>) for <I>r0</I> has already been overwritten
+in the commit RRT by the MOV's commit. We cannot free <I>r0</I> since
+the BR uop might not have issued yet.
+</LI>
+</UL>
+This situation only happens with instruction sets like x86 (and SPARC
+or even PowerPC to some extent) which support writing flags (particularly
+multiple independent flags) and data in a single instruction.
+
+<P>
+
+<H2><A NAME="SECTION03942000000000000000">
+Reference Counting</A>
+</H2>
+
+<P>
+For these reasons, we need to prevent U2's register from being freed
+if it is still referenced by anything still in the pipeline; the normal
+reorder buffer mechanism cannot always handle this situation in a
+very long pipeline.
+
+<P>
+One solution (the one used by PTLsim) is to give each physical register
+a reference counter. Physical registers can be referenced from three
+structures: as operands to ROBs, from the speculative RRT, and from
+the committed RRT. As each uop operand is renamed, the counter for
+the corresponding physical register is incremented by calling the
+<TT><FONT SIZE="-1">PhysicalRegister::addref()</FONT></TT> method. As each uop commits,
+the counter for each of its operands is decremented via the <TT><FONT SIZE="-1">PhysicalRegister::unref()</FONT></TT>
+method. Similarly, <TT><FONT SIZE="-1">unref()</FONT></TT> and <TT><FONT SIZE="-1">addref()</FONT></TT>
+are used whenever an entry in the speculative RRT or commit RRT is
+updated. During mis-speculation recovery (see Section <A HREF="node13.html#sec:SpeculationRecovery">10.2</A>),
+<TT><FONT SIZE="-1">unref()</FONT></TT> is also used to unlock the operands of uops
+slated for annulment. Finally, <TT><FONT SIZE="-1">unref()</FONT></TT> and <TT><FONT SIZE="-1">addref()</FONT></TT>
+are used when loads and stores need to add a new dependency on a waiting
+store queue entry (see Sections <A HREF="node14.html#sec:IssuingLoads">11.1</A> and <A HREF="node15.html#sec:SplitPhaseStores">12.2</A>).
+
+<P>
+As we update the committed RRT during the commit stage, the old register
+R mapped to the destination architectural register A of the uop being
+committed is examined. The register R is only moved to the <I>free</I>
+state iff its reference counter is zero. Otherwise, it is moved to
+the <I>pendingfree</I> state. The hardware examines the counters of
+<I>pendingfree</I> physical registers every cycle and moves physical
+registers to the <I>free</I> state only when their counters become
+zero and they are in the <I>pendingfree</I> state.
+
+<P>
+
+<H2><A NAME="SECTION03943000000000000000">
+Hardware Implementation</A>
+</H2>
+
+<P>
+The hardware implementation of this scheme is straightforward and
+low complexity. The counters can have a very small number of bits
+since it is very unlikely a given physical register would be referenced
+by all 100+ uops in the ROB; 3 bits should be enough to handle the
+typical maximum of &lt; 8 uops sharing a given operand. Counter overflows
+can simply stall renaming or flush the pipeline since they are so
+rare.
+
+<P>
+The counter table can be updated in bulk each cycle by adding/subtracting
+the appropriate sum or just adding zero if the corresponding register
+wasn't used. Since there are several stages between renaming and commit,
+the same counter is never both incremented and decremented in the
+same cycle, so race conditions are not an issue. 
+
+<P>
+In real processors, the Pentium 4 uses a scheme similar to this one
+but uses bit vectors instead. For smaller physical register files,
+this may be a better solution. Each physical register has a bit vector
+with one bit per ROB entry. If a given physical register P is still
+used by ROB entry E in the pipeline, P's bit vector bit R is set.
+Register P cannot be freed until all bits in its vector are zero.
+
+<P>
+
+<H1><A NAME="SECTION03950000000000000000"></A><A NAME="sec:PipelineFlushesAndBarriers"></A>
+<BR>
+Pipeline Flushes and Barriers
+</H1>
+
+<P>
+In some cases, the entire pipeline must be empty after a given uop
+commits. For instance, a <I>barrier</I> uop (e.g. system call, serializing
+uop, or major microcode assist) will stall the frontend when first
+renamed, and when committed (at which point it is the only uop in
+the pipeline), it will call <TT><FONT SIZE="-1">flush_pipeline()</FONT></TT> to restart
+fetching at the appropriate RIP. Exceptions have a similar effect
+when they reach the commit stage. After doing this, the current architectural
+registers must be copied into the externally visible <TT><FONT SIZE="-1">ctx.commitarf[]</FONT></TT>
+array, since normally the architectural registers are scattered throughout
+the physical register file. Fortunately, the commit stage also updates
+<TT><FONT SIZE="-1">ctx.commitarf[]</FONT></TT> in parallel with the commit RRT,
+even though the <TT><FONT SIZE="-1">commitarf</FONT></TT> array is never actually
+read by the out of order core.
+
+<P>
+At this point, the <TT><FONT SIZE="-1">handle_barrier()</FONT></TT> or <TT><FONT SIZE="-1">handle_exception()</FONT></TT>
+function is called to actually communicate with the world outside
+the out of order core. In the case of <TT><FONT SIZE="-1">handle_barrier()</FONT></TT>,
+generally this involves executing native code inside PTLsim to execute
+a system call on behalf of the simulated thread, or to service a very
+complex x86 instruction (e.g. <TT><FONT SIZE="-1">cpuid</FONT></TT>, floating point
+save or restore, etc). For <TT><FONT SIZE="-1">handle_exception()</FONT></TT>, the
+simulation is stopped and the user is notified that a genuine user
+visible (non-speculative) exception reached the commit stage.
+
+<P>
+If execution can continue after handling the barrier or exception,
+the <TT><FONT SIZE="-1">external_to_core_state()</FONT></TT> function is called
+to completely reset the out of order core using the state stored in
+<TT><FONT SIZE="-1">ctx.commitarf[]</FONT></TT>. This involves allocating a fixed
+physical register for each of the 64 architectural registers in <TT><FONT SIZE="-1">ctx.commitarf[]</FONT></TT>,
+setting the speculative and committed rename tables to their proper
+cold start values, and resetting all reference counts on physical
+registers as appropriate. If the processor is configured with multiple
+physical register files (Section <A HREF="node11.html#sec:PhysicalRegisters">8.3</A>), the
+initial physical register for each architectural register is allocated
+in the first physical register file only (this is configurable by
+modifying <TT><FONT SIZE="-1">external_to_core_state()</FONT></TT>). At this point,
+the main simulation loop can resume as if the processor had just restarted
+from scratch.
 
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html589"
+<A NAME="tex2html594"
   HREF="node18.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html585"
-  HREF="node9.html">
+<A NAME="tex2html590"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html579"
+<A NAME="tex2html584"
   HREF="node16.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html587"
+<A NAME="tex2html592"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html590"
-  HREF="node18.html">Commitment</A>
-<B> Up:</B> <A NAME="tex2html586"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html580"
-  HREF="node16.html">Stores</A>
- &nbsp; <B>  <A NAME="tex2html588"
+<B> Next:</B> <A NAME="tex2html595"
+  HREF="node18.html">Cache Hierarchy</A>
+<B> Up:</B> <A NAME="tex2html591"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html585"
+  HREF="node16.html">Forwarding, Wakeup and Writeback</A>
+ &nbsp; <B>  <A NAME="tex2html593"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

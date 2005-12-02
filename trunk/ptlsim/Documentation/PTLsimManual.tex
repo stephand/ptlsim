@@ -62,7 +62,7 @@ Order Microprocessor}\end{center}{\huge \par}
 \noindent \begin{center}{\LARGE Matt T. Yourst}\\
 \texttt{\large <yourst@yourst.com>}\end{center}{\large \par}
 
-\noindent \begin{center}Revision 20051010\end{center}
+\noindent \begin{center}Revision 20051202\end{center}
 
 \vfill{}
 \noindent \begin{center}The latest version of PTLsim and this document
@@ -297,6 +297,8 @@ rather than going native {[}disabled{]}
 \item [\textbf{\emph{Debugging:}}]~
 \item [\textbf{-dumpcode~}\emph{file}]Save page of user code at final
 RIP to \emph{file} {[}(none){]}
+\item [\textbf{-pause-at-startup}]Pause for N seconds at startup to let
+a debugger attach {[}disabled{]} (see Section \ref{sec:DebuggingHints})
 \item [\textbf{-perfect-cache}]Perfect cache hit rate {[}disabled{]}
 \item [\textbf{-ooo}]Use out of order core {[}always enabled{]}
 \end{lyxlist}
@@ -743,7 +745,7 @@ overrides these. Note that memory allocated in this way will \emph{not}
 be accessible to user code.
 
 
-\section{Debugging Hints}
+\section{\label{sec:DebuggingHints}Debugging Hints}
 
 When adding or modifying PTLsim, bugs will invariably crop up. Fortunately,
 PTLsim provides a trivial way to find the location of bugs which silently
@@ -761,6 +763,33 @@ turned off by default for improved performance, but they can be easily
 re-enabled by defining the \texttt{\small ENABLE\_CHECKS} symbol at
 the top of \texttt{\small ooocore.cpp}. Additional check functions
 are in the code but commented out; these may be used as well.
+
+You can also debug PTLsim with \texttt{\small gdb}, although the process
+is non-standard due to PTLsim's co-simulation architecture:
+
+\begin{itemize}
+\item Start PTLsim on the target program like normal. Notice the \texttt{\small Thread}
+\texttt{\emph{\small N}} \texttt{\small is running in XX-bit mode}
+message printed at startup: this is the PID you will be debugging,
+not the {}``\texttt{\small ptlsim}'' process that may also be running.
+\item Start GDB and type {}``\texttt{\small attach 12345}'' if \emph{12345}
+was the PID listed above
+\item Type {}``\texttt{\small symbol-file ptlsim}'' to load the PTLsim
+internal symbols (otherwise gdb only knows about the benchmark code
+itself). You should specify the full path to the PTLsim executable
+here.
+\item You're now debugging PTLsim. If you run the {}``\texttt{\small bt}''
+command to get a backtrace, it should show the PTLsim functions starting
+at address 0x70000000.
+\end{itemize}
+If the backtrace does not display enough information, go to the \texttt{\small Makefile}
+and enable the \char`\"{}no optimization\char`\"{} options (the \char`\"{}-O0\char`\"{}
+line instead of \char`\"{}-O99\char`\"{}) since that will make more
+debugging information available to you.
+
+The {}``\texttt{\small -pause-at-startup} \emph{seconds}'' configuration
+option may be useful here, to give you time to attach with a debugger
+before starting the simulation.
 
 
 \section{\label{sec:Timing}Timing Issues}
@@ -1058,10 +1087,7 @@ The full list of PTLsim performance and statistical counters is given
 in Section \ref{sec:PerformanceCounters}.
 
 
-\part{\label{part:x86andUops}x86 Instruction Set and PTLsim Micro-Operations}
-
-
-\chapter{x86 Instructions and Micro-Ops (uops)}
+\chapter{\label{part:x86andUops}x86 Instructions and Micro-Ops (uops)}
 
 
 \section{\label{sec:UopIntro}Micro-Ops (uops) and TransOps}
@@ -1137,7 +1163,8 @@ out of order version of the simulator; these should be ignored.
 \section{Descriptions of uops}
 
 Section \ref{sec:UopReference} describes the semantics and encoding
-of all uops supported by the PTLsim processor model.
+of all uops supported by the PTLsim processor model. The following
+is an overview of these uops.
 
 
 \section{Simple Fast Path Instructions}
@@ -1196,8 +1223,8 @@ The x86 ISA defines some bizarre byte operations as a carryover from
 the ancient 8086 architecture; for instance, it is possible to address
 the second byte of many integer registers as a separate register (i.e.
 as \texttt{\small ah}, \texttt{\small bh}, \texttt{\small ch}, \texttt{\small dh}).
-The \texttt{\small inshb}, \texttt{\small exthb} and \texttt{\small movhb}
-uops are provided for handling this rare but important operation.
+The \texttt{\small mask} uop is used for handling this rare but important
+set of operations.
 
 
 \section{\label{sub:FlagsManagement}Flags Management and Register Renaming}
@@ -1366,11 +1393,12 @@ in \texttt{\small translate-x86.cpp} and \texttt{\small ptlhwdef.h}.
 
 When the processor issues an assist (\texttt{\small brp} uop), the
 frontend pipeline is stalled and execution waits until the \texttt{\small brp}
-retires, at which point an assist function within PTLsim is called.
+commits, at which point an assist function within PTLsim is called.
 In a real processor there are more efficient ways of doing this without
 flushing the pipeline, however in PTLsim assists are sufficiently
 rare that the performance impact is negligible and this approach significantly
-reduces complexity.
+reduces complexity. The exact mechanism used is described in Section
+\ref{sec:PipelineFlushesAndBarriers}.
 
 
 \part{\label{part:OutOfOrderModel}Out of Order Processor Model}
@@ -1534,9 +1562,9 @@ the uop's UUID, RIP and branch predictor information as described
 in the Fetch stage (Section \ref{sec:FetchStage}).
 \item Current state of the ROB entry and uop (\texttt{\small current\_state\_list};
 see below)
-\item Indices of the physical register (\texttt{\small physreg}), LSQ entry
+\item Pointers to the physical register (\texttt{\small physreg}), LSQ entry
 (\texttt{\small lsq}) and other resources allocated to the uop
-\item Indices of the three physical register operands to the uop, as well
+\item Pointers to the three physical register operands to the uop, as well
 as a possible store dependency used in replay scheduling (described
 later)
 \item Various cycle counters and related fields for simulating progress
@@ -1568,13 +1596,15 @@ Physical registers are represented in PTLsim by the \texttt{\small PhysicalRegis
 structure. Physical registers store several components:
 
 \begin{itemize}
+\item Index of the physical register (\texttt{\small idx}) and the physical
+register file id (\texttt{\small rfid}) to which it belongs
 \item The actual 64-bit register data
 \item x86 flags: Z, P, S, O, C. These are discussed below in Section \ref{sub:FlagsManagement}.
 \item Waiting flag (\texttt{\small FLAG\_WAIT}) for results not yet ready
 \item Invalid flag (\texttt{\small FLAG\_INVAL}) for ready results which
 encountered an exception. The exception code is written to the data
-field in lieu of the real result.
-\item Current state of the physical register
+field in lieu of the real result
+\item Current state of the physical register (\texttt{\small state})
 \item ROB currently owning this physical register, or architectural register
 mapping this physical register
 \item Reference counter for the physical register. This is required for
@@ -1583,25 +1613,52 @@ reasons described in Section \ref{sub:PhysicalRegisterRecyclingComplications}.
 
 \subsection{Physical Register File}
 
-PTLsim models a unified physical register file holding both integer
-and floating point results; this is required because presently many
-PTL uops assume both types of registers are accessible as operands
-to a single uop.
+PTLsim uses a flexible physical register file model in which multiple
+physical register files with different sizes and properties can optionally
+be defined. Each physical register file in the \texttt{\small physregfiles{[}{]}}
+array can be made accessible from one or more clusters. For instance,
+uops which execute on floating point clusters can be forced to always
+allocate a register in the floating point register file, or each cluster
+can have a dedicated register file.
+
+Various heuristics can also be used for selecting the register file
+into which a result is placed. The default heuristic simply finds
+the first acceptable physical register file with a free register.
+Acceptable physical register files are those register files in which
+the uop being allocated is allowed to write its result; this is configurable
+based on clustering as described below. Other allocation policies,
+such as alternation between available register files and dependency
+based register allocation, are all possible by modifying the \texttt{\small rename()}
+function where physical registers are allocated..
+
+In each physical register file, physical register number 0 is defined
+as the \emph{null register:} it always contains the value zero and
+is used as an operand anywhere the zero value (or no value at all)
+is required.
+
+Physical register files are configured in \texttt{\small ooohwdef.h}.
+The \texttt{\small PhysicalRegisterFile{[}{]}} array is defined to
+declare each register file by name, register file ID (RFID, from 0
+to the number of register files) and size. The \texttt{\small MAX\_PHYS\_REG\_FILE\_SIZE}
+parameter must be greater than the largest physical register in the
+processor.
 
 
 \subsection{Physical Register States}
 
 Each physical register can be in one of several states at any given
-time; PTLsim maintains linked lists (the \texttt{\small physreg\_}\emph{statename}\texttt{\small \_list}
-lists) to track which registers are in each state. The \texttt{\small current\_state\_list}
-field in each physical register specifies this state. The valid states
-are:
+time. For each physical register file, PTLsim maintains linked lists
+(the \texttt{\small PhysicalRegisterFile.states{[}}\emph{statename}\texttt{\small {]}}
+lists) to track which registers are in each state. The \texttt{\small state}
+field in each physical register specifies its state, and implies that
+the physical register is on the list \texttt{\small physregfiles{[}physreg.}\texttt{\textbf{\small rfid}}\texttt{\small {]}.states{[}physreg.}\texttt{\textbf{\small state}}\texttt{\small {]}}.
+The valid states are:
 
 \begin{itemize}
 \item \textbf{\emph{free:}} the register is not allocated to any uop.
-\item \textbf{\emph{used:}} the register has been allocated to a uop but
-that uop has not issued yet.
-\item \textbf{\emph{ready:}} the uop associated with the register has issued
+\item \textbf{\emph{waiting:}} the register has been allocated to a uop
+but that uop is waiting to issue.
+\item \textbf{\emph{bypass:}} the uop associated with the register has issued
 and produced a value (or encountered an exception), but that value
 is only on the bypass network - it has not actually been written back
 yet. For simulation purposes only, uops immediately write their results
@@ -1619,13 +1676,13 @@ in the pipeline
 Section \ref{sub:PhysicalRegisterRecyclingComplications}.
 \end{itemize}
 One physical register is allocated to each uop and moved into the
-\emph{used} state, regardless of which type of uop it is. For integer,
+\emph{waiting} state, regardless of which type of uop it is. For integer,
 floating point and load uops, the physical register holds the actual
 numerical value generated by the corresponding uop. Branch uops place
 the target RIP of the branch in a physical register. Store uops place
-the physical address in the register. Technically branches and stores
-do not need physical registers, but to keep the processor design simple,
-they are allocated registers anyway.
+the merged data to store in the register. Technically branches and
+stores do not need physical registers, but to keep the processor design
+simple, they are allocated registers anyway.
 
 
 \section{\label{sec:LoadStoreQueueEntry}Load Store Queue Entries}
@@ -1912,11 +1969,16 @@ through the uop's operands to determine which cluster they will be
 forwarded from. If a given operand's corresponding producer uop \emph{S}
 is currently either dispatched to cluster \emph{C} but waiting to
 execute or is still on the bypass network of cluster \emph{C}, then
-cluster \emph{C}'s score is incremented. The final cluster is selected
-as the cluster with the highest score out of the set of clusters which
-the uop can actually issue on (e.g. a floating point uop cannot issue
-on a cluster with only integer units). This mechanism is designed
-to route each uop to the cluster in which the majority of its operands
+cluster \emph{C}'s score is incremented. 
+
+The final cluster is selected as the cluster with the highest score
+out of the set of clusters which the uop can actually issue on (e.g.
+a floating point uop cannot issue on a cluster with only integer units).
+The \texttt{\small ReorderBufferEntry::executable\_on\_cluster\_mask}
+bitmap can be used to further restrict which clusters a uop can be
+dispatched to, for instance because certain clusters can only write
+to certain physical register files. This mechanism is designed to
+route each uop to the cluster in which the majority of its operands
 will become available at the earliest time; in practice it works quite
 well and variants of this technique are often used in real processors.
 
@@ -2050,7 +2112,8 @@ As a result of this high performance design, each issue queue is limited
 to 64 entries and the tags to be matched must be between 0 and 255
 to fit in 8 bits. The \texttt{\small FullyAssociativeArrayTags16bit}
 class can be used instead if longer tags are required, at the cost
-of reduced simulation performance.
+of reduced simulation performance. To enable this, \texttt{\small BIG\_ROB}
+must be defined in \texttt{\small ooohwdef.h}.
 
 
 \subsection{Other Designs}
@@ -2341,12 +2404,12 @@ are somewhat more complex in that both the low and high 64 bit chunks
 from the \texttt{\small ld.lo} and \texttt{\small ld.hi} uops, respectively,
 are placed into a 128-bit buffer from which the final result is extracted.
 
-\textbf{\emph{NOTE:}} For simulation purposes only, the data to load
-is immediately accessed and recorded by \texttt{\small issueload()}
-regardless of whether or not there is a cache miss. This makes the
-loaded data significantly easier to track. In a real processor, the
-data extraction process obviously only happens after the missing line
-actually arrives, however our implementation in no way affects performance.
+For simulation purposes only, the data to load is immediately accessed
+and recorded by \texttt{\small issueload()} regardless of whether
+or not there is a cache miss. This makes the loaded data significantly
+easier to track. In a real processor, the data extraction process
+obviously only happens after the missing line actually arrives, however
+our implementation in no way affects performance.
 
 
 \section{\label{sec:CacheMissHandling}Cache Miss Handling}
@@ -2514,8 +2577,8 @@ issued state and decrements its \texttt{\small cycles\_left} field.
 If \texttt{\small cycles\_left} becomes zero, the corresponding uop
 has completed execution. The ROB is moved to the \emph{completed}
 state (on \texttt{\small rob\_completed\_list}) and its physical register
-or store queue entry is moved to the \texttt{\small ready} state so
-newly dispatched uops do not try to wait for it.
+or store queue entry is moved to the \texttt{\small bypass} state
+so newly dispatched uops do not try to wait for it.
 
 The \texttt{\small transfer()} function is also called every cycle.
 This function examines the list of ROBs in the \emph{completed} state
@@ -2534,7 +2597,7 @@ uop issued in. The \texttt{\small IssueQueue::broadcast()} method
 cluster to wake up any operands of uops in that cluster waiting on
 the newly completed uop.
 
-The \texttt{\small MAX\_FORWARDING\_LATENCY} constant (in ooohwdef.h)
+The \texttt{\small MAX\_FORWARDING\_LATENCY} constant (in \texttt{\small ooohwdef.h})
 specifies the maximum number of cycles between any two clusters. After
 the ROB has progressed through \texttt{\small MAX\_FORWARDING\_LATENCY}
 cycles in the \emph{completed} state, it is moved to the \texttt{\small ready-to-writeback}
@@ -2612,7 +2675,7 @@ as those used to hold temporary values) can be immediately freed without
 updating any Commit RRT entries, but for consistency we do not do
 this.
 
-In PTLsim, a physical register is freed by moving it to the \texttt{\small physreg\_free}
+In PTLsim, a physical register is freed by moving it to the \texttt{\small PHYSREG\_FREE}
 state. Unfortunately for various reasons related to long pipelines
 and the renaming of x86 flags, register reclamation is not so simple,
 but this will be discussed below in Section \ref{sub:PhysicalRegisterRecyclingComplications}.
@@ -2739,6 +2802,48 @@ this may be a better solution. Each physical register has a bit vector
 with one bit per ROB entry. If a given physical register P is still
 used by ROB entry E in the pipeline, P's bit vector bit R is set.
 Register P cannot be freed until all bits in its vector are zero.
+
+
+\section{\label{sec:PipelineFlushesAndBarriers}Pipeline Flushes and Barriers}
+
+In some cases, the entire pipeline must be empty after a given uop
+commits. For instance, a \emph{barrier} uop (e.g. system call, serializing
+uop, or major microcode assist) will stall the frontend when first
+renamed, and when committed (at which point it is the only uop in
+the pipeline), it will call \texttt{\small flush\_pipeline()} to restart
+fetching at the appropriate RIP. Exceptions have a similar effect
+when they reach the commit stage. After doing this, the current architectural
+registers must be copied into the externally visible \texttt{\small ctx.commitarf{[}{]}}
+array, since normally the architectural registers are scattered throughout
+the physical register file. Fortunately, the commit stage also updates
+\texttt{\small ctx.commitarf{[}{]}} in parallel with the commit RRT,
+even though the \texttt{\small commitarf} array is never actually
+read by the out of order core.
+
+At this point, the \texttt{\small handle\_barrier()} or \texttt{\small handle\_exception()}
+function is called to actually communicate with the world outside
+the out of order core. In the case of \texttt{\small handle\_barrier()},
+generally this involves executing native code inside PTLsim to execute
+a system call on behalf of the simulated thread, or to service a very
+complex x86 instruction (e.g. \texttt{\small cpuid}, floating point
+save or restore, etc). For \texttt{\small handle\_exception()}, the
+simulation is stopped and the user is notified that a genuine user
+visible (non-speculative) exception reached the commit stage.
+
+If execution can continue after handling the barrier or exception,
+the \texttt{\small external\_to\_core\_state()} function is called
+to completely reset the out of order core using the state stored in
+\texttt{\small ctx.commitarf{[}{]}}. This involves allocating a fixed
+physical register for each of the 64 architectural registers in \texttt{\small ctx.commitarf{[}{]}},
+setting the speculative and committed rename tables to their proper
+cold start values, and resetting all reference counts on physical
+registers as appropriate. If the processor is configured with multiple
+physical register files (Section \ref{sec:PhysicalRegisters}), the
+initial physical register for each architectural register is allocated
+in the first physical register file only (this is configurable by
+modifying \texttt{\small external\_to\_core\_state()}). At this point,
+the main simulation loop can resume as if the processor had just restarted
+from scratch.
 
 
 \chapter{\label{sec:CacheHierarchy}Cache Hierarchy}
@@ -3950,68 +4055,6 @@ the value to store is specified by} \textsf{\emph{rc}}\textsf{.}
 exceptions.}
 \end{itemize}
 \newpage
-\texttt{\textbf{\large inshb exthb movhb}}\textsf{}\\
-\textsf{\Large Byte Operations}{\Large \par}
-\lyxline{\Large}
-
-\begin{tabular}{lll}
-\textsf{\textbf{Mnemonic}}&
-\textsf{\textbf{Syntax}}&
-\textsf{\textbf{Operation}}\tabularnewline
-\hline
-\texttt{\textbf{\small inshb}}&
-\texttt{\small rd = ra,rb}&
-\textsf{rd = ra{[}15:8{]} $\leftarrow$ rb{[}7:0{]}}\tabularnewline
-\texttt{\textbf{\small exthb}}&
-\texttt{\small rd = ra,rb}&
-\textsf{rd = ra{[}7:0{]} $\leftarrow$ rb{[}15:8{]}}\tabularnewline
-\texttt{\textbf{\small movhb}}&
-\texttt{\small rd = ra,rb}&
-\textsf{rd = ra{[}15:8{]} $\leftarrow$ rb{[}15:8{]}}\tabularnewline
-\end{tabular}
-
-\medskip{}
-\textsf{\textbf{Notes:}}
-
-\begin{itemize}
-\item \textsf{In x86, it is possible to address the second byte of many
-integer registers as a separate register (as} \texttt{\small ah}\textsf{,}
-\texttt{\small bh}\textsf{,} \texttt{\small ch}\textsf{,} \texttt{\small dh}\textsf{).
-The} \texttt{\small inshb}\textsf{,} \texttt{\small exthb} \textsf{and}
-\texttt{\small movhb} \textsf{uops are provided for handling this
-unfortunately still common usage by moving 8 bits between the first
-and second bytes of the operands.}
-\item \textsf{These uops do not generate any condition code flags}
-\end{itemize}
-\newpage
-\texttt{\textbf{\large movhl movl}}\textsf{}\\
-\textsf{\Large Merge 32-bit Words}{\Large \par}
-\lyxline{\Large}
-
-\begin{tabular}{lll}
-\textsf{\textbf{Mnemonic}}&
-\textsf{\textbf{Syntax}}&
-\textsf{\textbf{Operation}}\tabularnewline
-\hline
-\texttt{\textbf{\small movhl}}&
-\texttt{\small rd = ra,rb}&
-\textsf{rd = (ra{[}31:0{]} <\,{}< 32) | rb{[}31:0{]}}\tabularnewline
-\texttt{\textbf{\small movl}}&
-\texttt{\small rd = ra,rb}&
-\textsf{rd = ra{[}31:0{]} $\leftarrow$ rb{[}31:0{]}}\tabularnewline
-\end{tabular}
-
-\medskip{}
-\textsf{\textbf{Notes:}}
-
-\begin{itemize}
-\item \textsf{The} \texttt{\small movhl} \textsf{uop concatenates two 32-bit
-words into a 64-bit word, while the} \texttt{\small movl} \textsf{uop
-simply merges} \textsf{\emph{rb}} \textsf{into the low 32 bits of}
-\textsf{\emph{ra}}\textsf{.}
-\item \textsf{These uops do not generate any condition code flags}
-\end{itemize}
-\newpage
 \texttt{\textbf{\large shl shr sar rotl rotr rotcl rotcr}}\textsf{}\\
 \textsf{\Large Shifts and Rotates}{\Large \par}
 \lyxline{\Large}
@@ -4092,8 +4135,8 @@ always produce the latest version of each of the ZAPS, CF, OF flag
 sets.}
 \end{itemize}
 \newpage
-\texttt{\textbf{\large dupbit}}\textsf{}\\
-\textsf{\Large Duplicate Bit}{\Large \par}
+\texttt{\textbf{\large mask}}\textsf{}\\
+\textsf{\Large Masking, Insertion and Extraction}{\Large \par}
 \lyxline{\Large}
 
 \begin{tabular}{lll}
@@ -4101,118 +4144,76 @@ sets.}
 \textsf{\textbf{Syntax}}&
 \textsf{\textbf{Operation}}\tabularnewline
 \hline
-\texttt{\textbf{\small dupbit}}&
-\texttt{\small rd = ra,rb,rc}&
-\textsf{rd = ra $\leftarrow$ (rb{[}rc{]}, rb{[}rc{]}, rb{[}rc{]},
-...)}\tabularnewline
+\texttt{\textbf{\small mask}}\texttt{\textbf{\emph{\small .x|z}}}&
+\texttt{\small rd = ra,rb,{[}ms,mc,ds{]}}&
+\textsf{See semantics below}\tabularnewline
 \end{tabular}
 
 \medskip{}
 \textsf{\textbf{Notes:}}
 
 \begin{itemize}
-\item \textsf{The} \texttt{\small dupbit} \textsf{uop duplicates the specified
-bit of} \textsf{\emph{rb}} \textsf{into all 64 bit positions, then
-merges the result into} \textsf{\emph{ra}}\textsf{.}
-\item \textsf{This uop is used to do specialized sign extension}
-\item \textsf{This uop does not generate any condition code flags}
-\end{itemize}
-\newpage
-\texttt{\textbf{\large extr extrx}}\textsf{}\\
-\textsf{\Large Extract Bit Field}{\Large \par}
-\lyxline{\Large}
-
-\begin{tabular}{lll}
-\textsf{\textbf{Mnemonic}}&
-\textsf{\textbf{Syntax}}&
-\textsf{\textbf{Operation}}\tabularnewline
-\hline
-\texttt{\textbf{\small extr}}&
-\texttt{\small rd = ra,shramt,bitcnt}&
-\textsf{rd = ra $\leftarrow$ (ra >\,{}> shramt) \&
-((1 <\,{}< bitcnt) - 1)}\tabularnewline
-\texttt{\textbf{\small extrx}}&
-\texttt{\small rd = ra,shramt,bitcnt}&
-\textsf{rd = ra $\leftarrow$ SignExt((ra >\,{}> shramt)
-\& ((1 <\,{}< bitcnt) - 1), bitcnt)}\tabularnewline
-\end{tabular}
-
-\medskip{}
-\textsf{\textbf{Notes:}}
-
-\begin{itemize}
-\item \textsf{The} \texttt{\small extr} \textsf{and} \texttt{\small extrx}
-\textsf{uops are used for generalized bit field extraction when the
-bounds of the bit field (}\textsf{\emph{shramt}} \textsf{and} \textsf{\emph{bitcnt}}\textsf{)
-are immediates.}
+\item \textsf{The} \texttt{\small mask} \textsf{uop and its variants are
+used for generalized bit field extraction, insertion, sign and zero
+extension using the 18-bit control field in the immediate}
 \item \textsf{These uops are used extensively within PTLsim microcode, but
 are also useful if the processor supports dynamically merging a chain
-of} \texttt{\small shr} \textsf{and} \texttt{\small and} \textsf{uops.}
+of} \texttt{\small shr}\textsf{,} \texttt{\small and}\textsf{,} \texttt{\small or}
+\textsf{uops.}
 \item \textsf{The condition code flags (ZAPS, CF, OF) are the flags logically
 generated by the final AND operation.}
 \end{itemize}
-\newpage
-\texttt{\textbf{\large insr}}\textsf{}\\
-\textsf{\Large Insert Bit Field}{\Large \par}
-\lyxline{\Large}
-
-\begin{tabular}{llp{0.50\columnwidth}}
-\textsf{\textbf{Mnemonic}}&
-\textsf{\textbf{Syntax}}&
-\textsf{\textbf{Operation}}\tabularnewline
-\hline
-\texttt{\textbf{\small insr}}&
-\texttt{\small rd = ra,rb,shlamt,bitcnt}&
-\parbox[t]{0.50\columnwidth}{\textsf{mask = ((1 <\,{}< bitcnt)-1) <\,{}<
-shlamt}\\
-\textsf{rd = ra $\leftarrow$ ((rb <\,{}< shlamt) \&
-mask) | (ra \& (\textasciitilde{}mask))}}\tabularnewline
-\end{tabular}
-
 \medskip{}
-\textsf{\textbf{Notes:}}
+\textsf{\textbf{Control Field Format}}
+
+\textsf{The 18-bit} \textsf{\emph{rc}} \textsf{immediate has the following
+three 6-bit fields:}
+
+\noindent \begin{center}\textsf{}\begin{tabular}{|c|c|c|}
+\hline 
+\textsf{\textbf{DS}}&
+\textsf{\textbf{MC}}&
+\textsf{\textbf{MS}}\tabularnewline
+\hline 
+\textsf{12}&
+\textsf{6}&
+\textsf{0}\tabularnewline
+\hline
+\end{tabular}\end{center}
 
 \begin{itemize}
-\item \textsf{The} \texttt{\small insr} \textsf{uop is used for generalized
-bit field insertion when the bounds of the bit field (}\textsf{\emph{shlamt}}
-\textsf{and} \textsf{\emph{bitcnt}}\textsf{) are immediates.}
-\item \textsf{These uops are used extensively within PTLsim microcode, but
-are also useful if the processor supports dynamically merging a dependency
-subgraph of} \texttt{\small shl} \textsf{,} \texttt{\small shr}\textsf{,}
-\texttt{\small and} \textsf{and} \texttt{\small or} \textsf{uops.}
-\item \textsf{The condition code flags (ZAPS, CF, OF) are the flags logically
-generated by the final OR operation.}
+\item \textsf{The} \texttt{\small mask} \textsf{uop and its variants are
+used for generalized bit field extraction, insertion, sign and zero
+extension using the 18-bit control field in the immediate}
 \end{itemize}
-\newpage
-\texttt{\textbf{\large sxt zxt}}\textsf{}\\
-\textsf{\Large Sign or Zero Extension}{\Large \par}
-\lyxline{\Large}
-
-\begin{tabular}{lll}
-\textsf{\textbf{Mnemonic}}&
-\textsf{\textbf{Syntax}}&
-\textsf{\textbf{Operation}}\tabularnewline
-\hline
-\texttt{\textbf{\small sxt.}}\texttt{\textbf{\emph{\small sz}}}&
-\texttt{\small rd = ra}&
-\textsf{rd = ra $\leftarrow$ SignExt(ra, sz)}\tabularnewline
-\texttt{\textbf{\small zxt.}}\texttt{\textbf{\emph{\small sz}}}&
-\texttt{\small rd = ra}&
-\textsf{rd = ra $\leftarrow$ ZeroExt(ra, sz)}\tabularnewline
-\end{tabular}
-
 \medskip{}
-\textsf{\textbf{Notes:}}
+\textsf{\textbf{Operation:}}
 
-\begin{itemize}
-\item \textsf{The} \texttt{\small sxt} \textsf{uop is used to sign extend
-the} \textsf{\emph{ra}} \textsf{operand from} \textsf{\emph{sz}} \textsf{bits
-to the uop's effective result size; this result is then merged into}
-\textsf{\emph{ra}}\textsf{.}
-\item \textsf{The} \textsf{\emph{zxt}} \textsf{uop performs zero extension
-with the same semantics}
-\item \textsf{These uops do not generate any condition code flags.}
-\end{itemize}
+\begin{lyxcode}
+{\small M~=~1'{[}(ms+mc-1):ms{]}}{\small \par}
+
+{\small T~=~(ra~\&~\textasciitilde{}M)~|~((rb~>\,{}>\,{}>~ds)~\&~M)}{\small \par}
+
+{\small if~(Z)~\{}{\small \par}
+
+~{\small ~\#~Zero~extend}{\small \par}
+
+~{\small ~rd~=~ra~$\leftarrow$~(T~\&~1'{[}(ms+mc-1):0{]})}{\small \par}
+
+{\small else~if~(X)~\{}{\small \par}
+
+~{\small ~\#~Sign~extend}{\small \par}
+
+~{\small ~rd~=~ra~$\leftarrow$~(T{[}ms+mc-1{]})~?~(T~|~1'{[}63:(ms+mc){]})~:~(T~\&~1'{[}(ms+mc-1):0{]})}{\small \par}
+
+{\small \}~else~\{}{\small \par}
+
+~{\small ~rd~=~ra~$\leftarrow$~T}{\small \par}
+
+{\small \}}{\small \par}
+
+
+\end{lyxcode}
 \newpage
 \texttt{\textbf{\large bswap}}\textsf{}\\
 \textsf{\Large Byte Swap}{\Large \par}

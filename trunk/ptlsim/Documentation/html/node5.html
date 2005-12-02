@@ -27,26 +27,26 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html317"
+<A NAME="tex2html330"
   HREF="node6.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html313"
+<A NAME="tex2html326"
   HREF="node2.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html307"
+<A NAME="tex2html320"
   HREF="node4.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html315"
+<A NAME="tex2html328"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html318"
+<B> Next:</B> <A NAME="tex2html331"
   HREF="node6.html">Statistics Collection and Control</A>
-<B> Up:</B> <A NAME="tex2html314"
+<B> Up:</B> <A NAME="tex2html327"
   HREF="node2.html">PTLsim User's Guide</A>
-<B> Previous:</B> <A NAME="tex2html308"
+<B> Previous:</B> <A NAME="tex2html321"
   HREF="node4.html">Getting Started with PTLsim</A>
- &nbsp; <B>  <A NAME="tex2html316"
+ &nbsp; <B>  <A NAME="tex2html329"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -55,30 +55,30 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html319"
+<LI><A NAME="tex2html332"
   HREF="node5.html#SECTION02310000000000000000">Overview</A>
-<LI><A NAME="tex2html320"
+<LI><A NAME="tex2html333"
   HREF="node5.html#SECTION02320000000000000000">Common Libraries and Logic Design APIs</A>
 <UL>
-<LI><A NAME="tex2html321"
+<LI><A NAME="tex2html334"
   HREF="node5.html#SECTION02321000000000000000">General Purpose Macros</A>
-<LI><A NAME="tex2html322"
+<LI><A NAME="tex2html335"
   HREF="node5.html#SECTION02322000000000000000">Super Standard Template Library (SuperSTL)</A>
-<LI><A NAME="tex2html323"
+<LI><A NAME="tex2html336"
   HREF="node5.html#SECTION02323000000000000000">Logic Standard Template Library (LogicSTL)</A>
-<LI><A NAME="tex2html324"
+<LI><A NAME="tex2html337"
   HREF="node5.html#SECTION02324000000000000000">Miscellaneous Code</A>
 </UL>
 <BR>
-<LI><A NAME="tex2html325"
+<LI><A NAME="tex2html338"
   HREF="node5.html#SECTION02330000000000000000">Low Level Startup and Injection</A>
-<LI><A NAME="tex2html326"
+<LI><A NAME="tex2html339"
   HREF="node5.html#SECTION02340000000000000000">Simulator Startup</A>
-<LI><A NAME="tex2html327"
+<LI><A NAME="tex2html340"
   HREF="node5.html#SECTION02350000000000000000">Address Space Simulation</A>
-<LI><A NAME="tex2html328"
+<LI><A NAME="tex2html341"
   HREF="node5.html#SECTION02360000000000000000">Debugging Hints</A>
-<LI><A NAME="tex2html329"
+<LI><A NAME="tex2html342"
   HREF="node5.html#SECTION02370000000000000000">Timing Issues</A>
 </UL>
 <!--End of Table of Child-Links-->
@@ -103,13 +103,13 @@ The following is an overview of the source files for PTLsim:
 <UL>
 <LI><TT><B><FONT SIZE="-1">ooocore.cpp</FONT></B></TT> is the out of order simulator
 itself. The microarchitectural model implemented by this simulator
-is the subject of Part <A HREF="node9.html#part:OutOfOrderModel">III</A>.
+is the subject of Part <A HREF="node8.html#part:OutOfOrderModel">II</A>.
 </LI>
 <LI><TT><B><FONT SIZE="-1">ptlhwdef.cpp</FONT></B></TT> and <TT><B><FONT SIZE="-1">ptlhwdef.h</FONT></B></TT>
 define the basic uop encodings, flags and registers. The tables of
 uops might be interesting to see how a modern x86 processor is designed
-at the microcode level. The basic format is discussed in Section <A HREF="node8.html#sec:UopIntro">5.1</A>;
-all uops are documented in Section <A HREF="node22.html#sec:UopReference">17</A>.
+at the microcode level. The basic format is discussed in Section <A HREF="node7.html#sec:UopIntro">5.1</A>;
+all uops are documented in Section <A HREF="node21.html#sec:UopReference">17</A>.
 </LI>
 <LI><TT><B><FONT SIZE="-1">ooohwdef.h</FONT></B></TT> defines the parameters of the
 out of order processor model not intrinsic to the PTLsim uop instruction
@@ -125,7 +125,7 @@ At present the full L1/L2/L3/mem hierarchy is modeled. Note that the
 instruction cache is missing at this point, but will be added back
 in very soon. For SPEC this does not matter very much. The cache hierarchy
 is very flexible configuration wise; it is described further in Section
-<A HREF="node19.html#sec:CacheHierarchy">15</A>.
+<A HREF="node18.html#sec:CacheHierarchy">15</A>.
 </LI>
 <LI><TT><B><FONT SIZE="-1">kernel.cpp</FONT></B></TT> and <TT><B><FONT SIZE="-1">kernel.h</FONT></B></TT>
 is where all the virtual machine &#34;black magic&#34; takes
@@ -610,7 +610,7 @@ readable pages (<TT><FONT SIZE="-1">readmap</FONT></TT> field), writable pages (
 field) and executable pages (<TT><FONT SIZE="-1">execmap</FONT></TT> field). Two additional
 SPATs, <TT><FONT SIZE="-1">dtlbmap</FONT></TT> and <TT><FONT SIZE="-1">itlbmap</FONT></TT>, are used
 to track which pages are currently mapped by the simulated translation
-lookaside buffers (TLBs); this is discussed further in Section <A HREF="node19.html#sec:TranslationLookasideBuffers">15.4</A>.
+lookaside buffers (TLBs); this is discussed further in Section <A HREF="node18.html#sec:TranslationLookasideBuffers">15.4</A>.
 
 <P>
 When running in native mode, PTLsim cannot track changes to the process
@@ -647,8 +647,9 @@ be accessible to user code.
 
 <P>
 
-<H1><A NAME="SECTION02360000000000000000">
-Debugging Hints</A>
+<H1><A NAME="SECTION02360000000000000000"></A><A NAME="sec:DebuggingHints"></A>
+<BR>
+Debugging Hints
 </H1>
 
 <P>
@@ -669,6 +670,41 @@ turned off by default for improved performance, but they can be easily
 re-enabled by defining the <TT><FONT SIZE="-1">ENABLE_CHECKS</FONT></TT> symbol at
 the top of <TT><FONT SIZE="-1">ooocore.cpp</FONT></TT>. Additional check functions
 are in the code but commented out; these may be used as well.
+
+<P>
+You can also debug PTLsim with <TT><FONT SIZE="-1">gdb</FONT></TT>, although the process
+is non-standard due to PTLsim's co-simulation architecture:
+
+<P>
+
+<UL>
+<LI>Start PTLsim on the target program like normal. Notice the <TT><FONT SIZE="-1">Thread</FONT></TT>
+<TT><I><FONT SIZE="-1">N</FONT></I></TT> <TT><FONT SIZE="-1">is running in XX-bit mode</FONT></TT>
+message printed at startup: this is the PID you will be debugging,
+not the ``<TT><FONT SIZE="-1">ptlsim</FONT></TT>'' process that may also be running.
+</LI>
+<LI>Start GDB and type ``<TT><FONT SIZE="-1">attach 12345</FONT></TT>'' if <I>12345</I>
+was the PID listed above
+</LI>
+<LI>Type ``<TT><FONT SIZE="-1">symbol-file ptlsim</FONT></TT>'' to load the PTLsim
+internal symbols (otherwise gdb only knows about the benchmark code
+itself). You should specify the full path to the PTLsim executable
+here.
+</LI>
+<LI>You're now debugging PTLsim. If you run the ``<TT><FONT SIZE="-1">bt</FONT></TT>''
+command to get a backtrace, it should show the PTLsim functions starting
+at address 0x70000000.
+</LI>
+</UL>
+If the backtrace does not display enough information, go to the <TT><FONT SIZE="-1">Makefile</FONT></TT>
+and enable the &#34;no optimization&#34; options (the &#34;-O0&#34;
+line instead of &#34;-O99&#34;) since that will make more
+debugging information available to you.
+
+<P>
+The ``<TT><FONT SIZE="-1">-pause-at-startup</FONT></TT> <I>seconds</I>'' configuration
+option may be useful here, to give you time to attach with a debugger
+before starting the simulation.
 
 <P>
 
@@ -693,31 +729,31 @@ results will be bogus.
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html317"
+<A NAME="tex2html330"
   HREF="node6.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html313"
+<A NAME="tex2html326"
   HREF="node2.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html307"
+<A NAME="tex2html320"
   HREF="node4.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html315"
+<A NAME="tex2html328"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html318"
+<B> Next:</B> <A NAME="tex2html331"
   HREF="node6.html">Statistics Collection and Control</A>
-<B> Up:</B> <A NAME="tex2html314"
+<B> Up:</B> <A NAME="tex2html327"
   HREF="node2.html">PTLsim User's Guide</A>
-<B> Previous:</B> <A NAME="tex2html308"
+<B> Previous:</B> <A NAME="tex2html321"
   HREF="node4.html">Getting Started with PTLsim</A>
- &nbsp; <B>  <A NAME="tex2html316"
+ &nbsp; <B>  <A NAME="tex2html329"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

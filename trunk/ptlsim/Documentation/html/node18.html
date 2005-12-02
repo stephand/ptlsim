@@ -7,8 +7,8 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
   Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
 <HTML>
 <HEAD>
-<TITLE>Commitment</TITLE>
-<META NAME="description" CONTENT="Commitment">
+<TITLE>Cache Hierarchy</TITLE>
+<META NAME="description" CONTENT="Cache Hierarchy">
 <META NAME="keywords" CONTENT="PTLsimManual">
 <META NAME="resource-type" CONTENT="document">
 <META NAME="distribution" CONTENT="global">
@@ -21,32 +21,32 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <LINK REL="next" HREF="node19.html">
 <LINK REL="previous" HREF="node17.html">
-<LINK REL="up" HREF="node9.html">
+<LINK REL="up" HREF="node8.html">
 <LINK REL="next" HREF="node19.html">
 </HEAD>
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html603"
+<A NAME="tex2html614"
   HREF="node19.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html599"
-  HREF="node9.html">
+<A NAME="tex2html610"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html593"
+<A NAME="tex2html604"
   HREF="node17.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html601"
+<A NAME="tex2html612"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html604"
-  HREF="node19.html">Cache Hierarchy</A>
-<B> Up:</B> <A NAME="tex2html600"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html594"
-  HREF="node17.html">Forwarding, Wakeup and Writeback</A>
- &nbsp; <B>  <A NAME="tex2html602"
+<B> Next:</B> <A NAME="tex2html615"
+  HREF="node19.html">Branch Prediction</A>
+<B> Up:</B> <A NAME="tex2html611"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html605"
+  HREF="node17.html">Commitment</A>
+ &nbsp; <B>  <A NAME="tex2html613"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -55,280 +55,331 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html605"
-  HREF="node18.html#SECTION04910000000000000000">Introduction</A>
-<LI><A NAME="tex2html606"
-  HREF="node18.html#SECTION04920000000000000000">Atomicity of x86 instructions</A>
-<LI><A NAME="tex2html607"
-  HREF="node18.html#SECTION04930000000000000000">Commitment</A>
-<LI><A NAME="tex2html608"
-  HREF="node18.html#SECTION04940000000000000000">Physical Register
-Recycling Complications</A>
-<UL>
-<LI><A NAME="tex2html609"
-  HREF="node18.html#SECTION04941000000000000000">Problem Scenarios</A>
-<LI><A NAME="tex2html610"
-  HREF="node18.html#SECTION04942000000000000000">Reference Counting</A>
-<LI><A NAME="tex2html611"
-  HREF="node18.html#SECTION04943000000000000000">Hardware Implementation</A>
-</UL></UL>
+<LI><A NAME="tex2html616"
+  HREF="node18.html#SECTION031010000000000000000">General Configurable Parameters</A>
+<LI><A NAME="tex2html617"
+  HREF="node18.html#SECTION031020000000000000000">Initiating a Cache Miss</A>
+<LI><A NAME="tex2html618"
+  HREF="node18.html#SECTION031030000000000000000">Filling a Cache Miss</A>
+<LI><A NAME="tex2html619"
+  HREF="node18.html#SECTION031040000000000000000">Translation Lookaside Buffers</A>
+</UL>
 <!--End of Table of Child-Links-->
 <HR>
 
-<H1><A NAME="SECTION04900000000000000000"></A><A NAME="sec:CommitStage"></A>
+<H1><A NAME="SECTION031000000000000000000"></A><A NAME="sec:CacheHierarchy"></A>
 <BR>
-Commitment
+Cache Hierarchy
 </H1>
 
 <P>
-
-<H1><A NAME="SECTION04910000000000000000">
-Introduction</A>
-</H1>
-
-<P>
-The commit stage examines uops from the head of the ROB, blocks until
-all uops comprising a given x86 instruction are ready to commit, commits
-the results of those uops to the architectural state and finally frees
-the resources associated with each uop.
-
-<P>
-
-<H1><A NAME="SECTION04920000000000000000">
-Atomicity of x86 instructions</A>
-</H1>
-
-<P>
-The x86 architecture specifies <I>atomic execution</I> for all distinct
-x86 instructions. This means that since each x86 instruction may be
-comprised of multiple uops; none of these uops may commit until <I>all</I>
-uops in the instruction are ready to commit. In PTLsim, this is accomplished
-by checking if the uop at the head of the ROB (next to commit) has
-its SOM (start of macro-op) bit set. If so, the ROB is scanned forwards
-from the SOM uop to the next uop in program order with its EOM (end
-of macro-op) bit set. If all uops in this range are ready to commit
-and exception-free, the SOM uop is allowed to commit, effectively
-unlocking the ROB head pointer until the next uop with a SOM bit set
-is encountered. However, any exception in any uop comprising the x86
-instruction at the head of the ROB causes the pipeline to be flushed
-and an exception to be taken. Similarly, external interrupts are only
-acknowledged at the boundary between x86 instructions (i.e. after
-the EOM uop of each instruction).
-
-<P>
-
-<H1><A NAME="SECTION04930000000000000000">
-Commitment</A>
-</H1>
-
-<P>
-As each uop commits, it may update several components of the architectural
-state. 
-
-<P>
-Integer ALU and floating point uops obviously update their destination
-architectural register (<I>rd</I>). In PTLsim, this is done by simply
-updating the committed register rename table (<TT><FONT SIZE="-1">commitrrt</FONT></TT>)
-rather than actually copying register values. However, the old physical
-register mapped to architectural register <I>rd</I> will normally
-become inaccessible after the Commit RRT mapping for <I>rd</I> is
-overwritten with the committing uop's physical register index. The
-old physical register previously mapped to <I>rd</I> can then be freed.
-Technically physical registers allocated to intermediate uops (such
-as those used to hold temporary values) can be immediately freed without
-updating any Commit RRT entries, but for consistency we do not do
-this.
-
-<P>
-In PTLsim, a physical register is freed by moving it to the <TT><FONT SIZE="-1">physreg_free</FONT></TT>
-state. Unfortunately for various reasons related to long pipelines
-and the renaming of x86 flags, register reclamation is not so simple,
-but this will be discussed below in Section <A HREF="#sub:PhysicalRegisterRecyclingComplications">14.4</A>.
-
-<P>
-Some uops may also commit to a subset of the x86 flags, as specified
-in the uop encoding. For these uops, in theory no rename tables need
-updating, since the flags can be directly masked into the <TT><FONT SIZE="-1">REG_flags</FONT></TT>
-architectural pseudo-register. Should the pipeline be flushed, the
-rename table entries for the ZAPS, CF, OF flag sets will all be reset
-to point to the <TT><FONT SIZE="-1">REG_flags</FONT></TT> pseudo-register anyway.
-However, for the speculation recovery scheme described in Section
-<A HREF="node14.html#sec:SpeculationRecovery">10.2</A>, the <TT><FONT SIZE="-1">REG_zf</FONT></TT>, <TT><FONT SIZE="-1">REG_cf</FONT></TT>,
-and <TT><FONT SIZE="-1">REG_of</FONT></TT> commit RRT entries are updated as well
-to match the updates done to the speculative RRT.
-
-<P>
-Branches and jumps update the <TT><FONT SIZE="-1">REG_rip</FONT></TT> pseudo architectural
-register, while all other uops simply increment <TT><FONT SIZE="-1">REG_rip</FONT></TT>
-by the number of bytes in the x86 instruction being committed. The
-number of bytes (1-15) is stored in a 4-bit field of the first uop
-in each x86 instruction (i.e. the uop with its SOM bit set).
-
-<P>
-Stores commit to the architectural state by writing directly to the
-data cache. Remember that a series of stores into a given 64-bit chunk
-of memory are merged within the store queue to the store uop's corresponding
-STQ entry as the store uop issues, so the commit unit always writes
-64 bits to the cache at a time. The byte mask associated with the
-STQ entry of the store uop is used to only update the modified bytes
-in each chunk of memory in program order.
-
-<P>
-
-<H1><A NAME="SECTION04940000000000000000"></A><A NAME="sub:PhysicalRegisterRecyclingComplications"></A>
-<BR>
-Physical Register
-Recycling Complications
-</H1>
-
-<P>
-
-<H2><A NAME="SECTION04941000000000000000">
-Problem Scenarios</A>
-</H2>
-
-<P>
-In some processor designs, it is not always possible to immediately
-free the physical register mapped to a given architectural register
-when that old architectural register mapping is overwritten during
-commit as described above. Out of order x86 processors must maintain
-three separate rename table entries for the ZAPS, CF, OF flags in
-addition to the register rename table entry, any or all of which may
-be updated when uops rename and retire, depending on the uop's flag
-renaming semantics (see Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>), For this
-reason, even though a given physical register value may become inaccessible
-and hence dead at commit time, the flags associated with that physical
-register are frequently still referenced within the pipeline, so the
-physical register itself must remain allocated.
-
-<P>
-Consider the following specific example, with uops listed in program
-order:
+The PTLsim cache hierarchy model is highly flexible and can be used
+to model a wide variety of contemporary cache structures. The cache
+subsystem (defined in <TT><FONT SIZE="-1">dcacheint.h</FONT></TT> and implemented
+by <TT><FONT SIZE="-1">dcache.cpp</FONT></TT>) by default consists of four levels:
 
 <P>
 
 <UL>
-<LI><TT><FONT SIZE="-1">sub rax = rax,rbx</FONT></TT>
-<BR>
-Assign RRT[<TT><FONT SIZE="-1">rax</FONT></TT>] = phys reg r0
-<BR>
-Assign RRT[<TT><FONT SIZE="-1">flags</FONT></TT>] = <I>r0</I> (since SUB all updates
-flags)
+<LI><B>L1 data cache</B> is directly probed by all loads and stores
 </LI>
-<LI><TT><FONT SIZE="-1">mov rax = rcx</FONT></TT>
-<BR>
-Assign RRT[<TT><FONT SIZE="-1">rax</FONT></TT>] = phys reg r1
-<BR><I>No flags renamed:</I> MOV never updates flags, so RRT[<TT><FONT SIZE="-1">flags</FONT></TT>]
-is still <I>r0</I>.
+<LI><B>L1 instruction cache</B> services all instruction fetches
 </LI>
-<LI><TT><FONT SIZE="-1">br.e target</FONT></TT>
-<BR>
-Depends on flags attached to <I>r0</I>, even though actual architectural
-register (<TT><FONT SIZE="-1">rax</FONT></TT>) for <I>r0</I> has already been overwritten
-in the commit RRT by the MOV's commit. We cannot free <I>r0</I> since
-the BR uop might not have issued yet.
+<LI><B>L2 cache</B> is shared between data and instructions, with data
+paths to both L1 caches
+</LI>
+<LI><B>L3 cache</B> is also shared and is optionally present
+</LI>
+<LI><B>Main memory</B> is considered infinite in size but still has
+configurable characteristics
 </LI>
 </UL>
-This situation only happens with instruction sets like x86 (and SPARC
-or even PowerPC to some extent) which support writing flags (particularly
-multiple independent flags) and data in a single instruction.
+These cache levels are listed in order from highest level (closer
+to the core) to lowest level (far away). The cache hierarchy is assumed
+to be <I>inclusive</I>, i.e. any data in higher levels is assumed
+to always be present in lower levels. Additionally, the cache levels
+are generally <I>write-through</I>, meaning that every store updates
+all cache levels, rather than waiting for a dirty line to be evicted.
+PTLsim supports a 48-bit virtual address space and 40-bit physical
+addresses in accordance with the x86-64 minimum requirements.
 
 <P>
 
-<H2><A NAME="SECTION04942000000000000000">
-Reference Counting</A>
-</H2>
+<H1><A NAME="SECTION031010000000000000000">
+General Configurable Parameters</A>
+</H1>
 
 <P>
-For these reasons, we need to prevent U2's register from being freed
-if it is still referenced by anything still in the pipeline; the normal
-reorder buffer mechanism cannot always handle this situation in a
-very long pipeline.
-
-<P>
-One solution (the one used by PTLsim) is to give each physical register
-a reference counter. Physical registers can be referenced from three
-structures: as operands to ROBs, from the speculative RRT, and from
-the committed RRT. As each uop operand is renamed, the counter for
-the corresponding physical register is incremented by calling the
-<TT><FONT SIZE="-1">PhysicalRegister::addref()</FONT></TT> method. As each uop commits,
-the counter for each of its operands is decremented via the <TT><FONT SIZE="-1">PhysicalRegister::unref()</FONT></TT>
-method. Similarly, <TT><FONT SIZE="-1">unref()</FONT></TT> and <TT><FONT SIZE="-1">addref()</FONT></TT>
-are used whenever an entry in the speculative RRT or commit RRT is
-updated. During mis-speculation recovery (see Section <A HREF="node14.html#sec:SpeculationRecovery">10.2</A>),
-<TT><FONT SIZE="-1">unref()</FONT></TT> is also used to unlock the operands of uops
-slated for annulment. Finally, <TT><FONT SIZE="-1">unref()</FONT></TT> and <TT><FONT SIZE="-1">addref()</FONT></TT>
-are used when loads and stores need to add a new dependency on a waiting
-store queue entry (see Sections <A HREF="node15.html#sec:IssuingLoads">11.1</A> and <A HREF="node16.html#sec:SplitPhaseStores">12.2</A>).
-
-<P>
-As we update the committed RRT during the commit stage, the old register
-R mapped to the destination architectural register A of the uop being
-committed is examined. The register R is only moved to the <I>free</I>
-state iff its reference counter is zero. Otherwise, it is moved to
-the <I>pendingfree</I> state. The hardware examines the counters of
-<I>pendingfree</I> physical registers every cycle and moves physical
-registers to the <I>free</I> state only when their counters become
-zero and they are in the <I>pendingfree</I> state.
+All caches support configuration of:
 
 <P>
 
-<H2><A NAME="SECTION04943000000000000000">
-Hardware Implementation</A>
-</H2>
+<UL>
+<LI>Line size in bytes. Any power of two size is acceptable, however the
+line size of a lower cache level must be the same or larger than any
+line size of a higher level cache. For example, it is illegal to have
+128 byte L1 lines with 64 byte L2 lines.
+</LI>
+<LI>Set count may be any power of two number. The total cache size in
+bytes is of course (line size) <IMG
+ WIDTH="18" HEIGHT="32" ALIGN="MIDDLE" BORDER="0"
+ SRC="img5.png"
+ ALT="$\times$"> (set count)<IMG
+ WIDTH="18" HEIGHT="32" ALIGN="MIDDLE" BORDER="0"
+ SRC="img5.png"
+ ALT="$\times$"> (way
+count)
+</LI>
+<LI>Way count (associativity) may be any number from 1 (direct mapped)
+up to the set count (fully associative). Note that simulation performance
+(and clock speed in a real processor) will suffer if the associativity
+is too great, particularly for L1 caches.
+</LI>
+<LI>Latency in cycles from a load request to the arrival of the data.
+</LI>
+</UL>
+In dcacheint.h, the two base classes <TT><FONT SIZE="-1">CacheLine</FONT></TT> and
+<TT><FONT SIZE="-1">CacheLineWithValidMask</FONT></TT> are interchangeable, depending
+on the model being used. The <TT><FONT SIZE="-1">CacheLine</FONT></TT> class is a
+standard cache line with no actual data (since the bytes in each line
+are simply held in memory for simulation purposes). 
 
 <P>
-The hardware implementation of this scheme is straightforward and
-low complexity. The counters can have a very small number of bits
-since it is very unlikely a given physical register would be referenced
-by all 100+ uops in the ROB; 3 bits should be enough to handle the
-typical maximum of &lt; 8 uops sharing a given operand. Counter overflows
-can simply stall renaming or flush the pipeline since they are so
-rare.
+The <TT><FONT SIZE="-1">CacheLineWithValidMask</FONT></TT> class adds a bitmask specifying
+which bytes within the cache line contain valid data and which are
+unknown. This is useful for implementing ``no stall on store''
+semantics, in which stores simply allocate a new way in the appropriate
+set but only set the valid bits for those bytes actually modified
+by the store. The rest of the cache line not touched by the store
+can be brought in later without stalling the processor (unless a load
+tries to access them); this is PTLsim's default model. Additionally,
+this technique may be used to implement sectored cache lines, in which
+the line fill bus is smaller than the cache line size. This means
+that groups of bytes within the line may be filled over subsequent
+cycles rather than all at once.
 
 <P>
-The counter table can be updated in bulk each cycle by adding/subtracting
-the appropriate sum or just adding zero if the corresponding register
-wasn't used. Since there are several stages between renaming and commit,
-the same counter is never both incremented and decremented in the
-same cycle, so race conditions are not an issue. 
+The <TT><FONT SIZE="-1">AssociativeArray</FONT></TT> template class in <TT><FONT SIZE="-1">logic.h</FONT></TT>
+forms the basis of all caches in PTLsim. To construct a cache in which
+specific lines can be locked into place, the <TT><FONT SIZE="-1">LockableAssociativeArray</FONT></TT>
+template class may be used instead. Finally, the <TT><FONT SIZE="-1">CommitRollbackCache</FONT></TT>
+template class is useful for creating versions of PTLsim with cache
+level commit/rollback support for out of order commit, fault recovery
+and advanced speculation techniques.
 
 <P>
-In real processors, the Pentium 4 uses a scheme similar to this one
-but uses bit vectors instead. For smaller physical register files,
-this may be a better solution. Each physical register has a bit vector
-with one bit per ROB entry. If a given physical register P is still
-used by ROB entry E in the pipeline, P's bit vector bit R is set.
-Register P cannot be freed until all bits in its vector are zero.
+The various caches are defined in <TT><FONT SIZE="-1">dcacheint.h</FONT></TT> by specializations
+of these template classes. The classes are <TT><FONT SIZE="-1">L1Cache</FONT></TT>,
+<TT><FONT SIZE="-1">L1ICache</FONT></TT>, <TT><FONT SIZE="-1">L2Cache</FONT></TT> and <TT><FONT SIZE="-1">L3Cache</FONT></TT>.
+
+<P>
+
+<H1><A NAME="SECTION031020000000000000000"></A><A NAME="sec:InitiatingCacheMiss"></A>
+<BR>
+Initiating a Cache Miss
+</H1>
+
+<P>
+As described in Section <A HREF="node14.html#sec:IssuingLoads">11.1</A>, in the out of order
+core model, the <TT><FONT SIZE="-1">issueload()</FONT></TT> function determines if
+some combination of a prior store's forwarded bytes (if any) and data
+present in the L1 cache can fulfill a load. If not, this is a miss
+and lower cache levels must be accessed. In this case, a <TT><FONT SIZE="-1">LoadStoreInfo</FONT></TT>
+structure (defined in <TT><FONT SIZE="-1">dcache.h</FONT></TT>) is prepared with various
+metadata about the load, including which ROB entry and physical register
+to wake up when the load arrives, its size, alignment, sign extension
+properties, prefetch properties and so on. The <TT><FONT SIZE="-1">issueload_slowpath()</FONT></TT>
+function (defined in <TT><FONT SIZE="-1">dcache.cpp</FONT></TT>) is then called with
+this information, the physical address to load and any data inherited
+from a prior store still in the pipeline. The <TT><FONT SIZE="-1">issueload_slowpath()</FONT></TT>
+function moves the load request out of the core pipeline and into
+the cache hierarchy. 
+
+<P>
+The <I>Load Fill Request Queue</I> (LFRQ) is a structure used to hold
+information about any outstanding loads that have missed any cache
+level. The LFRQ allows a configurable number of loads to be outstanding
+at any time and provides a central control point between cache lines
+arriving from the L2 cache or lower levels and the movement of the
+requested load data into the processor core to dependent instructions.
+The <TT><FONT SIZE="-1">LoadFillReq</FONT></TT> structure, prepared by <TT><FONT SIZE="-1">issueload_slowpath()</FONT></TT>,
+contains all the data needed to return a filled load to the core:
+the physical address of the load, the data and bytemask already known
+so far (e.g. forwarded from a prior store) and the <TT><FONT SIZE="-1">LoadStoreInfo</FONT></TT>
+metadata described above.
+
+<P>
+The <I>Miss Buffer</I> (MB) tracks all outstanding cache lines, rather
+than individual loads. Each MB slot uses a bitmap to track one or
+more LFRQ entries that need to be awakened when the missing cache
+line arrives. After adding the newly created <TT><FONT SIZE="-1">LoadFillReq</FONT></TT>
+entry to the LFRQ, the <TT><FONT SIZE="-1">MissBuffer::initiate_miss()</FONT></TT>
+method uses the missing line's physical address to allocate a new
+slot in the miss buffer array (or simply uses an existing slot if
+a miss was already in progress on a given line). In any case, the
+MB's wakeup bitmap is updated to reflect the new LFRQ entry referring
+to that line. Each MB entry contains a <TT><FONT SIZE="-1">cycles</FONT></TT> field,
+indicating the number of cycles remaining for that miss buffer before
+it can be moved up the cache hierarchy until it reaches the core.
+Each entry also contains two bits (<TT><FONT SIZE="-1">icache</FONT></TT> and <TT><FONT SIZE="-1">dcache</FONT></TT>)
+indicating which L1 caches to which the line should eventually be
+delivered; this is required because a single L2 line (and corresponding
+miss buffer) may be referenced by both the L1 data and instruction
+caches. 
+
+<P>
+In <TT><FONT SIZE="-1">initiate_miss()</FONT></TT>, the L2 and L3 caches are probed
+to see if they contain the required line. If the L2 has the line,
+the miss buffer is placed into the <TT><FONT SIZE="-1">STATE_DELIVER_TO_L1</FONT></TT>
+state, indicating that the line is now in progress to the L1 cache.
+Similarly, an L2 miss but L3 hit results in the <TT><FONT SIZE="-1">STATE_DELIVER_TO_L2</FONT></TT>
+state, and a miss all the way to main memory results in <TT><FONT SIZE="-1">STATE_DELIVER_TO_L3</FONT></TT>.
+
+<P>
+In the very unlikely event that either the LFRQ slot or miss buffer
+are full, an exception is returned to out of order core, which typically
+replays the affected load until space in these structures becomes
+available. For prefetch requests, only a miss buffer is allocated;
+no LFRQ slot is needed.
+
+<P>
+
+<H1><A NAME="SECTION031030000000000000000"></A><A NAME="sec:FillingCacheMiss"></A>
+<BR>
+Filling a Cache Miss
+</H1>
+
+<P>
+The <TT><FONT SIZE="-1">MissBuffer::clock()</FONT></TT> method implements all synchronous
+state transitions. For each active miss buffer, the <TT><FONT SIZE="-1">cycles</FONT></TT>
+counter is decremented, and if it becomes zero, the MB's current state
+is examined. If a given miss buffer was in the <TT><FONT SIZE="-1">STATE_DELIVER_TO_L3</FONT></TT>
+state (i.e. in progress from main memory) and the cycle counter just
+became zero, a line in the L3 cache is validated with the incoming
+data (this may involve evicting another line in the same set to make
+room). The MB is then moved to the next state up the cache hierarchy
+(i.e. <TT><FONT SIZE="-1">STATE_DELIVER_TO_L2</FONT></TT> in this example) and
+its cycles field is updated with the latency of the cache level it
+is now leaving (e.g. <TT><FONT SIZE="-1">L3_LATENCY</FONT></TT> in this example). 
+
+<P>
+This process continues with successive levels until the MB is in the
+<TT><FONT SIZE="-1">STATE_DELIVER_TO_L1</FONT></TT> state and its cycles field
+has been decremented to zero. If the MB's <TT><FONT SIZE="-1">dcache</FONT></TT> bit
+is set, the L1 corresponding line is validated and the <TT><FONT SIZE="-1">lfrq.wakeup()</FONT></TT>
+method is called to invoke a new state machine to wake up any loads
+waiting on the recently filled line (as known from the MB's <TT><FONT SIZE="-1">lfrqmap</FONT></TT>
+bitmap). If the MB's <TT><FONT SIZE="-1">icache</FONT></TT> bit was set, the line
+is validated in the L1 instruction cache, and the <TT><FONT SIZE="-1">icache_wakeup_func()</FONT></TT>
+callback is used to notify the out of order core's fetch stage that
+it may probe the cache for the missing line again. In any case, the
+miss buffer is then returned to the unused state.
+
+<P>
+Each LFRQ slot can be in one of three states: <I>free</I>, <I>waiting</I>
+and <I>ready</I>. LFRQ slots remain in the <I>waiting</I> state as
+long as they are referenced by a miss buffer; once the <TT><FONT SIZE="-1">lfrq.wakeup()</FONT></TT>
+method is called, all slots affiliated with that miss buffer are moved
+to the <I>ready</I> state. The <TT><FONT SIZE="-1">LoadFillRequestQueue::clock()</FONT></TT>
+method finds up to <TT><FONT SIZE="-1">MAX_WAKEUPS_PER_CYCLE</FONT></TT> LFRQ slots
+in the <I>ready</I> state and wakes them up by calling the <TT><FONT SIZE="-1">load_filled_callback()</FONT></TT>
+callback with the saved <TT><FONT SIZE="-1">LoadStoreInfo</FONT></TT> metadata. The
+out of order core handles this callback as described in Section <A HREF="node14.html#sec:CacheMissHandling">11.4</A>.
+
+<P>
+For simulation purposes only, the value to be loaded is immediately
+recorded as soon as the load issues, independent of the cache hit
+or miss status. In real hardware, the LFRQ entry data would be used
+to extract the correct bytes from the newly arrived line and perform
+sign extension and alignment. If the original load required bytes
+from a mixture of its source store buffer and the data cache, the
+SFR data and mask fields in the LFRQ entry would be used to perform
+this merging operation. The data would then be written into the physical
+register specified by the <TT><FONT SIZE="-1">LoadStoreInfo</FONT></TT> metadata and
+that register would be marked as ready before sending a signal to
+the issue queues to wake up dependent operations.
+
+<P>
+In some cases, the out of order core may need to annul speculatively
+executed loads. The cache subsystem is notified of this through the
+<TT><FONT SIZE="-1">annul_lfrq_slot()</FONT></TT> function called by the core. This
+function clears the specified LFRQ slot in each miss buffer's lfrqmap
+entry (since that slot should no longer be awakened now that it has
+been annulled), and frees the LFRQ entry itself.
+
+<P>
+
+<H1><A NAME="SECTION031040000000000000000"></A><A NAME="sec:TranslationLookasideBuffers"></A>
+<BR>
+Translation Lookaside Buffers
+</H1>
+
+<P>
+The cache subsystem includes separate translation lookaside buffers
+(TLBs) for data (DTLB) and instructions (ITLB) to map virtual to physical
+addresses. Note that virtual addresses are always used within the
+simulated virtual address space; hence the TLBs are solely for accurately
+measuring performance. To achieve fast simulation, the TLBs are not
+actually associatively scanned on each access; instead, the <TT><FONT SIZE="-1">TranslationLookasideBuffer::check()</FONT></TT>
+method simply checks one of the simulator's Shadow Page Access Tables
+(SPATs) as described in Section <A HREF="node5.html#sec:AddressSpaceSimulation">3.5</A>.
+For DTLB accesses, the <TT><FONT SIZE="-1">dtlbmap</FONT></TT> SPAT is used, while
+ITLB accesses use the <TT><FONT SIZE="-1">itlbmap</FONT></TT> SPAT. If a bit in the
+appropriate SPAT is set, that page is considered mapped within the
+TLB. When entries are added to or evicted from the TLBs, the SPAT
+bit for the old entry's virtual page address must be cleared and the
+bit for the new entry's virtual page address must be set; this keeps
+the SPATs up to date.
+
+<P>
+TLB miss penalties can be modeled in various ways. In most x86 processors,
+a hardware state machine is used to walk the 3-level or 4-level page
+table tree by issuing a chain of loads until the lowest level page
+table containing the physical address and attributes is reached. This
+can take from ~10 cycles up to hundreds of cycles
+if the page tables themselves are not already in the cache hierarchy.
+To model this, the <TT><FONT SIZE="-1">probe_cache_and_sfr()</FONT></TT> function
+queries the DTLB for every access, and if a miss is detected, it simulates
+an L2 cache miss to add some latency to the load causing the TLB miss.
+The TLB is then updated with the <TT><FONT SIZE="-1">TranslationLookasideBuffer::replace()</FONT></TT>
+method.
+
+<P>
+<B><I>NOTE:</I></B> PTLsim does not fully support self modifying
+code. Since no actual data is stored within the data and instruction
+caches (only tags are maintained), self modifying code may appear
+to work correctly. However, according to the x86 standard, any stores
+to any instructions currently in the pipeline must flush the entire
+pipeline; PTLsim does not currently do this.
 
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html603"
+<A NAME="tex2html614"
   HREF="node19.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html599"
-  HREF="node9.html">
+<A NAME="tex2html610"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html593"
+<A NAME="tex2html604"
   HREF="node17.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html601"
+<A NAME="tex2html612"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html604"
-  HREF="node19.html">Cache Hierarchy</A>
-<B> Up:</B> <A NAME="tex2html600"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html594"
-  HREF="node17.html">Forwarding, Wakeup and Writeback</A>
- &nbsp; <B>  <A NAME="tex2html602"
+<B> Next:</B> <A NAME="tex2html615"
+  HREF="node19.html">Branch Prediction</A>
+<B> Up:</B> <A NAME="tex2html611"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html605"
+  HREF="node17.html">Commitment</A>
+ &nbsp; <B>  <A NAME="tex2html613"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

@@ -7,8 +7,8 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
   Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
 <HTML>
 <HEAD>
-<TITLE>x86 Instructions and Micro-Ops (uops)</TITLE>
-<META NAME="description" CONTENT="x86 Instructions and Micro-Ops (uops)">
+<TITLE>Out of Order Processor Model</TITLE>
+<META NAME="description" CONTENT="Out of Order Processor Model">
 <META NAME="keywords" CONTENT="PTLsimManual">
 <META NAME="resource-type" CONTENT="document">
 <META NAME="distribution" CONTENT="global">
@@ -19,500 +19,220 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <LINK REL="STYLESHEET" HREF="PTLsimManual.css">
 
-<LINK REL="previous" HREF="node7.html">
-<LINK REL="up" HREF="node7.html">
+<LINK REL="next" HREF="node20.html">
+<LINK REL="previous" HREF="node2.html">
+<LINK REL="up" HREF="PTLsimManual.html">
 <LINK REL="next" HREF="node9.html">
 </HEAD>
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html379"
+<A NAME="tex2html393"
   HREF="node9.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html375"
-  HREF="node7.html">
+<A NAME="tex2html389"
+  HREF="PTLsimManual.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html371"
+<A NAME="tex2html383"
   HREF="node7.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html377"
+<A NAME="tex2html391"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html380"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Up:</B> <A NAME="tex2html376"
-  HREF="node7.html">x86 Instruction Set and</A>
-<B> Previous:</B> <A NAME="tex2html372"
-  HREF="node7.html">x86 Instruction Set and</A>
- &nbsp; <B>  <A NAME="tex2html378"
+<B> Next:</B> <A NAME="tex2html394"
+  HREF="node9.html">Introduction</A>
+<B> Up:</B> <A NAME="tex2html390"
+  HREF="PTLsimManual.html">PTLsimManual</A>
+<B> Previous:</B> <A NAME="tex2html384"
+  HREF="node7.html">x86 Instructions and Micro-Ops</A>
+ &nbsp; <B>  <A NAME="tex2html392"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
 <!--End of Navigation Panel-->
+
+<H1><A NAME="SECTION03000000000000000000"></A><A NAME="part:OutOfOrderModel"></A>
+<BR>
+Out of Order Processor Model
+</H1>
+
+<P>
+<BR><HR>
 <!--Table of Child-Links-->
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html381"
-  HREF="node8.html#SECTION03110000000000000000">Micro-Ops (uops) and TransOps</A>
-<LI><A NAME="tex2html382"
-  HREF="node8.html#SECTION03120000000000000000">Descriptions of uops</A>
-<LI><A NAME="tex2html383"
-  HREF="node8.html#SECTION03130000000000000000">Simple Fast Path Instructions</A>
-<LI><A NAME="tex2html384"
-  HREF="node8.html#SECTION03140000000000000000">x86-64</A>
-<LI><A NAME="tex2html385"
-  HREF="node8.html#SECTION03150000000000000000">Operation Sizes</A>
-<LI><A NAME="tex2html386"
-  HREF="node8.html#SECTION03160000000000000000">Flags Management and Register Renaming</A>
-<LI><A NAME="tex2html387"
-  HREF="node8.html#SECTION03170000000000000000">Unaligned Loads and Stores</A>
-<LI><A NAME="tex2html388"
-  HREF="node8.html#SECTION03180000000000000000">Repeated String Operations</A>
-<LI><A NAME="tex2html389"
-  HREF="node8.html#SECTION03190000000000000000">Problem Instructions</A>
-<LI><A NAME="tex2html390"
-  HREF="node8.html#SECTION031100000000000000000">SSE Support</A>
-<LI><A NAME="tex2html391"
-  HREF="node8.html#SECTION031110000000000000000">x87 Floating Point</A>
-<LI><A NAME="tex2html392"
-  HREF="node8.html#SECTION031120000000000000000">Assists</A>
-</UL>
-<!--End of Table of Child-Links-->
-<HR>
-
-<H1><A NAME="SECTION03100000000000000000">
-x86 Instructions and Micro-Ops (uops)</A>
-</H1>
-
-<P>
-
-<H1><A NAME="SECTION03110000000000000000"></A><A NAME="sec:UopIntro"></A>
-<BR>
-Micro-Ops (uops) and TransOps
-</H1>
-
-<P>
-PTLsim presents to user code a full implementation of the x86 and
-x86-64 instruction set (both 32-bit and 64-bit modes), including most
-user level instructions supported by the Intel Pentium 4 and AMD K8
-microprocessors (i.e. all standard instructions, SSE/SSE2, x86-64
-and most of x87 FP). At the present stage of development, the vast
-majority of all userspace instructions are implemented. 
-
-<P>
-The x86 instruction set is based on the two-operand CISC concept of
-load-and-compute and load-compute-store. However, modern x86 processors
-(including PTLsim) do not directly execute complex x86 instructions.
-Instead, these processors translate each x86 instruction into a series
-of micro-operations (<I>uops</I>) very similar to classical load-store
-RISC instructions. Uops can be executed very efficiently on an out
-of order core, unlike x86 instructions. In PTLsim, uops have three
-source registers and one destination register. They may generate a
-64-bit result and various x86 status flags, or may be loads, stores
-or branches.
-
-<P>
-The x86 instruction decoding process initially generates translated
-uops (<I>transops</I>), which have a slightly different structure
-than the true uops used in the processor core. Specifically, sources
-and destinations are represented as un-renamed architectural registers
-(or special temporary register numbers), and a variety of additional
-information is attached to each uop only needed during the renaming
-and retirement process. TransOps (represented by the <TT><FONT SIZE="-1">TransOp</FONT></TT>
-structure) consist of the following:
-
-<P>
-
+<LI><A NAME="tex2html395"
+  HREF="node9.html">Introduction</A>
+<LI><A NAME="tex2html396"
+  HREF="node10.html">Fetch Stage</A>
 <UL>
-<LI><TT><FONT SIZE="-1">som</FONT></TT>: Start of Macro-Op. Since x86 instructions may
-consist of multiple transops, the first transop in the sequence has
-its <TT><FONT SIZE="-1">som</FONT></TT> bit set to indicate this.
-</LI>
-<LI><TT><FONT SIZE="-1">eom</FONT></TT>: End of Macro-Op. This bit is set for the last
-transop in a given x86 instruction (which may also be the first uop
-for single-uop instructions)
-</LI>
-<LI><TT><FONT SIZE="-1">bytes</FONT></TT>: Number of bytes in the corresponding x86 instruction
-(1-15). This is only valid for a SOM uop.
-</LI>
-<LI><TT><FONT SIZE="-1">opcode</FONT></TT>: the uop (not x86) opcode
-</LI>
-<LI><TT><FONT SIZE="-1">size</FONT></TT>: the effective operation size (0-3, for 1/2/4/8
-bytes)
-</LI>
-<LI><TT><FONT SIZE="-1">cond:</FONT></TT> the x86 condition code for branches, selects,
-sets, etc. For loads and stores, this field is reused to specify unaligned
-access information as described later.
-</LI>
-<LI><TT><FONT SIZE="-1">setflags</FONT></TT>: subset of the x86 flags set by this uop
-(see Section <A HREF="#sub:FlagsManagement">5.6</A>)
-</LI>
-<LI><TT><FONT SIZE="-1">internal</FONT></TT>: set for certain microcode operations. For
-instance, loads and stores marked internal access on-chip registers
-or buffers invisible to x86 code (e.g. machine state registers, segmentation
-caches, floating point constant tables, etc).
-</LI>
-<LI><TT><FONT SIZE="-1">rd</FONT></TT>, <TT><FONT SIZE="-1">ra</FONT></TT>, <TT><FONT SIZE="-1">rb</FONT></TT>, <TT><FONT SIZE="-1">rc</FONT></TT>:
-the architectural source and destination registers (see Section <A HREF="node12.html#sub:RegisterRenaming">8.4.1</A>)
-</LI>
-<LI><TT><FONT SIZE="-1">extshift</FONT></TT>: shift amount (0-3 bits) used for shifted
-adds (x86 memory addressing and LEA). The <TT><FONT SIZE="-1">rc</FONT></TT> operand
-is shifted left by this amount.
-</LI>
-<LI><TT><FONT SIZE="-1">cachelevel</FONT></TT>: used for prefetching and non-temporal
-loads and stores
-</LI>
-<LI><TT><FONT SIZE="-1">rbimm</FONT></TT> and <TT><FONT SIZE="-1">rcimm</FONT></TT>: signed 64-bit immediates
-for the rb and rc operands. These are selected by specifying the special
-constant <TT><FONT SIZE="-1">REG_imm</FONT></TT> in the <TT><FONT SIZE="-1">rb</FONT></TT> and <TT><FONT SIZE="-1">rc</FONT></TT>
-fields, respectively.
-</LI>
-<LI><TT><FONT SIZE="-1">riptaken</FONT></TT>: for branches only, the 64-bit target RIP
-of the branch if it were taken.
-</LI>
-<LI><TT><FONT SIZE="-1">ripseq</FONT></TT>: for branches only, the 64-bit sequential RIP
-of the branch if it were not taken.
-</LI>
+<LI><A NAME="tex2html397"
+  HREF="node10.html#SECTION03210000000000000000">Instruction Fetching and the Basic Block Cache</A>
+<LI><A NAME="tex2html398"
+  HREF="node10.html#SECTION03220000000000000000">Fetch Queue</A>
 </UL>
-There may be other fields used for debugging or not relevant to the
-out of order version of the simulator; these should be ignored.
-
-<P>
-
-<H1><A NAME="SECTION03120000000000000000">
-Descriptions of uops</A>
-</H1>
-
-<P>
-Section <A HREF="node22.html#sec:UopReference">17</A> describes the semantics and encoding
-of all uops supported by the PTLsim processor model.
-
-<P>
-
-<H1><A NAME="SECTION03130000000000000000">
-Simple Fast Path Instructions</A>
-</H1>
-
-<P>
-Simple integer and floating point operations are fairly straightforward
-to decode into loads, stores and ALU operations; a typical load-op-store
-ALU operation will consist of a load to fetch one operand, the ALU
-operation itself, and a store to write the result. The instruction
-set also implements a number of important but complex instructions
-with bizarre semantics; typically the translator will synthesize and
-inject into the uop stream up to 8 uops for more complex instructions. 
-
-<P>
-
-<H1><A NAME="SECTION03140000000000000000">
-x86-64</A>
-</H1>
-
-<P>
-The 64-bit x86-64 instruction set is a fairly straightforward extension
-of the 32-bit IA-32 (x86) instruction set. The x86-64 ISA was introduced
-by AMD in 2000 with its K8 microarchitecture; the same instructions
-were subsequently plagiarized by Intel under a different name several
-years later. In addition to extending all integer registers and ALU
-datapaths to 64 bits, x86-64 also provides a total of 16 integer general
-purpose registers and 16 SSE (vector floating and fixed point) registers.
-It also introduced several 64-bit address space simplifications, including
-RIP-relative addressing and corresponding new addressing modes, and
-eliminated a number of legacy features from 64-bit mode, including
-segmentation, BCD arithmetic, some byte register manipulation, etc.
-Limited forms of segmentation are still present to allow thread local
-storage and mark code segments as 64-bit. In general, the encoding
-of x86-64 and x86 are very similar, with 64-bit mode adding a one
-byte REX prefix to specify additional bits for source and destination
-register indexes and effective address size. As a result, both variants
-can be decoded by similar decoding logic into a common set of uops.
-
-<P>
-
-<H1><A NAME="SECTION03150000000000000000"></A><A NAME="sec:OperationSizes"></A>
 <BR>
-Operation Sizes
-</H1>
-
-<P>
-Most x86-64 instructions can operate on 8, 16, 32 or 64 bits of a
-given register. For 8-bit and 16-bit operations, only the low 8 or
-16 bits of the destination register are actually updated; 32-bit and
-64-bit operations are zero extended as with RISC architectures. As
-a result, a dependency on the old destination register may be introduced
-so merging can be performed. Fortunately, since x86 features destructive
-overwrites of the destination register (i.e. the <TT><FONT SIZE="-1">rd</FONT></TT>
-and <TT><FONT SIZE="-1">ra</FONT></TT> operands are the same), the <TT><FONT SIZE="-1">ra</FONT></TT>
-operand is generally already a dependency. Thus, the PT2x uop encoding
-reserves 2 bits to specify the operation size; the low bits of the
-new result are automatically merged with the old destination value
-(in <TT><FONT SIZE="-1">ra</FONT></TT>) as part of the ALU logic. This applies to
-the <TT><FONT SIZE="-1">mov</FONT></TT> uop as well, allowing operations like ``<TT><FONT SIZE="-1">mov
-al,bl</FONT></TT>'' in one uop. Loads do not support this mode, so loads into
-8-bit and 16-bit registers must be followed by a separate <TT><FONT SIZE="-1">mov</FONT></TT>
-uop to truncate and merge the loaded value into the old destination
-properly.
-
-<P>
-The x86 ISA defines some bizarre byte operations as a carryover from
-the ancient 8086 architecture; for instance, it is possible to address
-the second byte of many integer registers as a separate register (i.e.
-as <TT><FONT SIZE="-1">ah</FONT></TT>, <TT><FONT SIZE="-1">bh</FONT></TT>, <TT><FONT SIZE="-1">ch</FONT></TT>, <TT><FONT SIZE="-1">dh</FONT></TT>).
-The <TT><FONT SIZE="-1">inshb</FONT></TT>, <TT><FONT SIZE="-1">exthb</FONT></TT> and <TT><FONT SIZE="-1">movhb</FONT></TT>
-uops are provided for handling this rare but important operation.
-
-<P>
-
-<H1><A NAME="SECTION03160000000000000000"></A><A NAME="sub:FlagsManagement"></A>
+<LI><A NAME="tex2html399"
+  HREF="node11.html">Frontend and Key Structures</A>
+<UL>
+<LI><A NAME="tex2html400"
+  HREF="node11.html#SECTION03310000000000000000">Resource Allocation</A>
+<LI><A NAME="tex2html401"
+  HREF="node11.html#SECTION03320000000000000000">Reorder Buffer Entries</A>
+<UL>
+<LI><A NAME="tex2html402"
+  HREF="node11.html#SECTION03321000000000000000">ROB States</A>
+</UL>
+<LI><A NAME="tex2html403"
+  HREF="node11.html#SECTION03330000000000000000">Physical Registers</A>
+<UL>
+<LI><A NAME="tex2html404"
+  HREF="node11.html#SECTION03331000000000000000">Physical Registers</A>
+<LI><A NAME="tex2html405"
+  HREF="node11.html#SECTION03332000000000000000">Physical Register File</A>
+<LI><A NAME="tex2html406"
+  HREF="node11.html#SECTION03333000000000000000">Physical Register States</A>
+</UL>
+<LI><A NAME="tex2html407"
+  HREF="node11.html#SECTION03340000000000000000">Load Store Queue Entries</A>
+<UL>
+<LI><A NAME="tex2html408"
+  HREF="node11.html#SECTION03341000000000000000">Register Renaming</A>
+<LI><A NAME="tex2html409"
+  HREF="node11.html#SECTION03342000000000000000">External State</A>
+</UL>
+<LI><A NAME="tex2html410"
+  HREF="node11.html#SECTION03350000000000000000">Frontend Stages</A>
+</UL>
 <BR>
-Flags Management and Register Renaming
-</H1>
-
-<P>
-Many x86 arithmetic instructions modify some or all of the processor's
-numerous status and condition flag bits, but only 5 are relevant to
-normal execution: Zero, Parity, Sign, Overflow, Carry. In accordance
-with the well-known ``ZAPS rule'', any instruction that updates
-any of the Z/P/S flags updates all three flags, so in reality only
-three flag entities need to be tracked: ZPS, O, F (``ZAPS'' also
-includes an Auxiliary flag not accessible by most modern user instructions;
-it is irrelevant to the discussion below).
-
-<P>
-The x86 flag update semantics can hamper out of order execution, so
-we use a simple and well known solution. The 5 flag bits are attached
-to each result and physical register (along with the invalid and waiting
-bits described in Section <A HREF="node12.html#sec:PhysicalRegisters">8.3</A>); these bits
-are then consumed along with the actual result value by any consumers
-that also need to access the flags. It should be noted that not all
-uops generate all the flags as well as a 64-bit result, and some uops
-only generate flags and no result data. 
-
-<P>
-The register renaming mechanism is aware of these semantics, and tracks
-the latest x86 instruction in program order to update each set of
-flags (ZAPS, C, O); this allows branches and other flag consumers
-to directly access the result with the most recent program-ordered
-flag updates yet still allows full out of order scheduling. To do
-this, x86 processors maintain three separate rename table entries
-for the ZAPS, CF, OF flags in addition to the register rename table
-entry, any or all of which may be updated when uops are renamed. The
-<TT><FONT SIZE="-1">TransOp</FONT></TT> structure for each uop has a 3-bit <TT><FONT SIZE="-1">setflags</FONT></TT>
-field filled out during decoding in accordance with x86 semantics;
-the <TT><FONT SIZE="-1">SETFLAG_ZF</FONT></TT>, <TT><FONT SIZE="-1">SETFLAG_CF</FONT></TT>, <TT><FONT SIZE="-1">SETFLAG_OF</FONT></TT>
-bits in this field are used to determine which of the ZPS, O, F flag
-subsets to rename.
-
-<P>
-As mentioned above, any consumer of the flags needs to consult at
-most three distinct sources: the last ZAPS producer, the Carry producer
-and the Overflow producer. This conveniently fits into PTLsim's three-operand
-uop semantics. Various special uops access the flags associated with
-an operand rather than the 64-bit operand data itself. Branches always
-take two flag sources, since in x86 this is enough to evaluate any
-possible condition code combination (the <TT><FONT SIZE="-1">cond_code_to_flag_regs</FONT></TT>
-array provides this mapping). Various ALU instructions consume only
-the flags part of a source physical register; these include <TT><FONT SIZE="-1">addc</FONT></TT>
-(add with carry), <TT><FONT SIZE="-1">rcl/rcr</FONT></TT> (rotate carry), <TT><FONT SIZE="-1">sel.</FONT><I><FONT SIZE="-1">cc</FONT></I></TT>
-(select for conditional moves) and so on. Finally, the <TT><FONT SIZE="-1">collcc</FONT></TT>
-uop takes three operands (the latest producer of the ZAPS, CF and
-OF flags) and merges the flag components of each operand into a single
-flag set as its result. These uops are all documented in Section <A HREF="node22.html#sec:UopReference">17</A>.
-
-<P>
-
-<H1><A NAME="SECTION03170000000000000000"></A><A NAME="sub:UnalignedLoadsAndStores"></A>
+<LI><A NAME="tex2html411"
+  HREF="node12.html">Scheduling, Dispatch and
+Issue</A>
+<UL>
+<LI><A NAME="tex2html412"
+  HREF="node12.html#SECTION03410000000000000000">Clustering and Issue Queue Configuration</A>
+<LI><A NAME="tex2html413"
+  HREF="node12.html#SECTION03420000000000000000">Cluster Selection</A>
+<LI><A NAME="tex2html414"
+  HREF="node12.html#SECTION03430000000000000000">Issue Queue Structure and Operation</A>
+<UL>
+<LI><A NAME="tex2html415"
+  HREF="node12.html#SECTION03431000000000000000">Implementation</A>
+<LI><A NAME="tex2html416"
+  HREF="node12.html#SECTION03432000000000000000">Other Designs</A>
+</UL>
+<LI><A NAME="tex2html417"
+  HREF="node12.html#SECTION03440000000000000000">Issue</A>
+</UL>
 <BR>
-Unaligned Loads and Stores
-</H1>
-
-<P>
-Compared to RISC architectures, the x86 architecture is infamous for
-its relatively widespread use of unaligned memory operations; any
-implementation must efficiently handle this scenario. Fortunately,
-analysis shows that unaligned accesses are rarely in the performance
-intensive parts of a modern program, so we can aggressively eliminate
-them on contact through rescheduling. PTLsim does this by initially
-causing all unaligned loads and stores to raise an <TT><FONT SIZE="-1">UnalignedAccess</FONT></TT>
-internal exception, forcing a rollback of the current trace. To locate
-the RIP of the offending x86 instruction, the sequential version of
-the trace is then executed until the unaligned access is encountered
-again. At this point, a special ``unaligned'' bit is set for the
-problem load or store in its translated basic block representation.
-The sequential basic block is then retranslated such that when the
-x86 instruction with the problem RIP is encountered, the offending
-load or store is split into two aligned loads or stores.
-
-<P>
-PTLsim includes special uops to handle loads and stores split into
-two in this manner. The <TT><FONT SIZE="-1">ld.lo</FONT></TT> uop rounds down its
-effective address <!-- MATH
- $\left\lfloor A\right\rfloor$
- -->
-<IMG
- WIDTH="33" HEIGHT="36" ALIGN="MIDDLE" BORDER="0"
- SRC="img2.png"
- ALT="$\left\lfloor A\right\rfloor $"> to the nearest 64-bit
-boundary and performs the load. The <TT><FONT SIZE="-1">ld.hi</FONT></TT> uop rounds
-up to <!-- MATH
- $\left\lceil A+8\right\rceil$
- -->
-<IMG
- WIDTH="63" HEIGHT="36" ALIGN="MIDDLE" BORDER="0"
- SRC="img3.png"
- ALT="$\left\lceil A+8\right\rceil $">, performs another load, then
-takes as its third rc operand the first (<TT><FONT SIZE="-1">ld.lo</FONT></TT>) load's
-result. The two loads are concatenated into a 128-bit word and the
-final unaligned data is extracted. Stores are handled in a similar
-manner, with <TT><FONT SIZE="-1">st.lo</FONT></TT> and <TT><FONT SIZE="-1">st.hi</FONT></TT> rounding
-down and up to store parts of the unaligned value in adjacent 64-bit
-blocks. Just as with normal loads and stores, these unaligned load
-or store pairs access separate store buffers for each half as if they
-were independent.
-
-<P>
-
-<H1><A NAME="SECTION03180000000000000000">
-Repeated String Operations</A>
-</H1>
-
-<P>
-The x86 architecture allows for repeated string operations, including
-block moves, stores, compares and scans. The iteration count of these
-repeated operations depends on a combination of the <TT><FONT SIZE="-1">rcx</FONT></TT>
-register and the flags set by the repeated operation (e.g. compare).
-To translate these instructions, PTL treats the <TT><FONT SIZE="-1">rep
-xxx</FONT></TT> instruction as a single basic block; any basic block in progress
-before the repeat instruction is capped and the repeat is translated
-as a separate basic block. This conveniently lets us unroll and optimize
-the repeated loop just like any other basic block. To handle the unusual
-case where the repeat count is zero, a check instruction is inserted
-at the top of the loop to protect against this case; PTL simply bypasses
-the offending block if the check fails.
-
-<P>
-
-<H1><A NAME="SECTION03190000000000000000"></A><A NAME="sec:ShiftRotateProblems"></A>
+<LI><A NAME="tex2html418"
+  HREF="node13.html">Speculation and Recovery</A>
+<UL>
+<LI><A NAME="tex2html419"
+  HREF="node13.html#SECTION03510000000000000000">Misspeculation Cases</A>
+<UL>
+<LI><A NAME="tex2html420"
+  HREF="node13.html#SECTION03511000000000000000">Branch Mispredictions</A>
+<LI><A NAME="tex2html421"
+  HREF="node13.html#SECTION03512000000000000000">Unaligned Loads and Stores and Aliased Stores</A>
+</UL>
+<LI><A NAME="tex2html422"
+  HREF="node13.html#SECTION03520000000000000000">Recovery</A>
+</UL>
 <BR>
-Problem Instructions
-</H1>
-
-<P>
-The shift and rotate instructions have some of the most bizarre semantics
-in the entire x86 instruction set: they may or may not modify a subset
-of the flags depending on the rotation count operand, which we may
-not even know until the instruction issues. For fixed shifts and rotates,
-these semantics can be preserved by the uops generated, however variable
-rotations are more complex. The <TT><FONT SIZE="-1">collcc</FONT></TT> uop is put
-to use here to collect all flags; the collected result is then fed
-into the shift or rotate uop as its <TT><FONT SIZE="-1">rc</FONT></TT> operand; the
-uop then replicates the precise x86 behavior (including rotates using
-the carry flag) according to its input operands.
-
-<P>
-
-<H1><A NAME="SECTION031100000000000000000">
-SSE Support</A>
-</H1>
-
-<P>
-PTLsim provides full support for SSE and SSE2 vector floating point
-and fixed point, in both scalar and vector mode. As is done in the
-AMD K8, each SSE operation on a 128-bit vector is split into two 64-bit
-halves; each half (possibly consisting of a 64-bit load and one or
-more FPU operations) is scheduled independently. Because SSE instructions
-do not set flags like x86 integer instructions, architectural state
-management can be restricted to the 16 128-bit SSE registers (represented
-as 32 paired 64-bit registers) and a single <TT><FONT SIZE="-1">mxcsr</FONT></TT>
-architectural register containing sticky exception bits, which has
-no effect on out of order execution). The processor's floating point
-units can operate in either 64-bit IEEE double precision mode or on
-two parallel 32-bit single precision values.
-
-<P>
-
-<H1><A NAME="SECTION031110000000000000000"></A><A NAME="sub:x87-Floating-Point"></A>
+<LI><A NAME="tex2html423"
+  HREF="node14.html">Load Issue</A>
+<UL>
+<LI><A NAME="tex2html424"
+  HREF="node14.html#SECTION03610000000000000000">Issuing Loads</A>
+<LI><A NAME="tex2html425"
+  HREF="node14.html#SECTION03620000000000000000">Store Queue Check and Store Dependencies</A>
+<LI><A NAME="tex2html426"
+  HREF="node14.html#SECTION03630000000000000000">Data Extraction</A>
+<LI><A NAME="tex2html427"
+  HREF="node14.html#SECTION03640000000000000000">Cache Miss Handling</A>
+</UL>
 <BR>
-x87 Floating Point
-</H1>
-
-<P>
-The legacy x87 floating point architecture is the bane of all x86
-processor vendors' existence, largely because its stack based nature
-makes out of order processing so difficult. While there are certainly
-ways of translating stack based instruction sets into flat addressing
-for scheduling purposes, we do not do this. Fortunately, following
-the Pentium III and AMD Athlon's introduction, x87 is rapidly headed
-for planned obsolescence; most major applications released within
-the last three years now use SSE instructions for their floating point
-needs either exclusively or in all performance critical parts. To
-this end, even Intel has relegated x86 support on the Pentium 4 to
-a separate low performance in-order legacy unit, and AMD has severely
-restricted its use in 64-bit mode. For this reason, PTLsim translates
-legacy x87 instructions into a serialized, program ordered and emulated
-form; the hardware does not contain any x87-style 80-bit floating
-point registers (all floating point hardware is 32-bit and 64-bit
-IEEE compliant). We have noticed little to no performance problem
-from this approach when examining typical binaries, which rarely if
-ever still use x87 instructions in compute-intensive code.
-
-<P>
-
-<H1><A NAME="SECTION031120000000000000000">
-Assists</A>
-</H1>
-
-<P>
-Some operations are too complex to inline directly into the uop stream.
-To perform these instructions, a special uop (<TT><FONT SIZE="-1">brp</FONT></TT>:
-branch private) is executed to branch to an <I>assist</I> function
-implemented in microcode. In PTLsim, some assist functions are implemented
-as regular C/C++ or assembly language code when they interact with
-the rest of the virtual machine. Examples of instructions requiring
-assists include system calls, interrupts, some forms of integer division,
-handling of rare floating point conditions, CPUID, MSR reads/writes,
-etc. These are listed in the <TT><FONT SIZE="-1">ASSIST_xxx</FONT></TT> enum found
-in <TT><FONT SIZE="-1">translate-x86.cpp</FONT></TT> and <TT><FONT SIZE="-1">ptlhwdef.h</FONT></TT>.
-
-<P>
-When the processor issues an assist (<TT><FONT SIZE="-1">brp</FONT></TT> uop), the
-frontend pipeline is stalled and execution waits until the <TT><FONT SIZE="-1">brp</FONT></TT>
-retires, at which point an assist function within PTLsim is called.
-In a real processor there are more efficient ways of doing this without
-flushing the pipeline, however in PTLsim assists are sufficiently
-rare that the performance impact is negligible and this approach significantly
-reduces complexity.
-
-<P>
-<HR>
-<!--Navigation Panel-->
-<A NAME="tex2html379"
-  HREF="node9.html">
-<IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html375"
-  HREF="node7.html">
-<IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html371"
-  HREF="node7.html">
-<IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html377"
-  HREF="node1.html">
-<IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
+<LI><A NAME="tex2html428"
+  HREF="node15.html">Stores</A>
+<UL>
+<LI><A NAME="tex2html429"
+  HREF="node15.html#SECTION03710000000000000000">Store to Store Forwarding and Merging</A>
+<LI><A NAME="tex2html430"
+  HREF="node15.html#SECTION03720000000000000000">Split Phase Stores</A>
+<UL>
+<LI><A NAME="tex2html431"
+  HREF="node15.html#SECTION03721000000000000000">Load Queue Search (Alias Check)</A>
+<LI><A NAME="tex2html432"
+  HREF="node15.html#SECTION03722000000000000000">Store Queue Search (Merge Check)</A>
+</UL>
+</UL>
 <BR>
-<B> Next:</B> <A NAME="tex2html380"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Up:</B> <A NAME="tex2html376"
-  HREF="node7.html">x86 Instruction Set and</A>
-<B> Previous:</B> <A NAME="tex2html372"
-  HREF="node7.html">x86 Instruction Set and</A>
- &nbsp; <B>  <A NAME="tex2html378"
-  HREF="node1.html">Contents</A></B> 
-<!--End of Navigation Panel-->
+<LI><A NAME="tex2html433"
+  HREF="node16.html">Forwarding, Wakeup and Writeback</A>
+<UL>
+<LI><A NAME="tex2html434"
+  HREF="node16.html#SECTION03810000000000000000">Forwarding and the Clustered Bypass Network</A>
+<LI><A NAME="tex2html435"
+  HREF="node16.html#SECTION03820000000000000000">Writeback</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html436"
+  HREF="node17.html">Commitment</A>
+<UL>
+<LI><A NAME="tex2html437"
+  HREF="node17.html#SECTION03910000000000000000">Introduction</A>
+<LI><A NAME="tex2html438"
+  HREF="node17.html#SECTION03920000000000000000">Atomicity of x86 instructions</A>
+<LI><A NAME="tex2html439"
+  HREF="node17.html#SECTION03930000000000000000">Commitment</A>
+<LI><A NAME="tex2html440"
+  HREF="node17.html#SECTION03940000000000000000">Physical Register
+Recycling Complications</A>
+<UL>
+<LI><A NAME="tex2html441"
+  HREF="node17.html#SECTION03941000000000000000">Problem Scenarios</A>
+<LI><A NAME="tex2html442"
+  HREF="node17.html#SECTION03942000000000000000">Reference Counting</A>
+<LI><A NAME="tex2html443"
+  HREF="node17.html#SECTION03943000000000000000">Hardware Implementation</A>
+</UL>
+<LI><A NAME="tex2html444"
+  HREF="node17.html#SECTION03950000000000000000">Pipeline Flushes and Barriers</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html445"
+  HREF="node18.html">Cache Hierarchy</A>
+<UL>
+<LI><A NAME="tex2html446"
+  HREF="node18.html#SECTION031010000000000000000">General Configurable Parameters</A>
+<LI><A NAME="tex2html447"
+  HREF="node18.html#SECTION031020000000000000000">Initiating a Cache Miss</A>
+<LI><A NAME="tex2html448"
+  HREF="node18.html#SECTION031030000000000000000">Filling a Cache Miss</A>
+<LI><A NAME="tex2html449"
+  HREF="node18.html#SECTION031040000000000000000">Translation Lookaside Buffers</A>
+</UL>
+<BR>
+<LI><A NAME="tex2html450"
+  HREF="node19.html">Branch Prediction</A>
+<UL>
+<LI><A NAME="tex2html451"
+  HREF="node19.html#SECTION031110000000000000000">Introduction</A>
+<LI><A NAME="tex2html452"
+  HREF="node19.html#SECTION031120000000000000000">Conditional Branch Predictor</A>
+<LI><A NAME="tex2html453"
+  HREF="node19.html#SECTION031130000000000000000">Branch Target Buffer</A>
+<LI><A NAME="tex2html454"
+  HREF="node19.html#SECTION031140000000000000000">Return Address Stack</A>
+</UL></UL>
+<!--End of Table of Child-Links-->
+<BR><HR>
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

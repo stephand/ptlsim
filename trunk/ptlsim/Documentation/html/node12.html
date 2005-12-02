@@ -7,8 +7,10 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
   Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
 <HTML>
 <HEAD>
-<TITLE>Frontend and Key Structures</TITLE>
-<META NAME="description" CONTENT="Frontend and Key Structures">
+<TITLE>Scheduling, Dispatch and
+Issue</TITLE>
+<META NAME="description" CONTENT="Scheduling, Dispatch and
+Issue">
 <META NAME="keywords" CONTENT="PTLsimManual">
 <META NAME="resource-type" CONTENT="document">
 <META NAME="distribution" CONTENT="global">
@@ -21,32 +23,32 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 
 <LINK REL="next" HREF="node13.html">
 <LINK REL="previous" HREF="node11.html">
-<LINK REL="up" HREF="node9.html">
+<LINK REL="up" HREF="node8.html">
 <LINK REL="next" HREF="node13.html">
 </HEAD>
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html500"
+<A NAME="tex2html514"
   HREF="node13.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html496"
-  HREF="node9.html">
+<A NAME="tex2html510"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html490"
+<A NAME="tex2html504"
   HREF="node11.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html498"
+<A NAME="tex2html512"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html501"
-  HREF="node13.html">Scheduling, Dispatch and Issue</A>
-<B> Up:</B> <A NAME="tex2html497"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html491"
-  HREF="node11.html">Fetch Stage</A>
- &nbsp; <B>  <A NAME="tex2html499"
+<B> Next:</B> <A NAME="tex2html515"
+  HREF="node13.html">Speculation and Recovery</A>
+<B> Up:</B> <A NAME="tex2html511"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html505"
+  HREF="node11.html">Frontend and Key Structures</A>
+ &nbsp; <B>  <A NAME="tex2html513"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -55,316 +57,161 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html502"
-  HREF="node12.html#SECTION04310000000000000000">Resource Allocation</A>
-<LI><A NAME="tex2html503"
-  HREF="node12.html#SECTION04320000000000000000">Reorder Buffer Entries</A>
+<LI><A NAME="tex2html516"
+  HREF="node12.html#SECTION03410000000000000000">Clustering and Issue Queue Configuration</A>
+<LI><A NAME="tex2html517"
+  HREF="node12.html#SECTION03420000000000000000">Cluster Selection</A>
+<LI><A NAME="tex2html518"
+  HREF="node12.html#SECTION03430000000000000000">Issue Queue Structure and Operation</A>
 <UL>
-<LI><A NAME="tex2html504"
-  HREF="node12.html#SECTION04321000000000000000">ROB States</A>
+<LI><A NAME="tex2html519"
+  HREF="node12.html#SECTION03431000000000000000">Implementation</A>
+<LI><A NAME="tex2html520"
+  HREF="node12.html#SECTION03432000000000000000">Other Designs</A>
 </UL>
 <BR>
-<LI><A NAME="tex2html505"
-  HREF="node12.html#SECTION04330000000000000000">Physical Registers</A>
-<UL>
-<LI><A NAME="tex2html506"
-  HREF="node12.html#SECTION04331000000000000000">Physical Registers</A>
-<LI><A NAME="tex2html507"
-  HREF="node12.html#SECTION04332000000000000000">Physical Register File</A>
-<LI><A NAME="tex2html508"
-  HREF="node12.html#SECTION04333000000000000000">Physical Register States</A>
-</UL>
-<BR>
-<LI><A NAME="tex2html509"
-  HREF="node12.html#SECTION04340000000000000000">Load Store Queue Entries</A>
-<UL>
-<LI><A NAME="tex2html510"
-  HREF="node12.html#SECTION04341000000000000000">Register Renaming</A>
-<LI><A NAME="tex2html511"
-  HREF="node12.html#SECTION04342000000000000000">External State</A>
-</UL>
-<BR>
-<LI><A NAME="tex2html512"
-  HREF="node12.html#SECTION04350000000000000000">Frontend Stages</A>
+<LI><A NAME="tex2html521"
+  HREF="node12.html#SECTION03440000000000000000">Issue</A>
 </UL>
 <!--End of Table of Child-Links-->
 <HR>
 
-<H1><A NAME="SECTION04300000000000000000">
-Frontend and Key Structures</A>
-</H1>
-
-<P>
-
-<H1><A NAME="SECTION04310000000000000000">
-Resource Allocation</A>
-</H1>
-
-<P>
-During the Allocate stage, PTLsim dequeues uops from the fetch queue,
-ensures all resources needed by those uops are free, and assigns resources
-to each uop as needed. These resources include Reorder Buffer (ROB)
-slots, physical registers and load store queue (LSQ) entries. In the
-event that the fetch queue is empty or any of the ROB, physical register
-file, load queue or store queue is full, the allocation stage stalls
-until some resources become available.
-
-<P>
-
-<H1><A NAME="SECTION04320000000000000000">
-Reorder Buffer Entries</A>
-</H1>
-
-<P>
-The Reorder Buffer (ROB) in the PTLsim out of order model works exactly
-like a traditional ROB: as a queue, entries are allocated from the
-tail and committed from the head. Each <TT><FONT SIZE="-1">ReorderBufferEntry</FONT></TT>
-structure is the central tracking structure for uops in the pipeline.
-This structure contains a variety of fields including:
-
-<P>
-
-<UL>
-<LI>The decoded uop (<TT><FONT SIZE="-1">uop</FONT></TT> field). This is the fully decoded
-<TT><FONT SIZE="-1">TransOp</FONT></TT> augmented with fetch-related information like
-the uop's UUID, RIP and branch predictor information as described
-in the Fetch stage (Section <A HREF="node11.html#sec:FetchStage">7.1</A>).
-</LI>
-<LI>Current state of the ROB entry and uop (<TT><FONT SIZE="-1">current_state_list</FONT></TT>;
-see below)
-</LI>
-<LI>Indices of the physical register (<TT><FONT SIZE="-1">physreg</FONT></TT>), LSQ entry
-(<TT><FONT SIZE="-1">lsq</FONT></TT>) and other resources allocated to the uop
-</LI>
-<LI>Indices of the three physical register operands to the uop, as well
-as a possible store dependency used in replay scheduling (described
-later)
-</LI>
-<LI>Various cycle counters and related fields for simulating progress
-through the pipeline
-</LI>
-</UL>
-
-<P>
-
-<H2><A NAME="SECTION04321000000000000000">
-ROB States</A>
-</H2>
-
-<P>
-Each ROB entry and corresponding uop can be in one of a number of
-states describing its progress through the simulator state machine.
-ROBs are linked into linked lists according to their current state;
-these lists are named <TT><FONT SIZE="-1">rob_</FONT></TT><I>statename</I><TT><FONT SIZE="-1">_list</FONT></TT>.
-The <TT><FONT SIZE="-1">current_state_list</FONT></TT> field specifies the list
-the ROB is currently on. ROBs can be moved between states using the
-<TT><FONT SIZE="-1">ROB::changestate(</FONT><I><FONT SIZE="-1">statelist</FONT></I><FONT SIZE="-1">)</FONT></TT>
-method. The specific states will be described below as they are encountered.
-
-<P>
-<B><I>NOTE:</I></B> the terms ``ROB entry'' (singular) and ``uop''
-are used interchangeably from now on unless otherwise stated, since
-there is a 1:1 mapping between the two.
-
-<P>
-
-<H1><A NAME="SECTION04330000000000000000"></A><A NAME="sec:PhysicalRegisters"></A>
+<H1><A NAME="SECTION03400000000000000000"></A><A NAME="sec:ClusterDispatchScheduleIssue"></A>
 <BR>
-Physical Registers
+Scheduling, Dispatch and
+Issue
 </H1>
 
 <P>
 
-<H2><A NAME="SECTION04331000000000000000">
-Physical Registers</A>
-</H2>
-
-<P>
-Physical registers are represented in PTLsim by the <TT><FONT SIZE="-1">PhysicalRegister</FONT></TT>
-structure. Physical registers store several components:
-
-<P>
-
-<UL>
-<LI>The actual 64-bit register data
-</LI>
-<LI>x86 flags: Z, P, S, O, C. These are discussed below in Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>.
-</LI>
-<LI>Waiting flag (<TT><FONT SIZE="-1">FLAG_WAIT</FONT></TT>) for results not yet ready
-</LI>
-<LI>Invalid flag (<TT><FONT SIZE="-1">FLAG_INVAL</FONT></TT>) for ready results which
-encountered an exception. The exception code is written to the data
-field in lieu of the real result.
-</LI>
-<LI>Current state of the physical register
-</LI>
-<LI>ROB currently owning this physical register, or architectural register
-mapping this physical register
-</LI>
-<LI>Reference counter for the physical register. This is required for
-reasons described in Section <A HREF="node18.html#sub:PhysicalRegisterRecyclingComplications">14.4</A>.
-</LI>
-</UL>
-
-<P>
-
-<H2><A NAME="SECTION04332000000000000000">
-Physical Register File</A>
-</H2>
-
-<P>
-PTLsim models a unified physical register file holding both integer
-and floating point results; this is required because presently many
-PTL uops assume both types of registers are accessible as operands
-to a single uop.
-
-<P>
-
-<H2><A NAME="SECTION04333000000000000000">
-Physical Register States</A>
-</H2>
-
-<P>
-Each physical register can be in one of several states at any given
-time; PTLsim maintains linked lists (the <TT><FONT SIZE="-1">physreg_</FONT></TT><I>statename</I><TT><FONT SIZE="-1">_list</FONT></TT>
-lists) to track which registers are in each state. The <TT><FONT SIZE="-1">current_state_list</FONT></TT>
-field in each physical register specifies this state. The valid states
-are:
-
-<P>
-
-<UL>
-<LI><B><I>free:</I></B> the register is not allocated to any uop.
-</LI>
-<LI><B><I>used:</I></B> the register has been allocated to a uop but
-that uop has not issued yet.
-</LI>
-<LI><B><I>ready:</I></B> the uop associated with the register has issued
-and produced a value (or encountered an exception), but that value
-is only on the bypass network - it has not actually been written back
-yet. For simulation purposes only, uops immediately write their results
-into the physical register as soon as they issue, even though technically
-the result is still only on the bypass network. This helps simplify
-the simulator considerably without compromising accuracy.
-</LI>
-<LI><B><I>written:</I></B> the uop associated with the register has
-passed through the writeback stage and the value of the physical register
-is now up to date; all future consumers will read the uop's result
-from this physical register.
-</LI>
-<LI><B><I>arch:</I></B> the physical register is currently mapped to
-one of the architectural registers; it has no associated uop currently
-in the pipeline
-</LI>
-<LI><B><I>pendingfree:</I></B> this is a special state described in
-Section <A HREF="node18.html#sub:PhysicalRegisterRecyclingComplications">14.4</A>.
-</LI>
-</UL>
-One physical register is allocated to each uop and moved into the
-<I>used</I> state, regardless of which type of uop it is. For integer,
-floating point and load uops, the physical register holds the actual
-numerical value generated by the corresponding uop. Branch uops place
-the target RIP of the branch in a physical register. Store uops place
-the physical address in the register. Technically branches and stores
-do not need physical registers, but to keep the processor design simple,
-they are allocated registers anyway.
-
-<P>
-
-<H1><A NAME="SECTION04340000000000000000"></A><A NAME="sec:LoadStoreQueueEntry"></A>
+<H1><A NAME="SECTION03410000000000000000"></A><A NAME="sec:Clustering"></A>
 <BR>
-Load Store Queue Entries
+Clustering and Issue Queue Configuration
 </H1>
 
 <P>
-Load Store Queue (LSQ) Entries (the <TT><FONT SIZE="-1">LoadStoreQueueEntry</FONT></TT>
-structure in PTLsim) are used to track additional information about
-loads and stores in the pipeline that cannot be represented by a physical
-register. Specifically, LSQ entries track:
+The PTLsim out of order model can simulate an arbitrarily complex
+set of functional units grouped into <I>clusters</I>. Clusters are
+specified by the <TT><FONT SIZE="-1">Cluster</FONT></TT> class and are defined by
+the <TT><FONT SIZE="-1">clusters[]</FONT></TT> array in <TT><FONT SIZE="-1">ooohwdef.h</FONT></TT>.
+Each Cluster element defines the name of the cluster, which functional
+units belong to the cluster (<TT><FONT SIZE="-1">fu_mask</FONT></TT> field) and the
+maximum number of uops that can be issued in that cluster each cycle
+(<TT><FONT SIZE="-1">issue_width</FONT></TT> field)
+
+<P>
+The <TT><FONT SIZE="-1">intercluster_latency_map</FONT></TT> matrix defines the
+forwarding latency, in cycles, between a given cluster and every other
+cluster. If <TT><FONT SIZE="-1">intercluster_latency_map[</FONT></TT><I>A</I><TT><FONT SIZE="-1">][</FONT></TT><I>B</I><TT><FONT SIZE="-1">]</FONT></TT>
+is <I>L</I> cycles, this means that functional units in cluster <I>B</I>
+must wait <I>L</I> cycles after a uop <I>U</I> in cluster A completes
+before cluster B's functional units can issue a uop dependent on <I>U</I>'s
+result. If the latency is zero between clusters <I>A</I> and <I>B</I>,
+producer and consumer uops in <I>A</I> and <I>B</I> can always be
+issued back to back in subsequent cycles. Hence, the diagonal of the
+forwarding latency matrix is always all zeros.
+
+<P>
+This clustering mechanism can be used to implement several features
+of modern microprocessors. First, traditional clustering is possible,
+in which it takes multiple additional cycles to forward results between
+different clusters (for instance, one or more integer clusters and
+a floating point unit). Second, several issue queues and corresponding
+issue width limits can be defined within a given virtual cluster,
+for instance to sort loads, stores and ALU operations into separate
+issue queues with different policies. This is done by specifying an
+inter-cluster latency of zero cycles between the relevant pseudo-clusters
+with separate issue queues. Both of these uses are required to accurately
+model most modern processors.
+
+<P>
+There is also an equivalent <TT><FONT SIZE="-1">intercluster_bandwidth_map</FONT></TT>
+matrix to specify the maximum number of values that can be routed
+between any two clusters each cycle.
+
+<P>
+The <TT><FONT SIZE="-1">IssueQueue</FONT></TT> template class is used to declare issue
+queues; each cluster has its own issue queue. The syntax <TT><FONT SIZE="-1">IssueQueue&lt;</FONT></TT><I>size</I><TT><FONT SIZE="-1">&gt;</FONT></TT>
+<TT><FONT SIZE="-1">issueq_</FONT></TT><I>name</I><TT><FONT SIZE="-1">;</FONT></TT> is used to declare
+an issue queue with a specific size. In the current implementation,
+the size can be from 1 to 64 slots. The macros <TT><FONT SIZE="-1">foreach_issueq()</FONT></TT>,
+<TT><FONT SIZE="-1">sched_get_all_issueq_free_slots()</FONT></TT> and <TT><FONT SIZE="-1">issueq_operation_on_cluster_with_result()</FONT></TT>
+macros must be modified if the cluster and issue queue configuration
+is changed to reflect all available clusters; the modifications required
+should be obvious from the example code. These macros with switch
+statements are required instead of a simple array since the issue
+queues can be of different template types and sizes.
 
 <P>
 
-<UL>
-<LI><B>Physical address</B> of the corresponding load or store
-</LI>
-<LI><B>Data</B> field (64 bits) stores the loaded value (for loads)
-or the value to store (for stores)
-</LI>
-<LI><B>Address valid</B> bit flag indicates if the load or store knows
-its effective physical address yet. If set, the physical address field
-is valid.
-</LI>
-<LI><B>Data valid</B> bit flag indicates if the data field is valid.
-For loads, this is set when the data has arrived from the cache. For
-stores, this is set when the data to store becomes ready and is merged.
-</LI>
-<LI><B>Invalid</B> bit flag is set if an exception occurs in the corresponding
-load or store.
-</LI>
-</UL>
-The <TT><FONT SIZE="-1">LoadStoreQueueEntry</FONT></TT> structure is technically a
-superset of a structure known as an <I>SFR</I> (Store Forwarding Register),
-which completely represents any load or store and can be passed between
-PTLsim subsystems easily. One LSQ entry is allocated to each load
-or store during the Allocate stage.
+<H1><A NAME="SECTION03420000000000000000">
+Cluster Selection</A>
+</H1>
 
 <P>
-In real processors, the load queue (LDQ) and store queue (STQ) are
-physically separate for circuit complexity reasons. However, in PTLsim
-a unified LSQ is used to make searching operations easier. One additional
-bit flag (<TT><FONT SIZE="-1">store</FONT></TT> bit) specifies whether an LSQ entry
-is a load or store.
+The <TT><FONT SIZE="-1">ReorderBufferEntry::select_cluster()</FONT></TT> function
+is responsible for routing a given uop into a specific cluster at
+the time it is dispatched; uops do not switch between clusters after
+this.
+
+<P>
+Various heuristics are employed to select which cluster a given uop
+should be routed to. In the reference implementation provided in <TT><FONT SIZE="-1">ooocore.cpp</FONT></TT>,
+a weighted score is generated for each possible cluster by scanning
+through the uop's operands to determine which cluster they will be
+forwarded from. If a given operand's corresponding producer uop <I>S</I>
+is currently either dispatched to cluster <I>C</I> but waiting to
+execute or is still on the bypass network of cluster <I>C</I>, then
+cluster <I>C</I>'s score is incremented. 
+
+<P>
+The final cluster is selected as the cluster with the highest score
+out of the set of clusters which the uop can actually issue on (e.g.
+a floating point uop cannot issue on a cluster with only integer units).
+The <TT><FONT SIZE="-1">ReorderBufferEntry::executable_on_cluster_mask</FONT></TT>
+bitmap can be used to further restrict which clusters a uop can be
+dispatched to, for instance because certain clusters can only write
+to certain physical register files. This mechanism is designed to
+route each uop to the cluster in which the majority of its operands
+will become available at the earliest time; in practice it works quite
+well and variants of this technique are often used in real processors.
 
 <P>
 
-<H2><A NAME="SECTION04341000000000000000"></A><A NAME="sub:RegisterRenaming"></A>
+<H1><A NAME="SECTION03430000000000000000"></A><A NAME="sec:Scheduling"></A>
 <BR>
-Register Renaming
-</H2>
+Issue Queue Structure and Operation
+</H1>
 
 <P>
-The basic register renaming process in the PTLsim x86 model is very
-similar to classical register renaming, with the exception of the
-flags complications described in Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>.
-Two versions of the register rename table (RRT) are maintained: a
-<I>speculative RRT</I> which is updated as uops are renamed, and a
-<I>commit RRT</I>, which is only updated when uops successfully commit.
-Since the simulator implements a unified physical and architectural
-register file, the commit process does not actually involve any data
-movement between physical and architectural registers: only the commit
-RRT needs to be updated. The commit RRT is used only for exception
-and branch mispredict recovery, since it holds the last known good
-mapping of architectural to physical registers.
+PTLsim implements issue queues in the <TT><FONT SIZE="-1">IssueQueue</FONT></TT> template
+class using the collapsing priority queue design used in most modern
+processors. 
 
 <P>
-Each rename table contains 80 entries as shown in Table <A HREF="#table:ArchitecturalRegisters">8.1</A>.
-This table maps architectural registers and pseudo-registers to the
-most up to date physical registers for the following:
+As each uop is dispatched, it is placed at the end of the issue queue
+for its cluster and several associative arrays are updated to reflect
+which operands the uop is still waiting for. In the IssueQueue class,
+the <TT><FONT SIZE="-1">insert()</FONT></TT> method takes the ROB index of the uop
+(its <I>tag</I> in issue queue terminology), the tags (ROB indices)
+of its operands, and a map of which of the operands are ready versus
+waiting. The ROB index is inserted into an associative array, and
+the ROB index tags of any waiting operands are inserted into corresponding
+slots in parallel arrays, one array per operand (in the current implementation,
+up to 4 operands are tracked). If an operand was ready at dispatch
+time, the slot for that operand in the corresponding array is marked
+as invalid since there is no need to wake it up later. Notice that
+the new slot is always at the end of the issue queue array; this is
+made possible by the collapsing mechanism described below.
 
 <P>
+The issue queue maintains two bitmaps to track the state of each slot
+in the queue. The <TT><FONT SIZE="-1">valid</FONT></TT> bitmap indicates which slots
+are occupied by uops, while the <TT><FONT SIZE="-1">issued</FONT></TT> bitmap indicates
+which of those uops have been issued. Together, these two bitmaps
+form the state machine described in Table <A HREF="#table:IssueQueueStateMachine">9.1</A>.
 
-<UL>
-<LI>16 x86-64 integer registers
-</LI>
-<LI>16 128-bit SSE registers (represented as separate 64-bit high and
-low halves)
-</LI>
-<LI>ZAPS, CF, OF flag sets described in Section <A HREF="node8.html#sub:FlagsManagement">5.6</A>.
-These rename table entries point to the physical register (with attached
-flags) of the most recent uop in program order to update any or all
-of the ZAPS, CF, OF flag sets, respectively.
-</LI>
-<LI>Various integer and x87 status registers
-</LI>
-<LI>Temporary pseudo-registers <TT><FONT SIZE="-1">temp0</FONT></TT>-<TT><FONT SIZE="-1">temp7</FONT></TT>
-not visible to x86 code but required to hold temporaries (e.g. generated
-addresses or value to swap in <TT><FONT SIZE="-1">xchg</FONT></TT> instructions).
-</LI>
-<LI>Special fixed values, e.g. <TT><FONT SIZE="-1">zero</FONT></TT>, <TT><FONT SIZE="-1">imm</FONT></TT>
-(value is in immediate field), <TT><FONT SIZE="-1">mem</FONT></TT> (destination of
-stores)
-</LI>
-</UL>
+<P>
 <BR><P></P>
 <DIV ALIGN="CENTER">
 
@@ -372,12 +219,16 @@ stores)
 
 <P>
 <DIV ALIGN="CENTER">
-<A NAME="3937"></A>
+<A NAME="3886"></A>
 <TABLE CELLPADDING=3 BORDER="1">
-<CAPTION><STRONG>Table 8.1:</STRONG>
-Architectural registers and
-pseudo-registers used for renaming.</CAPTION>
-<TR><TD ALIGN="CENTER" COLSPAN=9><I><FONT SIZE="-1">Architectural Registers and Pseudo-Registers</I></FONT></TD>
+<CAPTION><STRONG>Table 9.1:</STRONG>
+Issue Queue State Machine</CAPTION>
+<TR><TD ALIGN="CENTER">Valid</TD>
+<TD ALIGN="CENTER">Issued</TD>
+<TD ALIGN="LEFT">Meaning
+<BR>
+ 
+<TT><FONT SIZE="-1">0</FONT></TT></TD>
 </TR>
 </TABLE>
 </DIV>
@@ -385,72 +236,205 @@ pseudo-registers used for renaming.</CAPTION>
 <BR>
 
 <P>
-Once the uop's three architectural register sources are mapped to
-physical registers, these physical registers are placed in the <TT><FONT SIZE="-1">operands[</FONT></TT>0,1,2<TT><FONT SIZE="-1">]</FONT></TT>
-fields. The fourth operand field, <TT><FONT SIZE="-1">operands[</FONT></TT>3<TT><FONT SIZE="-1">]</FONT></TT>,
-is used to hold a store buffer dependency for loads and stores; this
-will be discussed later. The speculative RRT entries for both the
-destination physical register and any modified flags are then overwritten.
-Finally, the ROB is moved into the <B><I>frontend</I></B> state.
+After <TT><FONT SIZE="-1">insert()</FONT></TT> is called, the slot is placed in the
+dispatched state. As each uop completes, its tag (ROB index) is broadcast
+using the <TT><FONT SIZE="-1">broadcast()</FONT></TT> method to one or more issue
+queues accessible in that cycle. Because of clustering, some issue
+queues will receive the broadcast later than others; this is discussed
+below. Each slot in each of the four operand arrays is compared against
+the broadcast value. If the operand tag in that slot is valid and
+matches the broadcast tag, the slot (in one of the operand arrays
+only, not the entire issue queue) is invalidated to indicate it is
+ready and no longer waiting for further broadcasts.
+
+<P>
+Every cycle, the <TT><FONT SIZE="-1">clock()</FONT></TT> method uses the <TT><FONT SIZE="-1">valid</FONT></TT>
+and <TT><FONT SIZE="-1">issued</FONT></TT> bitmaps together with the valid bitmaps
+of each of the operand arrays to compute which issue queue slots in
+the dispatched state are no longer waiting on any of their operands.
+This bitmap of ready slots is then latched into the <TT><FONT SIZE="-1">allready</FONT></TT>
+bitmap.
+
+<P>
+The <TT><FONT SIZE="-1">issue()</FONT></TT> method simply finds the index of the first
+set bit in the <TT><FONT SIZE="-1">allready</FONT></TT> bitmap (this is the slot of
+the oldest ready uop in program order), marks the corresponding slot
+as issued, and returns the slot. The processor then selects a functional
+unit for the uop in that slot and executes it via the <TT><FONT SIZE="-1">ReorderBufferEntry::issue()</FONT></TT>
+method. After the uop has completed execution (i.e. it cannot possibly
+be replayed), the <TT><FONT SIZE="-1">release()</FONT></TT> method is called to remove
+the slot from the issue queue, freeing it up for incoming uops in
+the dispatch stage. The collapsing design of the issue queue means
+that the slot is not simply marked as invalid - all slots after it
+are physically shifted left by one, leaving a free slot at the end
+of the array. This design is relatively simple to implement in hardware
+and makes determining the oldest ready to issue uop very trivial.
+
+<P>
+Because of the collapsing mechanism, it is critical to note that the
+slot index returned by <TT><FONT SIZE="-1">issue()</FONT></TT> will become invalid
+after the next call to the <TT><FONT SIZE="-1">remove()</FONT></TT> method; hence,
+it should never be stored anywhere if a slot could be removed from
+the issue queue in the meantime.
+
+<P>
+If a uop issues but determines that it cannot actually complete at
+that time, it must be <I>replayed</I>. The <TT><FONT SIZE="-1">replay()</FONT></TT>
+method clears the issued bit for the uop's issue queue slot, returning
+it to the dispatched state. The replay mechanism can optionally add
+additional dependencies such that the uop is only re-issued after
+those dependencies are resolved. This is important for loads and stores,
+which may need to add a dependency on a prior store queue entry after
+finding a matching address in the load or store queues. In rare cases,
+a replay may also be required when a uop is issued but no applicable
+functional units are left for it to execute on. The <TT><FONT SIZE="-1">ReorderBufferEntry::replay()</FONT></TT>
+method is a wrapper around <TT><FONT SIZE="-1">IssueQueue::replay()</FONT></TT> used
+to collect the operands the uop is still waiting for.
 
 <P>
 
-<H2><A NAME="SECTION04342000000000000000">
-External State</A>
+<H2><A NAME="SECTION03431000000000000000">
+Implementation</A>
 </H2>
 
 <P>
-Since the rest of the simulator outside of the out of order core does
-not know about the RRTs and expects architectural registers to be
-in a standardized format, the system-wide <TT><FONT SIZE="-1">ctx</FONT></TT> structure
-of class <TT><FONT SIZE="-1">CoreState</FONT></TT> is used to house the architectural
-register file. The <TT><FONT SIZE="-1">REG_flags</FONT></TT> and <TT><FONT SIZE="-1">REG_rip</FONT></TT>
-entries of this structure are directly updated by the out of order
-core as instructions commit.
+PTLsim uses a novel method of modeling the issue queue and other associative
+structures with small tags. Specifically, the <TT><FONT SIZE="-1">FullyAssociativeArrayTags8bit</FONT></TT>
+template class declared in <TT><FONT SIZE="-1">logic.h</FONT></TT> and used to build
+the issue queue makes use of the host processor's 128-bit vector (SSE)
+instructions to do massively parallel associative matching, masking
+and bit scanning on up to 16 tags every clock cycle. This makes it
+substantially faster than simulators using the naive approach of scanning
+the issue queue entries linearly. Similar classes in <TT><FONT SIZE="-1">logic.h</FONT></TT>
+support O(1) associative searches of both 8-bit and 16-bit tags; tags
+longer than this are generally more efficient if the generic <TT><FONT SIZE="-1">FullyAssociativeArrayTags</FONT></TT>
+using standard integer comparisons is used instead.
+
+<P>
+As a result of this high performance design, each issue queue is limited
+to 64 entries and the tags to be matched must be between 0 and 255
+to fit in 8 bits. The <TT><FONT SIZE="-1">FullyAssociativeArrayTags16bit</FONT></TT>
+class can be used instead if longer tags are required, at the cost
+of reduced simulation performance. To enable this, <TT><FONT SIZE="-1">BIG_ROB</FONT></TT>
+must be defined in <TT><FONT SIZE="-1">ooohwdef.h</FONT></TT>.
 
 <P>
 
-<H1><A NAME="SECTION04350000000000000000">
-Frontend Stages</A>
+<H2><A NAME="SECTION03432000000000000000">
+Other Designs</A>
+</H2>
+
+<P>
+It's important to remember that the issue queue design described above
+is <I>one</I> possible implemention out of the many designs currently
+used in industry and research processors. For instance, in lieu of
+the collapsing design (used by the Pentium 4 and Power4/5/970), the
+AMD K8 uses a sequence number tag of the ROB and comparator logic
+to select the earliest ready instruction. Similarly, the Pentium 4
+uses a set of bit vectors (a <I>dependency matrix</I>) instead of
+tag broadcasts to wake up instructions. These other approaches may
+be implemented by modifying the <TT><FONT SIZE="-1">IssueQueue</FONT></TT> class as
+appropriate.
+
+<P>
+
+<H1><A NAME="SECTION03440000000000000000"></A><A NAME="sec:Issue"></A>
+<BR>
+Issue
 </H1>
 
 <P>
-To simulate various processor frontend pipeline depths, ROBs are placed
-in the <I>frontend</I> state for a user-selectable number of cycles.
-In the <TT><FONT SIZE="-1">frontend()</FONT></TT> function, the <TT><FONT SIZE="-1">cycles_left</FONT></TT>
-field in each ROB is decremented until it becomes zero. At this point,
-the uop is moved to the <B><I>ready_to_dispatch</I></B> state.
-This feature can be used to simulate various branch mispredict penalties
-by setting the <TT><FONT SIZE="-1">FRONTEND_STAGES</FONT></TT> constant.
+The <TT><FONT SIZE="-1">issue()</FONT></TT> top-level function issues one or more
+instructions in each cluster from each issue queue every cycle. This
+function consults the <TT><FONT SIZE="-1">clusters[</FONT></TT><I>clusterid</I><TT><FONT SIZE="-1">].issue_width</FONT></TT>
+field defined in <TT><FONT SIZE="-1">ooohwdef.h</FONT></TT> to determine the maximum
+number of uops to issue from each cluster. The <TT><FONT SIZE="-1">issueq_operation_on_cluster_with_result(cluster,
+iqslot, issue())</FONT></TT> macro (Section <A HREF="#sec:Clustering">9.1</A>) is used to
+invoke the <TT><FONT SIZE="-1">issue()</FONT></TT> method of the appropriate cluster
+to select the earliest ready issue queue slot, as described in Section
+<A HREF="#sec:Scheduling">9.3</A>. 
+
+<P>
+The <TT><FONT SIZE="-1">ReorderBufferEntry::issue()</FONT></TT> method of the corresponding
+ROB entry is then called to actually execute the uop. This method
+first makes sure a functional unit is available within the cluster
+that's capable of executing the uop; if not, the uop is replayed and
+re-issued again on the next cycle. At this point, the uop's three
+operands (<TT><FONT SIZE="-1">ra</FONT></TT>, <TT><FONT SIZE="-1">rb</FONT></TT>, <TT><FONT SIZE="-1">rc</FONT></TT>)
+are read from the physical register file. If any of the operands are
+invalid, the entire uop is marked as invalid with an <TT><FONT SIZE="-1">EXCEPTION_Propagate</FONT></TT>
+result and is not further executed. Otherwise, the uop is executed
+by calling the synthesized execute function for the uop (see Section
+<A HREF="node10.html#sec:FetchStage">7.1</A>).
+
+<P>
+Loads and stores are handled specially by calling the <TT><FONT SIZE="-1">issueload()</FONT></TT>
+or <TT><FONT SIZE="-1">issuestore()</FONT></TT> method. Since loads and stores can
+encounter an mis-speculation (e.g. when a load is erroneously issued
+before an earlier store to the same addresses), the <TT><FONT SIZE="-1">issueload()</FONT></TT>
+and <TT><FONT SIZE="-1">issuestore()</FONT></TT> functions can return <TT><FONT SIZE="-1">ISSUE_MISSPECULATED</FONT></TT>
+to force all uops in program order after the mis-speculated uop to
+be annulled and sent through the pipeline again. Similarly, if <TT><FONT SIZE="-1">issueload()</FONT></TT>
+or <TT><FONT SIZE="-1">issuestore()</FONT></TT> return <TT><FONT SIZE="-1">ISSUE_NEEDS_REPLAY</FONT></TT>,
+issuing from that cluster is aborted since the uop has been replayed
+in accordance with Section <A HREF="#sec:Scheduling">9.3</A>. It is important
+to note that loads which miss the cache are considered to complete
+successfully and do <I>not</I> require a replay; their physical register
+is simply marked as waiting until the load arrives. In both the mis-speculation
+and replay cases, no further uops from the cluster's issue queue are
+dispatched until the next cycle.
+
+<P>
+Branches are handled similar to integer and floating point operations,
+except that they may cause a mis-speculation in the event of a branch
+misprediction; this is discussed below.
+
+<P>
+If the uop caused an exception, we force it directly to the commit
+stage and not through writeback; this keeps dependencies waiting until
+they can be properly annulled by the speculation recovery logic. The
+commit stage will detect the exception and take appropriate action.
+If the exceptional uop was speculatively executed beyond a branch,
+it will never reach commit anyway since the bogus branch would have
+to commit before the exception would even become visible.
+
+<P>
+<B><I>NOTE:</I></B> In PTLsim, all issued uops put their result
+in the uop's assigned physical register at the time of issue, even
+though the data technically does not appear there until writeback
+(i.e. the physical register enters the <I>written</I> state). This
+is done to simplify the simulator implementation; it is assumed that
+any data ``read'' from physical registers before writeback is
+in fact being read from the bypass network instead.
 
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html500"
+<A NAME="tex2html514"
   HREF="node13.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html496"
-  HREF="node9.html">
+<A NAME="tex2html510"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html490"
+<A NAME="tex2html504"
   HREF="node11.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html498"
+<A NAME="tex2html512"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html501"
-  HREF="node13.html">Scheduling, Dispatch and Issue</A>
-<B> Up:</B> <A NAME="tex2html497"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html491"
-  HREF="node11.html">Fetch Stage</A>
- &nbsp; <B>  <A NAME="tex2html499"
+<B> Next:</B> <A NAME="tex2html515"
+  HREF="node13.html">Speculation and Recovery</A>
+<B> Up:</B> <A NAME="tex2html511"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html505"
+  HREF="node11.html">Frontend and Key Structures</A>
+ &nbsp; <B>  <A NAME="tex2html513"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

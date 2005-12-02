@@ -7,10 +7,8 @@ original version by:  Nikos Drakos, CBLU, University of Leeds
   Jens Lippmann, Marek Rouchal, Martin Wilck and others -->
 <HTML>
 <HEAD>
-<TITLE>Scheduling, Dispatch and
-Issue</TITLE>
-<META NAME="description" CONTENT="Scheduling, Dispatch and
-Issue">
+<TITLE>Speculation and Recovery</TITLE>
+<META NAME="description" CONTENT="Speculation and Recovery">
 <META NAME="keywords" CONTENT="PTLsimManual">
 <META NAME="resource-type" CONTENT="document">
 <META NAME="distribution" CONTENT="global">
@@ -23,32 +21,32 @@ Issue">
 
 <LINK REL="next" HREF="node14.html">
 <LINK REL="previous" HREF="node12.html">
-<LINK REL="up" HREF="node9.html">
+<LINK REL="up" HREF="node8.html">
 <LINK REL="next" HREF="node14.html">
 </HEAD>
 
 <BODY >
 <!--Navigation Panel-->
-<A NAME="tex2html523"
+<A NAME="tex2html532"
   HREF="node14.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html519"
-  HREF="node9.html">
+<A NAME="tex2html528"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html513"
+<A NAME="tex2html522"
   HREF="node12.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html521"
+<A NAME="tex2html530"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html524"
-  HREF="node14.html">Speculation and Recovery</A>
-<B> Up:</B> <A NAME="tex2html520"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html514"
-  HREF="node12.html">Frontend and Key Structures</A>
- &nbsp; <B>  <A NAME="tex2html522"
+<B> Next:</B> <A NAME="tex2html533"
+  HREF="node14.html">Load Issue</A>
+<B> Up:</B> <A NAME="tex2html529"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html523"
+  HREF="node12.html">Scheduling, Dispatch and Issue</A>
+ &nbsp; <B>  <A NAME="tex2html531"
   HREF="node1.html">Contents</A></B> 
 <BR>
 <BR>
@@ -57,377 +55,176 @@ Issue">
 <A NAME="CHILD_LINKS"><STRONG>Subsections</STRONG></A>
 
 <UL>
-<LI><A NAME="tex2html525"
-  HREF="node13.html#SECTION04410000000000000000">Clustering and Issue Queue Configuration</A>
-<LI><A NAME="tex2html526"
-  HREF="node13.html#SECTION04420000000000000000">Cluster Selection</A>
-<LI><A NAME="tex2html527"
-  HREF="node13.html#SECTION04430000000000000000">Issue Queue Structure and Operation</A>
+<LI><A NAME="tex2html534"
+  HREF="node13.html#SECTION03510000000000000000">Misspeculation Cases</A>
 <UL>
-<LI><A NAME="tex2html528"
-  HREF="node13.html#SECTION04431000000000000000">Implementation</A>
-<LI><A NAME="tex2html529"
-  HREF="node13.html#SECTION04432000000000000000">Other Designs</A>
+<LI><A NAME="tex2html535"
+  HREF="node13.html#SECTION03511000000000000000">Branch Mispredictions</A>
+<LI><A NAME="tex2html536"
+  HREF="node13.html#SECTION03512000000000000000">Unaligned Loads and Stores and Aliased Stores</A>
 </UL>
 <BR>
-<LI><A NAME="tex2html530"
-  HREF="node13.html#SECTION04440000000000000000">Issue</A>
+<LI><A NAME="tex2html537"
+  HREF="node13.html#SECTION03520000000000000000">Recovery</A>
 </UL>
 <!--End of Table of Child-Links-->
 <HR>
 
-<H1><A NAME="SECTION04400000000000000000"></A><A NAME="sec:ClusterDispatchScheduleIssue"></A>
+<H1><A NAME="SECTION03500000000000000000"></A><A NAME="sec:SpeculationAndRecovery"></A>
 <BR>
-Scheduling, Dispatch and
-Issue
+Speculation and Recovery
+</H1>
+
+<P>
+PTLsim allows speculative execution of two classes of uops which may
+require all uops in program order after and optionally including the
+mis-speculated uop to be annulled before they are committed to the
+architectural state.
+
+<P>
+
+<H1><A NAME="SECTION03510000000000000000">
+Misspeculation Cases</A>
 </H1>
 
 <P>
 
-<H1><A NAME="SECTION04410000000000000000"></A><A NAME="sec:Clustering"></A>
-<BR>
-Clustering and Issue Queue Configuration
-</H1>
-
-<P>
-The PTLsim out of order model can simulate an arbitrarily complex
-set of functional units grouped into <I>clusters</I>. Clusters are
-specified by the <TT><FONT SIZE="-1">Cluster</FONT></TT> class and are defined by
-the <TT><FONT SIZE="-1">clusters[]</FONT></TT> array in <TT><FONT SIZE="-1">ooohwdef.h</FONT></TT>.
-Each Cluster element defines the name of the cluster, which functional
-units belong to the cluster (<TT><FONT SIZE="-1">fu_mask</FONT></TT> field) and the
-maximum number of uops that can be issued in that cluster each cycle
-(<TT><FONT SIZE="-1">issue_width</FONT></TT> field)
-
-<P>
-The <TT><FONT SIZE="-1">intercluster_latency_map</FONT></TT> matrix defines the
-forwarding latency, in cycles, between a given cluster and every other
-cluster. If <TT><FONT SIZE="-1">intercluster_latency_map[</FONT></TT><I>A</I><TT><FONT SIZE="-1">][</FONT></TT><I>B</I><TT><FONT SIZE="-1">]</FONT></TT>
-is <I>L</I> cycles, this means that functional units in cluster <I>B</I>
-must wait <I>L</I> cycles after a uop <I>U</I> in cluster A completes
-before cluster B's functional units can issue a uop dependent on <I>U</I>'s
-result. If the latency is zero between clusters <I>A</I> and <I>B</I>,
-producer and consumer uops in <I>A</I> and <I>B</I> can always be
-issued back to back in subsequent cycles. Hence, the diagonal of the
-forwarding latency matrix is always all zeros.
-
-<P>
-This clustering mechanism can be used to implement several features
-of modern microprocessors. First, traditional clustering is possible,
-in which it takes multiple additional cycles to forward results between
-different clusters (for instance, one or more integer clusters and
-a floating point unit). Second, several issue queues and corresponding
-issue width limits can be defined within a given virtual cluster,
-for instance to sort loads, stores and ALU operations into separate
-issue queues with different policies. This is done by specifying an
-inter-cluster latency of zero cycles between the relevant pseudo-clusters
-with separate issue queues. Both of these uses are required to accurately
-model most modern processors.
-
-<P>
-There is also an equivalent <TT><FONT SIZE="-1">intercluster_bandwidth_map</FONT></TT>
-matrix to specify the maximum number of values that can be routed
-between any two clusters each cycle.
-
-<P>
-The <TT><FONT SIZE="-1">IssueQueue</FONT></TT> template class is used to declare issue
-queues; each cluster has its own issue queue. The syntax <TT><FONT SIZE="-1">IssueQueue&lt;</FONT></TT><I>size</I><TT><FONT SIZE="-1">&gt;</FONT></TT>
-<TT><FONT SIZE="-1">issueq_</FONT></TT><I>name</I><TT><FONT SIZE="-1">;</FONT></TT> is used to declare
-an issue queue with a specific size. In the current implementation,
-the size can be from 1 to 64 slots. The macros <TT><FONT SIZE="-1">foreach_issueq()</FONT></TT>,
-<TT><FONT SIZE="-1">sched_get_all_issueq_free_slots()</FONT></TT> and <TT><FONT SIZE="-1">issueq_operation_on_cluster_with_result()</FONT></TT>
-macros must be modified if the cluster and issue queue configuration
-is changed to reflect all available clusters; the modifications required
-should be obvious from the example code. These macros with switch
-statements are required instead of a simple array since the issue
-queues can be of different template types and sizes.
-
-<P>
-
-<H1><A NAME="SECTION04420000000000000000">
-Cluster Selection</A>
-</H1>
-
-<P>
-The <TT><FONT SIZE="-1">ReorderBufferEntry::select_cluster()</FONT></TT> function
-is responsible for routing a given uop into a specific cluster at
-the time it is dispatched; uops do not switch between clusters after
-this.
-
-<P>
-Various heuristics are employed to select which cluster a given uop
-should be routed to. In the reference implementation provided in <TT><FONT SIZE="-1">ooocore.cpp</FONT></TT>,
-a weighted score is generated for each possible cluster by scanning
-through the uop's operands to determine which cluster they will be
-forwarded from. If a given operand's corresponding producer uop <I>S</I>
-is currently either dispatched to cluster <I>C</I> but waiting to
-execute or is still on the bypass network of cluster <I>C</I>, then
-cluster <I>C</I>'s score is incremented. The final cluster is selected
-as the cluster with the highest score out of the set of clusters which
-the uop can actually issue on (e.g. a floating point uop cannot issue
-on a cluster with only integer units). This mechanism is designed
-to route each uop to the cluster in which the majority of its operands
-will become available at the earliest time; in practice it works quite
-well and variants of this technique are often used in real processors.
-
-<P>
-
-<H1><A NAME="SECTION04430000000000000000"></A><A NAME="sec:Scheduling"></A>
-<BR>
-Issue Queue Structure and Operation
-</H1>
-
-<P>
-PTLsim implements issue queues in the <TT><FONT SIZE="-1">IssueQueue</FONT></TT> template
-class using the collapsing priority queue design used in most modern
-processors. 
-
-<P>
-As each uop is dispatched, it is placed at the end of the issue queue
-for its cluster and several associative arrays are updated to reflect
-which operands the uop is still waiting for. In the IssueQueue class,
-the <TT><FONT SIZE="-1">insert()</FONT></TT> method takes the ROB index of the uop
-(its <I>tag</I> in issue queue terminology), the tags (ROB indices)
-of its operands, and a map of which of the operands are ready versus
-waiting. The ROB index is inserted into an associative array, and
-the ROB index tags of any waiting operands are inserted into corresponding
-slots in parallel arrays, one array per operand (in the current implementation,
-up to 4 operands are tracked). If an operand was ready at dispatch
-time, the slot for that operand in the corresponding array is marked
-as invalid since there is no need to wake it up later. Notice that
-the new slot is always at the end of the issue queue array; this is
-made possible by the collapsing mechanism described below.
-
-<P>
-The issue queue maintains two bitmaps to track the state of each slot
-in the queue. The <TT><FONT SIZE="-1">valid</FONT></TT> bitmap indicates which slots
-are occupied by uops, while the <TT><FONT SIZE="-1">issued</FONT></TT> bitmap indicates
-which of those uops have been issued. Together, these two bitmaps
-form the state machine described in Table <A HREF="#table:IssueQueueStateMachine">9.1</A>.
-
-<P>
-<BR><P></P>
-<DIV ALIGN="CENTER">
-
-<P>
-
-<P>
-<DIV ALIGN="CENTER">
-<A NAME="3952"></A>
-<TABLE CELLPADDING=3 BORDER="1">
-<CAPTION><STRONG>Table 9.1:</STRONG>
-Issue Queue State Machine</CAPTION>
-<TR><TD ALIGN="CENTER">Valid</TD>
-<TD ALIGN="CENTER">Issued</TD>
-<TD ALIGN="LEFT">Meaning
-<BR>
- 
-<TT><FONT SIZE="-1">0</FONT></TT></TD>
-</TR>
-</TABLE>
-</DIV>
-</DIV>
-<BR>
-
-<P>
-After <TT><FONT SIZE="-1">insert()</FONT></TT> is called, the slot is placed in the
-dispatched state. As each uop completes, its tag (ROB index) is broadcast
-using the <TT><FONT SIZE="-1">broadcast()</FONT></TT> method to one or more issue
-queues accessible in that cycle. Because of clustering, some issue
-queues will receive the broadcast later than others; this is discussed
-below. Each slot in each of the four operand arrays is compared against
-the broadcast value. If the operand tag in that slot is valid and
-matches the broadcast tag, the slot (in one of the operand arrays
-only, not the entire issue queue) is invalidated to indicate it is
-ready and no longer waiting for further broadcasts.
-
-<P>
-Every cycle, the <TT><FONT SIZE="-1">clock()</FONT></TT> method uses the <TT><FONT SIZE="-1">valid</FONT></TT>
-and <TT><FONT SIZE="-1">issued</FONT></TT> bitmaps together with the valid bitmaps
-of each of the operand arrays to compute which issue queue slots in
-the dispatched state are no longer waiting on any of their operands.
-This bitmap of ready slots is then latched into the <TT><FONT SIZE="-1">allready</FONT></TT>
-bitmap.
-
-<P>
-The <TT><FONT SIZE="-1">issue()</FONT></TT> method simply finds the index of the first
-set bit in the <TT><FONT SIZE="-1">allready</FONT></TT> bitmap (this is the slot of
-the oldest ready uop in program order), marks the corresponding slot
-as issued, and returns the slot. The processor then selects a functional
-unit for the uop in that slot and executes it via the <TT><FONT SIZE="-1">ReorderBufferEntry::issue()</FONT></TT>
-method. After the uop has completed execution (i.e. it cannot possibly
-be replayed), the <TT><FONT SIZE="-1">release()</FONT></TT> method is called to remove
-the slot from the issue queue, freeing it up for incoming uops in
-the dispatch stage. The collapsing design of the issue queue means
-that the slot is not simply marked as invalid - all slots after it
-are physically shifted left by one, leaving a free slot at the end
-of the array. This design is relatively simple to implement in hardware
-and makes determining the oldest ready to issue uop very trivial.
-
-<P>
-Because of the collapsing mechanism, it is critical to note that the
-slot index returned by <TT><FONT SIZE="-1">issue()</FONT></TT> will become invalid
-after the next call to the <TT><FONT SIZE="-1">remove()</FONT></TT> method; hence,
-it should never be stored anywhere if a slot could be removed from
-the issue queue in the meantime.
-
-<P>
-If a uop issues but determines that it cannot actually complete at
-that time, it must be <I>replayed</I>. The <TT><FONT SIZE="-1">replay()</FONT></TT>
-method clears the issued bit for the uop's issue queue slot, returning
-it to the dispatched state. The replay mechanism can optionally add
-additional dependencies such that the uop is only re-issued after
-those dependencies are resolved. This is important for loads and stores,
-which may need to add a dependency on a prior store queue entry after
-finding a matching address in the load or store queues. In rare cases,
-a replay may also be required when a uop is issued but no applicable
-functional units are left for it to execute on. The <TT><FONT SIZE="-1">ReorderBufferEntry::replay()</FONT></TT>
-method is a wrapper around <TT><FONT SIZE="-1">IssueQueue::replay()</FONT></TT> used
-to collect the operands the uop is still waiting for.
-
-<P>
-
-<H2><A NAME="SECTION04431000000000000000">
-Implementation</A>
+<H2><A NAME="SECTION03511000000000000000">
+Branch Mispredictions</A>
 </H2>
 
 <P>
-PTLsim uses a novel method of modeling the issue queue and other associative
-structures with small tags. Specifically, the <TT><FONT SIZE="-1">FullyAssociativeArrayTags8bit</FONT></TT>
-template class declared in <TT><FONT SIZE="-1">logic.h</FONT></TT> and used to build
-the issue queue makes use of the host processor's 128-bit vector (SSE)
-instructions to do massively parallel associative matching, masking
-and bit scanning on up to 16 tags every clock cycle. This makes it
-substantially faster than simulators using the naive approach of scanning
-the issue queue entries linearly. Similar classes in <TT><FONT SIZE="-1">logic.h</FONT></TT>
-support O(1) associative searches of both 8-bit and 16-bit tags; tags
-longer than this are generally more efficient if the generic <TT><FONT SIZE="-1">FullyAssociativeArrayTags</FONT></TT>
-using standard integer comparisons is used instead.
+Branch mispredictions form the bulk of all mis-speculated operations.
+Whenever the actual RIP returned by a branch uop differs from the
+<TT><FONT SIZE="-1">riptaken</FONT></TT> field of the uop, the branch has been mispredicted.
+This means all uops after (but <I>not</I> including) the branch must
+be annulled and removed from all processor structures. The fetch queue
+(Section <A HREF="node10.html#sec:FetchStage">7.1</A>) is then reset and fetching is redirected
+to the correct branch target. However, all uops in program order before
+the branch are still correct and may continue executing.
 
 <P>
-As a result of this high performance design, each issue queue is limited
-to 64 entries and the tags to be matched must be between 0 and 255
-to fit in 8 bits. The <TT><FONT SIZE="-1">FullyAssociativeArrayTags16bit</FONT></TT>
-class can be used instead if longer tags are required, at the cost
-of reduced simulation performance.
+Note that we do <I>not</I> just reissue the branch: this would be
+pointless, as we already know the correct RIP since the branch uop
+itself has already executed once. Instead, we let it writeback and
+commit as if it were predicted correctly.
 
 <P>
 
-<H2><A NAME="SECTION04432000000000000000">
-Other Designs</A>
+<H2><A NAME="SECTION03512000000000000000">
+Unaligned Loads and Stores and Aliased Stores</A>
 </H2>
 
 <P>
-It's important to remember that the issue queue design described above
-is <I>one</I> possible implemention out of the many designs currently
-used in industry and research processors. For instance, in lieu of
-the collapsing design (used by the Pentium 4 and Power4/5/970), the
-AMD K8 uses a sequence number tag of the ROB and comparator logic
-to select the earliest ready instruction. Similarly, the Pentium 4
-uses a set of bit vectors (a <I>dependency matrix</I>) instead of
-tag broadcasts to wake up instructions. These other approaches may
-be implemented by modifying the <TT><FONT SIZE="-1">IssueQueue</FONT></TT> class as
-appropriate.
+Loads and stores may also require the annulment of all uops following
+(and this time including) the load or store in program order. The
+conditions under which this process can occur are described in Sections
+<A HREF="node14.html#sec:IssuingLoads">11.1</A> and <A HREF="node15.html#sub:AliasCheck">12.2.1</A>.
 
 <P>
 
-<H1><A NAME="SECTION04440000000000000000"></A><A NAME="sec:Issue"></A>
+<H1><A NAME="SECTION03520000000000000000"></A><A NAME="sec:SpeculationRecovery"></A>
 <BR>
-Issue
+Recovery
 </H1>
 
 <P>
-The <TT><FONT SIZE="-1">issue()</FONT></TT> top-level function issues one or more
-instructions in each cluster from each issue queue every cycle. This
-function consults the <TT><FONT SIZE="-1">clusters[</FONT></TT><I>clusterid</I><TT><FONT SIZE="-1">].issue_width</FONT></TT>
-field defined in <TT><FONT SIZE="-1">ooohwdef.h</FONT></TT> to determine the maximum
-number of uops to issue from each cluster. The <TT><FONT SIZE="-1">issueq_operation_on_cluster_with_result(cluster,
-iqslot, issue())</FONT></TT> macro (Section <A HREF="#sec:Clustering">9.1</A>) is used to
-invoke the <TT><FONT SIZE="-1">issue()</FONT></TT> method of the appropriate cluster
-to select the earliest ready issue queue slot, as described in Section
-<A HREF="#sec:Scheduling">9.3</A>. 
+In PTLsim, the <TT><FONT SIZE="-1">ReorderBufferEntry::annul()</FONT></TT> method
+removes any and all ROBs that entered the pipeline after and optionally
+including the misspeculated uop (depending on the <TT><FONT SIZE="-1">keep_misspec_uop</FONT></TT>
+argument). Because this method moves all affected ROBs to the free
+state, they are instantly taken out of consideration for future pipeline
+stages and will be dropped on the next cycle.
 
 <P>
-The <TT><FONT SIZE="-1">ReorderBufferEntry::issue()</FONT></TT> method of the corresponding
-ROB entry is then called to actually execute the uop. This method
-first makes sure a functional unit is available within the cluster
-that's capable of executing the uop; if not, the uop is replayed and
-re-issued again on the next cycle. At this point, the uop's three
-operands (<TT><FONT SIZE="-1">ra</FONT></TT>, <TT><FONT SIZE="-1">rb</FONT></TT>, <TT><FONT SIZE="-1">rc</FONT></TT>)
-are read from the physical register file. If any of the operands are
-invalid, the entire uop is marked as invalid with an <TT><FONT SIZE="-1">EXCEPTION_Propagate</FONT></TT>
-result and is not further executed. Otherwise, the uop is executed
-by calling the synthesized execute function for the uop (see Section
-<A HREF="node11.html#sec:FetchStage">7.1</A>).
+We must be extremely careful to annul all uops in an x86 macro-op;
+otherwise half the x86 instruction could be executed twice once refetched.
+Therefore, if the first uop to annul is not also the first uop in
+the x86 macro-op, we may have to scan backwards in the ROB until we
+find the first uop of the macro-op. In this way, we ensure that we
+can annul the entire macro-op. All uops comprising the macro-op are
+guaranteed to still be in the ROB since none of the uops can commit
+until the entire macro-op can commit. Note that this does not apply
+if the final uop in the macro-op is a branch and that branch uop itself
+is being retained as occurs with mispredicted branches.
 
 <P>
-Loads and stores are handled specially by calling the <TT><FONT SIZE="-1">issueload()</FONT></TT>
-or <TT><FONT SIZE="-1">issuestore()</FONT></TT> method. Since loads and stores can
-encounter an mis-speculation (e.g. when a load is erroneously issued
-before an earlier store to the same addresses), the <TT><FONT SIZE="-1">issueload()</FONT></TT>
-and <TT><FONT SIZE="-1">issuestore()</FONT></TT> functions can return <TT><FONT SIZE="-1">ISSUE_MISSPECULATED</FONT></TT>
-to force all uops in program order after the mis-speculated uop to
-be annulled and sent through the pipeline again. Similarly, if <TT><FONT SIZE="-1">issueload()</FONT></TT>
-or <TT><FONT SIZE="-1">issuestore()</FONT></TT> return <TT><FONT SIZE="-1">ISSUE_NEEDS_REPLAY</FONT></TT>,
-issuing from that cluster is aborted since the uop has been replayed
-in accordance with Section <A HREF="#sec:Scheduling">9.3</A>. It is important
-to note that loads which miss the cache are considered to complete
-successfully and do <I>not</I> require a replay; their physical register
-is simply marked as waiting until the load arrives. In both the mis-speculation
-and replay cases, no further uops from the cluster's issue queue are
-dispatched until the next cycle.
+The first uop to annul is determined in the <TT><FONT SIZE="-1">annul()</FONT></TT>
+method by scanning backwards in time from the excepting uop until
+a uop with its SOM (start of macro-op) bit is set, as described in
+Section <A HREF="node7.html#sec:UopIntro">5.1</A>. This SOM uop represents the boundary
+between x86 instructions, and is where we start annulment. The end
+of the range of uops to annul is at the tail of the reorder buffer.
 
 <P>
-Branches are handled similar to integer and floating point operations,
-except that they may cause a mis-speculation in the event of a branch
-misprediction; this is discussed below.
+We have to reconstruct the speculative RRT as it existed just before
+the first uop to be annulled was renamed. This is done by calling
+the <TT><FONT SIZE="-1">pseudocommit()</FONT></TT> method of each annulled uop to
+implement the ``fast flush with pseudo-commit'' algorithm as follows.
+First, we overwrite the speculative RRT with the committed RRT. We
+then <I>simulate</I> the commitment of all non-speculative ROBs up
+to the first uop to be annulled by updating the speculative RRT as
+if it were the commit RRT. This brings the speculative RRT to the
+same state as if all in flight nonspeculative operations before the
+first uop to be annulled had actually committed. Fetching is then
+resumed at the correct RIP, where new uops are renamed using the recovered
+speculative RRT.
 
 <P>
-If the uop caused an exception, we force it directly to the commit
-stage and not through writeback; this keeps dependencies waiting until
-they can be properly annulled by the speculation recovery logic. The
-commit stage will detect the exception and take appropriate action.
-If the exceptional uop was speculatively executed beyond a branch,
-it will never reach commit anyway since the bogus branch would have
-to commit before the exception would even become visible.
+Other methods of RRT reconstruction (like backwards walk with saved
+checkpoint values) are difficult to impossible because of the requirement
+that flag rename tables be restored even if some of the required physical
+registers with attached flags have since been freed. Technically RRT
+checkpointing could be used but due to the load/store replay mechanism
+in use, this would require a checkpoint at every load and store as
+well as branches. Hence, the forward walk method seems to offer the
+best performance in practice and is quite simple. The Pentium 4 is
+believed to use a similar method of recovering from some types of
+mis-speculations.
 
 <P>
-<B><I>NOTE:</I></B> In PTLsim, all issued uops put their result
-in the uop's assigned physical register at the time of issue, even
-though the data technically does not appear there until writeback
-(i.e. the physical register enters the <I>written</I> state). This
-is done to simplify the simulator implementation; it is assumed that
-any data ``read'' from physical registers before writeback is
-in fact being read from the bypass network instead.
+After reconstructing the RRT, for each ROB to annul, we broadcast
+the ROB index to the appropriate cluster's issue queue, allowing the
+issue queue to purge the slot of the ROB being annulled. Finally,
+for each annulled uop, we free any resources allocated to it (i.e.,
+the ROB itself, the destination physical register, the load/store
+queue entry (if any) and so on. Any updates to the branch predictor
+and return address stack made during the speculative execution of
+branches are also rolled back.
+
+<P>
+Finally, the fetch unit is restarted at the correct RIP and uops enter
+the pipeline and are renamed according to the recovered rename tables
+and allocated resource maps.
 
 <P>
 <HR>
 <!--Navigation Panel-->
-<A NAME="tex2html523"
+<A NAME="tex2html532"
   HREF="node14.html">
 <IMG WIDTH="37" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="next" SRC="next.png"></A> 
-<A NAME="tex2html519"
-  HREF="node9.html">
+<A NAME="tex2html528"
+  HREF="node8.html">
 <IMG WIDTH="26" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="up" SRC="up.png"></A> 
-<A NAME="tex2html513"
+<A NAME="tex2html522"
   HREF="node12.html">
 <IMG WIDTH="63" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="previous" SRC="prev.png"></A> 
-<A NAME="tex2html521"
+<A NAME="tex2html530"
   HREF="node1.html">
 <IMG WIDTH="65" HEIGHT="24" ALIGN="BOTTOM" BORDER="0" ALT="contents" SRC="contents.png"></A>  
 <BR>
-<B> Next:</B> <A NAME="tex2html524"
-  HREF="node14.html">Speculation and Recovery</A>
-<B> Up:</B> <A NAME="tex2html520"
-  HREF="node9.html">Out of Order Processor</A>
-<B> Previous:</B> <A NAME="tex2html514"
-  HREF="node12.html">Frontend and Key Structures</A>
- &nbsp; <B>  <A NAME="tex2html522"
+<B> Next:</B> <A NAME="tex2html533"
+  HREF="node14.html">Load Issue</A>
+<B> Up:</B> <A NAME="tex2html529"
+  HREF="node8.html">Out of Order Processor</A>
+<B> Previous:</B> <A NAME="tex2html523"
+  HREF="node12.html">Scheduling, Dispatch and Issue</A>
+ &nbsp; <B>  <A NAME="tex2html531"
   HREF="node1.html">Contents</A></B> 
 <!--End of Navigation Panel-->
 <ADDRESS>
 Matt T Yourst
-2005-10-26
+2005-12-02
 </ADDRESS>
 </BODY>
 </HTML>

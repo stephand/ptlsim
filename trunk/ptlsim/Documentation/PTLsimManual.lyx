@@ -67,7 +67,7 @@ Matt T.
 <yourst@yourst.com>
 \layout Standard
 \noindent \align center 
-Revision 20051010
+Revision 20051202
 \layout Standard
 \added_space_top vfill \noindent \align center 
 The latest version of PTLsim and this document are always available at:
@@ -3901,15 +3901,12 @@ The full list of PTLsim performance and statistical counters is given in
 \end_inset 
 
 .
-\layout Part
+\layout Chapter
 
 
 \begin_inset LatexCommand \label{part:x86andUops}
 
 \end_inset 
-
-x86 Instruction Set and PTLsim Micro-Operations
-\layout Chapter
 
 x86 Instructions and Micro-Ops (uops)
 \layout Section
@@ -4188,6 +4185,7 @@ Section
 
  describes the semantics and encoding of all uops supported by the PTLsim
  processor model.
+ The following is an overview of these uops.
 \layout Section
 
 Simple Fast Path Instructions
@@ -4334,22 +4332,10 @@ dh
  The 
 \family typewriter 
 \size small 
-inshb
+mask
 \family default 
 \size default 
-, 
-\family typewriter 
-\size small 
-exthb
-\family default 
-\size default 
- and 
-\family typewriter 
-\size small 
-movhb
-\family default 
-\size default 
- uops are provided for handling this rare but important operation.
+ uop is used for handling this rare but important set of operations.
 \layout Section
 
 
@@ -4752,11 +4738,17 @@ brp
 brp
 \family default 
 \size default 
- retires, at which point an assist function within PTLsim is called.
+ commits, at which point an assist function within PTLsim is called.
  In a real processor there are more efficient ways of doing this without
  flushing the pipeline, however in PTLsim assists are sufficiently rare
  that the performance impact is negligible and this approach significantly
  reduces complexity.
+ The exact mechanism used is described in Section 
+\begin_inset LatexCommand \ref{sec:PipelineFlushesAndBarriers}
+
+\end_inset 
+
+.
 \layout Part
 
 
@@ -5090,7 +5082,7 @@ current_state_list
 ; see below)
 \layout Itemize
 
-Indices of the physical register (
+Pointers to the physical register (
 \family typewriter 
 \size small 
 physreg
@@ -5105,8 +5097,8 @@ lsq
 ) and other resources allocated to the uop
 \layout Itemize
 
-Indices of the three physical register operands to the uop, as well as a
- possible store dependency used in replay scheduling (described later)
+Pointers to the three physical register operands to the uop, as well as
+ a possible store dependency used in replay scheduling (described later)
 \layout Itemize
 
 Various cycle counters and related fields for simulating progress through
@@ -5202,6 +5194,21 @@ PhysicalRegister
  Physical registers store several components:
 \layout Itemize
 
+Index of the physical register (
+\family typewriter 
+\size small 
+idx
+\family default 
+\size default 
+) and the physical register file id (
+\family typewriter 
+\size small 
+rfid
+\family default 
+\size default 
+) to which it belongs
+\layout Itemize
+
 The actual 64-bit register data
 \layout Itemize
 
@@ -5230,10 +5237,16 @@ FLAG_INVAL
 \family default 
 \size default 
 ) for ready results which encountered an exception.
- The exception code is written to the data field in lieu of the real result.
+ The exception code is written to the data field in lieu of the real result
 \layout Itemize
 
-Current state of the physical register
+Current state of the physical register (
+\family typewriter 
+\size small 
+state
+\family default 
+\size default 
+)
 \layout Itemize
 
 ROB currently owning this physical register, or architectural register mapping
@@ -5252,19 +5265,79 @@ Reference counter for the physical register.
 Physical Register File
 \layout Standard
 
-PTLsim models a unified physical register file holding both integer and
- floating point results; this is required because presently many PTL uops
- assume both types of registers are accessible as operands to a single uop.
+PTLsim uses a flexible physical register file model in which multiple physical
+ register files with different sizes and properties can optionally be defined.
+ Each physical register file in the 
+\family typewriter 
+\size small 
+physregfiles[]
+\family default 
+\size default 
+ array can be made accessible from one or more clusters.
+ For instance, uops which execute on floating point clusters can be forced
+ to always allocate a register in the floating point register file, or each
+ cluster can have a dedicated register file.
+\layout Standard
+
+Various heuristics can also be used for selecting the register file into
+ which a result is placed.
+ The default heuristic simply finds the first acceptable physical register
+ file with a free register.
+ Acceptable physical register files are those register files in which the
+ uop being allocated is allowed to write its result; this is configurable
+ based on clustering as described below.
+ Other allocation policies, such as alternation between available register
+ files and dependency based register allocation, are all possible by modifying
+ the 
+\family typewriter 
+\size small 
+rename()
+\family default 
+\size default 
+ function where physical registers are allocated..
+\layout Standard
+
+In each physical register file, physical register number 0 is defined as
+ the 
+\emph on 
+null register:
+\emph default 
+ it always contains the value zero and is used as an operand anywhere the
+ zero value (or no value at all) is required.
+\layout Standard
+
+Physical register files are configured in 
+\family typewriter 
+\size small 
+ooohwdef.h
+\family default 
+\size default 
+.
+ The 
+\family typewriter 
+\size small 
+PhysicalRegisterFile[]
+\family default 
+\size default 
+ array is defined to declare each register file by name, register file ID
+ (RFID, from 0 to the number of register files) and size.
+ The 
+\family typewriter 
+\size small 
+MAX_PHYS_REG_FILE_SIZE
+\family default 
+\size default 
+ parameter must be greater than the largest physical register in the processor.
 \layout Subsection
 
 Physical Register States
 \layout Standard
 
-Each physical register can be in one of several states at any given time;
- PTLsim maintains linked lists (the 
+Each physical register can be in one of several states at any given time.
+ For each physical register file, PTLsim maintains linked lists (the 
 \family typewriter 
 \size small 
-physreg_
+PhysicalRegisterFile.states[
 \family default 
 \size default 
 \emph on 
@@ -5272,17 +5345,32 @@ statename
 \family typewriter 
 \size small 
 \emph default 
-_list
+]
 \family default 
 \size default 
  lists) to track which registers are in each state.
  The 
 \family typewriter 
 \size small 
-current_state_list
+state
 \family default 
 \size default 
- field in each physical register specifies this state.
+ field in each physical register specifies its state, and implies that the
+ physical register is on the list 
+\family typewriter 
+\size small 
+physregfiles[physreg.
+\series bold 
+rfid
+\series default 
+].states[physreg.
+\series bold 
+state
+\series default 
+]
+\family default 
+\size default 
+.
  The valid states are:
 \layout Itemize
 
@@ -5298,16 +5386,16 @@ free:
 
 \series bold 
 \emph on 
-used:
+waiting:
 \series default 
 \emph default 
- the register has been allocated to a uop but that uop has not issued yet.
+ the register has been allocated to a uop but that uop is waiting to issue.
 \layout Itemize
 
 
 \series bold 
 \emph on 
-ready:
+bypass:
 \series default 
 \emph default 
  the uop associated with the register has issued and produced a value (or
@@ -5356,13 +5444,13 @@ pendingfree:
 
 One physical register is allocated to each uop and moved into the 
 \emph on 
-used
+waiting
 \emph default 
  state, regardless of which type of uop it is.
  For integer, floating point and load uops, the physical register holds
  the actual numerical value generated by the corresponding uop.
  Branch uops place the target RIP of the branch in a physical register.
- Store uops place the physical address in the register.
+ Store uops place the merged data to store in the register.
  Technically branches and stores do not need physical registers, but to
  keep the processor design simple, they are allocated registers anyway.
 \layout Section
@@ -7046,9 +7134,21 @@ C
 C
 \emph default 
 's score is incremented.
- The final cluster is selected as the cluster with the highest score out
+ 
+\layout Standard
+
+The final cluster is selected as the cluster with the highest score out
  of the set of clusters which the uop can actually issue on (e.g.
  a floating point uop cannot issue on a cluster with only integer units).
+ The 
+\family typewriter 
+\size small 
+ReorderBufferEntry::executable_on_cluster_mask
+\family default 
+\size default 
+ bitmap can be used to further restrict which clusters a uop can be dispatched
+ to, for instance because certain clusters can only write to certain physical
+ register files.
  This mechanism is designed to route each uop to the cluster in which the
  majority of its operands will become available at the earliest time; in
  practice it works quite well and variants of this technique are often used
@@ -7503,6 +7603,19 @@ FullyAssociativeArrayTags16bit
 \size default 
  class can be used instead if longer tags are required, at the cost of reduced
  simulation performance.
+ To enable this, 
+\family typewriter 
+\size small 
+BIG_ROB
+\family default 
+\size default 
+ must be defined in 
+\family typewriter 
+\size small 
+ooohwdef.h
+\family default 
+\size default 
+.
 \layout Subsection
 
 Other Designs
@@ -8262,14 +8375,8 @@ ld.hi
  result is extracted.
 \layout Standard
 
-
-\series bold 
-\emph on 
-NOTE:
-\series default 
-\emph default 
- For simulation purposes only, the data to load is immediately accessed
- and recorded by 
+For simulation purposes only, the data to load is immediately accessed and
+ recorded by 
 \family typewriter 
 \size small 
 issueload()
@@ -8692,7 +8799,7 @@ rob_completed_list
 ) and its physical register or store queue entry is moved to the 
 \family typewriter 
 \size small 
-ready
+bypass
 \family default 
 \size default 
  state so newly dispatched uops do not try to wait for it.
@@ -8797,8 +8904,13 @@ The
 MAX_FORWARDING_LATENCY
 \family default 
 \size default 
- constant (in ooohwdef.h) specifies the maximum number of cycles between
- any two clusters.
+ constant (in 
+\family typewriter 
+\size small 
+ooohwdef.h
+\family default 
+\size default 
+) specifies the maximum number of cycles between any two clusters.
  After the ROB has progressed through 
 \family typewriter 
 \size small 
@@ -8982,7 +9094,7 @@ rd
 In PTLsim, a physical register is freed by moving it to the 
 \family typewriter 
 \size small 
-physreg_free
+PHYSREG_FREE
 \family default 
 \size default 
  state.
@@ -9333,6 +9445,137 @@ In real processors, the Pentium 4 uses a scheme similar to this one but
  If a given physical register P is still used by ROB entry E in the pipeline,
  P's bit vector bit R is set.
  Register P cannot be freed until all bits in its vector are zero.
+\layout Section
+
+
+\begin_inset LatexCommand \label{sec:PipelineFlushesAndBarriers}
+
+\end_inset 
+
+Pipeline Flushes and Barriers
+\layout Standard
+
+In some cases, the entire pipeline must be empty after a given uop commits.
+ For instance, a 
+\emph on 
+barrier
+\emph default 
+ uop (e.g.
+ system call, serializing uop, or major microcode assist) will stall the
+ frontend when first renamed, and when committed (at which point it is the
+ only uop in the pipeline), it will call 
+\family typewriter 
+\size small 
+flush_pipeline()
+\family default 
+\size default 
+ to restart fetching at the appropriate RIP.
+ Exceptions have a similar effect when they reach the commit stage.
+ After doing this, the current architectural registers must be copied into
+ the externally visible 
+\family typewriter 
+\size small 
+ctx.commitarf[]
+\family default 
+\size default 
+ array, since normally the architectural registers are scattered throughout
+ the physical register file.
+ Fortunately, the commit stage also updates 
+\family typewriter 
+\size small 
+ctx.commitarf[]
+\family default 
+\size default 
+ in parallel with the commit RRT, even though the 
+\family typewriter 
+\size small 
+commitarf
+\family default 
+\size default 
+ array is never actually read by the out of order core.
+\layout Standard
+
+At this point, the 
+\family typewriter 
+\size small 
+handle_barrier()
+\family default 
+\size default 
+ or 
+\family typewriter 
+\size small 
+handle_exception()
+\family default 
+\size default 
+ function is called to actually communicate with the world outside the out
+ of order core.
+ In the case of 
+\family typewriter 
+\size small 
+handle_barrier()
+\family default 
+\size default 
+, generally this involves executing native code inside PTLsim to execute
+ a system call on behalf of the simulated thread, or to service a very complex
+ x86 instruction (e.g.
+ 
+\family typewriter 
+\size small 
+cpuid
+\family default 
+\size default 
+, floating point save or restore, etc).
+ For 
+\family typewriter 
+\size small 
+handle_exception()
+\family default 
+\size default 
+, the simulation is stopped and the user is notified that a genuine user
+ visible (non-speculative) exception reached the commit stage.
+\layout Standard
+
+If execution can continue after handling the barrier or exception, the 
+\family typewriter 
+\size small 
+external_to_core_state()
+\family default 
+\size default 
+ function is called to completely reset the out of order core using the
+ state stored in 
+\family typewriter 
+\size small 
+ctx.commitarf[]
+\family default 
+\size default 
+.
+ This involves allocating a fixed physical register for each of the 64 architect
+ural registers in 
+\family typewriter 
+\size small 
+ctx.commitarf[]
+\family default 
+\size default 
+, setting the speculative and committed rename tables to their proper cold
+ start values, and resetting all reference counts on physical registers
+ as appropriate.
+ If the processor is configured with multiple physical register files (Section
+ 
+\begin_inset LatexCommand \ref{sec:PhysicalRegisters}
+
+\end_inset 
+
+), the initial physical register for each architectural register is allocated
+ in the first physical register file only (this is configurable by modifying
+ 
+\family typewriter 
+\size small 
+external_to_core_state()
+\family default 
+\size default 
+).
+ At this point, the main simulation loop can resume as if the processor
+ had just restarted from scratch.
 \layout Chapter
 
 
@@ -14987,422 +15230,6 @@ Internal stores may not be unaligned, and never stall or generate exceptions.
 \family typewriter 
 \series bold 
 \size large 
-inshb exthb movhb
-\family sans 
-\series default 
-\size default 
-
-\newline 
-
-\size larger 
-Byte Operations
-\layout Standard
-
-
-\begin_inset  Tabular
-<lyxtabular version="3" rows="4" columns="3">
-<features>
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<row bottomline="true">
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Mnemonic
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Syntax
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Operation
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-inshb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra[15:8] 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- rb[7:0]
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-exthb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra[7:0] 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- rb[15:8]
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-movhb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra[15:8] 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- rb[15:8]
-\end_inset 
-</cell>
-</row>
-</lyxtabular>
-
-\end_inset 
-
-
-\layout Standard
-\added_space_top medskip 
-
-\family sans 
-\series bold 
-Notes:
-\layout Itemize
-
-
-\family sans 
-In x86, it is possible to address the second byte of many integer registers
- as a separate register (as 
-\family typewriter 
-\size small 
-ah
-\family sans 
-\size default 
-, 
-\family typewriter 
-\size small 
-bh
-\family sans 
-\size default 
-, 
-\family typewriter 
-\size small 
-ch
-\family sans 
-\size default 
-, 
-\family typewriter 
-\size small 
-dh
-\family sans 
-\size default 
-).
- The 
-\family typewriter 
-\size small 
-inshb
-\family sans 
-\size default 
-, 
-\family typewriter 
-\size small 
-exthb
-\family sans 
-\size default 
- and 
-\family typewriter 
-\size small 
-movhb
-\family sans 
-\size default 
- uops are provided for handling this unfortunately still common usage by
- moving 8 bits between the first and second bytes of the operands.
-\layout Itemize
-
-
-\family sans 
-These uops do not generate any condition code flags
-\layout Standard
-\line_bottom \pagebreak_top 
-
-\family typewriter 
-\series bold 
-\size large 
-movhl movl
-\family sans 
-\series default 
-\size default 
-
-\newline 
-
-\size larger 
-Merge 32-bit Words
-\layout Standard
-
-
-\begin_inset  Tabular
-<lyxtabular version="3" rows="3" columns="3">
-<features>
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<row bottomline="true">
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Mnemonic
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Syntax
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Operation
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-movhl
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = (ra[31:0] << 32) | rb[31:0]
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-movl
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra[31:0] 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- rb[31:0]
-\end_inset 
-</cell>
-</row>
-</lyxtabular>
-
-\end_inset 
-
-
-\layout Standard
-\added_space_top medskip 
-
-\family sans 
-\series bold 
-Notes:
-\layout Itemize
-
-
-\family sans 
-The 
-\family typewriter 
-\size small 
-movhl
-\family sans 
-\size default 
- uop concatenates two 32-bit words into a 64-bit word, while the 
-\family typewriter 
-\size small 
-movl
-\family sans 
-\size default 
- uop simply merges 
-\emph on 
-rb
-\emph default 
- into the low 32 bits of 
-\emph on 
-ra
-\emph default 
-.
-\layout Itemize
-
-
-\family sans 
-These uops do not generate any condition code flags
-\layout Standard
-\line_bottom \pagebreak_top 
-
-\family typewriter 
-\series bold 
-\size large 
 shl shr sar rotl rotr rotcl rotcr
 \family sans 
 \series default 
@@ -15892,7 +15719,7 @@ The specific flags attached to the result depend on the input conditions
 \family typewriter 
 \series bold 
 \size large 
-dupbit
+mask
 \family sans 
 \series default 
 \size default 
@@ -15900,7 +15727,7 @@ dupbit
 \newline 
 
 \size larger 
-Duplicate Bit
+Masking, Insertion and Extraction
 \layout Standard
 
 
@@ -15955,7 +15782,9 @@ Operation
 \family typewriter 
 \series bold 
 \size small 
-dupbit
+mask
+\emph on 
+.x|z
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -15966,7 +15795,7 @@ dupbit
 
 \family typewriter 
 \size small 
-rd = ra,rb,rc
+rd = ra,rb,[ms,mc,ds]
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -15976,11 +15805,7 @@ rd = ra,rb,rc
 
 
 \family sans 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- (rb[rc], rb[rc], rb[rc], ...)
+See semantics below
 \end_inset 
 </cell>
 </row>
@@ -16002,202 +15827,11 @@ Notes:
 The 
 \family typewriter 
 \size small 
-dupbit
+mask
 \family sans 
 \size default 
- uop duplicates the specified bit of 
-\emph on 
-rb
-\emph default 
- into all 64 bit positions, then merges the result into 
-\emph on 
-ra
-\emph default 
-.
-\layout Itemize
-
-
-\family sans 
-This uop is used to do specialized sign extension
-\layout Itemize
-
-
-\family sans 
-This uop does not generate any condition code flags
-\layout Standard
-\line_bottom \pagebreak_top 
-
-\family typewriter 
-\series bold 
-\size large 
-extr extrx
-\family sans 
-\series default 
-\size default 
-
-\newline 
-
-\size larger 
-Extract Bit Field
-\layout Standard
-
-
-\begin_inset  Tabular
-<lyxtabular version="3" rows="3" columns="3">
-<features>
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<row bottomline="true">
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Mnemonic
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Syntax
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Operation
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-extr
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,shramt,bitcnt
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- (ra >> shramt) & ((1 << bitcnt) - 1)
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-extrx
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,shramt,bitcnt
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- SignExt((ra >> shramt) & ((1 << bitcnt) - 1), bitcnt)
-\end_inset 
-</cell>
-</row>
-</lyxtabular>
-
-\end_inset 
-
-
-\layout Standard
-\added_space_top medskip 
-
-\family sans 
-\series bold 
-Notes:
-\layout Itemize
-
-
-\family sans 
-The 
-\family typewriter 
-\size small 
-extr
-\family sans 
-\size default 
- and 
-\family typewriter 
-\size small 
-extrx
-\family sans 
-\size default 
- uops are used for generalized bit field extraction when the bounds of the
- bit field (
-\emph on 
-shramt
-\emph default 
- and 
-\emph on 
-bitcnt
-\emph default 
-) are immediates.
+ uop and its variants are used for generalized bit field extraction, insertion,
+ sign and zero extension using the 18-bit control field in the immediate
 \layout Itemize
 
 
@@ -16209,175 +15843,13 @@ These uops are used extensively within PTLsim microcode, but are also useful
 shr
 \family sans 
 \size default 
- and 
-\family typewriter 
-\size small 
-and
-\family sans 
-\size default 
- uops.
-\layout Itemize
-
-
-\family sans 
-The condition code flags (ZAPS, CF, OF) are the flags logically generated
- by the final AND operation.
-\layout Standard
-\line_bottom \pagebreak_top 
-
-\family typewriter 
-\series bold 
-\size large 
-insr
-\family sans 
-\series default 
-\size default 
-
-\newline 
-
-\size larger 
-Insert Bit Field
-\layout Standard
-
-
-\begin_inset  Tabular
-<lyxtabular version="3" rows="2" columns="3">
-<features>
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<column alignment="block" valignment="top" width="50col%">
-<row bottomline="true">
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Mnemonic
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Syntax
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-\series bold 
-Operation
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-insr
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb,shlamt,bitcnt
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-mask = ((1 << bitcnt)-1) << shlamt
-\newline 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- ((rb << shlamt) & mask) | (ra & (~mask))
-\end_inset 
-</cell>
-</row>
-</lyxtabular>
-
-\end_inset 
-
-
-\layout Standard
-\added_space_top medskip 
-
-\family sans 
-\series bold 
-Notes:
-\layout Itemize
-
-
-\family sans 
-The 
-\family typewriter 
-\size small 
-insr
-\family sans 
-\size default 
- uop is used for generalized bit field insertion when the bounds of the
- bit field (
-\emph on 
-shlamt
-\emph default 
- and 
-\emph on 
-bitcnt
-\emph default 
-) are immediates.
-\layout Itemize
-
-
-\family sans 
-These uops are used extensively within PTLsim microcode, but are also useful
- if the processor supports dynamically merging a dependency subgraph of
- 
-\family typewriter 
-\size small 
-shl
-\family sans 
-\size default 
- , 
-\family typewriter 
-\size small 
-shr
-\family sans 
-\size default 
 , 
 \family typewriter 
 \size small 
 and
 \family sans 
 \size default 
- and 
+, 
 \family typewriter 
 \size small 
 or
@@ -16389,32 +15861,34 @@ or
 
 \family sans 
 The condition code flags (ZAPS, CF, OF) are the flags logically generated
- by the final OR operation.
+ by the final AND operation.
 \layout Standard
-\line_bottom \pagebreak_top 
+\added_space_top medskip 
 
-\family typewriter 
-\series bold 
-\size large 
-sxt zxt
 \family sans 
-\series default 
-\size default 
-
-\newline 
-
-\size larger 
-Sign or Zero Extension
+\series bold 
+Control Field Format
 \layout Standard
 
+
+\family sans 
+The 18-bit 
+\emph on 
+rc
+\emph default 
+ immediate has the following three 6-bit fields:
+\layout Standard
+\noindent \align center 
+
+\family sans 
 
 \begin_inset  Tabular
-<lyxtabular version="3" rows="3" columns="3">
+<lyxtabular version="3" rows="2" columns="3">
 <features>
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<column alignment="left" valignment="top" width="0">
-<row bottomline="true">
+<column alignment="center" valignment="top" leftline="true" width="0">
+<column alignment="center" valignment="top" leftline="true" width="0">
+<column alignment="center" valignment="top" leftline="true" rightline="true" width="0">
+<row topline="true">
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
 \begin_inset Text
 
@@ -16423,7 +15897,7 @@ Sign or Zero Extension
 
 \family sans 
 \series bold 
-Mnemonic
+DS
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -16434,10 +15908,10 @@ Mnemonic
 
 \family sans 
 \series bold 
-Syntax
+MC
 \end_inset 
 </cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+<cell alignment="center" valignment="top" topline="true" leftline="true" rightline="true" usebox="none">
 \begin_inset Text
 
 \layout Standard
@@ -16445,34 +15919,19 @@ Syntax
 
 \family sans 
 \series bold 
-Operation
+MS
 \end_inset 
 </cell>
 </row>
-<row>
+<row topline="true" bottomline="true">
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
 \begin_inset Text
 
 \layout Standard
 
 
-\family typewriter 
-\series bold 
-\size small 
-sxt.
-\emph on 
-sz
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra
+\family sans 
+12
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -16482,52 +15941,17 @@ rd = ra
 
 
 \family sans 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- SignExt(ra, sz)
+6
 \end_inset 
 </cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-zxt.
-\emph on 
-sz
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+<cell alignment="center" valignment="top" topline="true" leftline="true" rightline="true" usebox="none">
 \begin_inset Text
 
 \layout Standard
 
 
 \family sans 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- ZeroExt(ra, sz)
+0
 \end_inset 
 </cell>
 </row>
@@ -16536,12 +15960,6 @@ rd = ra
 \end_inset 
 
 
-\layout Standard
-\added_space_top medskip 
-
-\family sans 
-\series bold 
-Notes:
 \layout Itemize
 
 
@@ -16549,37 +15967,86 @@ Notes:
 The 
 \family typewriter 
 \size small 
-sxt
+mask
 \family sans 
 \size default 
- uop is used to sign extend the 
-\emph on 
-ra
-\emph default 
- operand from 
-\emph on 
-sz
-\emph default 
- bits to the uop's effective result size; this result is then merged into
- 
-\emph on 
-ra
-\emph default 
-.
-\layout Itemize
-
+ uop and its variants are used for generalized bit field extraction, insertion,
+ sign and zero extension using the 18-bit control field in the immediate
+\layout Standard
+\added_space_top medskip 
 
 \family sans 
-The 
-\emph on 
-zxt
-\emph default 
- uop performs zero extension with the same semantics
-\layout Itemize
+\series bold 
+Operation:
+\layout LyX-Code
 
 
-\family sans 
-These uops do not generate any condition code flags.
+\size small 
+M = 1'[(ms+mc-1):ms]
+\layout LyX-Code
+
+
+\size small 
+T = (ra & ~M) | ((rb >>> ds) & M)
+\layout LyX-Code
+
+
+\size small 
+if (Z) {
+\layout LyX-Code
+
+
+\size small 
+  # Zero extend
+\layout LyX-Code
+
+
+\size small 
+  rd = ra 
+\begin_inset Formula $\leftarrow$
+\end_inset 
+
+ (T & 1'[(ms+mc-1):0])
+\layout LyX-Code
+
+
+\size small 
+else if (X) {
+\layout LyX-Code
+
+
+\size small 
+  # Sign extend
+\layout LyX-Code
+
+
+\size small 
+  rd = ra 
+\begin_inset Formula $\leftarrow$
+\end_inset 
+
+ (T[ms+mc-1]) ? (T | 1'[63:(ms+mc)]) : (T & 1'[(ms+mc-1):0])
+\layout LyX-Code
+
+
+\size small 
+} else {
+\layout LyX-Code
+
+
+\size small 
+  rd = ra 
+\begin_inset Formula $\leftarrow$
+\end_inset 
+
+ T
+\layout LyX-Code
+
+
+\size small 
+}
+\layout LyX-Code
+
 \layout Standard
 \line_bottom \pagebreak_top 
 
