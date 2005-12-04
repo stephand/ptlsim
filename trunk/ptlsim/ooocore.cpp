@@ -1019,14 +1019,19 @@ void external_to_core_state() {
   }
 
   // Always start out on cluster 0:
-  PhysicalRegisterFile& physregs = physregfiles[0];
-  PhysicalRegister* zeroreg = &physregs[PHYS_REG_NULL];
+  PhysicalRegister* zeroreg = &physregfiles[0][PHYS_REG_NULL];
 
   //
   // Allocate and commit each architectural register
   //
   foreach (i, ARCHREG_COUNT) {
-    PhysicalRegister* physreg = (i == REG_zero) ? zeroreg : physregs.alloc();
+    //
+    // IMPORTANT! If using some register file configuration other
+    // than (integer, fp), this needs to be changed!
+    //
+    bool fp = ((i >= REG_xmml0) & (i <= REG_xmmh15));
+    PhysicalRegisterFile& rf = physregfiles[(fp) ? 1 : 0];
+    PhysicalRegister* physreg = (i == REG_zero) ? zeroreg : rf.alloc();
     physreg->data = ctx.commitarf[i];
     physreg->flags = 0;
     commitrrt[i] = physreg;
