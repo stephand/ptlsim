@@ -557,7 +557,7 @@ ptlstats
 
 \family typewriter 
 \size small 
-ptlstats -dumpraw ls.stats
+ptlstats ls.stats
 \family default 
 \size default 
 
