@@ -205,15 +205,6 @@ Part
 \layout Itemize
 
 Part 
-\begin_inset LatexCommand \ref{part:x86andUops}
-
-\end_inset 
-
- describes the PTLsim internal micro-operation instruction set and its relation
- to x86 and x86-64
-\layout Itemize
-
-Part 
 \begin_inset LatexCommand \ref{part:OutOfOrderModel}
 
 \end_inset 
@@ -871,6 +862,28 @@ Sequential\SpecialChar ~
 and\SpecialChar ~
 Native\SpecialChar ~
 Control:
+\layout List
+\labelwidthstring WWWWWWWW
+
+
+\series bold 
+-seq\SpecialChar ~
+
+\series default 
+\emph on 
+N
+\emph default 
+ Run 
+\emph on 
+N
+\emph default 
+ x86 instructions on the sequential simulator prior to switching to the
+ out of order core [0] (see Section 
+\begin_inset LatexCommand \ref{sec:SequentialMode}
+
+\end_inset 
+
+)
 \layout List
 \labelwidthstring WWWWWWWW
 
@@ -3891,6 +3904,93 @@ In PTLstats, use the
 ptlstats -deltastart 0 ptlsim.stats > ptlsim.stats.txt
 \layout Section
 
+
+\begin_inset LatexCommand \label{sec:SequentialMode}
+
+\end_inset 
+
+Sequential Mode
+\layout Standard
+
+PTLsim also supports 
+\emph on 
+sequential mode
+\emph default 
+, in which instructions are run on a simple, in-order processor model (in
+ 
+\family typewriter 
+\size small 
+seqcore.cpp
+\family default 
+\size default 
+) without accounting for cache misses, branch mispredicts and so forth.
+ This is several times faster than the out of order model, but is obviously
+ far slower than native execution.
+ The purpose of sequential mode is mainly to aid in testing the x86 to uop
+ decoding pipeline and uop implementation code.
+ It may also be useful for gathering certain statistics on the instruction
+ mix and count without running a full simulation.
+ In the future we will extend sequential mode to optionally update the same
+ data caches and branch predictor used by the out of order core so as to
+ warm them up before starting the more detailed out of order simulation.
+\layout Standard
+
+If enabled, sequential mode always runs the processor for the specified
+ number of committed instructions.
+ At that point, execution switches to the out of order core for the remainder
+ of the simulation.
+ The specific configuration file symtax is:
+\layout LyX-Code
+
+
+\size small 
+-seq 
+\emph on 
+N
+\layout Standard
+
+where 
+\emph on 
+N
+\emph default 
+ is the number of x86 instructions to commit.
+ These 
+\emph on 
+N
+\emph default 
+ instructions are 
+\emph on 
+included
+\emph default 
+ in the total number of instructions to simulate (
+\family typewriter 
+\size small 
+-stopinsns
+\family default 
+\size default 
+ parameter).
+ However, the cycle counter is reset to zero whenever out of order mode
+ is entered, so it does not count against any 
+\family typewriter 
+\size small 
+-stop 
+\emph on 
+cycles
+\family default 
+\size default 
+\emph default 
+ parameter.
+ If the program exits while in sequential mode, the out of order core is
+ never enabled.
+ Therefore, to execute the entire program in sequential mode (for instance,
+ for testing or profiling only), use the following:
+\layout LyX-Code
+
+
+\size small 
+-seq inf -stopinsns 0
+\layout Section
+
 Performance and Statistical Counters
 \layout Standard
 
@@ -4504,10 +4604,7 @@ ce intensive parts of a modern program, so we can aggressively eliminate
 UnalignedAccess
 \family default 
 \size default 
- internal exception, forcing a rollback of the current trace.
- To locate the RIP of the offending x86 instruction, the sequential version
- of the trace is then executed until the unaligned access is encountered
- again.
+ internal exception, forcing a pipeline flush.
  At this point, a special 
 \begin_inset Quotes eld
 \end_inset 
