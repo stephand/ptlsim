@@ -47,14 +47,6 @@ void debug_assist_call(const char* name) {
 }
 
 extern "C" {
-  void assist_mul8();
-  void assist_mul16();
-  void assist_mul32();
-  void assist_mul64();
-  void assist_imul8();
-  void assist_imul16();
-  void assist_imul32();
-  void assist_imul64();
   void assist_div8();
   void assist_div16();
   void assist_div32();
@@ -80,11 +72,17 @@ void assist_invalid_opcode() {
 //
 
 void assist_int() {
-  handle_syscall_32bit();
+  handle_syscall_32bit(SYSCALL_SEMANTICS_INT80);
 }
 
 void assist_syscall() {
-  handle_syscall_64bit();
+  if (ctx.use64) {
+#ifdef __x86_64__
+    handle_syscall_64bit();
+#endif
+  } else {
+    handle_syscall_32bit(SYSCALL_SEMANTICS_SYSCALL);
+  }
 }
 
 void assist_sysret() {
@@ -92,8 +90,8 @@ void assist_sysret() {
   debug_assist_call("sysret"); assert(false);
 }
 
-static const char cpuid_vendor[12+1] = "AuthenticPTL";
-static const char cpuid_description[48+1] = "PTLsim 3.0 Cycle Accurate x86-64 Simulator Model";
+static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
+static const char cpuid_description[48+1] = "PTLsim 4.0 Cycle Accurate x86-64 Simulator Model";
 
 void assist_cpuid() {
   debug_assist_call("cpuid");
@@ -163,8 +161,6 @@ void assist_cpuid() {
 extern void assist_ptlcall();
 
 assist_func_t assistid_to_func[ASSIST_COUNT] = {
-  assist_mul8,  assist_mul16,  assist_mul32,  assist_mul64,
-  assist_imul8, assist_imul16, assist_imul32, assist_imul64,
   assist_div8,  assist_div16,  assist_div32,  assist_div64,
   assist_idiv8, assist_idiv16, assist_idiv32, assist_idiv64,
   assist_int, assist_syscall, assist_sysret, assist_cpuid,
@@ -172,8 +168,6 @@ assist_func_t assistid_to_func[ASSIST_COUNT] = {
 };
 
 const char* assist_names[ASSIST_COUNT] = {
-  "mul8",  "mul16",  "mul32",  "mul64",
-  "imul8", "imul16", "imul32", "imul64",
   "div8",  "div16",  "div32",  "div64",
   "idiv8", "idiv16", "idiv32", "idiv64",
   "int", "syscall", "sysret", "cpuid",
@@ -2774,21 +2768,54 @@ namespace TranslateX86 {
         // callout would be appropriate here: first get the operand into some known register,
         // then encode a microcode callout.
         //
+      case 4:
+      case 5: {
+        // mul (4), imul (5)
+        int srcreg;
+
+        if (rd.type == OPTYPE_REG) {
+          srcreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+        } else {
+          ra.type = OPTYPE_REG;
+          ra.reg.reg = 0; // not used
+          move_reg_or_mem(ra, rd, REG_temp4);
+          srcreg = REG_temp4;
+        }
+
+        int size = (rd.type == OPTYPE_REG) ? reginfo[rd.reg.reg].sizeshift : rd.mem.size;
+
+        int highop = (modrm.reg == 4) ? OP_mulhu : OP_mulh;
+
+        if (size == 0) {
+          // ax <- al * src
+          this << TransOp(OP_mov,  REG_temp0, REG_zero, srcreg, REG_zero, 3);
+          this << TransOp(highop, REG_temp1, REG_rax, REG_temp0, REG_zero, size, 0, 0, SETFLAG_CF|SETFLAG_OF);
+          this << TransOp(OP_mull, REG_rax, REG_rax, REG_temp0, REG_zero, size);
+          // insert high byte
+          this << TransOp(OP_mask, REG_rax, REG_rax, REG_temp1, REG_imm, 3, 0, make_mask_control_info(56, 8, 56));
+        } else {
+          // dx:ax = ax * src
+          // edx:eax = eax * src
+          // rdx:rax = rax * src
+          this << TransOp(OP_mov,  REG_temp0, REG_zero, srcreg, REG_zero, 3);
+          this << TransOp(highop, REG_rdx, REG_rax, REG_temp0, REG_zero, size, 0, 0, SETFLAG_CF|SETFLAG_OF);
+          this << TransOp(OP_mull, REG_rax, REG_rax, REG_temp0, REG_zero, size);
+        }
+        break;
+      }
       default:
         ra.type = OPTYPE_REG;
         ra.reg.reg = 0; // not used
         move_reg_or_mem(ra, rd, REG_sr2);
 
         int subop_and_size_to_assist_idx[4][4] = {
-          {ASSIST_MUL8,  ASSIST_MUL16,  ASSIST_MUL32,  ASSIST_MUL64},
-          {ASSIST_IMUL8, ASSIST_IMUL16, ASSIST_IMUL32, ASSIST_IMUL64},
           {ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64},
           {ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64}
         };
 
         int size = (rd.type == OPTYPE_REG) ? reginfo[rd.reg.reg].sizeshift : rd.mem.size;
 
-        microcode_assist(subop_and_size_to_assist_idx[modrm.reg - 4][size], ripstart, rip);
+        microcode_assist(subop_and_size_to_assist_idx[modrm.reg - 6][size], ripstart, rip);
         end_of_block = 1;
         //++MTY FIXME We need to handle getting the result back into the correct output
         // register when it's ah/bh/ch/dh.

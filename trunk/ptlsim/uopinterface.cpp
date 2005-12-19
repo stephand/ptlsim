@@ -8,8 +8,6 @@
 #include <globals.h>
 #include <ptlsim.h>
 
-#include <maskluts.h>
-
 extern "C" {
   extern const AddrPair templatemap_nop[1];
   extern const AddrPair templatemap_mov[4][2];
@@ -41,6 +39,7 @@ extern "C" {
   extern const AddrPair templatemap_sar[4][2];
   extern const AddrPair templatemap_mull[4][2];
   extern const AddrPair templatemap_mulh[4][2];
+  extern const AddrPair templatemap_mulhu[4][2];
   extern const AddrPair templatemap_bt[4][2];
   extern const AddrPair templatemap_bts[4][2];
   extern const AddrPair templatemap_btr[4][2];
@@ -54,12 +53,7 @@ extern "C" {
   extern const AddrPair templatemap_br_and[16][4][2]; // [cond][size][except]
   extern const AddrPair templatemap_br[16][2];
   extern const AddrPair templatemap_chk[16];
-  extern const AddrPair templatemap_zxt[4][4]; // [rdsize][rbsize]
-  extern const AddrPair templatemap_sxt[4][4]; // [rdsize][rbsize]
   extern const AddrPair templatemap_bswap[4];
-  extern const AddrPair templatemap_inshb[1];
-  extern const AddrPair templatemap_exthb[1];
-  extern const AddrPair templatemap_movhb[1];
   extern const AddrPair templatemap_movccr[1];
   extern const AddrPair templatemap_movrcc[1];
   extern const AddrPair templatemap_andcc[1];
@@ -70,8 +64,6 @@ extern "C" {
   extern const AddrPair templatemap_bru[1];
   extern const AddrPair templatemap_brp[1];
   extern const AddrPair templatemap_collcc[1];
-  extern const AddrPair templatemap_movhl[1];
-  extern const AddrPair templatemap_movl[1];  
 
   extern const AddrPair templatemap_addf[4];
   extern const AddrPair templatemap_subf[4];
@@ -108,9 +100,8 @@ extern "C" {
   extern const AddrPair templatemap_cvtf_s2d_hi[1];
 }
 
-const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal) {
+uop_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal) {
   const AddrPair* cp = null;
-
   switch (op) {
   case OP_nop:
     cp = &templatemap_nop[0]; break;
@@ -170,6 +161,8 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
     cp = &templatemap_mull[size][setflags]; break;
   case OP_mulh:
     cp = &templatemap_mulh[size][setflags]; break;
+  case OP_mulhu:
+    cp = &templatemap_mulhu[size][setflags]; break;
   case OP_bt:
     cp = &templatemap_bt[size][setflags]; break;
   case OP_bts:
@@ -182,16 +175,20 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
     cp = &templatemap_ctz[size][setflags]; break;
   case OP_clz: 
     cp = &templatemap_clz[size][setflags]; break;
+#ifdef __x86_64__
   case OP_ctpop:
     cp = &templatemap_ctpop[size][setflags]; break;
+#endif
   case OP_sel:
     cp = &templatemap_sel[cond][size]; break;
   case OP_set:
     cp = &templatemap_set[cond][size]; break;
+#ifdef __x86_64__
   case OP_br_sub:
     cp = &templatemap_br_sub[cond][size][except]; break;
   case OP_br_and:
     cp = &templatemap_br_and[cond][size][except]; break;
+#endif
   case OP_br:
     cp = &templatemap_br[cond][except]; break;
   case OP_chk:
@@ -208,8 +205,10 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
   case OP_ld_pre:
   case OP_st:
     cp = &templatemap_nop[0]; break;
+#ifdef __x86_64__
   case OP_mask:
     cp = &templatemap_mask[size][cond]; break;
+#endif
   case OP_bswap:
     cp = &templatemap_bswap[size]; break;
   case OP_movccr:
@@ -228,6 +227,7 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
     cp = &templatemap_jmp[except]; break;
   case OP_collcc:
     cp = &templatemap_collcc[0]; break;
+#ifdef __x86_64__
   case OP_addf:
     cp = &templatemap_addf[size]; break;
   case OP_subf:
@@ -294,43 +294,45 @@ const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond,
     cp = &templatemap_cvtf_s2d_lo[0]; break;
   case OP_cvtf_s2d_hi:
     cp = &templatemap_cvtf_s2d_hi[0]; break;
+#endif
   default:
     logfile << "Unknown uop opcode ", op, flush, " (", nameof(op), ")", endl, flush;
     assert(false);
   }
-
-  return cp;
+  return (uop_func_t)cp->start;
 }
 
 void synth_uops_for_bb(BasicBlock& bb) {
   const byte* p = bb.data;
-  bb.synthops = new const byte*[bb.count];
+  bb.synthops = new uop_func_t[bb.count];
   foreach (i, bb.count) {
     TransOp transop;
     p = transop.expand(p);
     int sfra = 0;
     bool except = 0;
 
-    const AddrPair* cp = get_synthcode_for_uop(transop.opcode, transop.size, transop.setflags, transop.cond, transop.extshift, sfra, transop.cachelevel, except, transop.internal);
-    bb.synthops[i] = cp->start;
+    uop_func_t func = get_synthcode_for_uop(transop.opcode, transop.size, transop.setflags, transop.cond, transop.extshift, sfra, transop.cachelevel, except, transop.internal);
+    bb.synthops[i] = func;
   }
 }
 
-const byte* get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except) {
+uop_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except) {
   const AddrPair* cp;
 
   switch (opcode) {
+#ifdef __x86_64__
   case OP_br_sub:
     cp = &templatemap_br_sub[cond][size][except]; break;
   case OP_br_and:
     cp = &templatemap_br_and[cond][size][except]; break;
+#endif
   case OP_br:
     cp = &templatemap_br[cond][except]; break;
   default:
     assert(false);
   }
 
-  return cp->start;
+  return (uop_func_t)cp->start;
 }
 
 inline W64 x86_rotr64(W64 r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r; }
@@ -400,10 +402,51 @@ W64 rotr64(W64 w, int c) {
 }
 #endif
 
+// These are referenced from uopimpl.S also:
+
+W64 mask_gen_lut[64*64]; // (((1 << mc)-1) >>> ms)
+W64 mask_bt_lut[64*64];  // mask[mc+ms] = 1
+W64 mask_zxt_lut[64*64]; // 1'[(ms+mc-1):0]
+W64 mask_sxt_lut[64*64]; // 1'[63:(ms+mc)]
+
+void gen_mask_uop_masks() {
+  foreach (mc, 64) {
+    foreach (ms, 64) {
+      W64 t = x86_rotr64(bitmask(mc), ms);
+      mask_gen_lut[(mc << 6) + ms] = t;
+    }
+  }
+
+  foreach (mc, 64) {
+    foreach (ms, 64) {
+      W64 t = 0;
+      setbit(t, (mc+ms-1));
+      mask_bt_lut[(mc << 6) + ms] = t;
+    }
+  }
+
+  foreach (mc, 64) {
+    foreach (ms, 64) {
+      W64 t = 0;
+      for (int i = (ms+mc-1); i >= 0; i--) setbit(t, i);
+      mask_zxt_lut[(mc << 6) + ms] = t;
+    }
+  }
+
+  foreach (mc, 64) {
+    foreach (ms, 64) {
+      W64 t = 0;
+      int limit = (ms+mc);
+      for (int i = 63; i >= limit; i--) setbit(t, i);
+      mask_sxt_lut[(mc << 6) + ms] = t;
+    }
+  }
+}
+
 // See testmasks.cpp for more information
 
 template <int SIZE, int ZEROEXT, int SIGNEXT>
-void uop_mask(IssueState& state, IssueInput& input) {
+void uop_mask(IssueState& state, const IssueInput& input) {
   int ms = bits(input.rc, 0, 6);
   int mc = bits(input.rc, 6, 6);
   int ds = bits(input.rc, 12, 6);
@@ -443,18 +486,28 @@ void uop_mask(IssueState& state, IssueInput& input) {
   state.reg.rdflags = f;
 }
 
-template void uop_mask<1, 0, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<1, 1, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<1, 0, 1>(IssueState& state, IssueInput& input);
+template void uop_mask<1, 0, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<1, 1, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<1, 0, 1>(IssueState& state, const IssueInput& input);
 
-template void uop_mask<2, 0, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<2, 1, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<2, 0, 1>(IssueState& state, IssueInput& input);
+template void uop_mask<2, 0, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<2, 1, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<2, 0, 1>(IssueState& state, const IssueInput& input);
 
-template void uop_mask<4, 0, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<4, 1, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<4, 0, 1>(IssueState& state, IssueInput& input);
+template void uop_mask<4, 0, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<4, 1, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<4, 0, 1>(IssueState& state, const IssueInput& input);
 
-template void uop_mask<8, 0, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<8, 1, 0>(IssueState& state, IssueInput& input);
-template void uop_mask<8, 0, 1>(IssueState& state, IssueInput& input);
+template void uop_mask<8, 0, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<8, 1, 0>(IssueState& state, const IssueInput& input);
+template void uop_mask<8, 0, 1>(IssueState& state, const IssueInput& input);
+/*
+uop_func_t templatemap_mask2[4][2] = {
+  {&uop_mask<1, 0, 0>},
+  // ...
+};
+*/
+
+void init_uops() {
+  gen_mask_uop_masks();
+}

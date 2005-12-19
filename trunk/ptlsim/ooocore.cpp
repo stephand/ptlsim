@@ -465,7 +465,7 @@ struct FetchBufferEntry: public TransOp {
   W64 rip;
   W64 bbrip;
   W64 uuid;
-  const byte* synthop;
+  uop_func_t synthop;
   BranchPredictorUpdateInfo predinfo;
 
   int index() const;
@@ -1117,9 +1117,7 @@ int uop_in_basic_block;
 //
 
 bool stall_frontend = 0;
-
-static Queue<FetchBufferEntry, FETCH_QUEUE_SIZE> fetchq;
-
+Queue<FetchBufferEntry, FETCH_QUEUE_SIZE> fetchq;
 bool waiting_for_icache_fill = false;
 
 // call this in response to a branch mispredict:
@@ -1565,7 +1563,7 @@ void rename() {
     physreg = physregfiles[phys_reg_file].alloc();
     assert(physreg);
     physreg->flags = FLAG_WAIT;
-    physreg->data = 0xdeadbeefdeadbeef;
+    physreg->data = 0xdeadbeefdeadbeefULL;
     physreg->rob = &rob;
     physreg->archreg = rob.uop.rd;
     rob.physreg = physreg;
@@ -2223,8 +2221,6 @@ void ReorderBufferEntry::replay() {
 
   issueq_operation_on_cluster(cluster, replay(iqslot, uopids, preready));
 }
-
-extern "C" void call_exec_func(const IssueInput& input, IssueState& output, const byte* func);
 
 inline int check_access_alignment(W64 addr, AddressSpace::SPATChunk** top, bool annul, int sizeshift, bool internal, int exception) {
   if (lowbits(addr, sizeshift))
@@ -3271,7 +3267,7 @@ int ReorderBufferEntry::issue() {
     } else if (br) {
       state.brreg.riptaken = uop.riptaken;
       state.brreg.ripseq = uop.ripseq;
-      call_exec_func(input, state, uop.synthop);
+      call_exec_func(uop.synthop, state, input);
 
       if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.check((void*)state.reg.rddata, PROT_EXEC))) {
         // bogus branch
@@ -3279,7 +3275,7 @@ int ReorderBufferEntry::issue() {
         state.reg.rddata = EXCEPTION_PageFaultOnExec;
       }
     } else {
-      call_exec_func(input, state, uop.synthop);
+      call_exec_func(uop.synthop, state, input);
     }
   }
 
@@ -3934,7 +3930,7 @@ int ReorderBufferEntry::commit() {
   return COMMIT_RESULT_OK;
 }
 
-W64 last_commit_at_cycle = 0;
+W64 last_commit_at_cycle;
 
 CycleTimer ctcommit;
 
@@ -4446,7 +4442,7 @@ void check_refcounts() {
 
 W64 last_stats_captured_at_cycle = 0;
 
-void out_of_order_core_toplevel_loop() {
+int out_of_order_core_toplevel_loop() {
   init_luts();
 
   logfile << "Starting out-of-order core toplevel loop", endl, flush;
@@ -4466,6 +4462,10 @@ void out_of_order_core_toplevel_loop() {
   if (start_log_at_iteration != MAX_CYCLE) loglevel = 0;
 
   cttotal.start();
+
+  bool exiting = false;
+
+  last_commit_at_cycle = sim_cycle;
 
   while ((iterations < stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns)) {
     if ((iterations >= start_log_at_iteration) & (!loglevel)) {
@@ -4517,9 +4517,11 @@ void out_of_order_core_toplevel_loop() {
 #endif
 
     if (commitrc == COMMIT_RESULT_BARRIER) {
-      if (!handle_barrier()) break;
+      exiting = !handle_barrier();
+      if (exiting) break;
     } else if (commitrc == COMMIT_RESULT_EXCEPTION) {
-      if (!handle_exception()) break;
+      exiting = !handle_exception();
+      if (exiting) break;
     } else if (commitrc == COMMIT_RESULT_STOP) {
       break;
     }
@@ -4539,4 +4541,6 @@ void out_of_order_core_toplevel_loop() {
   }
 
   logfile << flush;
+
+  return exiting;
 }

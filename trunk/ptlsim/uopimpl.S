@@ -470,10 +470,11 @@ generate_aluop3_shift_allsize_setflags subs sub sub
 
 .macro imulh SZ RD RA
 .if (\SZ == 1)
-  imul    %bl         # multiply %al by RA; %ax = product
+  imul    %bl          # multiply %al by RA; %ax = product
+  mov     %al,%ah
 .endif
 .if (\SZ == 2)
-  imul    %bx         # multiply %ax by RA; %dx:%ax = product
+  imul    %bx          # multiply %ax by RA; %dx:%ax = product
   mov     %ax,%dx
 .endif
 .if (\SZ == 4)
@@ -483,6 +484,25 @@ generate_aluop3_shift_allsize_setflags subs sub sub
 .if (\SZ == 8)
   imul    %rbx         # multiply %rax by RA; %rdx:%rax = product
   mov     %rax,%rdx
+.endif
+.endm
+
+.macro umulh SZ RD RA
+.if (\SZ == 1)
+  mul    %bl          # multiply %al by RA; %ax = product
+  mov    %al,%ah
+.endif
+.if (\SZ == 2)
+  mul    %bx          # multiply %ax by RA; %dx:%ax = product
+  mov     %ax,%dx
+.endif
+.if (\SZ == 4)
+  mul    %ebx         # multiply %eax by RA; %edx:%eax = product
+  mov    %eax,%edx
+.endif
+.if (\SZ == 8)
+  mul    %rbx         # multiply %rax by RA; %rdx:%rax = product
+  mov    %rax,%rdx
 .endif
 .endm
 
@@ -509,6 +529,7 @@ grouplabel \PTOPCODE
 
 generate_mulop_allsize_setflags mull imull
 generate_mulop_allsize_setflags mulh imulh
+generate_mulop_allsize_setflags mulhu umulh
 
 .macro generate_aluop_setflags_useflags_rc PTOPCODE OPCODE SIZE REG REGB
 som nf_\PTOPCODE\SIZE
@@ -1999,8 +2020,6 @@ assist \op64
 
 # Generate templates for mul imul div idiv
 
-  generate_muldiv mul mul8 mul16 mul32 mul64
-  generate_muldiv imul imul8 imul16 imul32 imul64
   generate_muldiv div div8 div16 div32 div64
   generate_muldiv idiv idiv8 idiv16 idiv32 idiv64
 
@@ -2070,8 +2089,11 @@ NOTE:
 
 */
 
-#define rinput                rdi
-#define rfunc                 rdx
+/* void call_exec_func(uop_func_t func, IssueState& output, const IssueInput& input); */
+
+#define rfunc                 rdi
+/* #define rstate                rsi  // defined above */
+#define rinput                rdx
 
 #define IssueInput_ra         %rinput+0
 #define IssueInput_rb         %rinput+8
@@ -2080,7 +2102,6 @@ NOTE:
 #define IssueInput_rbflags    %rinput+26
 #define IssueInput_rcflags    %rinput+28
 
-# void call_exec_func(const IssueInput& input, IssueState& output, void* func);         //W64 ra, W64 rb, W64 rc, W64 raflags, W64 rbflags, W64 rcflags)
 .globl call_exec_func
 call_exec_func:
   push      %rbx

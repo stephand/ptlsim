@@ -11,9 +11,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <asm/unistd.h>
-#include <asm/prctl.h>
-#include <asm/prctl.h>
-#include <sys/prctl.h>
+#include <linux/unistd.h>
 #include <fcntl.h>
 #include <elf.h>
 #include <signal.h>
@@ -23,7 +21,11 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
-#include <fcntl.h>
+
+#ifdef __x86_64__
+#include <asm/prctl.h>
+#include <sys/prctl.h>
+#endif
 
 //
 // Performance Counter Support:
@@ -60,7 +62,10 @@ extern "C" {
 #include <ptlcalls.h>
 #include <loader.h>
 
+#ifdef __x86_64__
 declare_syscall2(__NR_arch_prctl, W64, arch_prctl, int, code, void*, addr);
+#endif
+
 declare_syscall0(__NR_gettid, pid_t, gettid);
 declare_syscall0(__NR_fork, pid_t, sys_fork);
 declare_syscall1(__NR_exit, void, sys_exit, int, code);
@@ -68,6 +73,112 @@ declare_syscall1(__NR_brk, void*, sys_brk, void*, p);
 declare_syscall3(__NR_write, ssize_t, sys_write, int, fd, const void*, buf, size_t, count);
 declare_syscall3(__NR_execve, int, sys_execve, char*, filename, char**, argv, char**, envp);
 declare_syscall4(__NR_ptrace, W64, sys_ptrace, int, request, pid_t, pid, W64, addr, W64, data);
+
+static inline W64 do_syscall_64bit(W64 syscallid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5, W64 arg6) {
+  W64 rc;
+  asm volatile ("movq %5,%%r10\n"
+                "movq %6,%%r8\n"
+                "movq %7,%%r9\n"
+                "syscall\n"
+                : "=a" (rc)
+                : "0" (syscallid),"D" ((W64)(arg1)),"S" ((W64)(arg2)),
+                "d" ((W64)(arg3)), "g" ((W64)(arg4)), "g" ((W64)(arg5)),
+                "g" ((W64)(arg6)) 
+                : "r11","rcx","memory" ,"r8", "r10", "r9" );
+	return rc;
+}
+
+struct user_desc_32bit {
+	W32 entry_number;
+	W32 base_addr;
+	W32 limit;
+	W32 seg_32bit:1;
+	W32 contents:2;
+	W32 read_exec_only:1;
+	W32 limit_in_pages:1;
+	W32 seg_not_present:1;
+	W32 useable:1;
+};
+
+#ifdef __x86_64__
+// Parameters in: ebx ecx edx esi edi ebp
+static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 arg4, W32 arg5, W32 arg6) {
+  W32 rc;
+  asm volatile ("push %%rbp ; movl %[arg6],%%ebp ; int $0x80 ; pop %%rbp" : "=a" (rc) :
+                "a" (sysid), "b" (arg1), "c" (arg2), "d" (arg3),
+                "S" (arg4), "D" (arg5), [arg6] "r" (arg6));
+  return rc;
+}
+
+W64 get_fs_base() {
+  W64 fsbase;
+  assert(arch_prctl(ARCH_GET_FS, &fsbase) == 0);
+  return fsbase;
+}
+
+W64 get_gs_base() {
+  W64 gsbase;
+  assert(arch_prctl(ARCH_GET_GS, &gsbase) == 0);
+  return gsbase;
+}
+
+#else
+// We need this here because legacy x86 readily runs out of registers:
+static W32 tempsysid;
+
+// 32-bit only
+static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 arg4, W32 arg5, W32 arg6) {
+  W32 rc;
+  tempsysid = sysid;
+
+  asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl tempsysid,%%eax ; int $0x80 ; pop %%ebp" : "=a" (rc) :
+                "b" (arg1), "c" (arg2), "d" (arg3), 
+                "S" (arg4), "D" (arg5), "0" (arg6));
+  return rc;
+}
+
+declare_syscall1(__NR_get_thread_area, int, sys_get_thread_area, void*, udesc);
+declare_syscall1(__NR_set_thread_area, int, sys_set_thread_area, void*, udesc);
+
+W64 get_fs_base() {
+  // can't set fs in 32-bit programs
+  return 0;
+}
+
+W64 get_gs_base() {
+  user_desc_32bit ud;
+  ud.entry_number = 0;
+
+  int rc = sys_get_thread_area(&ud);
+
+  // Not yet set:
+  if (!rc)
+    return 0;
+  /*
+  if (rc) {
+    stringbuf sb;
+    sb << "ERROR: errno = ", rc, " -> ", strerror(-rc), endl;
+    early_printk(sb);
+    assert(false);
+  }
+  */
+  return ud.base_addr;
+}
+
+#endif // !__x86_64__
+
+// Based on /usr/include/asm-i386/unistd.h:
+#define __NR_32bit_mmap 90
+#define __NR_32bit_mmap2 192
+#define __NR_32bit_munmap 91
+#define __NR_32bit_mprotect 125
+#define __NR_32bit_mremap 163
+#define __NR_32bit_brk 45
+#define __NR_32bit_exit 1
+#define __NR_32bit_exit_group 252
+#define __NR_32bit_mremap 163
+#define __NR_32bit_set_thread_area 243
+#define __NR_32bit_rt_sigaction 174
 
 void early_printk(const char* text) {
   sys_write(2, text, strlen(text));
@@ -104,7 +215,11 @@ void* ptl_alloc_private_pages(W64 bytecount, int prot, W64 base) {
 }
 
 void* ptl_alloc_private_32bit_pages(W64 bytecount, int prot, W64 base) {
+#ifdef __x86_64__
   int flags = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : MAP_32BIT);
+#else
+  int flags = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : 0);
+#endif
   return sys_mmap((void*)base, ceil(bytecount, PAGE_SIZE), prot, flags, 0, 0);  
 }
 
@@ -265,7 +380,7 @@ __free_block(struct free_arena_header *ah) {
   /* Return the block that contains the called block */
   return ah;
 }
- 
+
 extern "C" void *malloc(size_t size) {
   struct free_arena_header *fp;
   struct free_arena_header *pah;
@@ -356,7 +471,9 @@ extern "C" void __assert_fail (__const char *__assertion, __const char *__file, 
   if (logfile) {
     fprintf(logfile, "\nAssert %s failed in %s:%d (%s) at simcycle %lld iters %lld commits %lld\n\n", __assertion, __file, __line, __function, sim_cycle, iterations, total_user_insns_committed);
     if (use_out_of_order_core) {
+#ifdef __x86_64__
       dump_ooo_state();
+#endif
     }
 
     logfile.flush();
@@ -506,16 +623,6 @@ void* AddressSpace::mremap(void* start, W64 oldlength, W64 newlength, int flags)
   return p;
 }
 
-#define define_syscall1(id,type,name,type1,arg1) \
-type name(type1 arg1) \
-{ \
-long __res; \
-__asm__ volatile (__syscall \
-	: "=a" (__res) \
-	: "0" (id),"D" ((long)(arg1)) : __syscall_clobber ); \
-__syscall_return(type,__res); \
-}
-
 void* AddressSpace::setbrk(void* reqbrk) {
   W64 oldsize = ceil(((W64)brk - (W64)brkbase), PAGE_SIZE);
 
@@ -603,7 +710,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
   MemoryMapExtent* map = startmap;
 
   // Atomically capture process memory: otherwise we may allocate our own memory while reading /proc/self/maps 
-#define MAX_PROC_MAPS_SIZE (16*1024*1024)
+#define MAX_PROC_MAPS_SIZE 16*1024*1024
 
   char* mapdata = (char*)ptl_alloc_private_pages(MAX_PROC_MAPS_SIZE);
   int mapsize = 0;
@@ -752,8 +859,9 @@ void AddressSpace::resync_with_process_maps() {
   brk = sys_brk(null);
   if (DEBUG) logfile << "resync_with_process_maps: brk from ", (void*)brkbase, " to ", (void*)brk, endl;
 
-  assert(arch_prctl(ARCH_GET_FS, (void*)&fsbase) == 0);
-  assert(arch_prctl(ARCH_GET_GS, (void*)&gsbase) == 0);
+  fsbase = get_fs_base();
+  gsbase = get_gs_base();
+
   if (DEBUG) logfile << "resync_with_process_maps: fsbase ", (void*)fsbase, ", gsbase ", (void*)gsbase, endl;
 
   W64 stackleft = stackbase - stack_min_addr;
@@ -761,11 +869,6 @@ void AddressSpace::resync_with_process_maps() {
   if (DEBUG) logfile << "  Original user stack range: ", (void*)stack_min_addr, " to ", (void*)stack_max_addr, " (", (stack_max_addr - stack_min_addr), " bytes)", endl, flush;
 
   if (DEBUG) logfile << "  Stack from ", (void*)stack_min_addr, " to ", (void*)stackbase, " (", stackleft, " bytes) is allocate-on-access", endl, flush;
-  //assert(stackbase);
-  //assert(inrange(stackbase, stack_min_addr, stack_max_addr));
-
-  //W64 pstack = (W64)this->mmap((void*)stack_min_addr, stackleft, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_ANONYMOUS|MAP_PRIVATE|MAP_NORESERVE|MAP_GROWSDOWN, -1, 0);
-  //assert(pstack == stack_min_addr);
 
   //
   // Make sure the user code does not see and cannot access PTL native code.
@@ -902,6 +1005,7 @@ extern "C" void switch_to_sim_save_context();
 
 extern "C" void switch_to_sim_save_context();
 
+#ifdef __x86_64__
 struct FarJumpDescriptor {
   W32 offset;
   W16 seg;
@@ -1002,6 +1106,41 @@ struct InsideSimEscapeCode {
     memcpy(&bytes, src, length);
   }
 };
+#else // ! __x86_64__
+
+extern "C" void save_context_switch_to_sim_lowlevel();
+W64 switch_to_sim_save_context_indirect;
+
+struct SwitchToSimThunkCode {
+  byte opcode[3];
+  W32 indirtarget;
+
+  SwitchToSimThunkCode() { }
+
+  void indirjump(W64& ptr) {
+    // 90 ff 25 xx xx xx xx = nop | jmp ds:[imm32]
+    opcode[0] = 0x90; opcode[1] = 0xff; opcode[2] = 0x25;
+    indirtarget = LO32((W32)&ptr);
+  }
+} __attribute__((packed));
+
+extern "C" void inside_sim_escape_code_template_32bit();
+extern "C" void inside_sim_escape_code_template_32bit_end();
+
+struct InsideSimEscapeCode { 
+  byte bytes[64];
+
+  void prep() {
+    byte* src;
+    int length;
+    src = (byte*)&inside_sim_escape_code_template_32bit;
+    length = ((byte*)&inside_sim_escape_code_template_32bit_end) - src;
+    assert(length <= lengthof(bytes));
+    memcpy(&bytes, src, length);
+  }
+};
+
+#endif // ! __x86_64__
 
 struct PTLsimThunkPagePrivate: public PTLsimThunkPage {
   SwitchToSimThunkCode switch_to_sim_thunk;
@@ -1027,7 +1166,12 @@ void setup_sim_thunk_page() {
 
   thunkpage->simulated = 0;
   thunkpage->call_code_addr = 0; // (initialized later)
+#ifdef __x86_64__
   thunkpage->switch_to_sim_thunk.farjump(switch_to_sim_save_context_indirect);
+#else // ! __x86_64__
+  switch_to_sim_save_context_indirect = (W64)&save_context_switch_to_sim_lowlevel;
+  thunkpage->switch_to_sim_thunk.indirjump(switch_to_sim_save_context_indirect);
+#endif
   thunkpage->call_within_sim_thunk.prep();
   enable_ptlsim_call_gate();
 }
@@ -1083,8 +1227,6 @@ extern "C" void save_context_switch_to_sim() {
 
   ctx.commitarf[REG_flags] &= ~(FLAG_INV|FLAG_WAIT);
   fpu_state_to_ptlsim_state();
-  assert(arch_prctl(ARCH_GET_FS, &fsbase) == 0);
-  assert(arch_prctl(ARCH_GET_GS, &gsbase) == 0);
   asp.resync_with_process_maps();
 
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
@@ -1107,25 +1249,14 @@ extern "C" void save_context_switch_to_sim() {
   switch_to_sim();
 }
 
+#ifdef __x86_64__
+
 const char* syscall_names_64bit[] = {
   "read", "write", "open", "close", "stat", "fstat", "lstat", "poll", "lseek", "mmap", "mprotect", "munmap", "brk", "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "ioctl", "pread64", "pwrite64", "readv", "writev", "access", "pipe", "select", "sched_yield", "mremap", "msync", "mincore", "madvise", "shmget", "shmat", "shmctl", "dup", "dup2", "pause", "nanosleep", "getitimer", "alarm", "setitimer", "getpid", "sendfile", "socket", "connect", "accept", "sendto", "recvfrom", "sendmsg", "recvmsg", "shutdown", "bind", "listen", "getsockname", "getpeername", "socketpair", "setsockopt", "getsockopt", "clone", "fork", "vfork", "execve", "exit", "wait4", "kill", "uname", "semget", "semop", "semctl", "shmdt", "msgget", "msgsnd", "msgrcv", "msgctl", "fcntl", "flock", "fsync", "fdatasync", "truncate", "ftruncate", "getdents", "getcwd", "chdir", "fchdir", "rename", "mkdir", "rmdir", "creat", "link", "unlink", "symlink", "readlink", "chmod", "fchmod", "chown", "fchown", "lchown", "umask", "gettimeofday", "getrlimit", "getrusage", "sysinfo", "times", "ptrace", "getuid", "syslog", "getgid", "setuid", "setgid", "geteuid", "getegid", "setpgid", "getppid", "getpgrp", "setsid", "setreuid", "setregid", "getgroups", "setgroups", "setresuid", "getresuid", "setresgid", "getresgid", "getpgid", "setfsuid", "setfsgid", "getsid", "capget", "capset", "rt_sigpending", "rt_sigtimedwait", "rt_sigqueueinfo", "rt_sigsuspend", "sigaltstack", "utime", "mknod", "uselib", "personality", "ustat", "statfs", "fstatfs", "sysfs", "getpriority", "setpriority", "sched_setparam", "sched_getparam", "sched_setscheduler", "sched_getscheduler", "sched_get_priority_max", "sched_get_priority_min", "sched_rr_get_interval", "mlock", "munlock", "mlockall", "munlockall", "vhangup", "modify_ldt", "pivot_root", "_sysctl", "prctl", "arch_prctl", "adjtimex", "setrlimit", "chroot", "sync", "acct", "settimeofday", "mount", "umount2", "swapon", "swapoff", "reboot", "sethostname", "setdomainname", "iopl", "ioperm", "create_module", "init_module", "delete_module", "get_kernel_syms", "query_module", "quotactl", "nfsservctl", "getpmsg", "putpmsg", "afs_syscall", "tuxcall", "security", "gettid", "readahead", "setxattr", "lsetxattr", "fsetxattr", "getxattr", "lgetxattr", "fgetxattr", "listxattr", "llistxattr", "flistxattr", "removexattr", "lremovexattr", "fremovexattr", "tkill", "time", "futex", "sched_setaffinity", "sched_getaffinity", "set_thread_area", "io_setup", "io_destroy", "io_getevents", "io_submit", "io_cancel", "get_thread_area", "lookup_dcookie", "epoll_create", "epoll_ctl_old", "epoll_wait_old", "remap_file_pages", "getdents64", "set_tid_address", "restart_syscall", "semtimedop", "fadvise64", "timer_create", "timer_settime", "timer_gettime", "timer_getoverrun", "timer_delete", "clock_settime", "clock_gettime", "clock_getres", "clock_nanosleep", "exit_group", "epoll_wait", "epoll_ctl", "tgkill", "utimes", "vserver", "vserver", "mbind", "set_mempolicy", "get_mempolicy", "mq_open", "mq_unlink", "mq_timedsend", "mq_timedreceive", "mq_notify", "mq_getsetattr", "kexec_load", "waitid"};
 
 //
-// System calls
+// SYSCALL instruction from x86-64 mode
 //
-static inline W64 do_syscall_64bit(W64 syscallid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5, W64 arg6) {
-  W64 rc;
-  asm volatile ("movq %5,%%r10\n"
-                "movq %6,%%r8\n"
-                "movq %7,%%r9\n"
-                "syscall\n"
-                : "=a" (rc)
-                : "0" (syscallid),"D" ((W64)(arg1)),"S" ((W64)(arg2)),
-                "d" ((W64)(arg3)), "g" ((W64)(arg4)), "g" ((W64)(arg5)),
-                "g" ((W64)(arg6)) 
-                : "r11","rcx","memory" ,"r8", "r10", "r9" );
-	return rc;
-}
 
 void handle_syscall_64bit() {
   bool DEBUG = 1; //analyze_in_detail();
@@ -1205,27 +1336,7 @@ void handle_syscall_64bit() {
   if (DEBUG) logfile << "handle_syscall: result ", ctx.commitarf[REG_rax], " (", (void*)ctx.commitarf[REG_rax], "); returning to ", (void*)ctx.commitarf[REG_rip], endl, flush;
 }
 
-// Parameters in: ebx ecx edx esi edi ebp
-static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 arg4, W32 arg5, W32 arg6) {
-  W32 rc;
-  asm volatile ("push %%rbp ; movl %[arg6],%%ebp ; int $0x80 ; pop %%rbp" : "=a" (rc) :
-                "a" (sysid), "b" (arg1), "c" (arg2), "d" (arg3),
-                "S" (arg4), "D" (arg5), [arg6] "r" (arg6));
-  return rc;
-}
-
-// Based on /usr/include/asm-i386/unistd.h:
-#define __NR_32bit_mmap 90
-#define __NR_32bit_mmap2 192
-#define __NR_32bit_munmap 91
-#define __NR_32bit_mprotect 125
-#define __NR_32bit_mremap 163
-#define __NR_32bit_brk 45
-#define __NR_32bit_exit 1
-#define __NR_32bit_exit_group 252
-#define __NR_32bit_mremap 163
-#define __NR_32bit_set_thread_area 243
-#define __NR_32bit_rt_sigaction 174
+#endif // __x86_64__
 
 struct old_mmap32_arg_struct {
 	W32 addr;
@@ -1236,38 +1347,79 @@ struct old_mmap32_arg_struct {
 	W32 offset;
 };
 
-struct user_desc_32bit {
-	W32 entry_number;
-	W32 base_addr;
-	W32 limit;
-	W32 seg_32bit:1;
-	W32 contents:2;
-	W32 read_exec_only:1;
-	W32 limit_in_pages:1;
-	W32 seg_not_present:1;
-	W32 useable:1;
-};
-
 const char* syscall_names_32bit[] = {"restart_syscall", "exit", "fork", "read", "write", "open", "close", "waitpid", "creat", "link", "unlink", "execve", "chdir", "time", "mknod", "chmod", "lchown", "break", "oldstat", "lseek", "getpid", "mount", "umount", "setuid", "getuid", "stime", "ptrace", "alarm", "oldfstat", "pause", "utime", "stty", "gtty", "access", "nice", "ftime", "sync", "kill", "rename", "mkdir", "rmdir", "dup", "pipe", "times", "prof", "brk", "setgid", "getgid", "signal", "geteuid", "getegid", "acct", "umount2", "lock", "ioctl", "fcntl", "mpx", "setpgid", "ulimit", "oldolduname", "umask", "chroot", "ustat", "dup2", "getppid", "getpgrp", "setsid", "sigaction", "sgetmask", "ssetmask", "setreuid", "setregid", "sigsuspend", "sigpending", "sethostname", "setrlimit", "getrlimit", "getrusage", "gettimeofday", "settimeofday", "getgroups", "setgroups", "select", "symlink", "oldlstat", "readlink", "uselib", "swapon", "reboot", "readdir", "mmap", "munmap", "truncate", "ftruncate", "fchmod", "fchown", "getpriority", "setpriority", "profil", "statfs", "fstatfs", "ioperm", "socketcall", "syslog", "setitimer", "getitimer", "stat", "lstat", "fstat", "olduname", "iopl", "vhangup", "idle", "vm86old", "wait4", "swapoff", "sysinfo", "ipc", "fsync", "sigreturn", "clone", "setdomainname", "uname", "modify_ldt", "adjtimex", "mprotect", "sigprocmask", "create_module", "init_module", "delete_module", "get_kernel_syms", "quotactl", "getpgid", "fchdir", "bdflush", "sysfs", "personality", "afs_syscall", "setfsuid", "setfsgid", "_llseek", "getdents", "_newselect", "flock", "msync", "readv", "writev", "getsid", "fdatasync", "_sysctl", "mlock", "munlock", "mlockall", "munlockall", "sched_setparam", "sched_getparam", "sched_setscheduler", "sched_getscheduler", "sched_yield", "sched_get_priority_max", "sched_get_priority_min", "sched_rr_get_interval", "nanosleep", "mremap", "setresuid", "getresuid", "vm86", "query_module", "poll", "nfsservctl", "setresgid", "getresgid", "prctl", "rt_sigreturn", "rt_sigaction", "rt_sigprocmask", "rt_sigpending", "rt_sigtimedwait", "rt_sigqueueinfo", "rt_sigsuspend", "pread64", "pwrite64", "chown", "getcwd", "capget", "capset", "sigaltstack", "sendfile", "getpmsg", "putpmsg", "vfork", "ugetrlimit", "mmap2", "truncate64", "ftruncate64", "stat64", "lstat64", "fstat64", "lchown32", "getuid32", "getgid32", "geteuid32", "getegid32", "setreuid32", "setregid32", "getgroups32", "setgroups32", "fchown32", "setresuid32", "getresuid32", "setresgid32", "getresgid32", "chown32", "setuid32", "setgid32", "setfsuid32", "setfsgid32", "pivot_root", "mincore", "madvise", "madvise1", "getdents64", "fcntl64", "<unused>", "<unused>", "gettid", "readahead", "setxattr", "lsetxattr", "fsetxattr", "getxattr", "lgetxattr", "fgetxattr", "listxattr", "llistxattr", "flistxattr", "removexattr", "lremovexattr", "fremovexattr", "tkill", "sendfile64", "futex", "sched_setaffinity", "sched_getaffinity", "set_thread_area", "get_thread_area", "io_setup", "io_destroy", "io_getevents", "io_submit", "io_cancel", "fadvise64", "<unused>", "exit_group", "lookup_dcookie", "epoll_create", "epoll_ctl", "epoll_wait", "remap_file_pages", "set_tid_address", "timer_create", "statfs64", "fstatfs64", "tgkill", "utimes", "fadvise64_64", "vserver", "mbind", "get_mempolicy", "set_mempolicy", "mq_open", "sys_kexec_load", "waitid"};
 
-void handle_syscall_32bit() {
+void handle_syscall_32bit(int semantics) {
   bool DEBUG = 1; //analyze_in_detail();
   //
-  // Handle an x86-64 syscall:
+  // Handle a 32-bit syscall:
   // (This is called from the assist_syscall ucode assist)
   //
 
-  int syscallid = ctx.commitarf[REG_rax];
-  W64 arg1 = ctx.commitarf[REG_rbx];
-  W64 arg2 = ctx.commitarf[REG_rcx];
-  W64 arg3 = ctx.commitarf[REG_rdx];
-  W64 arg4 = ctx.commitarf[REG_rsi];
-  W64 arg5 = ctx.commitarf[REG_rdi];
-  W64 arg6 = ctx.commitarf[REG_rbp];
+  static const char* semantics_name[] = {"int80", "syscall", "sysenter"};
+
+  int syscallid;
+  W64 arg1, arg2, arg3, arg4, arg5, arg6;
+  W64 retaddr;
+
+  if (semantics == SYSCALL_SEMANTICS_INT80) {
+    //
+    // int 0x80 can be called from either 32-bit or 64-bit mode,
+    // but in 64-bit mode, its semantics exactly match the 32-bit
+    // semantics, i.e. x86 syscall IDs, truncates addresses to 32
+    // bits, etc.
+    //
+    syscallid = ctx.commitarf[REG_rax];
+    arg1 = ctx.commitarf[REG_rbx];
+    arg2 = ctx.commitarf[REG_rcx];
+    arg3 = ctx.commitarf[REG_rdx];
+    arg4 = ctx.commitarf[REG_rsi];
+    arg5 = ctx.commitarf[REG_rdi];
+    arg6 = ctx.commitarf[REG_rbp];
+    retaddr = ctx.commitarf[REG_sr1];
+  } else if (semantics == SYSCALL_SEMANTICS_SYSCALL) {
+    assert(!ctx.use64);
+    //
+    // SYSCALL can also be used from 32-bit mode when the vsyscall
+    // kernel page is used. The semantics are then as follows:
+    //
+    // Arguments:
+    // %eax	System call number.
+    // %ebx Arg1
+    // %ecx return EIP 
+    // %edx Arg3
+    // %esi Arg4
+    // %edi Arg5
+    // %ebp Arg2    [note: not saved in the stack frame, should not be touched]
+    // %esp user stack 
+    // 0(%esp) Arg6
+    //
+    syscallid = LO32(ctx.commitarf[REG_rax]);
+    arg1 = LO32(ctx.commitarf[REG_rbx]);
+    arg2 = LO32(ctx.commitarf[REG_rbp]);
+    arg3 = LO32(ctx.commitarf[REG_rdx]);
+    arg4 = LO32(ctx.commitarf[REG_rsi]);
+    arg5 = LO32(ctx.commitarf[REG_rdi]);
+    retaddr = ctx.commitarf[REG_rcx];
+
+    W32* arg6ptr = (W32*)LO32(ctx.commitarf[REG_rsp]);
+
+    if (!asp.check(arg6ptr, PROT_READ)) {
+      ctx.commitarf[REG_rax] = -EFAULT;
+      ctx.commitarf[REG_rip] = retaddr;
+      if (DEBUG) logfile << "handle_syscall (#", syscallid, " ", ((syscallid < lengthof(syscall_names_32bit)) ? syscall_names_32bit[syscallid] : "???"), 
+      " via ", semantics_name[semantics], ") from ", (void*)retaddr, " args ", " (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
+      (void*)arg5, ", ???", ") at iteration ", iterations, ": arg6 @ ", arg6ptr, " inaccessible; returning -EFAULT", endl, flush;
+    }
+
+    arg6 = *arg6ptr;
+  } else {
+    assert(false);
+  }
 
   if (DEBUG) 
     logfile << "handle_syscall (#", syscallid, " ", ((syscallid < lengthof(syscall_names_32bit)) ? syscall_names_32bit[syscallid] : "???"), 
-      ") from ", (void*)ctx.commitarf[REG_rcx], " args ", " (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
+      " via ", semantics_name[semantics], ") from ", (void*)ctx.commitarf[REG_rcx], " args ", " (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
       (void*)arg5, ", ", (void*)arg6, ") at iteration ", iterations, endl, flush;
 
   switch (syscallid) {
@@ -1326,8 +1478,7 @@ void handle_syscall_32bit() {
     ctx.commitarf[REG_rax] = do_syscall_32bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
     break;
   }
-  //ctx.commitarf[REG_rax] = -EINVAL;
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_sr1];
+  ctx.commitarf[REG_rip] = retaddr;
 
   if (DEBUG) logfile << "handle_syscall: result ", ctx.commitarf[REG_rax], " (", (void*)ctx.commitarf[REG_rax], "); returning to ", (void*)ctx.commitarf[REG_rip], endl, flush;
 }
@@ -1481,6 +1632,8 @@ void print_perfctrs(ostream& os) {
 // Injection into target process
 //
 
+#ifdef __x86_64__
+
 void copy_from_process_memory(int pid, void* target, const void* source, int size) {
   W64* destp = (W64*)target;
   W64* srcp = (W64*)source;
@@ -1617,8 +1770,6 @@ int ptlsim_inject(int argc, char** argv) {
   void* thunk_source = (void*)(x86_64_mode ? &ptlsim_loader_thunk_64bit : &ptlsim_loader_thunk_32bit);
   int thunk_size = LOADER_THUNK_SIZE;
 
-  static const W64 thunk_base = 0x1000;
-
   if (DEBUG) cerr << "Saving old code (", thunk_size, " bytes) at thunk rip ", (void*)regs.rip, " in pid ", pid, endl;
   copy_from_process_memory(pid, &info.saved_thunk, (void*)info.origrip, LOADER_THUNK_SIZE);
 
@@ -1669,6 +1820,191 @@ int ptlsim_inject(int argc, char** argv) {
   return WEXITSTATUS(status);
 }
 
+#else // ! __x86_64__
+
+void copy_from_process_memory(int pid, void* target, const void* source, int size) {
+  W32* destp = (W32*)target;
+  W32* srcp = (W32*)source;
+
+  foreach (i, ceil(size, 4) / sizeof(W32)) {
+    W64 rc = sys_ptrace(PTRACE_PEEKDATA, pid, (W32)srcp++, (W32)destp++);
+    if (errno != 0) { cerr << "ERROR copying to target ", target, ": ", strerror(errno), endl, flush; assert(false); }
+  }
+}
+
+void copy_to_process_memory(int pid, void* target, const void* source, int size) {
+  W32* destp = (W32*)target;
+  W32* srcp = (W32*)source;
+
+  foreach (i, ceil(size, 4) / sizeof(W32)) {
+    W64 rc = sys_ptrace(PTRACE_POKEDATA, pid, (W32)(destp++), (W32)(*srcp++));
+    assert(rc == 0);
+  }
+}
+
+void write_process_memory_W64(int pid, W64 target, W64 data) {
+  int rc;
+  rc = sys_ptrace(PTRACE_POKEDATA, pid, target+0, LO32(data));
+  assert(rc == 0);
+  rc = sys_ptrace(PTRACE_POKEDATA, pid, target+4, HI32(data));
+  assert(rc == 0);
+}
+
+W64 read_process_memory_W64(int pid, W64 source) {
+  W64 datalo;
+  W64 datahi;
+  int rc;
+  rc = sys_ptrace(PTRACE_PEEKDATA, pid, source, (W32)&datalo);
+  assert(rc == 0);
+  rc = sys_ptrace(PTRACE_PEEKDATA, pid, source+4, (W32)&datahi);
+  assert(rc == 0);
+
+  return ((W64)datahi << 32) | datalo;
+}
+
+void write_process_memory_W32(int pid, W64 target, W32 data) {
+  int rc = sys_ptrace(PTRACE_POKEDATA, pid, target, data);
+  assert(rc == 0);
+}
+
+W32 read_process_memory_W32(int pid, W64 source) {
+  W64 data;
+  int rc = sys_ptrace(PTRACE_PEEKDATA, pid, source, (W64)&data);
+  assert(rc == 0);
+  return LO32(data);
+}
+
+extern "C" void ptlsim_loader_thunk_32bit(LoaderInfo* info);
+
+int is_elf_valid(const char* filename) {
+  idstream is;
+  is.open(filename);
+  if (!is) return 0;
+
+  struct ELFPartialHeader {
+    W32 magic;
+    byte class3264;
+  };
+
+  ELFPartialHeader h;
+  static const W32 ELFMAGIC = 0x464c457f; // ^ELF
+
+  is.read(&h, sizeof(h));
+  if (h.magic != ELFMAGIC) return 0;
+  if (h.class3264 != ELFCLASS32) return 0;
+
+  return 1;
+}
+
+int ptlsim_inject(int argc, char** argv) {
+  static const bool DEBUG = 0;
+
+  char* filename = argv[1];
+
+  if (!is_elf_valid(filename)) {
+    cerr << "ptlsim: cannot open ", filename, endl;
+    sys_exit(1);
+  }
+
+  if (DEBUG) cerr << "ptlsim[", gettid(), "]: ", filename, " is a 32-bit ELF executable", endl;
+
+  int pid = sys_fork();
+
+  if (!pid) {
+    if (DEBUG) cerr << "ptlsim[", gettid(), "]: Executing ", filename, endl, flush;
+    sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
+    // Child process stops after execve() below:
+    int rc = sys_execve(filename, argv+1, environ);
+
+    if (rc < 0) {
+      cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, " (error: ", strerror(errno), ")", endl, flush;
+      sys_exit(2);
+    }
+    assert(false);
+  }
+
+  if (pid < 0) {
+    cerr << "ptlsim[", gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
+    sys_exit(0);
+  }
+
+  if (DEBUG) cerr << "ptlsim: waiting for child pid ", pid, "...", endl, flush;
+
+  int status;
+  int rc = waitpid(pid, &status, 0);
+  if (rc != pid) {
+    cerr << "ptlsim: waitpid returned ", rc, " (vs expected pid ", pid, "); failed with error ", strerror(errno), endl;
+    sys_exit(3);
+  }
+
+  assert(rc == pid);
+  assert(WIFSTOPPED(status));
+
+  struct user_regs_struct regs;
+  assert(sys_ptrace(PTRACE_GETREGS, pid, 0, (W64)&regs) == 0);
+
+  LoaderInfo info;
+  info.initialize = 1;
+  info.origrip = regs.eip;
+  info.origrsp = regs.esp;
+  const char* ptlsim_filename = get_full_exec_filename();
+  if (DEBUG) cerr << "ptlsim: PTLsim full filename is ", ptlsim_filename, endl;
+  strncpy(info.ptlsim_filename, ptlsim_filename, sizeof(info.ptlsim_filename)-1);
+  info.ptlsim_filename[sizeof(info.ptlsim_filename)-1] = 0;
+
+  if (DEBUG) cerr << "ptlsim: Original process rip ", (void*)info.origrip, ", rsp ", (void*)info.origrsp, " for pid ", pid, endl;
+
+  regs.esp -= sizeof(LoaderInfo);
+
+  void* thunk_source = (void*)&ptlsim_loader_thunk_32bit;
+  int thunk_size = LOADER_THUNK_SIZE;
+
+  if (DEBUG) cerr << "Saving old code (", thunk_size, " bytes) at thunk rip ", (void*)regs.eip, " in pid ", pid, endl;
+  copy_from_process_memory(pid, &info.saved_thunk, (void*)info.origrip, LOADER_THUNK_SIZE);
+
+  if (DEBUG) cerr << "Writing new code (", LOADER_THUNK_SIZE, " bytes) at thunk rip ", (void*)regs.eip, " in pid ", pid, endl;
+  copy_to_process_memory(pid, (void*)info.origrip, thunk_source, LOADER_THUNK_SIZE);
+
+  //
+  // Write stack frame
+  //
+  if (DEBUG) cerr << "Copy loader info (", sizeof(LoaderInfo), " bytes) to rsp ", (void*)regs.esp, " in pid ", pid, endl;
+  copy_to_process_memory(pid, (void*)regs.esp, &info, sizeof(LoaderInfo));
+
+  W64 loader_info_base = regs.esp;
+
+  regs.esp -= 2*4;
+
+  if (DEBUG) cerr << "Make stack frame at rsp ", (void*)regs.esp, " in pid ", pid, endl;
+
+  write_process_memory_W32(pid, regs.esp + 0*4, info.origrip); // return address
+  write_process_memory_W32(pid, regs.esp + 1*4, loader_info_base); // pointer to info block
+  if (DEBUG) cerr << "value = ", hexstring(read_process_memory_W64(pid, regs.esp), 64), endl;
+
+  if (DEBUG) cerr << "  retaddr = 0x", hexstring(info.origrip, 64), endl;
+  if (DEBUG) cerr << "  arg[0]  = 0x", hexstring(loader_info_base, 64), endl;
+
+  regs.edi = loader_info_base;
+
+  assert(sys_ptrace(PTRACE_SETREGS, pid, 0, (W64)&regs) == 0);
+
+  if (DEBUG) cerr << "ptlsim: restarting child pid ", pid, " at ", (void*)regs.eip, "...", endl, flush;
+
+  rc = ptrace(PTRACE_DETACH, pid, 0, 0);
+  if (rc) {
+    cerr << "ptlsim: detach returned ", rc, ", error code ", strerror(errno), endl, flush;
+    sys_exit(4);
+  }
+  rc = waitpid(pid, &status, 0);
+
+  // (child done)
+  status = WEXITSTATUS(status);
+  if (DEBUG) cerr << "ptlsim: exiting with exit code ", status, endl, flush;
+  return WEXITSTATUS(status);
+}
+
+#endif
+
 //
 // Profiling thread exit callbacks
 //
@@ -1681,7 +2017,7 @@ int ptlsim_inject(int argc, char** argv) {
  */
 extern "C" void thread_exit_callback(int sig, siginfo_t *si, void *puc) {
   int exitcode = si->si_code;
-  
+
   if (logfile) {
     logfile << endl, "=== Thread ", gettid(), " exited with status ", exitcode, " ===", endl, endl;
     print_perfctrs(logfile);
@@ -1694,17 +2030,20 @@ extern "C" void thread_exit_callback(int sig, siginfo_t *si, void *puc) {
 void init_exit_callback() {
   // Presently the exit callback only works in x86-64 mode because it uses signals:
   if (!ctx.use64) return;
-
+#ifdef __x86_64__
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = thread_exit_callback;
   sa.sa_flags = SA_SIGINFO;
   assert(sigaction(SIGXCPU, &sa, NULL) == 0);
   arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)1);
+#endif
 }
 
 void remove_exit_callback() {
+#ifdef __x86_64__
   arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)0);
+#endif
 }
 
 //
@@ -1712,10 +2051,10 @@ void remove_exit_callback() {
 //
 ThreadState basetls;
 
-Elf64_auxv_t* auxv_start;
+native_auxv_t* auxv_start;
 
-Elf64_auxv_t* find_auxv_entry(int type) {
-  Elf64_auxv_t* auxp = auxv_start;
+native_auxv_t* find_auxv_entry(int type) {
+  native_auxv_t* auxp = auxv_start;
 
   while (auxp->a_type != AT_NULL) {
     //logfile << "  auxv type ", intstring(auxp->a_type, 3), ": 0x", hexstring((W64)auxp->a_un.a_ptr, 64), " = ", intstring(auxp->a_un.a_val, 24), endl, flush;
@@ -1755,7 +2094,7 @@ int get_stack_reqs_for_args_env_auxv(const byte* origargv) {
   // sb << "Stack reqs: ", argc, " args, ", envc, " envs, ", auxvc, " auxvs", endl;
   write(2, (char*)sb, strlen(sb));
 
-  return ((1 + argc + 1 + envc + 1) * sizeof(char**)) + ((auxvc + 1) * sizeof(Elf64_auxv_t));
+  return ((1 + argc + 1 + envc + 1) * sizeof(char**)) + ((auxvc + 1) * sizeof(native_auxv_t));
 }
 
 struct Elf32_auxv_32bit {
@@ -1787,20 +2126,11 @@ byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
 
   while (*p) *dest++ = (char*)(*p++);
 
-  // skip over environment
-  /*
-  while (*p) {
-    stringbuf sb;
-    sb << "init env: ", (char*)*p, endl;
-    write(2, (char*)sb, strlen(sb));
-    *dest++ = (char*)(*p++);
-  }
-  */
-
   // skip over null at end of environment
   *dest++ = 0; p++;
 
-  Elf64_auxv_t* destauxv = (Elf64_auxv_t*)dest;
+  native_auxv_t* destauxv = (native_auxv_t*)dest;
+
   auxv_t* auxv = (auxv_t*)p;
 
   auxv_start = destauxv;
@@ -1827,8 +2157,11 @@ byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
 // In this clever function, we just keep on recursively
 // descending into the stack until the desired rsp is hit.
 //
-
+#ifdef __x86_64__
 inline void* get_rsp() { W64 rsp; asm volatile("mov %%rsp,%[dest]" : [dest] "=r" (rsp)); return (void*)rsp; }
+#else // ! __x86_64__
+inline void* get_rsp() { W32 esp; asm volatile("mov %%esp,%[dest]" : [dest] "=r" (esp)); return (void*)esp; }
+#endif
 
 void expand_user_stack_to_addr(W64 desired_rsp) {
   byte dummy[PAGE_SIZE];
@@ -1851,13 +2184,20 @@ extern time_t ptlsim_build_timestamp;
 // then captures any user process arguments, environment and auxv, possibly
 // converting between 64-bit and 32-bit formats.
 //
+
 extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   //
   // We don't yet have any I/O streams or console output at this point
   // so we are limited to things we can do without using libc:
   //
+
   // The loader thunk patched our ELF header with the real RIP to enter at:
+#ifdef __x86_64__
   Elf64_Ehdr* ptlsim_ehdr = (Elf64_Ehdr*)PTL_PAGE_POOL_BASE;
+#else
+  Elf32_Ehdr* ptlsim_ehdr = (Elf32_Ehdr*)PTL_PAGE_POOL_BASE;
+#endif
+
   inside_ptlsim = (ptlsim_ehdr->e_type == ET_PTLSIM);
   ptlsim_build_timestamp = (time_t)ptlsim_ehdr->e_version;
 
@@ -1870,15 +2210,15 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   ctx.reset();
   ctx.commitarf[REG_rsp] = (W64)origrsp;
   ctx.commitarf[REG_rip] = (W64)ptlsim_ehdr->e_entry;
+
   ctx.commitarf[REG_flags] = 0;
   ctx.use64 = (ptlsim_ehdr->e_machine == EM_X86_64);
-
   cpu_fsave(x87state);
   fpu_state_to_ptlsim_state();
   ctx.commitarf[REG_mxcsr] = x86_stmxcsr();
-
-  assert(arch_prctl(ARCH_GET_FS, &fsbase) == 0);
-  assert(arch_prctl(ARCH_GET_GS, &gsbase) == 0);
+  
+  fsbase = get_fs_base();
+  gsbase = get_gs_base();
 
   //
   // Generally the true stack top can be found by rounding up to some big fraction
@@ -1910,6 +2250,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   tls->stack = (byte*)stack + SIM_THREAD_STACK_SIZE;
   setup_sim_thunk_page();
 
+#ifdef __x86_64__
   const byte* argv = (ctx.use64)
     ? (const byte*)(((W64*)origrsp)+1)
     : (const byte*)(((W32*)origrsp)+1);
@@ -1924,7 +2265,26 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   byte* endp = (ctx.use64)
     ? copy_args_env_auxv<W64, Elf64_auxv_t>(sp, argv)
     : copy_args_env_auxv<W32, Elf32_auxv_32bit>(sp, argv);
+#else
 
+  const byte* argv = (const byte*)(((W32*)origrsp)+1);
+
+  int bytes = get_stack_reqs_for_args_env_auxv<W32, Elf32_auxv_32bit>(argv);
+  /*
+  {
+    stringbuf sb;
+    sb << "env bytes: ", bytes, endl;
+    early_printk(sb);
+    sb.reset();
+    sb << "tls->stack: ", (void*)tls->stack, endl;
+    early_printk(sb);
+  }
+  */
+  byte* sp = (byte*)(tls->stack);
+  sp -= bytes;
+
+  byte* endp = copy_args_env_auxv<W32, Elf32_auxv_32bit>(sp, argv);
+#endif
   assert(endp == tls->stack);
 
   return sp;

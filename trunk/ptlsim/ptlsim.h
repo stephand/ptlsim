@@ -22,11 +22,16 @@ void user_process_terminated(int rc);
 ostream& print_user_context(ostream& os, const UserContext& ctx, int width = 4);
 
 void init_translate();
+void init_uops();
 BasicBlock* translate_basic_block(void* rip);
 extern bool split_unaligned_memops_during_translate;
 
+int out_of_order_core_toplevel_loop();
+int sequential_core_toplevel_loop();
+
 void ooo_capture_stats();
 void ooo_capture_stats(DataStoreNode& root);
+void seq_capture_stats(DataStoreNode& root);
 void save_stats();
 
 extern "C" void switch_to_sim();
@@ -40,9 +45,15 @@ struct AddrPair {
   byte* end;
 };
 
-const AddrPair* get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal);
+uop_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal);
+uop_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except);
 void synth_uops_for_bb(BasicBlock& bb);
-const byte* get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except);
+
+#ifdef __x86_64__
+extern "C" void call_exec_func(uop_func_t func, IssueState& output, const IssueInput& input);
+#else
+inline void call_exec_func(uop_func_t func, IssueState& output, const IssueInput& input) { func(output, input); }
+#endif
 
 void add_unaligned_ldst_rip(W64 rip);
 void remove_unaligned_ldst_rip(W64 rip);

@@ -26,8 +26,7 @@ W64 stop_at_iteration = MAX_CYCLE;
 W64 insns_in_last_basic_block = 65536;
 W64 stop_at_rip = 0;
 W64 stop_at_user_insns = MAX_CYCLE;
-W64 force_seq_at_iteration = MAX_CYCLE;
-W64 all_sequential = 0;
+W64 sequential_mode_insns = 0;
 W64 start_log_at_iteration = MAX_CYCLE;
 W64 start_short_log_at_iteration = MAX_CYCLE;
 W64 user_profile_only = 0;
@@ -74,11 +73,9 @@ static ConfigurationOption optionlist[] = {
   {"flushevery",                         OPTION_TYPE_W64,     0, "Flush the pipeline every N committed instructions", &flush_interval},
 
   {null,                                 OPTION_TYPE_SECTION, 0, "Sequential and Native Control", null},
+  {"seq",                                OPTION_TYPE_W64,     0, "Run in sequential mode for <seq> instructions before switching to out of order", &sequential_mode_insns},
   {"profonly",                           OPTION_TYPE_BOOL,    0, "Profile user code in native mode only; don't simulate anything", &user_profile_only},
-  {"forceseq",                           OPTION_TYPE_W64,     0, "Force trace at or after iteration <forceseq> to run sequential version", &force_seq_at_iteration},
-  {"allseq",                             OPTION_TYPE_BOOL,    0, "Completely disable out of order execution mode", &all_sequential},
   {"exitend",                            OPTION_TYPE_BOOL,    0, "Kill the thread after full simulation completes rather than going native", &exit_after_fullsim},
-
   {null,                                 OPTION_TYPE_SECTION, 0, "Debugging", null},
   {"dumpcode",                           OPTION_TYPE_STRING,  0, "Save page of user code at final rip to file <dumpcode>", &dumpcode_filename},
   {"pause-at-startup",                   OPTION_TYPE_W64,     0, "Pause for N seconds after starting up (to allow debugger to attach)", &pause_at_startup},
@@ -154,6 +151,7 @@ int ConfigurationParser::parse(int argc, char* argv[]) {
               cerr << "Warning: option ", argv[i-1], " had no argument; ignoring", endl;
               break;
             }
+            bool isinf = (strncmp(p, "inf", 3) == 0);
             if (len > 1) {
               char& c = p[len-1];
               switch (c) {
@@ -167,8 +165,8 @@ int ConfigurationParser::parse(int argc, char* argv[]) {
                 multiplier = 1000000000000LL; c = 0; break;
               }
             }
-            W64 v = strtoll(p, &endp, 0);
-            if (endp[0] != 0) {
+            W64 v = (isinf) ? MAX_CYCLE : strtoll(p, &endp, 0);
+            if ((!isinf) && (endp[0] != 0)) {
               cerr << "Warning: invalid value '", p, "' for option ", argv[i-1], "; ignoring", endl;
             }
             v *= multiplier;

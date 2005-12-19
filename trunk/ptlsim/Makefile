@@ -1,3 +1,4 @@
+# -*- makefile -*-
 #
 # PTLsim: Cycle Accurate x86-64 Simulator
 # Makefile
@@ -5,24 +6,44 @@
 # Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
 #
 
+#
+# Platform definition
+#
+# Define this if compiling on an 64-bit x86-64 machine
+# Undefine if compiling on an ordinary 32-bit x86 machine
+#
+__x86_64__ = 1
 
 CC = g++
-
-CFLAGS = -O99 -g -fomit-frame-pointer -pipe -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -fomit-frame-pointer -funroll-loops -funit-at-a-time -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
-#CFLAGS = -O0 -g3 -pipe -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type
-
 INCFLAGS = -I. -DBUILDHOST="`hostname -f`"
 
+ifdef __x86_64__
+CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -funit-at-a-time -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+#CFLAGS = -O0 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type
+CFLAGS32BIT = -m32
+else
+# 32-bit PTLsim32 only:
+#CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -funit-at-a-time -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+CFLAGS = -O0 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+CFLAGS32BIT = 
+endif
+
+ifdef __x86_64__
 COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o uopimpl.o lowlevel-64bit.o lowlevel-32bit.o uopinterface.o dcache.o config.o datastore.o injectcode-32bit.o injectcode-64bit.o
-OOOOBJS = ooocore.o branchpred.o
+else
+# 32-bit PTLsim32 only:
+COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o uopimpl32.o lowlevel-32bit.o uopinterface.o dcache.o config.o datastore.o injectcode-32bit.o
+endif
+
+OOOOBJS = ooocore.o seqcore.o branchpred.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h loader.h maskluts.h
+COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h loader.h
 OOOINCLUDES = branchpred.h ooohwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
-COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp uopimpl.S lowlevel-64bit.S lowlevel-32bit.S uopinterface.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c genoffsets.cpp cpuid.cpp ptlstats.cpp
-OOOCPPFILES = ooocore.cpp branchpred.cpp
+COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp uopimpl.S uopimpl32.S lowlevel-64bit.S lowlevel-32bit.S uopinterface.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c genoffsets.cpp cpuid.cpp ptlstats.cpp
+OOOCPPFILES = ooocore.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
 #
@@ -47,7 +68,6 @@ all: ptlsim ptlstats ptlcalls.o cpuid
 genoffsets: genoffsets.o superstl.o
 	g++ -g -O2 genoffsets.o superstl.o -o genoffsets
 
-
 cpuid: cpuid.o
 	g++ -O2 cpuid.o superstl.o -o cpuid
 
@@ -56,22 +76,32 @@ simsynth-offsets.h: genoffsets
 
 # Compile this fast:
 ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h config.h
-	gcc $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -m64 -c ptlstats.cpp
+	gcc $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -c ptlstats.cpp
 
+ifdef __x86_64__
 injectcode-64bit.o: injectcode.cpp
 	g++ $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
 
 injectcode-32bit.o: injectcode.cpp
 	g++ $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
+else
+injectcode-32bit.o: injectcode.cpp
+	g++ $(CFLAGS) $(INCFLAGS) -DPTLSIM_FORCE_32BIT_ONLY -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
+endif
 
 lowlevel-32bit.o: lowlevel-32bit.S
-	gcc -c -m32 -O3 lowlevel-32bit.S
+	gcc -c $(CFLAGS32BIT) $(INCFLAGS) -g -O3 lowlevel-32bit.S
 
 ptlcalls-32bit.o: ptlcalls.c
-	gcc $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c ptlcalls.c -o ptlcalls-32bit.o
+	gcc -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer ptlcalls.c -o ptlcalls-32bit.o
 
+ifdef __x86_64__
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
 	g++ -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
+else
+ptlsim: $(OBJFILES) Makefile ptlsim32.lds
+	g++ -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim32.lds -Wl,-e,ptlsim_preinit_entry
+endif
 
 ptlsim.objdump: ptlsim Makefile
 	objdump -Crtd --no-show-raw-insn ptlsim | convert-disasm-x86 > ptlsim.objdump
@@ -121,7 +151,6 @@ backup: dist
 
 distfiles: $(DISTFILES)
 	@echo $(DISTFILES)
-
 
 .depend:
 	touch simsynth-offsets.h

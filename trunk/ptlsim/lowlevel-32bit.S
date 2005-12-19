@@ -34,4 +34,182 @@ inside_sim_escape_code_template_32bit:
   ret
 inside_sim_escape_code_template_32bit_end:
 
+#ifndef __x86_64__
+/*
+ * PTLsim32 32-bit entry code
+ */
+
+#define __ASM_ONLY__
+#include <ptlhwdef.h>
+
+.extern ptlsim_init
+.extern _start
+
+.global ptlsim_preinit_entry
+ptlsim_preinit_entry:
+  #
+  # We may be a 64-bit process running in a 32-bit address space,
+  # which means argv, argc, etc. will be in 32-bit format and need
+  # to be converted before any initialization routines.
+  #
+  mov   %eax,%esp       # origrsp
+  push  offset _start   # next_init_func
+  push  %eax
+  call  ptlsim_preinit
+  mov   %esp,%eax            # update to new stack pointer
+  jmp   _start
+
+/*
+ * struct ThreadState {
+ *   ThreadState* self;
+ *   void* stack;
+ *   ...
+ * };
+ */
+
+#define ThreadState_self                              4*0
+#define ThreadState_rsp                               4*1
+#define ThreadState_simcall                           4*2
+
+.extern ctx
+.extern save_context_switch_to_sim
+.extern x87state
+.extern basetls
+.extern fsreg
+.extern gsreg
+
+.global save_context_switch_to_sim_lowlevel
+save_context_switch_to_sim_lowlevel:
+#++MTY FIXME zero out high 32 bits of everything, and all 64 bits of r8-r15
+  mov      [ctx + 8*REG_rax + 8*0],%eax
+  mov      [ctx + 8*REG_rax + 8*1],%ecx
+  mov      [ctx + 8*REG_rax + 8*2],%edx
+  mov      [ctx + 8*REG_rax + 8*3],%ebx
+  mov      [ctx + 8*REG_rax + 8*4],%esp
+  mov      [ctx + 8*REG_rax + 8*5],%ebp
+  mov      [ctx + 8*REG_rax + 8*6],%esi
+  mov      [ctx + 8*REG_rax + 8*7],%edi
+
+  mov      dword ptr [ctx + 8*REG_rax + 8*0 + 4],0
+  mov      dword ptr [ctx + 8*REG_rax + 8*1 + 4],0
+  mov      dword ptr [ctx + 8*REG_rax + 8*2 + 4],0
+  mov      dword ptr [ctx + 8*REG_rax + 8*3 + 4],0
+  mov      dword ptr [ctx + 8*REG_rax + 8*4 + 4],0
+  mov      dword ptr [ctx + 8*REG_rax + 8*5 + 4],0
+  mov      dword ptr [ctx + 8*REG_rax + 8*6 + 4],0
+  mov      dword ptr [ctx + 8*REG_rax + 8*7 + 4],0
+
+  mov      %eax,[%esp]                           # Get return %rip (if we got here through a CALL insn)
+  mov      [ctx + 8*REG_rip],%eax                # Save %rip
+  mov      dword ptr [ctx + 8*REG_rip + 4],0
+
+  mov      %esp,[basetls + ThreadState_rsp]      # Switch to private thread stack
+
+  and      %esp,-16
+  pushfd                                         # Save rflags
+  pop      dword ptr [ctx + 8*REG_flags + 8]     # Put flags into structure
+
+  # SSE registers
+  movlpd   [ctx + 8*REG_xmml0],%xmm0
+  movlpd   [ctx + 8*REG_xmml1],%xmm1
+  movlpd   [ctx + 8*REG_xmml2],%xmm2
+  movlpd   [ctx + 8*REG_xmml3],%xmm3
+  movlpd   [ctx + 8*REG_xmml4],%xmm4
+  movlpd   [ctx + 8*REG_xmml5],%xmm5
+  movlpd   [ctx + 8*REG_xmml6],%xmm6
+  movlpd   [ctx + 8*REG_xmml7],%xmm7
+
+  movhpd   [ctx + 8*REG_xmmh0],%xmm0
+  movhpd   [ctx + 8*REG_xmmh1],%xmm1
+  movhpd   [ctx + 8*REG_xmmh2],%xmm2
+  movhpd   [ctx + 8*REG_xmmh3],%xmm3
+  movhpd   [ctx + 8*REG_xmmh4],%xmm4
+  movhpd   [ctx + 8*REG_xmmh5],%xmm5
+  movhpd   [ctx + 8*REG_xmmh6],%xmm6
+  movhpd   [ctx + 8*REG_xmmh7],%xmm7
+
+  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
+  stmxcsr  [ctx + 8*REG_mxcsr]                   # Save SSE flags
+
+  # Save x87 state
+  fsave    x87state
+
+  # (skip tr0/tr1/tr2)
+  mov      dword ptr [ctx + 8*REG_zero],0        # Save %zero
+
+  mov      [fsreg],%fs
+  mov      [gsreg],%gs
+
+  sub      %esp,4                                # Realign stack
+  jmp      save_context_switch_to_sim
+
+.data
+
+switch_to_native_restore_context_temp_32_to_32:
+  .long 0
+
+.previous
+
+# extern "C" void switch_to_native_restore_context_lowlevel(const UserContext& ctx, int switch_64_to_32);
+# %rdi = ctx
+# %rsi = switch_64_to_32
+.global switch_to_native_restore_context_lowlevel
+switch_to_native_restore_context_lowlevel:
+  # Calling convention:
+  # %rdi = pointer to state to restore
+  mov      %edi,[%esp + 4 + 0*4] # get arg 0 (pointer to state to restore)
+
+  frstor   x87state
+
+  mov      %fs,[fsreg]
+  mov      %gs,[gsreg]
+
+  mov      %eax,[%edi + 8*REG_rip]        # Load %rip
+  mov      [switch_to_native_restore_context_temp_32_to_32],%eax  # Save %rip for final jump
+
+  lea      %esp,[%edi + 8*REG_flags]      # Load address of flags
+  popfd                                   # Restore flags
+  mov      %esp,[%edi + 8*REG_rsp]        # Restore user %esp; now on user stack
+
+  mov      %eax,[%edi + 8*REG_rax + 8*0]
+  mov      %ecx,[%edi + 8*REG_rax + 8*1]
+  mov      %edx,[%edi + 8*REG_rax + 8*2]
+  mov      %ebx,[%edi + 8*REG_rax + 8*3]
+# mov      %esp,[%edi + 8*REG_rax + 8*4]              # (already done)
+  mov      %ebp,[%edi + 8*REG_rax + 8*5]
+  mov      %esi,[%edi + 8*REG_rax + 8*6]
+# mov      %edi,[%edi + 8*REG_rax + 8*7]              # (done at very end)
+
+  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
+# mov      %rip,[%edi + 8*REG_rip]      # (do later)
+# mov      %rflags,[%edi + 8*REG_flags] # (already done)
+# fldsw    [%edi + 8*REG_mxcsr + 4]     # Restore FP status word     ++MTY FIXME there is a fstsw but no corresponding fldsw
+#  fldcw    [%edi + 8*REG_mxcsr + 6]     # Restore FP control word
+  ldmxcsr  [%edi + 8*REG_mxcsr]         # Restore SSE flags
+  # (No need to restore %tr0, %tr1, %tr2, %zero
+
+  movlpd   %xmm0,[%edi + 8*REG_xmml0]
+  movlpd   %xmm1,[%edi + 8*REG_xmml1]
+  movlpd   %xmm2,[%edi + 8*REG_xmml2]
+  movlpd   %xmm3,[%edi + 8*REG_xmml3]
+  movlpd   %xmm4,[%edi + 8*REG_xmml4]
+  movlpd   %xmm5,[%edi + 8*REG_xmml5]
+  movlpd   %xmm6,[%edi + 8*REG_xmml6]
+  movlpd   %xmm7,[%edi + 8*REG_xmml7]
+
+  movhpd   %xmm0,[%edi + 8*REG_xmmh0]
+  movhpd   %xmm1,[%edi + 8*REG_xmmh1]
+  movhpd   %xmm2,[%edi + 8*REG_xmmh2]
+  movhpd   %xmm3,[%edi + 8*REG_xmmh3]
+  movhpd   %xmm4,[%edi + 8*REG_xmmh4]
+  movhpd   %xmm5,[%edi + 8*REG_xmmh5]
+  movhpd   %xmm6,[%edi + 8*REG_xmmh6]
+  movhpd   %xmm7,[%edi + 8*REG_xmmh7]
+
+  mov      %edi,[%edi + 8*REG_rdi]      # Restore %rdi
+
+  jmp      [switch_to_native_restore_context_temp_32_to_32]
+
+#endif
+
 .end

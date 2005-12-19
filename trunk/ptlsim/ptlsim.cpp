@@ -22,7 +22,9 @@ void save_stats() {
 
   logfile << "(Capturing final stats bundle ", snapshotid, " at cycle ", sim_cycle, ")", endl, flush;
 
-#ifdef __x86_64__
+  if ((sequential_mode_insns > 0) && dsroot)
+    seq_capture_stats((*dsroot)("seq")); 
+
   if (use_out_of_order_core)
     ooo_capture_stats();
 
@@ -30,7 +32,6 @@ void save_stats() {
     if (use_out_of_order_core) 
       ooo_capture_stats((*dsroot)("final")); 
   }
-#endif
 
   if (stats_filename) {
     logfile << "Saving stats to data store ", stats_filename, " at cycle ", sim_cycle, "...", endl, flush;
@@ -65,10 +66,6 @@ void show_stats_and_switch_to_native() {
   switch_to_native_restore_context();
 }
 
-extern void enable_ptlsim_call_gate();
-extern void disable_ptlsim_call_gate();
-extern void out_of_order_core_toplevel_loop();
-
 void switch_to_sim() {
   static const bool DEBUG = 0;
 
@@ -78,8 +75,15 @@ void switch_to_sim() {
   // Sanitize flags (AMD and Intel CPUs also use bits 1 and 3 for reserved bits, but not for INV and WAIT like we do).
 
 #ifdef __x86_64__
-  if (use_out_of_order_core)
-    out_of_order_core_toplevel_loop();
+  bool done = false;
+
+  if (sequential_mode_insns)
+    done = sequential_core_toplevel_loop();
+
+  if (!done) {
+    if (use_out_of_order_core)
+      out_of_order_core_toplevel_loop();
+  }
 #endif
 
   ctx.commitarf[REG_flags] &= FLAG_NOT_WAIT_INV; // sanitize flags
@@ -131,9 +135,8 @@ int main(int argc, char* argv[]) {
   }
 
   init_cache();
-#ifdef __x86_64__
+  init_uops();
   init_translate();
-#endif
 
   void* interp_entry = (void*)ctx.commitarf[REG_rip];
   void* program_entry = (void*)find_auxv_entry(AT_ENTRY)->a_un.a_val;

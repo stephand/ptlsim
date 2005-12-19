@@ -127,6 +127,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // Multiplication
   {"mull",           OPCLASS_MULTIPLY,      3, ALU0},
   {"mulh",           OPCLASS_MULTIPLY,      3, ALU1},
+  {"mulhu",          OPCLASS_MULTIPLY,      3, ALU1},
   // Bit testing
   {"bt",             OPCLASS_LOGIC,         A, ANYALU},
   {"bts",            OPCLASS_LOGIC,         A, ANYALU},
@@ -391,12 +392,21 @@ ostream& operator <<(ostream& os, const BasicBlock& bb) {
   os << bb.refcount, " refs, ", bb.bytes, " bytes compressed, ", (void*)bb.rip_taken, " taken, ", (void*)bb.rip_not_taken, " not taken:", endl;
   const byte* p = bb.data;
   W64 rip = bb.rip;
+  int bytes_in_insn;
+
   foreach (i, bb.count) {
     TransOp transop;
     const byte* oldp = p;
     p = transop.expand(p);
-    os << "  ", (void*)rip, ": ", transop, endl;
-    rip += transop.bytes;
+    os << "  ", (void*)rip, ": ", transop;
+
+    if (transop.som) os << " [som bytes ", transop.bytes, "]";
+    if (transop.eom) os << " [eom]";
+    os << endl;
+
+    if (transop.som) bytes_in_insn = transop.bytes;
+    if (transop.eom) rip += bytes_in_insn;
+
     //if (transop.eom) os << "  ;;", endl;
   }
   os << "Basic block terminates with taken rip ", (void*)bb.rip_taken, ", not taken rip ", (void*)bb.rip_not_taken, endl;

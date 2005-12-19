@@ -449,6 +449,7 @@ enum {
   OP_xorcc,
   OP_mull,
   OP_mulh,
+  OP_mulhu,
   OP_bt,
   OP_bts,
   OP_btr,
@@ -756,6 +757,8 @@ stringbuf& operator <<(stringbuf& os, const TransOp& op);
 
 struct BasicBlock;
 
+typedef void (*uop_func_t)(IssueState& output, const IssueInput& input);
+
 struct BasicBlockBase {
   listlink<BasicBlock> hashlink;
   W64 rip;
@@ -766,7 +769,7 @@ struct BasicBlockBase {
   int refcount;
   W64 tagcount:10, memcount:8, storecount:8, repblock:1;
   W64 usedregs;
-  const byte** synthops;
+  uop_func_t* synthops;
 
   void acquire() {
     refcount++;
@@ -825,8 +828,6 @@ static inline stringbuf& operator <<(stringbuf& sb, const flagstring& bs) {
 }
 
 enum {
-  ASSIST_MUL8,  ASSIST_MUL16,  ASSIST_MUL32,  ASSIST_MUL64,
-  ASSIST_IMUL8, ASSIST_IMUL16, ASSIST_IMUL32, ASSIST_IMUL64,
   ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
   ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
   ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSRET, ASSIST_CPUID,

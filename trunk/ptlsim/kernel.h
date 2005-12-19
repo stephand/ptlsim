@@ -13,6 +13,8 @@
 #include <ptlhwdef.h>
 #include <elf.h>
 
+#ifdef __x86_64__
+
 #undef __syscall_return
 #define __syscall_return(type, res) return (type)(res);
 #define __syscall_clobber "r11","rcx","memory" 
@@ -46,6 +48,36 @@
   ("movq %5,%%r10 ; movq %6,%%r8 ; movq %7,%%r9 ; " __syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), \
    "d" ((long)(arg3)), "g" ((long)(arg4)), "g" ((long)(arg5)), "g" ((long)(arg6)) : __syscall_clobber,"r8","r10","r9" ); __syscall_return(type,__res); }
 
+#else
+
+#define declare_syscall0(sysid,type,name) inline type name(void) { long __res; asm volatile ("int $0x80" \
+  : "=a" (__res) : "0" (sysid)); __syscall_return(type,__res); }
+
+#define declare_syscall1(sysid,type,name,type1,arg1) inline type name(type1 arg1) { long __res; \
+  asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1))); __syscall_return(type,__res); }
+
+#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) inline type name(type1 arg1,type2 arg2) { \
+  long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2))); __syscall_return(type,__res); }
+
+#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) inline type name(type1 arg1,type2 arg2,type3 arg3) { \
+  long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3))); __syscall_return(type,__res); }
+
+#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) inline type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
+  { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4))); \
+  __syscall_return(type,__res); }
+
+#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5) inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
+  { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5))); \
+  __syscall_return(type,__res); }
+
+#define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5,type6,arg6) \
+  inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
+  long __res; asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; pop %%ebp" : "=a" (__res) \
+	: "i" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5)), \
+  "0" ((long)(arg6))); __syscall_return(type,__res); }
+
+#endif
+
 //
 // Thread local storage
 //
@@ -78,6 +110,8 @@ void init_kernel();
 //
 // Memory management
 //
+#ifdef __x86_64__
+
 // On x86-64 K8's, there are 48 bits of virtual address space and 40 bits of physical address space: 
 #define TOP_OF_MEM 0x1000000000000LL
 //#define PTL_PAGE_POOL_BASE 0x7ff000000000LL
@@ -85,8 +119,22 @@ void init_kernel();
 #define PTL_PAGE_POOL_SIZE (1*1024*1024*1024LL)  // (1 GB)
 #define PTL_PAGE_POOL_END (PTL_PAGE_POOL_BASE + PTL_PAGE_POOL_SIZE)
 
-#define mmap_invalid(addr) (((W64)addr & 0xfffffffffffff000) == 0xfffffffffffff000)
+#define mmap_invalid(addr) (((W64)(addr) & 0xfffffffffffff000) == 0xfffffffffffff000)
 #define mmap_valid(addr) (!mmap_invalid(addr))
+
+#else // ! __x86_64__
+
+// On x86, there are 32 bits of virtual address space and 32 bits of physical address space: 
+#define TOP_OF_MEM 0x100000000LL
+//#define PTL_PAGE_POOL_BASE 0x7ff000000000LL
+#define PTL_PAGE_POOL_BASE 0x70000000LL
+#define PTL_PAGE_POOL_SIZE (512*1024*1024LL)  // (512 MB)
+#define PTL_PAGE_POOL_END (PTL_PAGE_POOL_BASE + PTL_PAGE_POOL_SIZE)
+
+#define mmap_invalid(addr) (((W32)(addr) & 0xfffff000) == 0xfffff000)
+#define mmap_valid(addr) (!mmap_invalid(addr))
+
+#endif
 
 //
 // These take pages from the private page pool so we can keep all PTLsim 
@@ -102,11 +150,19 @@ bool try_to_extend_stack(W64 addr);
 //
 // Thunk and breakpoint management
 //
-Elf64_auxv_t* find_auxv_entry(int type);
+#ifdef __x86_64__
+typedef Elf64_auxv_t native_auxv_t;
+#else
+typedef Elf32_auxv_t native_auxv_t;
+#endif
+
+native_auxv_t* find_auxv_entry(int type);
 
 void switch_stack_and_jump_32_or_64(void* code, void* stack, bool use64);
 void switch_to_native_restore_context();
 void set_switch_to_sim_breakpoint(void* addr);
+void enable_ptlsim_call_gate();
+void disable_ptlsim_call_gate();
 
 int ptlsim_inject(int argc, char* argv[]);
 
@@ -245,7 +301,11 @@ extern AddressSpace asp;
 //
 // System calls
 //
-void handle_syscall_32bit();
+enum { SYSCALL_SEMANTICS_INT80, SYSCALL_SEMANTICS_SYSCALL, SYSCALL_SEMANTICS_SYSENTER };
+
+void handle_syscall_32bit(int semantics);
+
+// x86-64 mode has only one type of system call (the syscall instruction)
 void handle_syscall_64bit();
 
 //
