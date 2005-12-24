@@ -265,7 +265,7 @@ void print_banner(ostream& os, int argc, char* argv[]) {
 #ifdef __x86_64__
   os << "//  PTLsim: Cycle Accurate x86-64 Simulator", endl;
 #else
-  os << "//  PTLsim: Cycle Accurate x86-64 Simulator (32-bit version)", endl;
+  os << "//  PTLsim: Cycle Accurate x86 Simulator (32-bit version)", endl;
 #endif
   os << "//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>", endl;
   os << "// ", endl;

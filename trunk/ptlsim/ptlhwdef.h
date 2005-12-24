@@ -416,6 +416,8 @@ enum {
   OP_bru,
   OP_brp,
   OP_chk,
+  OP_chk_sub,
+  OP_chk_and,
 
   OP_ld,
   OP_ldx,
@@ -427,16 +429,14 @@ enum {
   OP_st,
   OP_st_lm,
 
-  OP_mask,
-
   OP_rotl,
   OP_rotr,
   OP_rotcl,
   OP_rotcr,
   OP_shl,
   OP_shr,
-  OP_dupbit,
   OP_sar,
+  OP_mask,
 
   OP_bswap,
 
@@ -459,13 +459,7 @@ enum {
   OP_ctpop,
   OP_addf,
   OP_subf,
-  OP_addaf,
-  OP_addsf,
-  OP_subaf,
-  OP_subsf,
   OP_mulf,
-  OP_maddf,
-  OP_msubf,
   OP_divf,
   OP_sqrtf,
   OP_rcpf,
@@ -757,7 +751,7 @@ stringbuf& operator <<(stringbuf& os, const TransOp& op);
 
 struct BasicBlock;
 
-typedef void (*uop_func_t)(IssueState& output, const IssueInput& input);
+typedef void (*uopimpl_func_t)(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags);
 
 struct BasicBlockBase {
   listlink<BasicBlock> hashlink;
@@ -769,7 +763,7 @@ struct BasicBlockBase {
   int refcount;
   W64 tagcount:10, memcount:8, storecount:8, repblock:1;
   W64 usedregs;
-  uop_func_t* synthops;
+  uopimpl_func_t* synthops;
 
   void acquire() {
     refcount++;

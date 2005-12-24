@@ -96,7 +96,7 @@ struct FarJumpDescriptor {
 
 static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
   FarJumpDescriptor desc;
-  desc.offset = LO32((W64)code);
+  desc.offset = LO32((Waddr)code);
   desc.seg = (use64) ? 0x33 : 0x23;
 
   asm volatile(
@@ -170,7 +170,7 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
     byte* p = (byte*)sys_mmap(loader_temp_code, PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
     if (p != loader_temp_code) sys_exit(240);
 
-    byte* loader_at_entry = (byte*)info->origrip;
+    byte* loader_at_entry = (byte*)(Waddr)info->origrip;
 
     foreach (i, LOADER_THUNK_SIZE) loader_temp_code[i] = loader_at_entry[i];
 
@@ -180,7 +180,7 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
     func(info);
   }
 
-  byte* loader_at_entry = (byte*)info->origrip;
+  byte* loader_at_entry = (byte*)(Waddr)info->origrip;
 
   int rc = sys_mprotect(floorptr(loader_at_entry, PAGE_SIZE), 2*PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
   if (rc) sys_exit(249);
@@ -208,8 +208,8 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
     phdr_offset = floor(phdr->p_offset, PAGE_SIZE);
     phdr_memsz = phdr->p_memsz + (phdr->p_vaddr % PAGE_SIZE);
 
-    byte* baseaddr = (byte*)sys_mmap((void*)phdr_vaddr, ceil(phdr_filesz, PAGE_SIZE), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED, fd, phdr_offset);
-    if ((W64)baseaddr != phdr_vaddr) { sys_exit(253); }
+    byte* baseaddr = (byte*)sys_mmap((void*)(Waddr)phdr_vaddr, ceil(phdr_filesz, PAGE_SIZE), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED, fd, phdr_offset);
+    if ((Waddr)baseaddr != phdr_vaddr) { sys_exit(253); }
 
     phdr++;
   }
@@ -217,11 +217,11 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
   phdr--;
 
   // Zero-fill remainder of page
-  byte* p = (byte*)(phdr_vaddr + phdr_filesz);
-  byte* bssp = (byte*)ceil(phdr_vaddr + phdr_filesz, PAGE_SIZE);
+  byte* p = (byte*)(Waddr)(phdr_vaddr + phdr_filesz);
+  byte* bssp = (byte*)(Waddr)ceil(phdr_vaddr + phdr_filesz, PAGE_SIZE);
   while (p < bssp) *p++ = 0;
 
-  byte* endp = (byte*)ceil(phdr_vaddr + phdr_memsz, PAGE_SIZE);
+  byte* endp = (byte*)(Waddr)ceil(phdr_vaddr + phdr_memsz, PAGE_SIZE);
 
   // Map zero pages for remainder of segment
   byte* bssaddr = (byte*)sys_mmap(bssp, endp - bssp, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
@@ -229,9 +229,9 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
   if (bssaddr != bssp) sys_exit(254);
 
   // ELF header can now be accessed at base of PTLsim image:
-  ehdr = (PTLsim_Elf_Ehdr*)image_base;
+  ehdr = (PTLsim_Elf_Ehdr*)(Waddr)image_base;
 
-  void* func = (void*)ehdr->e_entry;
+  void* func = (void*)(Waddr)ehdr->e_entry;
 
   // Patch PTLsim ELF header's e_entry field with original rip so we can get at it later
   ehdr->e_entry = info->origrip;
@@ -249,5 +249,5 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
   sys_munmap(temp, PAGE_SIZE);
   sys_close(fd);
 
-  switch_stack_and_jump(func, (void*)info->origrsp, true);
+  switch_stack_and_jump(func, (void*)(Waddr)info->origrsp, true);
 }

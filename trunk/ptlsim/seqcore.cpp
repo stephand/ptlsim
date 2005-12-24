@@ -6,17 +6,12 @@
 //
 
 #include <globals.h>
-#include <stdio.h>
-#include <elf.h>
-#include <asm/unistd.h>
-#include <asm/prctl.h>
-#include <sys/prctl.h>
 #include <ptlsim.h>
 #include <branchpred.h>
+#include <dcache.h>
 #include <datastore.h>
-#include <logic.h>
 
-// With these disabled, simulation is ~10-20% faster
+// With these disabled, simulation is faster
 //#define ENABLE_CHECKS
 //#define ENABLE_LOGGING
 
@@ -38,12 +33,36 @@ extern W64 virt_addr_mask;
 namespace SequentialCore {
 
   BasicBlock* current_basic_block = null;
-  W64 current_basic_block_rip = 0;
+  Waddr current_basic_block_rip = 0;
   const byte* current_basic_block_transop = null;
   int current_basic_block_transop_index = 0;
   int bytes_in_current_insn = 0;
   int current_uop_in_macro_op;
   W64 current_uuid;
+
+  // (n/a):
+  W64 fetch_blocks_fetched;
+  W64 fetch_uops_fetched;
+  W64 fetch_user_insns_fetched;
+  
+  W64 bbcache_inserts;
+  W64 bbcache_removes;
+  
+  W64 fetch_opclass_histogram[OPCLASS_COUNT];
+
+  //
+  // Make these local to the sequential core namespace
+  // to avoid confusing the other core models:
+  //
+  W64 last_stats_captured_at_cycle = 0;
+  W64 total_uops_committed = 0;
+  W64 total_user_insns_committed = 0;
+  W64 sim_cycle = 0;
+
+  CycleTimer ctseq;
+  CycleTimer ctfetch;
+  CycleTimer ctissue;
+  CycleTimer ctcommit;
 
   //
   // Shadow flags are maintained for each archreg to simulate renaming,
@@ -55,7 +74,7 @@ namespace SequentialCore {
 
   ostream& print_state(ostream& os) {
     os << "General state:", endl;
-    os << "  RIP:                ", (void*)arf[REG_rip], endl;
+    os << "  RIP:                ", (void*)(Waddr)arf[REG_rip], endl;
     os << "  Flags:              ", hexstring(arf[REG_flags], 16), " ", flagstring(arf[REG_flags]), endl;
     os << "  UUID:               ", current_uuid, endl;
     os << "  Bytes in macro-op:  ", bytes_in_current_insn, endl;
@@ -93,7 +112,7 @@ namespace SequentialCore {
     ISSUE_EXCEPTION = -1,
   };
 
-  inline int check_access_alignment(W64 addr, AddressSpace::SPATChunk** top, bool annul, int sizeshift, bool internal, int exception) {
+  inline int check_access_alignment(W64 addr, AddressSpace::spat_t top, bool annul, int sizeshift, bool internal, int exception) {
     if (lowbits(addr, sizeshift))
       return EXCEPTION_UnalignedAccess;
 
@@ -114,12 +133,7 @@ namespace SequentialCore {
     int aligntype = uop.cond;
     bool internal = uop.internal;
 
-    W64 rip = arf[REG_rip];
-
-    //
-    // Make sure the address is aligned and the page tables map it
-    //
-    AddressSpace::SPATChunk** top = (AddressSpace::SPATChunk**)asp.writemap;
+    Waddr rip = arf[REG_rip];
 
     W64 raddr = ra + rb;
     raddr &= virt_addr_mask;
@@ -172,7 +186,7 @@ namespace SequentialCore {
     bool ready;
     byte bytemask;
 
-    W64 exception = check_access_alignment(addr, top, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnWrite);
+    W64 exception = check_access_alignment(addr, asp.writemap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnWrite);
 
     if (exception) {
       state.invalid = 1;
@@ -259,12 +273,7 @@ namespace SequentialCore {
     bool internal = uop.internal;
     bool signext = (uop.opcode == OP_ldx);
 
-    W64 rip = arf[REG_rip];
-
-    //
-    // Make sure the address is aligned and the page tables map it
-    //
-    AddressSpace::SPATChunk** top = (AddressSpace::SPATChunk**)asp.readmap;
+    Waddr rip = arf[REG_rip];
 
     W64 raddr = ra + rb;
     if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
@@ -295,7 +304,7 @@ namespace SequentialCore {
     state.datavalid = 1;
     state.invalid = 0;
 
-    W64 exception = check_access_alignment(addr, top, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnRead);
+    W64 exception = check_access_alignment(addr, asp.readmap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnRead);
 
     if (exception) {
       state.invalid = 1;
@@ -334,7 +343,7 @@ namespace SequentialCore {
       //    ^ origaddr
       //
       if (!annul) {
-        data = *((W64*)floor(addr, 8));
+        data = *((W64*)(Waddr)floor(addr, 8));
       
         struct {
           W64 lo;
@@ -367,7 +376,7 @@ namespace SequentialCore {
     } else {
       // x86-64 requires virtual addresses to be canonical: if bit 47 is set, all upper 16 bits must be set
       W64 realaddr = (W64)signext64(addr, 48);
-      data = loaddata((void*)realaddr, sizeshift, signext);
+      data = loaddata((void*)(Waddr)realaddr, sizeshift, signext);
     }
 
     //
@@ -431,7 +440,7 @@ namespace SequentialCore {
 
   bool handle_barrier() {
     core_to_external_state();
-    assist_func_t assist = (assist_func_t)ctx.commitarf[REG_rip];
+    assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
     const char* assist_name = "unknown";
 
@@ -442,7 +451,8 @@ namespace SequentialCore {
       }
     }
 
-    logfile << "Barrier (", (void*)assist, " ", assist_name, " called from ", (void*)ctx.commitarf[REG_sr1], ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+    if (logable(1)) logfile << "Barrier (", (void*)assist, " ", assist_name, " called from ", (void*)(Waddr)ctx.commitarf[REG_sr1],
+      ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
 
     if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
 
@@ -458,7 +468,7 @@ namespace SequentialCore {
     external_to_core_state();
 
     if (requested_switch_to_native) {
-      logfile << "PTL call requested switch to native mode at rip ", (void*)ctx.commitarf[REG_rip], endl;
+      logfile << "PTL call requested switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
       return false;
     }
 
@@ -469,11 +479,13 @@ namespace SequentialCore {
     core_to_external_state();
 
     if (logable(1)) 
-      logfile << "Exception (", exception_name(ctx.exception), " called from ", (void*)ctx.commitarf[REG_rip], 
+      logfile << "Exception (", exception_name(ctx.exception), " called from ", (void*)(Waddr)ctx.commitarf[REG_rip], 
         ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
 
     stringbuf sb;
-    sb << exception_name(ctx.exception), " detected at fault rip ", (void*)ctx.commitarf[REG_rip], " @ ", total_user_insns_committed, " commits: genuine user exception (", exception_name(ctx.exception), "); aborting";
+    sb << exception_name(ctx.exception), " detected at fault rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " @ ", 
+      total_user_insns_committed, " commits (", total_uops_committed, " uops): genuine user exception (",
+      exception_name(ctx.exception), "); aborting";
     logfile << sb, endl, flush;
     cerr << sb, endl, flush;
     logfile << flush;
@@ -483,34 +495,6 @@ namespace SequentialCore {
 
     return false;
   }
-
-  //
-  // Fetch
-  //
-
-  // (n/a):
-  W64 fetch_blocks_fetched;
-  W64 fetch_uops_fetched;
-  W64 fetch_user_insns_fetched;
-  
-  W64 bbcache_inserts;
-  W64 bbcache_removes;
-  
-  W64 fetch_opclass_histogram[OPCLASS_COUNT];
-
-  //
-  // Make these local to the sequential core namespace
-  // to avoid confusing the other core models:
-  //
-  W64 last_stats_captured_at_cycle = 0;
-  W64 total_uops_committed = 0;
-  W64 total_user_insns_committed = 0;
-  W64 sim_cycle = 0;
-
-  CycleTimer ctseq;
-  CycleTimer ctfetch;
-  CycleTimer ctissue;
-  CycleTimer ctcommit;
 
   int sequential_core_toplevel_loop() {
     logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
@@ -539,11 +523,13 @@ namespace SequentialCore {
         logfile << "Start logging (level ", loglevel, ") at cycle ", sim_cycle, endl, flush;
       }
 
-      if (logable(99)) logfile << "Cycle ", sim_cycle, ":", endl;
-      if (logable(99)) print_state(logfile);
+      if (logable(9)) logfile << "Cycle ", sim_cycle, ":", endl;
+      if (logable(9)) print_state(logfile);
+
+      Waddr rip = arf[REG_rip];
 
       if (lowbits(sim_cycle, 18) == 0) 
-        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)ctx.commitarf[REG_rip], ")", endl, flush;
+        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)rip, ")", endl, flush;
 
       if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
         //ooo_capture_stats();
@@ -555,8 +541,6 @@ namespace SequentialCore {
       //
       
       TransOp uop;
-
-      W64 rip = arf[REG_rip];
 
       if (!asp.fastcheck((byte*)rip, asp.execmap)) {
         if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": bogus RIP", endl;
@@ -605,27 +589,29 @@ namespace SequentialCore {
       state.reg.rdflags = 0;
 
       IssueInput input;
-      input.ra = arf[archreg_remap_table[uop.ra]];
-      input.rb = (uop.rb == REG_imm) ? uop.rbimm : arf[archreg_remap_table[uop.rb]];
-      input.rc = (uop.rc == REG_imm) ? uop.rcimm : arf[archreg_remap_table[uop.rc]];
+      W64 radata = arf[archreg_remap_table[uop.ra]];
+      W64 rbdata = (uop.rb == REG_imm) ? uop.rbimm : arf[archreg_remap_table[uop.rb]];
+      W64 rcdata = (uop.rc == REG_imm) ? uop.rcimm : arf[archreg_remap_table[uop.rc]];
 
-      input.raflags = arflags[archreg_remap_table[uop.ra]];
-      input.rbflags = (uop.rb == REG_imm) ? 0 : arflags[archreg_remap_table[uop.rb]];
-      input.rcflags = (uop.rc == REG_imm) ? 0 : arflags[archreg_remap_table[uop.rc]];
+      W16 raflags = arflags[archreg_remap_table[uop.ra]];
+      W16 rbflags = arflags[archreg_remap_table[uop.rb]];
+      W16 rcflags = arflags[archreg_remap_table[uop.rc]];
 
       bool ld = isload(uop.opcode);
       bool st = isstore(uop.opcode);
       bool br = isbranch(uop.opcode);
 
-      uop_func_t synthop = current_basic_block->synthops[current_basic_block_transop_index];
+      uopimpl_func_t synthop = current_basic_block->synthops[current_basic_block_transop_index];
 
       SFR sfr;
 
       int exception = 0;
       bool refetch = 0;
 
+      if (logable(1)) logfile << "Executing synthop ", (void*)synthop, endl;
+
       if (ld|st) {
-        int status = (ld) ? issueload(uop, sfr, input.ra, input.rb, input.rc) : issuestore(uop, sfr, input.ra, input.rb, input.rc);
+        int status = (ld) ? issueload(uop, sfr, radata, rbdata, rcdata) : issuestore(uop, sfr, radata, rbdata, rcdata);
 
         state.reg.rddata = sfr.data;
         state.reg.rdflags = 0;
@@ -638,9 +624,9 @@ namespace SequentialCore {
       } else if (br) {
         state.brreg.riptaken = uop.riptaken;
         state.brreg.ripseq = uop.ripseq;
-        call_exec_func(synthop, state, input);
+        synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags); 
 
-        if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.fastcheck((void*)state.reg.rddata, asp.execmap))) {
+        if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.fastcheck((void*)(Waddr)state.reg.rddata, asp.execmap))) {
           // bogus branch
           state.reg.rdflags |= FLAG_INV;
           state.reg.rddata = EXCEPTION_PageFaultOnExec;
@@ -654,8 +640,7 @@ namespace SequentialCore {
           logfile << endl;
         }
       } else {
-        call_exec_func(synthop, state, input);
-
+        synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags);
         if (state.reg.rdflags & FLAG_INV) exception = state.reg.rddata;
 
         if (logable(1)) {
@@ -670,7 +655,6 @@ namespace SequentialCore {
       // Commit
       //
       if (refetch) {
-        //++MTY CHECKME Shouldn't this be the start of the basic block, instead of in the middle?
         BasicBlock* bb = bbcache.remove(current_basic_block_rip);
         bbcache_removes++;
         if (bb) bb->free();
@@ -713,7 +697,7 @@ namespace SequentialCore {
         ctx.exception = exception;
 
         // See notes in handle_exception():
-        if ((uop.opcode == OP_chk) & (exception == EXCEPTION_SkipBlock)) {
+        if (isclass(uop.opcode, OPCLASS_CHECK) & (exception == EXCEPTION_SkipBlock)) {
           //
           // CheckFailed and SkipBlock exceptions are raised by the chk uop.
           // This uop is used at the start of microcoded instructions to assert
@@ -734,8 +718,8 @@ namespace SequentialCore {
           //
 
           W64 chk_recovery_rip = arf[REG_rip] + bytes_in_current_insn;
-          logfile << "SkipBlock exception commit: advancing rip ", (void*)arf[REG_rip], " by ", bytes_in_current_insn, " bytes to ", 
-            (void*)chk_recovery_rip, endl;
+          if (logable(1)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)arf[REG_rip], " by ", bytes_in_current_insn, " bytes to ", 
+            (void*)(Waddr)chk_recovery_rip, endl;
           current_uuid++;
           reset_fetch(chk_recovery_rip);
         } else {
@@ -758,10 +742,9 @@ namespace SequentialCore {
 
     core_to_external_state();
 
-    if (logable(1)) {
-      logfile << "Core State:", endl;
-      logfile << ctx.commitarf;
-    }
+    logfile << "Exiting sequential mode at ", total_user_insns_committed, " instructions, ", total_uops_committed, " uops and ", iterations, " iterations", endl;
+    logfile << "Core State:", endl;
+    logfile << ctx.commitarf;
 
     logfile << flush;
 

@@ -20,11 +20,11 @@
 #define BRANCH_HINT_RET         (1 << 3)
 
 struct PredictorUpdate {
-  byte* pdir1; // direction-1 predictor counter
-  byte* pdir2; // direction-2 predictor counter
-  byte* pmeta; // meta predictor counter
+  byte* cp1;
+  byte* cp2;
+  byte* cpmeta;
   // predicted directions:
-  W32 bimod:1, twolev:1, meta:1, ras_push:1, flags:8;
+  W32 bimodal:1, twolevel:1, meta:1, ras_push:1, flags:8;
   int ras_old_top;
   W64 ras_old_data;
 };

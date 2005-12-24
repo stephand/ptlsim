@@ -66,7 +66,7 @@ extern "C" {
 declare_syscall2(__NR_arch_prctl, W64, arch_prctl, int, code, void*, addr);
 #endif
 
-declare_syscall0(__NR_gettid, pid_t, gettid);
+declare_syscall0(__NR_gettid, pid_t, sys_gettid);
 declare_syscall0(__NR_fork, pid_t, sys_fork);
 declare_syscall1(__NR_exit, void, sys_exit, int, code);
 declare_syscall1(__NR_brk, void*, sys_brk, void*, p);
@@ -110,13 +110,13 @@ static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 
   return rc;
 }
 
-W64 get_fs_base() {
-  W64 fsbase;
+Waddr get_fs_base() {
+  Waddr fsbase;
   assert(arch_prctl(ARCH_GET_FS, &fsbase) == 0);
   return fsbase;
 }
 
-W64 get_gs_base() {
+Waddr get_gs_base() {
   W64 gsbase;
   assert(arch_prctl(ARCH_GET_GS, &gsbase) == 0);
   return gsbase;
@@ -140,29 +140,18 @@ static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 
 declare_syscall1(__NR_get_thread_area, int, sys_get_thread_area, void*, udesc);
 declare_syscall1(__NR_set_thread_area, int, sys_set_thread_area, void*, udesc);
 
-W64 get_fs_base() {
-  // can't set fs in 32-bit programs
-  return 0;
+Waddr get_fs_base() {
+  user_desc_32bit ud;
+  ud.entry_number = get_fs() >> 3;
+  int rc = sys_get_thread_area(&ud);
+  return (rc) ? 0 : ud.base_addr;
 }
 
-W64 get_gs_base() {
+Waddr get_gs_base() {
   user_desc_32bit ud;
-  ud.entry_number = 0;
-
+  ud.entry_number = get_gs() >> 3;
   int rc = sys_get_thread_area(&ud);
-
-  // Not yet set:
-  if (!rc)
-    return 0;
-  /*
-  if (rc) {
-    stringbuf sb;
-    sb << "ERROR: errno = ", rc, " -> ", strerror(-rc), endl;
-    early_printk(sb);
-    assert(false);
-  }
-  */
-  return ud.base_addr;
+  return (rc) ? 0 : ud.base_addr;
 }
 
 #endif // !__x86_64__
@@ -205,7 +194,7 @@ int sys_madvise(void* start, W64 length, int action) {
 // Makes it easy to identify which segments PTLsim owns versus the user address space:
 bool inside_ptlsim = false;
 
-void* ptl_alloc_private_pages(W64 bytecount, int prot, W64 base) {
+void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
   int flags = MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : 0);
   flags |= (inside_ptlsim) ? MAP_SHARED : MAP_PRIVATE;
   if (base == 0) base = PTL_PAGE_POOL_BASE;
@@ -214,7 +203,7 @@ void* ptl_alloc_private_pages(W64 bytecount, int prot, W64 base) {
   return addr;
 }
 
-void* ptl_alloc_private_32bit_pages(W64 bytecount, int prot, W64 base) {
+void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
 #ifdef __x86_64__
   int flags = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : MAP_32BIT);
 #else
@@ -223,12 +212,12 @@ void* ptl_alloc_private_32bit_pages(W64 bytecount, int prot, W64 base) {
   return sys_mmap((void*)base, ceil(bytecount, PAGE_SIZE), prot, flags, 0, 0);  
 }
 
-void ptl_free_private_pages(void* addr, W64 bytecount) {
+void ptl_free_private_pages(void* addr, Waddr bytecount) {
   sys_munmap(addr, bytecount);
 }
 
-void ptl_zero_private_pages(void* addr, W64 bytecount) {
-  sys_madvise((void*)floor((W64)addr, PAGE_SIZE), bytecount, MADV_DONTNEED);
+void ptl_zero_private_pages(void* addr, Waddr bytecount) {
+  sys_madvise((void*)floor((Waddr)addr, PAGE_SIZE), bytecount, MADV_DONTNEED);
 }
 
 //
@@ -483,56 +472,54 @@ extern "C" void __assert_fail (__const char *__assertion, __const char *__file, 
 }
 
 //
-// class AddressSpace
+// Shadow page accessibility table format (x86-64 only): 
+// Top level:  1048576 bytes: 131072 64-bit pointers to chunks
+//
+// Leaf level: 65536 bytes per chunk: 524288 bits, one per 4 KB page
+// Total: 131072 chunks x 524288 pages per chunk x 4 KB per page = 48 bits virtual address space
+// Total: 17 bits       + 19 bits                + 12 bits       = 48 bits virtual address space
+//
+// In 32-bit version, SPAT is a flat 131072-byte bit vector.
 //
 
-/*
- * Shadow page accessibility table format: 
- * Top level:  1048576 bytes: 131072 64-bit pointers to chunks
- *
- * Leaf level: 65536 bytes per chunk: 524288 bits, one per 4 KB page
- * Total: 131072 chunks x 524288 pages per chunk x 4 KB per page = 48 bits virtual address space
- * Total: 17 bits       + 19 bits                + 12 bits       = 48 bits virtual address space
-*/
-
-byte& AddressSpace::pageid_to_map_byte(SPATChunk** top, W64 pageid) {
+byte& AddressSpace::pageid_to_map_byte(spat_t top, Waddr pageid) {
+#ifdef __x86_64__
   W64 chunkid = pageid >> log2(SPAT_PAGES_PER_CHUNK);
 
-  if (chunkid >= SPAT_TOPLEVEL_CHUNKS) {
-    logfile << "ERROR: pageid_to_map_byte(", hexstring(pageid << 12, 64), "): chunkid ", chunkid, " vs SPAT_TOPLEVEL_CHUNKS ", SPAT_TOPLEVEL_CHUNKS, endl, flush;
-    assert(chunkid < SPAT_TOPLEVEL_CHUNKS);
-  }
   if (!top[chunkid]) {
     top[chunkid] = (SPATChunk*)ptl_alloc_private_pages(SPAT_BYTES_PER_CHUNK);
   }
   SPATChunk& chunk = *top[chunkid];
-  W64 byteid = bits(pageid, 3, log2(SPAT_BYTES_PER_CHUNK)); // i.e., bits(pageid, 3, 16)
+  W64 byteid = bits(pageid, 3, log2(SPAT_BYTES_PER_CHUNK));
   assert(byteid <= SPAT_BYTES_PER_CHUNK);
   return chunk[byteid];
+#else
+  return top[pageid >> 3];
+#endif
 }
 
-void AddressSpace::make_accessible(void* p, W64 size, SPATChunk** top) {
-  W64 address = lowbits((W64)p, ADDRESS_SPACE_BITS);
-  W64 firstpage = (W64)address >> PAGE_SHIFT;
-  W64 lastpage = ((W64)address + size - 1) >> PAGE_SHIFT;
+void AddressSpace::make_accessible(void* p, Waddr size, spat_t top) {
+  Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
+  Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
+  Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
   assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
 #if 0
-  logfile << "SPT: Making byte range ", (void*)(firstpage << PAGE_SHIFT), " to ", (void*)(lastpage << PAGE_SHIFT), " accessible for ", 
+  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " accessible for ", 
     ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"), endl, flush;
 #endif
   for (W64 i = firstpage; i <= lastpage; i++) { setbit(pageid_to_map_byte(top, i), lowbits(i, 3)); }
 }
 
-void AddressSpace::make_inaccessible(void* p, W64 size, SPATChunk** top) {
-  W64 address = lowbits((W64)p, ADDRESS_SPACE_BITS);
-  W64 firstpage = (W64)address >> PAGE_SHIFT;
-  W64 lastpage = ((W64)address + size - 1) >> PAGE_SHIFT;
+void AddressSpace::make_inaccessible(void* p, Waddr size, spat_t top) {
+  Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
+  Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
+  Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
   assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
 #if 0
-  logfile << "SPT: Making byte range ", (void*)(firstpage << PAGE_SHIFT), " to ", (void*)(lastpage << PAGE_SHIFT), " inaccessible for ", 
+  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " inaccessible for ", 
     ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"), endl, flush;
 #endif
-  for (W64 i = firstpage; i <= lastpage; i++) { clearbit(pageid_to_map_byte(top, i), lowbits(i, 3)); }
+  for (Waddr i = firstpage; i <= lastpage; i++) { clearbit(pageid_to_map_byte(top, i), lowbits(i, 3)); }
 }
 
 AddressSpace::AddressSpace() { }
@@ -543,20 +530,34 @@ void AddressSpace::reset() {
   brkbase = sys_brk(0);
   brk = brkbase;
 
+#ifdef __x86_64__
   if (readmap) ptl_free_private_pages(readmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
   if (writemap) ptl_free_private_pages(writemap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
   if (execmap) ptl_free_private_pages(execmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
   if (dtlbmap) ptl_free_private_pages(dtlbmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
   if (itlbmap) ptl_free_private_pages(itlbmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
 
-  readmap  = (SPATChunk**)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  writemap = (SPATChunk**)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  execmap  = (SPATChunk**)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  dtlbmap  = (SPATChunk**)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  itlbmap  = (SPATChunk**)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  readmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  writemap = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  execmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  dtlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  itlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+#else
+  if (readmap) ptl_free_private_pages(readmap, SPAT_BYTES);
+  if (writemap) ptl_free_private_pages(writemap, SPAT_BYTES);
+  if (execmap) ptl_free_private_pages(execmap, SPAT_BYTES);
+  if (dtlbmap) ptl_free_private_pages(dtlbmap, SPAT_BYTES);
+  if (itlbmap) ptl_free_private_pages(itlbmap, SPAT_BYTES);
+
+  readmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
+  writemap = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
+  execmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
+  dtlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
+  itlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
+#endif
 }
 
-void AddressSpace::setattr(void* start, W64 length, int prot) {
+void AddressSpace::setattr(void* start, Waddr length, int prot) {
   logfile << "setattr: region ", start, " to ", (void*)((char*)start + length), " (", length >> 10, " KB) has user-visible attributes ",
     ((prot & PROT_READ) ? 'r' : '-'), ((prot & PROT_WRITE) ? 'w' : '-'), ((prot & PROT_EXEC) ? 'x' : '-'), endl;
 
@@ -573,20 +574,20 @@ void AddressSpace::setattr(void* start, W64 length, int prot) {
   else disallow_exec(start, length);
 }
 
-int AddressSpace::getattr(void* page) {
-  W64 address = lowbits((W64)page, ADDRESS_SPACE_BITS);
+int AddressSpace::getattr(void* addr) {
+  Waddr address = lowbits((Waddr)addr, ADDRESS_SPACE_BITS);
 
-  W64 pageid = ((W64)address) >> PAGE_SHIFT;
+  Waddr page = pageid(address);
 
   int prot = 
-    (bit(pageid_to_map_byte(readmap, pageid), lowbits(pageid, 3)) ? PROT_READ : 0) |
-    (bit(pageid_to_map_byte(writemap, pageid), lowbits(pageid, 3)) ? PROT_WRITE : 0) |
-    (bit(pageid_to_map_byte(execmap, pageid), lowbits(pageid, 3)) ? PROT_EXEC : 0);
+    (bit(pageid_to_map_byte(readmap, page), lowbits(page, 3)) ? PROT_READ : 0) |
+    (bit(pageid_to_map_byte(writemap, page), lowbits(page, 3)) ? PROT_WRITE : 0) |
+    (bit(pageid_to_map_byte(execmap, page), lowbits(page, 3)) ? PROT_EXEC : 0);
 
   return prot;
 }
  
-int AddressSpace::mprotect(void* start, W64 length, int prot) {
+int AddressSpace::mprotect(void* start, Waddr length, int prot) {
   length = ceil(length, PAGE_SIZE);
   int rc = ::mprotect(start, length, prot);
   if (rc) return rc;
@@ -594,7 +595,7 @@ int AddressSpace::mprotect(void* start, W64 length, int prot) {
   return 0;
 }
 
-int AddressSpace::munmap(void* start, W64 length) {
+int AddressSpace::munmap(void* start, Waddr length) {
   length = ceil(length, PAGE_SIZE);
   int rc = ::munmap(start, length);
   sys_errno = errno;
@@ -603,7 +604,7 @@ int AddressSpace::munmap(void* start, W64 length) {
   return 0;
 }
 
-void* AddressSpace::mmap(void* start, W64 length, int prot, int flags, int fd, off_t offset) {
+void* AddressSpace::mmap(void* start, Waddr length, int prot, int flags, int fd, off_t offset) {
   // Guarantee enough room will be available post-alignment:
   length = ceil(length, PAGE_SIZE);
   start = ::mmap(start, length, prot, flags, fd, offset);
@@ -612,7 +613,7 @@ void* AddressSpace::mmap(void* start, W64 length, int prot, int flags, int fd, o
   return start;
 }
 
-void* AddressSpace::mremap(void* start, W64 oldlength, W64 newlength, int flags) {
+void* AddressSpace::mremap(void* start, Waddr oldlength, Waddr newlength, int flags) {
   int oldattr = getattr(start);
 
   void* p = ::mremap(start, oldlength, newlength, flags);
@@ -624,7 +625,7 @@ void* AddressSpace::mremap(void* start, W64 oldlength, W64 newlength, int flags)
 }
 
 void* AddressSpace::setbrk(void* reqbrk) {
-  W64 oldsize = ceil(((W64)brk - (W64)brkbase), PAGE_SIZE);
+  Waddr oldsize = ceil(((Waddr)brk - (Waddr)brkbase), PAGE_SIZE);
 
   if (!reqbrk) {
     assert(brk == sys_brk(0));
@@ -632,11 +633,11 @@ void* AddressSpace::setbrk(void* reqbrk) {
     return brk;
   }
 
-  logfile << "setbrk(", reqbrk, "): old range ", brkbase, "-", brk, " (", oldsize, " bytes); new range ", brkbase, "-", reqbrk, " (delta ", ((W64)reqbrk - (W64)brk), ", size ", ((W64)reqbrk - (W64)brkbase), ")", endl;
+  logfile << "setbrk(", reqbrk, "): old range ", brkbase, "-", brk, " (", oldsize, " bytes); new range ", brkbase, "-", reqbrk, " (delta ", ((Waddr)reqbrk - (Waddr)brk), ", size ", ((Waddr)reqbrk - (Waddr)brkbase), ")", endl;
 
   setattr(brkbase, oldsize, PROT_NONE);
   void* newbrk = sys_brk(reqbrk);
-  W64 newsize = (W64)newbrk - (W64)brkbase;
+  Waddr newsize = (Waddr)newbrk - (Waddr)brkbase;
   brk = newbrk;
   logfile << "setbrk(", reqbrk, "): new range ", brkbase, "-", newbrk, " (size ", newsize, ")", endl, flush;
 
@@ -644,8 +645,8 @@ void* AddressSpace::setbrk(void* reqbrk) {
   return newbrk;
 }
 
-W64 stack_min_addr;
-W64 stack_max_addr;
+Waddr stack_min_addr;
+Waddr stack_max_addr;
 
 //
 // These are in PTL space accessed directly by uops:
@@ -788,7 +789,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
 
     map->devmajor = devmajor;
     map->devminor = devminor;
-    map->offset = (W64)offset;
+    map->offset = (Waddr)offset;
     map->inode = inode;
 
     // In some kernel versions (at least 2.6.11 and below), the VDSO page is given
@@ -820,7 +821,7 @@ ostream& operator <<(ostream& os, const MemoryMapExtent& map) {
   os << "  ", padstring(sb, 18), " ", intstring(map.length >> 10, 16), " KB ";
   if (!(map.flags & MAP_ANONYMOUS)) {
     sb.reset();
-    sb << (void*)map.offset;
+    sb << "0x", hexstring(map.offset, 64);
     os << padstring((map.offset) ? (char*)sb : "0", 10), " in ", map.devmajor, ".", map.devminor, ".", map.inode;
   }
   return os;
@@ -835,7 +836,7 @@ void AddressSpace::resync_with_process_maps() {
 
   MemoryMapExtent* mapstart = (MemoryMapExtent*)ptl_alloc_private_pages(MAX_MAPS_PER_PROCESS * sizeof(MemoryMapExtent));
   int n = mqueryall(mapstart, MAX_MAPS_PER_PROCESS);
-  W64 stackbase = 0;
+  Waddr stackbase = 0;
 
   ThreadState* tls = getcurrent();
 
@@ -848,7 +849,7 @@ void AddressSpace::resync_with_process_maps() {
   logfile << flush;
 
   foreach (i, n) {
-    if (map->flags & MAP_STACK) stackbase = (W64)map->start;
+    if (map->flags & MAP_STACK) stackbase = (Waddr)map->start;
     setattr(map->start, map->length, (map->flags & MAP_ZERO) ? 0 : map->prot);
     map++;
   }
@@ -862,9 +863,9 @@ void AddressSpace::resync_with_process_maps() {
   fsbase = get_fs_base();
   gsbase = get_gs_base();
 
-  if (DEBUG) logfile << "resync_with_process_maps: fsbase ", (void*)fsbase, ", gsbase ", (void*)gsbase, endl;
+  if (DEBUG) logfile << "resync_with_process_maps: fsbase ", (void*)(Waddr)fsbase, ", gsbase ", (void*)(Waddr)gsbase, endl;
 
-  W64 stackleft = stackbase - stack_min_addr;
+  Waddr stackleft = stackbase - stack_min_addr;
 
   if (DEBUG) logfile << "  Original user stack range: ", (void*)stack_min_addr, " to ", (void*)stack_max_addr, " (", (stack_max_addr - stack_min_addr), " bytes)", endl, flush;
 
@@ -1161,7 +1162,7 @@ void setup_sim_thunk_page() {
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
 
   // Map in the PTL call gate page. This is NOT a PTL private page, so make sure the user can access it too:
-  W64 v = (W64)asp.mmap(thunkpage, 4*PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_FIXED|MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+  Waddr v = (Waddr)asp.mmap(thunkpage, 4*PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_FIXED|MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
   assert(v == PTLSIM_THUNK_PAGE);
 
   thunkpage->simulated = 0;
@@ -1169,7 +1170,7 @@ void setup_sim_thunk_page() {
 #ifdef __x86_64__
   thunkpage->switch_to_sim_thunk.farjump(switch_to_sim_save_context_indirect);
 #else // ! __x86_64__
-  switch_to_sim_save_context_indirect = (W64)&save_context_switch_to_sim_lowlevel;
+  switch_to_sim_save_context_indirect = (Waddr)&save_context_switch_to_sim_lowlevel;
   thunkpage->switch_to_sim_thunk.indirjump(switch_to_sim_save_context_indirect);
 #endif
   thunkpage->call_within_sim_thunk.prep();
@@ -1196,11 +1197,11 @@ extern void switch_to_sim();
 extern "C" void switch_to_native_restore_context_lowlevel(const UserContext& ctx, int switch_64_to_32);
 
 void switch_to_native_restore_context() {
-  logfile << endl, "=== Switching to native mode at rip ", (void*)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
+  logfile << endl, "=== Switching to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
 
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
 
-  thunkpage->call_code_addr = (W64)&thunkpage->switch_to_sim_thunk;
+  thunkpage->call_code_addr = (Waddr)&thunkpage->switch_to_sim_thunk;
   thunkpage->simulated = 0;
   ptlsim_state_to_fpu_state();
   switch_to_native_restore_context_lowlevel(ctx.commitarf, !ctx.use64);
@@ -1209,7 +1210,7 @@ void switch_to_native_restore_context() {
 // Called by save_context_switch_to_sim_lowlevel
 extern "C" void save_context_switch_to_sim() {
   if (pending_patched_switch_to_sim_addr) {
-    ctx.commitarf[REG_rip] = (W64)pending_patched_switch_to_sim_addr;
+    ctx.commitarf[REG_rip] = (Waddr)pending_patched_switch_to_sim_addr;
     logfile << endl, "=== Removed thunk patch at rip ", pending_patched_switch_to_sim_addr, " ===", endl, flush;
     *pending_patched_switch_to_sim_addr = saved_bytes_behind_switch_to_sim_thunk;
     pending_patched_switch_to_sim_addr = 0;
@@ -1223,18 +1224,18 @@ extern "C" void save_context_switch_to_sim() {
   if (!ctx.use64) ctx.commitarf[REG_rip] &= 0xffffffff;
 #endif
 
-  logfile << endl, "=== Switching to simulation mode at rip ", (void*)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
+  logfile << endl, "=== Switching to simulation mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
 
   ctx.commitarf[REG_flags] &= ~(FLAG_INV|FLAG_WAIT);
   fpu_state_to_ptlsim_state();
   asp.resync_with_process_maps();
 
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
-  thunkpage->call_code_addr = (W64)&thunkpage->call_within_sim_thunk;
+  thunkpage->call_code_addr = (Waddr)&thunkpage->call_within_sim_thunk;
   thunkpage->simulated = 1;
 
   if (user_profile_only) {
-    logfile << endl, "=== Trigger reached during profile mode at rip ", (void*)ctx.commitarf[REG_rip], ": starting counters ===", endl, endl, flush;
+    logfile << endl, "=== Trigger reached during profile mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": starting counters ===", endl, endl, flush;
     flush_cpu_caches();
     start_perfctrs();
     switch_to_native_restore_context();
@@ -1359,8 +1360,8 @@ void handle_syscall_32bit(int semantics) {
   static const char* semantics_name[] = {"int80", "syscall", "sysenter"};
 
   int syscallid;
-  W64 arg1, arg2, arg3, arg4, arg5, arg6;
-  W64 retaddr;
+  W32 arg1, arg2, arg3, arg4, arg5, arg6;
+  W32 retaddr;
 
   if (semantics == SYSCALL_SEMANTICS_INT80) {
     //
@@ -1402,14 +1403,15 @@ void handle_syscall_32bit(int semantics) {
     arg5 = LO32(ctx.commitarf[REG_rdi]);
     retaddr = ctx.commitarf[REG_rcx];
 
-    W32* arg6ptr = (W32*)LO32(ctx.commitarf[REG_rsp]);
+    W32* arg6ptr = (W32*)(Waddr)LO32(ctx.commitarf[REG_rsp]);
 
     if (!asp.check(arg6ptr, PROT_READ)) {
-      ctx.commitarf[REG_rax] = -EFAULT;
+      ctx.commitarf[REG_rax] = (W64)(-EFAULT);
       ctx.commitarf[REG_rip] = retaddr;
       if (DEBUG) logfile << "handle_syscall (#", syscallid, " ", ((syscallid < lengthof(syscall_names_32bit)) ? syscall_names_32bit[syscallid] : "???"), 
-      " via ", semantics_name[semantics], ") from ", (void*)retaddr, " args ", " (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
-      (void*)arg5, ", ???", ") at iteration ", iterations, ": arg6 @ ", arg6ptr, " inaccessible; returning -EFAULT", endl, flush;
+                   " via ", semantics_name[semantics], ") from ", (void*)(Waddr)retaddr, " args ", " (", (void*)(Waddr)arg1, ", ", (void*)(Waddr)arg2, ", ", 
+                   (void*)(Waddr)arg3, ", ", (void*)(Waddr)arg4, ", ", (void*)(Waddr)arg5, ", ???", ") at iteration ", iterations, ": arg6 @ ", arg6ptr,
+                   " inaccessible; returning -EFAULT", endl, flush;
     }
 
     arg6 = *arg6ptr;
@@ -1419,26 +1421,27 @@ void handle_syscall_32bit(int semantics) {
 
   if (DEBUG) 
     logfile << "handle_syscall (#", syscallid, " ", ((syscallid < lengthof(syscall_names_32bit)) ? syscall_names_32bit[syscallid] : "???"), 
-      " via ", semantics_name[semantics], ") from ", (void*)ctx.commitarf[REG_rcx], " args ", " (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
-      (void*)arg5, ", ", (void*)arg6, ") at iteration ", iterations, endl, flush;
+      " via ", semantics_name[semantics], ") from ", (void*)(Waddr)ctx.commitarf[REG_rcx], " args ", " (", (void*)(Waddr)arg1, ", ", 
+      (void*)(Waddr)arg2, ", ", (void*)(Waddr)arg3, ", ", (void*)(Waddr)arg4, ", ", (void*)(Waddr)arg5, ", ", (void*)(Waddr)arg6,
+      ") at iteration ", iterations, endl, flush;
 
   switch (syscallid) {
   case __NR_32bit_mmap2:
     // mmap2 specifies the 4KB page number to allow mapping 2^(32+12) = 2^44 bit
     // files; x86-64 mmap doesn't have this silliness:
-    ctx.commitarf[REG_rax] = (W64)asp.mmap((void*)arg1, arg2, arg3, arg4, arg5, arg6 << log2(PAGE_SIZE));
+    ctx.commitarf[REG_rax] = (Waddr)asp.mmap((void*)(Waddr)arg1, arg2, arg3, arg4, arg5, arg6 << log2(PAGE_SIZE));
     break;
   case __NR_32bit_munmap:
-    ctx.commitarf[REG_rax] = asp.munmap((void*)arg1, arg2);
+    ctx.commitarf[REG_rax] = asp.munmap((void*)(Waddr)arg1, arg2);
     break;
   case __NR_32bit_mprotect:
-    ctx.commitarf[REG_rax] = asp.mprotect((void*)arg1, arg2, arg3);
+    ctx.commitarf[REG_rax] = asp.mprotect((void*)(Waddr)arg1, arg2, arg3);
     break;
   case __NR_32bit_brk:
-    ctx.commitarf[REG_rax] = (W64)asp.setbrk((void*)arg1);
+    ctx.commitarf[REG_rax] = (Waddr)asp.setbrk((void*)(Waddr)arg1);
     break;
   case __NR_32bit_mremap:
-    ctx.commitarf[REG_rax] = (W64)asp.mremap((void*)arg1, arg2, arg3, arg4);
+    ctx.commitarf[REG_rax] = (Waddr)asp.mremap((void*)(Waddr)arg1, arg2, arg3, arg4);
     break;
   case __NR_32bit_exit: {
     logfile << "handle_syscall at iteration ", iterations, ": exit(): exiting with arg ", (W64s)arg1, "...", endl, flush;
@@ -1449,10 +1452,11 @@ void handle_syscall_32bit(int semantics) {
     user_process_terminated((int)arg1);
   }
   case __NR_32bit_set_thread_area: {
-    user_desc_32bit* desc = (user_desc_32bit*)arg1;
+    user_desc_32bit* desc = (user_desc_32bit*)(Waddr)arg1;
     ctx.commitarf[REG_rax] = do_syscall_32bit(syscallid, arg1, 0, 0, 0, 0, 0);
     if (!ctx.commitarf[REG_rax]) {
-      logfile << "handle_syscall at iteration ", iterations, ": set_thread_area: LDT desc 0x", hexstring(((desc->entry_number << 3) + 3), 16), " now has base ", (void*)desc->base_addr, endl, flush;
+      logfile << "handle_syscall at iteration ", iterations, ": set_thread_area: LDT desc 0x", 
+        hexstring(((desc->entry_number << 3) + 3), 16), " now has base ", (void*)(Waddr)desc->base_addr, endl, flush;
       ldt_seg_base_cache[desc->entry_number] = desc->base_addr;
     }
     break;
@@ -1460,7 +1464,7 @@ void handle_syscall_32bit(int semantics) {
   case __NR_32bit_rt_sigaction: {
     //++MTY This is only so we receive SIGSEGV on our own:
 #if 1
-    logfile << "handle_syscall: signal(", arg1, ", ", (void*)arg2, ")", endl, flush;
+    logfile << "handle_syscall: signal(", arg1, ", ", (void*)(Waddr)arg2, ")", endl, flush;
     ctx.commitarf[REG_rax] = 0;
 #else
     ctx.commitarf[REG_rax] = do_syscall_32bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
@@ -1468,10 +1472,8 @@ void handle_syscall_32bit(int semantics) {
     break;
   }
   case __NR_32bit_mmap: {
-    //logfile << "ERROR: old-style mmap() not supported; program must use mmap2()", endl, flush;
-    //assert(false);
-    old_mmap32_arg_struct* mm = (old_mmap32_arg_struct*)arg1;
-    ctx.commitarf[REG_rax] = (W64)asp.mmap((void*)mm->addr, mm->len, mm->prot, mm->flags, mm->fd, mm->offset);
+    old_mmap32_arg_struct* mm = (old_mmap32_arg_struct*)(Waddr)arg1;
+    ctx.commitarf[REG_rax] = (Waddr)asp.mmap((void*)(Waddr)mm->addr, mm->len, mm->prot, mm->flags, mm->fd, mm->offset);
     break;
   }
   default:
@@ -1480,7 +1482,7 @@ void handle_syscall_32bit(int semantics) {
   }
   ctx.commitarf[REG_rip] = retaddr;
 
-  if (DEBUG) logfile << "handle_syscall: result ", ctx.commitarf[REG_rax], " (", (void*)ctx.commitarf[REG_rax], "); returning to ", (void*)ctx.commitarf[REG_rip], endl, flush;
+  if (DEBUG) logfile << "handle_syscall: result ", ctx.commitarf[REG_rax], " (", (void*)(Waddr)ctx.commitarf[REG_rax], "); returning to ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
 }
 
 const char* ptlcall_names[PTLCALL_COUNT] = {"nop", "marker", "switch_to_sim", "switch_to_native", "capture_stats"};
@@ -1488,9 +1490,9 @@ const char* ptlcall_names[PTLCALL_COUNT] = {"nop", "marker", "switch_to_sim", "s
 bool requested_switch_to_native = 0;
 
 W64 handle_ptlcall(W64 rip, W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5) {
-  logfile << "PTL call from userspace (", (void*)rip, "): callid ", callid, " (", ((callid < PTLCALL_COUNT) ? ptlcall_names[callid] : "UNKNOWN"), 
-    ") args (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ", (void*)arg5, ")", endl, flush;
-  if (callid >= PTLCALL_COUNT) return -EINVAL;
+  logfile << "PTL call from userspace (", (void*)(Waddr)rip, "): callid ", callid, " (", ((callid < PTLCALL_COUNT) ? ptlcall_names[callid] : "UNKNOWN"), 
+    ") args (", (void*)(Waddr)arg1, ", ", (void*)(Waddr)arg2, ", ", (void*)(Waddr)arg3, ", ", (void*)(Waddr)arg4, ", ", (void*)(Waddr)arg5, ")", endl, flush;
+  if (callid >= PTLCALL_COUNT) return (W64)(-EINVAL);
 
   switch (callid) {
   case PTLCALL_NOP: {
@@ -1503,10 +1505,10 @@ W64 handle_ptlcall(W64 rip, W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, 
   };
   case PTLCALL_SWITCH_TO_SIM: {
     logfile << "  WARNING: already running in simulation mode", endl;
-    return -EINVAL;
+    return (W64)(-EINVAL);
   }
   case PTLCALL_SWITCH_TO_NATIVE: {
-    logfile << "  Switching to native mode at rip ", (void*)rip, endl;
+    logfile << "  Switching to native mode at rip ", (void*)(Waddr)rip, endl;
     requested_switch_to_native = 1;
     break;
   }
@@ -1717,12 +1719,12 @@ int ptlsim_inject(int argc, char** argv) {
     sys_exit(1);
   }
 
-  if (DEBUG) cerr << "ptlsim[", gettid(), "]: ", filename, " is a ", (x86_64_mode ? "64-bit" : "32-bit"), " ELF executable", endl;
+  if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: ", filename, " is a ", (x86_64_mode ? "64-bit" : "32-bit"), " ELF executable", endl;
 
   int pid = sys_fork();
 
   if (!pid) {
-    if (DEBUG) cerr << "ptlsim[", gettid(), "]: Executing ", filename, endl, flush;
+    if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
     int rc = sys_execve(filename, argv+1, environ);
@@ -1735,7 +1737,7 @@ int ptlsim_inject(int argc, char** argv) {
   }
 
   if (pid < 0) {
-    cerr << "ptlsim[", gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
+    cerr << "ptlsim[", sys_gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
     sys_exit(0);
   }
 
@@ -1850,7 +1852,7 @@ void write_process_memory_W64(int pid, W64 target, W64 data) {
   assert(rc == 0);
 }
 
-W64 read_process_memory_W64(int pid, W64 source) {
+W64 read_process_memory_W64(int pid, Waddr source) {
   W64 datalo;
   W64 datahi;
   int rc;
@@ -1862,14 +1864,14 @@ W64 read_process_memory_W64(int pid, W64 source) {
   return ((W64)datahi << 32) | datalo;
 }
 
-void write_process_memory_W32(int pid, W64 target, W32 data) {
+void write_process_memory_W32(int pid, Waddr target, W32 data) {
   int rc = sys_ptrace(PTRACE_POKEDATA, pid, target, data);
   assert(rc == 0);
 }
 
-W32 read_process_memory_W32(int pid, W64 source) {
+W32 read_process_memory_W32(int pid, Waddr source) {
   W64 data;
-  int rc = sys_ptrace(PTRACE_PEEKDATA, pid, source, (W64)&data);
+  int rc = sys_ptrace(PTRACE_PEEKDATA, pid, source, (Waddr)&data);
   assert(rc == 0);
   return LO32(data);
 }
@@ -1906,12 +1908,12 @@ int ptlsim_inject(int argc, char** argv) {
     sys_exit(1);
   }
 
-  if (DEBUG) cerr << "ptlsim[", gettid(), "]: ", filename, " is a 32-bit ELF executable", endl;
+  if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: ", filename, " is a 32-bit ELF executable", endl;
 
   int pid = sys_fork();
 
   if (!pid) {
-    if (DEBUG) cerr << "ptlsim[", gettid(), "]: Executing ", filename, endl, flush;
+    if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
     int rc = sys_execve(filename, argv+1, environ);
@@ -1924,7 +1926,7 @@ int ptlsim_inject(int argc, char** argv) {
   }
 
   if (pid < 0) {
-    cerr << "ptlsim[", gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
+    cerr << "ptlsim[", sys_gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
     sys_exit(0);
   }
 
@@ -1941,7 +1943,7 @@ int ptlsim_inject(int argc, char** argv) {
   assert(WIFSTOPPED(status));
 
   struct user_regs_struct regs;
-  assert(sys_ptrace(PTRACE_GETREGS, pid, 0, (W64)&regs) == 0);
+  assert(sys_ptrace(PTRACE_GETREGS, pid, 0, (Waddr)&regs) == 0);
 
   LoaderInfo info;
   info.initialize = 1;
@@ -1952,7 +1954,7 @@ int ptlsim_inject(int argc, char** argv) {
   strncpy(info.ptlsim_filename, ptlsim_filename, sizeof(info.ptlsim_filename)-1);
   info.ptlsim_filename[sizeof(info.ptlsim_filename)-1] = 0;
 
-  if (DEBUG) cerr << "ptlsim: Original process rip ", (void*)info.origrip, ", rsp ", (void*)info.origrsp, " for pid ", pid, endl;
+  if (DEBUG) cerr << "ptlsim: Original process rip ", (void*)(Waddr)info.origrip, ", rsp ", (void*)(Waddr)info.origrsp, " for pid ", pid, endl;
 
   regs.esp -= sizeof(LoaderInfo);
 
@@ -1960,10 +1962,10 @@ int ptlsim_inject(int argc, char** argv) {
   int thunk_size = LOADER_THUNK_SIZE;
 
   if (DEBUG) cerr << "Saving old code (", thunk_size, " bytes) at thunk rip ", (void*)regs.eip, " in pid ", pid, endl;
-  copy_from_process_memory(pid, &info.saved_thunk, (void*)info.origrip, LOADER_THUNK_SIZE);
+  copy_from_process_memory(pid, &info.saved_thunk, (void*)(Waddr)info.origrip, LOADER_THUNK_SIZE);
 
   if (DEBUG) cerr << "Writing new code (", LOADER_THUNK_SIZE, " bytes) at thunk rip ", (void*)regs.eip, " in pid ", pid, endl;
-  copy_to_process_memory(pid, (void*)info.origrip, thunk_source, LOADER_THUNK_SIZE);
+  copy_to_process_memory(pid, (void*)(Waddr)info.origrip, thunk_source, LOADER_THUNK_SIZE);
 
   //
   // Write stack frame
@@ -1986,7 +1988,7 @@ int ptlsim_inject(int argc, char** argv) {
 
   regs.edi = loader_info_base;
 
-  assert(sys_ptrace(PTRACE_SETREGS, pid, 0, (W64)&regs) == 0);
+  assert(sys_ptrace(PTRACE_SETREGS, pid, 0, (Waddr)&regs) == 0);
 
   if (DEBUG) cerr << "ptlsim: restarting child pid ", pid, " at ", (void*)regs.eip, "...", endl, flush;
 
@@ -2019,7 +2021,7 @@ extern "C" void thread_exit_callback(int sig, siginfo_t *si, void *puc) {
   int exitcode = si->si_code;
 
   if (logfile) {
-    logfile << endl, "=== Thread ", gettid(), " exited with status ", exitcode, " ===", endl, endl;
+    logfile << endl, "=== Thread ", sys_gettid(), " exited with status ", exitcode, " ===", endl, endl;
     print_perfctrs(logfile);
     logfile.close();
   }
@@ -2114,17 +2116,17 @@ byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
   origargv -= sizeof(ptrsize_t);
   ptrsize_t* p = (ptrsize_t*)origargv;
 
-  int argc = *p++;
+  Waddr argc = *p++;
   *dest++ = (char*)argc;
 
-  foreach (i, argc+1) *dest++ = (char*)(*p++);
+  foreach (i, argc+1) *dest++ = (char*)(Waddr)(*p++);
 
   // skip over null at end of args
   *dest++ = 0; p++;
 
   initenv = (char**)dest;
 
-  while (*p) *dest++ = (char*)(*p++);
+  while (*p) *dest++ = (char*)(Waddr)(*p++);
 
   // skip over null at end of environment
   *dest++ = 0; p++;
@@ -2166,7 +2168,7 @@ inline void* get_rsp() { W32 esp; asm volatile("mov %%esp,%[dest]" : [dest] "=r"
 void expand_user_stack_to_addr(W64 desired_rsp) {
   byte dummy[PAGE_SIZE];
 
-  W64 current_rsp = (W64)get_rsp();
+  Waddr current_rsp = (Waddr)get_rsp();
 
   if (current_rsp > desired_rsp)
     expand_user_stack_to_addr(desired_rsp);
@@ -2208,15 +2210,15 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 
   // Set up initial context:
   ctx.reset();
-  ctx.commitarf[REG_rsp] = (W64)origrsp;
-  ctx.commitarf[REG_rip] = (W64)ptlsim_ehdr->e_entry;
+  ctx.commitarf[REG_rsp] = (Waddr)origrsp;
+  ctx.commitarf[REG_rip] = (Waddr)ptlsim_ehdr->e_entry;
 
   ctx.commitarf[REG_flags] = 0;
   ctx.use64 = (ptlsim_ehdr->e_machine == EM_X86_64);
   cpu_fsave(x87state);
   fpu_state_to_ptlsim_state();
   ctx.commitarf[REG_mxcsr] = x86_stmxcsr();
-  
+
   fsbase = get_fs_base();
   gsbase = get_gs_base();
 
@@ -2227,7 +2229,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   //
   stack_max_addr = ceil(ctx.commitarf[REG_rsp], 256*1024*1024);
 
-  W64 user_stack_size;
+  Waddr user_stack_size;
 
   struct rlimit rlimit;
   assert(getrlimit(RLIMIT_STACK, &rlimit) == 0);
@@ -2270,16 +2272,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   const byte* argv = (const byte*)(((W32*)origrsp)+1);
 
   int bytes = get_stack_reqs_for_args_env_auxv<W32, Elf32_auxv_32bit>(argv);
-  /*
-  {
-    stringbuf sb;
-    sb << "env bytes: ", bytes, endl;
-    early_printk(sb);
-    sb.reset();
-    sb << "tls->stack: ", (void*)tls->stack, endl;
-    early_printk(sb);
-  }
-  */
+
   byte* sp = (byte*)(tls->stack);
   sp -= bytes;
 

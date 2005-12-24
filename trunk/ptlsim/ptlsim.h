@@ -45,15 +45,9 @@ struct AddrPair {
   byte* end;
 };
 
-uop_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal);
-uop_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except);
+uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal);
+uopimpl_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except);
 void synth_uops_for_bb(BasicBlock& bb);
-
-#ifdef __x86_64__
-extern "C" void call_exec_func(uop_func_t func, IssueState& output, const IssueInput& input);
-#else
-inline void call_exec_func(uop_func_t func, IssueState& output, const IssueInput& input) { func(output, input); }
-#endif
 
 void add_unaligned_ldst_rip(W64 rip);
 void remove_unaligned_ldst_rip(W64 rip);

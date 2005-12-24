@@ -6,13 +6,9 @@
 # Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
 #
 
-#
-# Platform definition
-#
-# Define this if compiling on an 64-bit x86-64 machine
-# Undefine if compiling on an ordinary 32-bit x86 machine
-#
-__x86_64__ = 1
+ifeq ($(findstring "x86_64",$(MACHTYPE)),)
+__x86_64__=1
+endif
 
 CC = g++
 INCFLAGS = -I. -DBUILDHOST="`hostname -f`"
@@ -23,16 +19,16 @@ CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trappi
 CFLAGS32BIT = -m32
 else
 # 32-bit PTLsim32 only:
-#CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -funit-at-a-time -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
-CFLAGS = -O0 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -funit-at-a-time -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+#CFLAGS = -O0 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
 CFLAGS32BIT = 
 endif
 
 ifdef __x86_64__
-COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o uopimpl.o lowlevel-64bit.o lowlevel-32bit.o uopinterface.o dcache.o config.o datastore.o injectcode-32bit.o injectcode-64bit.o
+COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o lowlevel-64bit.o lowlevel-32bit.o uopimpl.o dcache.o config.o datastore.o injectcode-32bit.o injectcode-64bit.o
 else
 # 32-bit PTLsim32 only:
-COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o uopimpl32.o lowlevel-32bit.o uopinterface.o dcache.o config.o datastore.o injectcode-32bit.o
+COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o lowlevel-32bit.o uopimpl.o dcache.o config.o datastore.o injectcode-32bit.o
 endif
 
 OOOOBJS = ooocore.o seqcore.o branchpred.o
@@ -42,7 +38,7 @@ COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datas
 OOOINCLUDES = branchpred.h ooohwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
-COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp uopimpl.S uopimpl32.S lowlevel-64bit.S lowlevel-32bit.S uopinterface.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c genoffsets.cpp cpuid.cpp ptlstats.cpp
+COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp lowlevel-64bit.S lowlevel-32bit.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c genoffsets.cpp cpuid.cpp ptlstats.cpp
 OOOCPPFILES = ooocore.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
@@ -142,7 +138,7 @@ simsynth.out.S: simsynth.out
 # Miscellaneous:
 #
 
-DISTFILES = $(CPPFILES) $(INCLUDEFILES) Makefile ptlsim.lds COPYING README 
+DISTFILES = $(CPPFILES) $(INCLUDEFILES) Makefile ptlsim.lds ptlsim32.lds COPYING README 
 
 dist: $(DISTFILES)
 	tar zcvf ptlsim-`date "+%Y%m%d%H%M%S"`.tar.gz $(DISTFILES)

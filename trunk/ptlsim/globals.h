@@ -26,6 +26,12 @@ typedef unsigned char W8;
 typedef signed char W8s;
 #define null NULL
 
+#ifdef __x86_64__
+typedef W64 Waddr;
+#else
+typedef W32 Waddr;
+#endif
+
 #ifdef __cplusplus
 
 namespace math {
@@ -120,9 +126,9 @@ template <typename T, typename A> static inline T trunc(T x, A a) { return (T)((
 template <typename T, typename A> static inline T ceil(T x, A a) { return (T)((((T)x) + ((T)(a-1))) & ~((T)(a-1))); }
 template <typename T, typename A> static inline T mask(T x, A a) { return (T)(((T)x) & ((T)(a-1))); }
 
-template <typename T, typename A> static inline T* floorptr(T* x, A a) { return (T*)floor((W64)x, a); }
-template <typename T, typename A> static inline T* ceilptr(T* x, A a) { return (T*)ceil((W64)x, a); }
-template <typename T, typename A> static inline T* maskptr(T* x, A a) { return (T*)mask((W64)x, a); }
+template <typename T, typename A> static inline T* floorptr(T* x, A a) { return (T*)floor((Waddr)x, a); }
+template <typename T, typename A> static inline T* ceilptr(T* x, A a) { return (T*)ceil((Waddr)x, a); }
+template <typename T, typename A> static inline T* maskptr(T* x, A a) { return (T*)mask((Waddr)x, a); }
 inline W64 mux64(W64 sel, W64 v0, W64 v1) { return (sel & v1) | ((~sel) & v0); }
 
 #define typeof __typeof__
@@ -180,6 +186,10 @@ typedef byte v16qi __attribute__ ((vector_size(16)));
 typedef v16qi vec16b;
 typedef W16 v8hi __attribute__ ((vector_size(16)));
 typedef v8hi vec8w;
+typedef float v4sf __attribute__ ((vector_size(16)));
+typedef v4sf vec4f;
+typedef float v2df __attribute__ ((vector_size(16)));
+typedef v2df vec2d;
 
 inline vec16b x86_sse_pcmpeqb(vec16b a, vec16b b) { asm("pcmpeqb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
 inline vec16b x86_sse_psubusb(vec16b a, vec16b b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }

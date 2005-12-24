@@ -50,28 +50,28 @@
 
 #else
 
-#define declare_syscall0(sysid,type,name) inline type name(void) { long __res; asm volatile ("int $0x80" \
+#define declare_syscall0(sysid,type,name) type name(void) { long __res; asm volatile ("int $0x80" \
   : "=a" (__res) : "0" (sysid)); __syscall_return(type,__res); }
 
-#define declare_syscall1(sysid,type,name,type1,arg1) inline type name(type1 arg1) { long __res; \
+#define declare_syscall1(sysid,type,name,type1,arg1) type name(type1 arg1) { long __res; \
   asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1))); __syscall_return(type,__res); }
 
-#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) inline type name(type1 arg1,type2 arg2) { \
+#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) type name(type1 arg1,type2 arg2) { \
   long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2))); __syscall_return(type,__res); }
 
-#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) inline type name(type1 arg1,type2 arg2,type3 arg3) { \
+#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) type name(type1 arg1,type2 arg2,type3 arg3) { \
   long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3))); __syscall_return(type,__res); }
 
-#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) inline type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
+#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
   { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4))); \
   __syscall_return(type,__res); }
 
-#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5) inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
+#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5) type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
   { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5))); \
   __syscall_return(type,__res); }
 
 #define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5,type6,arg6) \
-  inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
+  type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
   long __res; asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; pop %%ebp" : "=a" (__res) \
 	: "i" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5)), \
   "0" ((long)(arg6))); __syscall_return(type,__res); }
@@ -95,7 +95,7 @@ static inline ThreadState* getcurrent() {
   return &basetls;
 }
 
-pid_t gettid();
+pid_t sys_gettid();
 W64 arch_prctl(int code, void* addr);
 void sys_exit(int code);
 void* sys_brk(void* newbrk);
@@ -141,11 +141,10 @@ void init_kernel();
 // data out of the way of the user virtual machine to ensure deterministic
 // allocations.
 //  
-void* ptl_alloc_private_pages(W64 bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, W64 base = 0);
-void* ptl_alloc_private_32bit_pages(W64 bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, W64 base = 0);
-void ptl_free_private_pages(void* base, W64 bytecount);
-void ptl_zero_private_pages(void* base, W64 bytecount);
-bool try_to_extend_stack(W64 addr);
+void* ptl_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
+void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
+void ptl_free_private_pages(void* base, Waddr bytecount);
+void ptl_zero_private_pages(void* base, Waddr bytecount);
 
 //
 // Thunk and breakpoint management
@@ -181,6 +180,8 @@ extern void remove_exit_callback();
 // Address space management
 //
 
+#ifdef __x86_64__
+
 // Each chunk covers 2 GB of virtual address space:
 #define SPAT_TOPLEVEL_CHUNK_BITS 17
 #define SPAT_PAGES_PER_CHUNK_BITS 19
@@ -190,6 +191,15 @@ extern void remove_exit_callback();
 #define ADDRESS_SPACE_BITS (48)
 #define ADDRESS_SPACE_SIZE (1LL << ADDRESS_SPACE_BITS)
 
+#else
+
+// Each chunk covers 2 GB of virtual address space:
+#define ADDRESS_SPACE_BITS (32)
+#define ADDRESS_SPACE_SIZE (1LL << ADDRESS_SPACE_BITS)
+#define SPAT_BYTES ((ADDRESS_SPACE_SIZE / PAGE_SIZE) / 8)
+
+#endif
+
 class AddressSpace {
 public:
   AddressSpace();
@@ -197,50 +207,63 @@ public:
   void reset();
 public:
 
-  W64 imagebase;
-  W64 entrypoint;
-  W64 end_code;
+  Waddr imagebase;
+  Waddr entrypoint;
+  Waddr end_code;
 
   void* brkbase;
   void* brk;
 
-  W64 top_of_stack;
-  W64 stack_base;
+  Waddr top_of_stack;
+  Waddr stack_base;
 
 public:
-  W64 prep(int argc, char** argv, int envc, char** envp);
+  Waddr prep(int argc, char** argv, int envc, char** envp);
 
 public:
   //
   // Shadow page attribute table
   //
+#ifdef __x86_64__
   typedef byte SPATChunk[SPAT_BYTES_PER_CHUNK];
-  SPATChunk** readmap;
-  SPATChunk** writemap;
-  SPATChunk** execmap;
-  SPATChunk** dtlbmap;
-  SPATChunk** itlbmap;
+  typedef SPATChunk** spat_t;
+#else
+  typedef byte* spat_t;
+#endif
+  spat_t readmap;
+  spat_t writemap;
+  spat_t execmap;
+  spat_t dtlbmap;
+  spat_t itlbmap;
 
-  byte& pageid_to_map_byte(SPATChunk** top, W64 pageid);
-  void make_accessible(void* address, W64 size, SPATChunk** top);
-  void make_inaccessible(void* address, W64 size, SPATChunk** top);
+  byte& pageid_to_map_byte(spat_t top, Waddr pageid);
+  void make_accessible(void* address, Waddr size, spat_t top);
+  void make_inaccessible(void* address, Waddr size, spat_t top);
 
-  void make_page_accessible(void* address, SPATChunk** top) {
-    W64 pageid = ((W64)lowbits((W64)address, ADDRESS_SPACE_BITS)) >> PAGE_SHIFT;
-    setbit(pageid_to_map_byte(top, pageid), lowbits(pageid, 3));
+  Waddr pageid(void* address) const {
+#ifdef __x86_64__
+    return ((W64)lowbits((W64)address, ADDRESS_SPACE_BITS)) >> log2(PAGE_SIZE);
+#else
+    return ((Waddr)address) >> log2(PAGE_SIZE);
+#endif
   }
 
-  void make_page_inaccessible(void* address, SPATChunk** top) {
-    W64 pageid = ((W64)lowbits((W64)address, ADDRESS_SPACE_BITS)) >> PAGE_SHIFT;
-    clearbit(pageid_to_map_byte(top, pageid), lowbits(pageid, 3));
+  Waddr pageid(Waddr address) const { return pageid((void*)address); }
+
+  void make_page_accessible(void* address, spat_t top) {
+    setbit(pageid_to_map_byte(top, pageid(address)), lowbits(pageid(address), 3));
   }
 
-  void allow_read(void* address, W64 size) { make_accessible(address, size, readmap); }
-  void disallow_read(void* address, W64 size) { make_inaccessible(address, size, readmap); }
-  void allow_write(void* address, W64 size) { make_accessible(address, size, writemap); }
-  void disallow_write(void* address, W64 size) { make_inaccessible(address, size, writemap); }
-  void allow_exec(void* address, W64 size) { make_accessible(address, size, execmap); }
-  void disallow_exec(void* address, W64 size) { make_inaccessible(address, size, execmap); }
+  void make_page_inaccessible(void* address, spat_t top) {
+    clearbit(pageid_to_map_byte(top, pageid(address)), lowbits(pageid(address), 3));
+  }
+
+  void allow_read(void* address, Waddr size) { make_accessible(address, size, readmap); }
+  void disallow_read(void* address, Waddr size) { make_inaccessible(address, size, readmap); }
+  void allow_write(void* address, Waddr size) { make_accessible(address, size, writemap); }
+  void disallow_write(void* address, Waddr size) { make_inaccessible(address, size, writemap); }
+  void allow_exec(void* address, Waddr size) { make_accessible(address, size, execmap); }
+  void disallow_exec(void* address, Waddr size) { make_inaccessible(address, size, execmap); }
 
 public:
   //
@@ -248,28 +271,31 @@ public:
   //
   long sys_errno;
 
-  void setattr(void* start, W64 length, int prot);
+  void setattr(void* start, Waddr length, int prot);
   int getattr(void* start);
-  int mprotect(void* start, W64 length, int prot);
-  int munmap(void* start, W64 length);
-  void* mmap(void* start, W64 length, int prot, int flags, int fd, off_t offset);
-  void* mremap(void* start, W64 oldsize, W64 newsize, int flags);
+  int mprotect(void* start, Waddr length, int prot);
+  int munmap(void* start, Waddr length);
+  void* mmap(void* start, Waddr length, int prot, int flags, int fd, off_t offset);
+  void* mremap(void* start, Waddr oldsize, Waddr newsize, int flags);
   void* setbrk(void* targetbrk);
 
-  bool fastcheck(W64 addr, SPATChunk** top) const {
-    W64 pageid = lowbits(addr, ADDRESS_SPACE_BITS) >> PAGE_SHIFT;
-    W64 chunkid = pageid >> log2(SPAT_PAGES_PER_CHUNK);
+  bool fastcheck(Waddr addr, spat_t top) const {
+#ifdef __x86_64__
+    W64 chunkid = pageid(addr) >> log2(SPAT_PAGES_PER_CHUNK);
 
     if (!top[chunkid])
       return false;
 
     AddressSpace::SPATChunk& chunk = *top[chunkid];
-    W64 byteid = bits(pageid, 3, log2(SPAT_BYTES_PER_CHUNK));
-    return bit(chunk[byteid], lowbits(pageid, 3));
+    Waddr byteid = bits(pageid(addr), 3, log2(SPAT_BYTES_PER_CHUNK));
+    return bit(chunk[byteid], lowbits(pageid(addr), 3));
+#else // 32-bit
+    return bit(top[pageid(addr) >> 3], lowbits(pageid(addr), 3));
+#endif
   }
 
-  bool fastcheck(void* addr, SPATChunk** top) const {
-    return fastcheck((W64)addr, top);
+  bool fastcheck(void* addr, spat_t top) const {
+    return fastcheck((Waddr)addr, top);
   }
 
   bool check(void* p, int prot) const {
@@ -315,19 +341,19 @@ void handle_syscall_64bit();
 extern W64 ldt_seg_base_cache[LDT_SIZE];
 
 static inline W16 get_fs() {
-  W64 value;
+  Waddr value;
   asm("mov %%fs,%%ax\n" : "=a" (value));
   return value;
 }
 
 static inline W16 get_gs() {
-  W64 value;
+  Waddr value;
   asm("mov %%gs,%%ax\n" : "=a" (value));
   return value;
 }
 
 static inline W64 get_limit(W16 desc) {
-  W64 value;
+  Waddr value;
   asm("lsl %[desc],%[value]\n" : [value] "=r" (value) : [desc] "m" (desc));
   return value;
 }

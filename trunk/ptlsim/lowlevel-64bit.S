@@ -246,3 +246,4 @@ inside_sim_escape_code_template_64bit:
   .byte 0x37
   ret
 inside_sim_escape_code_template_64bit_end:
+

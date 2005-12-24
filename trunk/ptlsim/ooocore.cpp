@@ -9,15 +9,13 @@
 #include <stdio.h>
 #include <elf.h>
 #include <asm/unistd.h>
-#include <asm/prctl.h>
-#include <sys/prctl.h>
 #include <ptlsim.h>
 #include <branchpred.h>
 #include <datastore.h>
 #include <logic.h>
 #include <ooohwdef.h>
 
-// With these disabled, simulation is ~10-20% faster
+// With these disabled, simulation is faster
 //#define ENABLE_CHECKS
 //#define ENABLE_LOGGING
 
@@ -465,7 +463,7 @@ struct FetchBufferEntry: public TransOp {
   W64 rip;
   W64 bbrip;
   W64 uuid;
-  uop_func_t synthop;
+  uopimpl_func_t synthop;
   BranchPredictorUpdateInfo predinfo;
 
   int index() const;
@@ -928,7 +926,7 @@ bool ReorderBufferEntry::has_exception() const {
 }
 
 bool ReorderBufferEntry::operand_ready(int operand) const {
-  return ((operands[operand]->flags & FLAG_WAIT) == 0);
+  return operands[operand]->ready();
 }
 
 struct RegisterRenameTable: public array<PhysicalRegister*, TRANSREG_COUNT> {
@@ -1097,13 +1095,13 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
 // Fetch Stage
 //
 
-W64 current_basic_block_rip = 0;
+Waddr current_basic_block_rip = 0;
 BasicBlock* current_basic_block = null;
 const byte* current_basic_block_transop = null;
 int current_basic_block_transop_index = 0;
 int bytes_in_current_insn = 0;
 
-W64 fetchrip;
+Waddr fetchrip;
 int uop_in_basic_block;
 
 //
@@ -1174,7 +1172,7 @@ W64 fetch_opclass_histogram[OPCLASS_COUNT];
 
 W64 icache_filled_callback(LoadStoreInfo lsi, W64 addr) {
   if (logable(1)) 
-    logfile << "L1 i-cache wakeup on line ", (void*)addr, endl;
+    logfile << "L1 i-cache wakeup on line ", (void*)(Waddr)addr, endl;
 
   waiting_for_icache_fill = 0;
   return 0;
@@ -1273,7 +1271,7 @@ void fetch() {
 
     fetch_uops_fetched++;
 
-    W64 predrip = 0;
+    Waddr predrip = 0;
 
     if (isclass(transop.opcode, OPCLASS_BRANCH)) {
       transop.predinfo.bptype = 
@@ -1318,7 +1316,7 @@ void fetch() {
     fetch_opclass_histogram[opclassof(transop.opcode)]++;
 
     if (logable(1)) {
-      logfile << intstring(transop.uuid, 20), " fetch  rip ", (void*)transop.rip, ": ", transop, 
+      logfile << intstring(transop.uuid, 20), " fetch  rip ", (void*)(Waddr)transop.rip, ": ", transop, 
         " (BB ", current_basic_block, " uop ", current_basic_block_transop_index, " of ", current_basic_block->count;
       if (transop.som) logfile << "; SOM";
       if (transop.eom) logfile << "; EOM ", bytes_in_current_insn, " bytes";
@@ -2222,7 +2220,7 @@ void ReorderBufferEntry::replay() {
   issueq_operation_on_cluster(cluster, replay(iqslot, uopids, preready));
 }
 
-inline int check_access_alignment(W64 addr, AddressSpace::SPATChunk** top, bool annul, int sizeshift, bool internal, int exception) {
+inline int check_access_alignment(W64 addr, AddressSpace::spat_t top, bool annul, int sizeshift, bool internal, int exception) {
   if (lowbits(addr, sizeshift))
     return EXCEPTION_UnalignedAccess;
 
@@ -2298,11 +2296,6 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   int aligntype = uop.cond;
   bool internal = uop.internal;
 
-  //
-  // Make sure the address is aligned and the page tables map it
-  //
-  AddressSpace::SPATChunk** top = (AddressSpace::SPATChunk**)asp.writemap;
-
   W64 raddr = ra + rb;
   raddr &= virt_addr_mask;
   W64 origaddr = raddr;
@@ -2360,7 +2353,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   bool ready;
   byte bytemask;
 
-  W64 exception = check_access_alignment(addr, top, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnWrite);
+  W64 exception = check_access_alignment(addr, asp.writemap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnWrite);
 
   if (exception) {
     state.invalid = 1;
@@ -2385,7 +2378,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
       // to just split them once in the bbcache; this has no performance
       // effect on the cycle accurate results.
       //
-      if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
+      if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)(Waddr)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
 
       BasicBlock* bb = bbcache.remove(uop.bbrip);
       bbcache_removes++;
@@ -2528,10 +2521,11 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
       state.datavalid = 1;
 
       if (logable(1)) {
-        logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
-          " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ", "0x", hexstring(addr, 48), 
-          " aliased with ldbuf ", ldbuf.index(), " (uuid ", ldbuf.rob->uop.uuid, " rob", ldbuf.rob->index(), 
-          " r", ldbuf.rob->physreg->index(), ")", " (add colliding load rip ", (void*)ldbuf.rob->uop.rip, "; replay from rip ", (void*)uop.rip, ")", endl;
+        logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), 
+          " st", lsq->index(),  " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ", "0x",
+          hexstring(addr, 48), " aliased with ldbuf ", ldbuf.index(), " (uuid ", ldbuf.rob->uop.uuid, " rob", ldbuf.rob->index(), 
+          " r", ldbuf.rob->physreg->index(), ")", " (add colliding load rip ", (void*)(Waddr)ldbuf.rob->uop.rip,
+          "; replay from rip ", (void*)(Waddr)uop.rip, ")", endl;
       }
 
       // Add the rip to the load to the load/store alias predictor:
@@ -2618,11 +2612,6 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   bool internal = uop.internal;
   bool signext = (uop.opcode == OP_ldx);
 
-  //
-  // Make sure the address is aligned and the page tables map it
-  //
-  AddressSpace::SPATChunk** top = (AddressSpace::SPATChunk**)asp.readmap;
-
   W64 raddr = ra + rb;
   if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
   raddr &= virt_addr_mask;
@@ -2657,7 +2646,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   load_type_internal += uop.internal;
   load_size[sizeshift]++;
 
-  W64 exception = check_access_alignment(addr, top, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnRead);
+  W64 exception = check_access_alignment(addr, asp.readmap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnRead);
 
   if (exception) {
     state.invalid = 1;
@@ -2671,7 +2660,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
 
     if (exception == EXCEPTION_UnalignedAccess) {
       // (see notes above for issuestore case)
-      if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
+      if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)(Waddr)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
 
       BasicBlock* bb = bbcache.remove(uop.bbrip);
       bbcache_removes++;
@@ -2780,9 +2769,9 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
     //
     if (!annul) {
       if (sfra) {
-        data = mux64(expand_8bit_to_64bit_lut[sfra->bytemask], *((W64*)floor(addr, 8)), sfra->data);
+        data = mux64(expand_8bit_to_64bit_lut[sfra->bytemask], *((W64*)(Waddr)floor(addr, 8)), sfra->data);
       } else {
-        data = *((W64*)floor(addr, 8));
+        data = *((W64*)(Waddr)floor(addr, 8));
       }
       
       struct {
@@ -2817,10 +2806,10 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
     // x86-64 requires virtual addresses to be canonical: if bit 47 is set, all upper 16 bits must be set
     W64 realaddr = (W64)signext64(addr, 48);
     if (sfra) {
-      W64 predata = mux64(expand_8bit_to_64bit_lut[sfra->bytemask], *((W64*)floor(realaddr, 8)), sfra->data);
+      W64 predata = mux64(expand_8bit_to_64bit_lut[sfra->bytemask], *((W64*)(Waddr)floor(realaddr, 8)), sfra->data);
       data = loaddata(((byte*)&predata) + lowbits(addr, 3), sizeshift, signext);
     } else {
-      data = loaddata((void*)realaddr, sizeshift, signext);
+      data = loaddata((void*)(Waddr)realaddr, sizeshift, signext);
     }
   }
 
@@ -3065,7 +3054,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     lastrob = &annulrob;
 
     if (logable(1)) {
-      logfile << intstring(annulrob.uop.uuid, 20), " annul  rob ", intstring(annulrob.index(), -3), ": annul rip ", (void*)annulrob.uop.rip;
+      logfile << intstring(annulrob.uop.uuid, 20), " annul  rob ", intstring(annulrob.index(), -3), ": annul rip ", (void*)(Waddr)annulrob.uop.rip;
       logfile << (annulrob.uop.som ? " SOM" : "    ");
       logfile << (annulrob.uop.eom ? " EOM" : "    ");
       logfile << ": free";
@@ -3204,14 +3193,9 @@ int ReorderBufferEntry::issue() {
   IssueState state;
   state.reg.rdflags = 0;
 
-  IssueInput input;
-  input.ra = ra.data;
-  input.rb = (uop.rb == REG_imm) ? uop.rbimm : rb.data;
-  input.rc = (uop.rc == REG_imm) ? uop.rcimm : rc.data;
-
-  input.raflags = ra.flags;
-  input.rbflags = (uop.rb == REG_imm) ? 0 : rb.flags;
-  input.rcflags = (uop.rc == REG_imm) ? 0 : rc.flags;
+  W64 radata = ra.data;
+  W64 rbdata = (uop.rb == REG_imm) ? uop.rbimm : rb.data;
+  W64 rcdata = (uop.rc == REG_imm) ? uop.rcimm : rc.data;
 
   bool ld = isload(uop.opcode);
   bool st = isstore(uop.opcode);
@@ -3238,7 +3222,7 @@ int ReorderBufferEntry::issue() {
   }
 
   bool propagated_exception = 0;
-  if ((input.raflags | input.rbflags | input.rcflags) & FLAG_INV) {
+  if ((ra.flags | rb.flags | rc.flags) & FLAG_INV) {
     //
     // Invalid data propagated through operands: mark output as
     // invalid and don't even execute the uop at all.
@@ -3252,7 +3236,7 @@ int ReorderBufferEntry::issue() {
 
     if (ld|st) {
       start_timer((ld ? ctload : ctstore));
-      int completed = (ld) ? issueload(*lsq, input.ra, input.rb, input.rc) : issuestore(*lsq, input.ra, input.rb, input.rc, operand_ready(2));
+      int completed = (ld) ? issueload(*lsq, radata, rbdata, rcdata) : issuestore(*lsq, radata, rbdata, rcdata, operand_ready(2));
       stop_timer((ld ? ctload : ctstore));
       if (completed == ISSUE_MISSPECULATED) {
         issue_result_misspeculation++;
@@ -3267,15 +3251,14 @@ int ReorderBufferEntry::issue() {
     } else if (br) {
       state.brreg.riptaken = uop.riptaken;
       state.brreg.ripseq = uop.ripseq;
-      call_exec_func(uop.synthop, state, input);
-
-      if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.check((void*)state.reg.rddata, PROT_EXEC))) {
+      uop.synthop(state, radata, rbdata, rcdata, ra.flags, rb.flags, rc.flags); 
+      if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.check((void*)(Waddr)state.reg.rddata, PROT_EXEC))) {
         // bogus branch
         state.reg.rdflags |= FLAG_INV;
         state.reg.rddata = EXCEPTION_PageFaultOnExec;
       }
     } else {
-      call_exec_func(uop.synthop, state, input);
+      uop.synthop(state, radata, rbdata, rcdata, ra.flags, rb.flags, rc.flags); 
     }
   }
 
@@ -3312,7 +3295,7 @@ int ReorderBufferEntry::issue() {
     if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[physreg->rfid].name;
     logfile << " ", rdstr, " = ", rastr, ", ", rbstr, ", ", rcstr, " (", cycles_left, " left)";
 
-    if (br & mispredicted) logfile << "; mispredicted (real ", (void*)physreg->data, " vs expected ", (void*)uop.riptaken, ")";
+    if (br & mispredicted) logfile << "; mispredicted (real ", (void*)(Waddr)physreg->data, " vs expected ", (void*)(Waddr)uop.riptaken, ")";
     logfile << endl;
   }
 
@@ -3755,13 +3738,15 @@ int ReorderBufferEntry::commit() {
   commit_opclass_histogram[opclassof(uop.opcode)]++;
 
   if (macro_op_has_exceptions) {
-    if (logable(1)) logfile << intstring(uop.uuid, 20), " except rob ", intstring(index(), -3), " exception ", exception_name(ctx.exception), " [EOM #", total_user_insns_committed, "]", endl;
+    if (logable(1)) 
+      logfile << intstring(uop.uuid, 20), " except rob ", intstring(index(), -3),
+        " exception ", exception_name(ctx.exception), " [EOM #", total_user_insns_committed, "]", endl;
 
     // See notes in handle_exception():
-    if ((uop.opcode == OP_chk) & (ctx.exception == EXCEPTION_SkipBlock)) {
+    if (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
       chk_recovery_rip = ctx.commitarf[REG_rip] + bytes_in_current_insn_to_commit;
-      logfile << "SkipBlock exception commit: advancing rip ", (void*)ctx.commitarf[REG_rip], " by ", bytes_in_current_insn_to_commit, " bytes to ", 
-        (void*)chk_recovery_rip, endl;
+      if (logable(1)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)ctx.commitarf[REG_rip],
+        " by ", bytes_in_current_insn_to_commit, " bytes to ", (void*)(Waddr)chk_recovery_rip, endl;
       commit_result_exception_skipblock++;
     } else {
       commit_result_exception++;
@@ -3800,7 +3785,7 @@ int ReorderBufferEntry::commit() {
     } else {
       ctx.commitarf[REG_rip] += bytes_in_current_insn_to_commit;
     }
-    if (logable(1)) logfile << " [rip = ", (void*)ctx.commitarf[REG_rip], "]";
+    if (logable(1)) logfile << " [rip = ", (void*)(Waddr)ctx.commitarf[REG_rip], "]";
   }
 
   if (!uop.nouserflags) {
@@ -3837,7 +3822,7 @@ int ReorderBufferEntry::commit() {
 
   if (st) {
     assert(commitstore_unlocked(*lsq) == 0);
-    if (logable(1)) logfile << " [mem ", (void*)(lsq->physaddr << 3), " = ", bytemaskstring((const byte*)&lsq->data, lsq->bytemask, 8), "]";
+    if (logable(1)) logfile << " [mem ", (void*)(Waddr)(lsq->physaddr << 3), " = ", bytemaskstring((const byte*)&lsq->data, lsq->bytemask, 8), "]";
   }
 
   //
@@ -4002,7 +3987,7 @@ bool handle_barrier() {
   branchpred.flush();
 
   core_to_external_state();
-  assist_func_t assist = (assist_func_t)ctx.commitarf[REG_rip];
+  assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
   const char* assist_name = "unknown";
 
@@ -4013,7 +3998,8 @@ bool handle_barrier() {
     }
   }
 
-  logfile << "Barrier (", (void*)assist, " ", assist_name, " called from ", (void*)ctx.commitarf[REG_sr1], ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+  if (logable(1)) logfile << "Barrier (", (void*)assist, " ", assist_name, " called from ", (void*)(Waddr)ctx.commitarf[REG_sr1], 
+    ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
 
   if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
 
@@ -4031,7 +4017,7 @@ bool handle_barrier() {
   cttotal.start();
 
   if (requested_switch_to_native) {
-    logfile << "PTL call requested switch to native mode at rip ", (void*)ctx.commitarf[REG_rip], endl;
+    logfile << "PTL call requested switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
     return false;
   }
 
@@ -4046,7 +4032,7 @@ bool handle_exception() {
   core_to_external_state();
 
   if (logable(1)) 
-    logfile << "Exception (", exception_name(ctx.exception), " called from ", (void*)ctx.commitarf[REG_rip], 
+    logfile << "Exception (", exception_name(ctx.exception), " called from ", (void*)(Waddr)ctx.commitarf[REG_rip], 
       ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
 
   //
@@ -4069,7 +4055,7 @@ bool handle_exception() {
   //
   if (ctx.exception == EXCEPTION_SkipBlock) {
     ctx.commitarf[REG_rip] = chk_recovery_rip;
-    logfile << "SkipBlock pseudo-exception: skipping to ", (void*)ctx.commitarf[REG_rip], endl, flush;
+    logfile << "SkipBlock pseudo-exception: skipping to ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
     flush_pipeline(ctx.commitarf[REG_rip]);
     external_to_core_state();
     cttotal.start();
@@ -4077,7 +4063,8 @@ bool handle_exception() {
   }
 
   stringbuf sb;
-  sb << exception_name(ctx.exception), " detected at fault rip ", (void*)ctx.commitarf[REG_rip], " @ ", total_user_insns_committed, " commits: genuine user exception (", exception_name(ctx.exception), "); aborting";
+  sb << exception_name(ctx.exception), " detected at fault rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " @ ", total_user_insns_committed, 
+    " user commits (", sim_cycle, " cycles): genuine user exception (", exception_name(ctx.exception), "); aborting";
   logfile << sb, endl, flush;
   cerr << sb, endl, flush;
   logfile << flush;
@@ -4474,14 +4461,18 @@ int out_of_order_core_toplevel_loop() {
     }
     if (logable(1)) logfile << "Cycle ", sim_cycle, ":", endl;
 
-    if ((sim_cycle - last_commit_at_cycle) > 1024) {
-      logfile << "WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, " user commits: no instructions have committed for ", (sim_cycle - last_commit_at_cycle), " cycles; the pipeline could be deadlocked", endl, flush;
-      cerr << "WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, " user commits: no instructions have committed for ", (sim_cycle - last_commit_at_cycle), " cycles; the pipeline could be deadlocked", endl, flush;
+    if ((sim_cycle - last_commit_at_cycle) > 2048) {
+      stringbuf sb;
+      sb << "WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, 
+        " user commits: no instructions have committed for ", (sim_cycle - last_commit_at_cycle),
+        " cycles; the pipeline could be deadlocked", endl;
+      logfile << sb, flush;
+      cerr << sb, flush;
       break;
     }
 
     if (lowbits(sim_cycle, 16) == 0) 
-      logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)ctx.commitarf[REG_rip], ")", endl, flush;
+      logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)(Waddr)ctx.commitarf[REG_rip], ")", endl, flush;
 
     if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
       ooo_capture_stats();

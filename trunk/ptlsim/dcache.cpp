@@ -371,7 +371,7 @@ namespace DataCache {
 
     W64 loaddata() {
       int sizeshift = lsi.info.sizeshift;
-      W64 cachedata = *((W64*)floor(addr, 8));
+      W64 cachedata = *((W64*)(Waddr)floor(addr, 8));
       W64 sframask = expand_8bit_to_64bit_lut[mask];
       W64 muxdata = mux64(sframask, cachedata, data);
       W64 data = (sizeshift == 3) ? data : bits(muxdata, 8*lowbits(addr, 3), (8 << sizeshift));
@@ -380,7 +380,7 @@ namespace DataCache {
     }
 
     ostream& print(ostream& os) const {
-      os << "  ", (void*)data, " @ ", (void*)addr, " -> r", lsi.info.rd;
+      os << "  ", "0x", hexstring(data, 64), " @ ", (void*)(Waddr)addr, " -> r", lsi.info.rd;
       if (lsi.info.commit) os << ", c", lsi.info.cbslot;
       os << ": shift ", lsi.info.sizeshift, ", signext ", lsi.info.signext, ", mask ", bitstring(mask, 8, true);
       return os;
@@ -460,7 +460,7 @@ namespace DataCache {
     // miss buffer can be freed.
     // 
     void wakeup(W64 address, const bitvec<LFRQ_SIZE>& lfrqmask) {
-      if (analyze_in_detail()) logfile << "LFRQ.wakeup(", (void*)address, ", ", lfrqmask, ")", endl;
+      if (analyze_in_detail()) logfile << "LFRQ.wakeup(", (void*)(Waddr)address, ", ", lfrqmask, ")", endl;
       //assert(L2.probe(address));
       waiting &= ~lfrqmask;
       ready |= lfrqmask;
@@ -641,7 +641,7 @@ namespace DataCache {
       mb.dcache = (!icache);
 
       if (hit_in_L2) {
-        if (DEBUG) logfile << "mb", idx, ": enter state deliver to L1 on ", (void*)addr, " (iter ", iterations, ")", endl;
+        if (DEBUG) logfile << "mb", idx, ": enter state deliver to L1 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
         mb.state = STATE_DELIVER_TO_L1;
         mb.cycles = L2_LATENCY;
 
@@ -651,14 +651,14 @@ namespace DataCache {
       
       bool L3hit = L3.probe(addr);
       if (L3hit) {
-        if (DEBUG) logfile << "mb", idx, ": enter state deliver to L2 on ", (void*)addr, " (iter ", iterations, ")", endl;
+        if (DEBUG) logfile << "mb", idx, ": enter state deliver to L2 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
         mb.state = STATE_DELIVER_TO_L2;
         mb.cycles = L3_LATENCY;
         if (icache) fetch_hit_L3++; else load_hit_L3++;
         return idx;
       }
 
-      if (DEBUG) logfile << "mb", idx, ": enter state deliver to L3 on ", (void*)addr, " (iter ", iterations, ")", endl;
+      if (DEBUG) logfile << "mb", idx, ": enter state deliver to L3 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
       mb.state = STATE_DELIVER_TO_L3;
       mb.cycles = MAIN_MEM_LATENCY;
       if (icache) fetch_hit_mem++; else load_hit_mem++;
@@ -764,7 +764,7 @@ namespace DataCache {
         if (freemap[i]) continue;
         const Entry& mb = missbufs[i];
 
-        os << "  slot ", intstring(i, 2), ": ", (void*)mb.addr, " state ", 
+        os << "  slot ", intstring(i, 2), ": ", (void*)(Waddr)mb.addr, " state ", 
           padstring(missbuf_state_names[mb.state], -8), " ", (mb.dcache ? "dcache" : "      "),
           " ", (mb.icache ? "icache" : "      "), " on ", mb.cycles, " cycles -> lfrq ", mb.lfrqmap, endl;
       }
@@ -840,7 +840,7 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
   //
 
   if (DEBUG) {
-    logfile << "issue_load_slowpath: L1line for ", (void*)addr, " = ", L1line, " validmask ";
+    logfile << "issue_load_slowpath: L1line for ", (void*)(Waddr)addr, " = ", L1line, " validmask ";
     if (L1line) logfile << L1line->valid; else logfile << "(none)";
     logfile << endl;
   }
@@ -1003,7 +1003,7 @@ void initiate_prefetch(W64 addr, int cachelevel) {
     if (PREFETCH_STOPS_AT_L2) return; // only move up to L2 level, and it's already there
   }
 
-  if (DEBUG) logfile << "Prefetch requested for ", (void*)addr, " to cache level ", cachelevel, endl;
+  if (DEBUG) logfile << "Prefetch requested for ", (void*)(Waddr)addr, " to cache level ", cachelevel, endl;
 
   missbuf.initiate_miss(addr, L2line);
   prefetch_required++;
@@ -1038,7 +1038,7 @@ int initiate_icache_miss(W64 addr) {
   int mb = missbuf.initiate_miss(addr, L2.probe(addr), true);
 
   if (logable(1))
-    logfile << "Initiate icache miss on ", (void*)addr, " to missbuf ", mb, " (", (line_in_L2 ? "in L2" : "not in L2"), ")", endl;
+    logfile << "Initiate icache miss on ", (void*)(Waddr)addr, " to missbuf ", mb, " (", (line_in_L2 ? "in L2" : "not in L2"), ")", endl;
 
   return mb;
 }
@@ -1059,7 +1059,7 @@ CompileIssuePrefetch(2);
 CompileIssuePrefetch(3);
 
 static inline W64 storemask(W64 addr, W64 data, byte bytemask) {
-  W64& mem = *(W64*)addr;
+  W64& mem = *(W64*)(Waddr)addr;
   mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
   return data;
 }

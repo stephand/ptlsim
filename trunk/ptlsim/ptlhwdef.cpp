@@ -12,8 +12,6 @@ CoreState ctx alignto(4096) insection(".corectx");
 CoreState dummyctx alignto(4096) insection(".corectx");
 IssueState issuestate[8] alignto(64) insection(".corectx");
 W64 fpregs[8] alignto(64) insection(".ldm");
-W64 fsbase insection(".ldm");
-W64 gsbase insection(".ldm");
 
 extern void print_message(const char* text);
 
@@ -93,6 +91,8 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"bru",            OPCLASS_UNCOND_BRANCH, A, ANYALU|ANYLDU}, // unconditional branch (branch cap)
   {"brp",            OPCLASS_UNCOND_BRANCH|OPCLASS_BARRIER, A, ANYALU|ANYLDU}, // unconditional branch (PTL only)
   {"chk",            OPCLASS_CHECK,         A, ANYALU|ANYLDU}, // check condition and rollback if false (uses cond codes); rcimm is exception type
+  {"chk.sub",        OPCLASS_CHECK,         A, ANYALU|ANYLDU}, // check ("cmp" form: subtract)
+  {"chk.and",        OPCLASS_CHECK,         A, ANYALU|ANYLDU}, // check ("test" form: and)
   // User loads and stores
   {"ld",             OPCLASS_LOAD,          L, ANYLDU}, // load zero extended
   {"ldx",            OPCLASS_LOAD,          L, ANYLDU}, // load sign extended
@@ -103,8 +103,6 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"ld.pre",         OPCLASS_PREFETCH,      1, ANYALU}, // prefetch
   {"st",             OPCLASS_STORE,         1, ANYSTU}, // store
   {"st.lm",          OPCLASS_STORE,         1, ANYSTU}, // store to local memory
-  // Masking, insert and extract
-  {"mask",           OPCLASS_SHIFTROT,      1, ANYALU},        // mask rd = ra,rb,[ds,ms,mc]
   // Shifts and rotates
   {"rotl",           OPCLASS_SHIFTROT,      1, ANYALU},  
   {"rotr",           OPCLASS_SHIFTROT,      1, ANYALU},   
@@ -112,8 +110,9 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"rotcr",          OPCLASS_SHIFTROT,      1, ANYALU},  
   {"shl",            OPCLASS_SHIFTROT,      1, ANYALU},
   {"shr",            OPCLASS_SHIFTROT,      1, ANYALU},
-  {"dupbit",         OPCLASS_LOGIC,         1, ANYALU},          // duplicate the specified bit into all bits of output
   {"sar",            OPCLASS_SHIFTROT,      1, ANYALU},   
+  // Masking, insert and extract
+  {"mask",           OPCLASS_SHIFTROT,      1, ANYALU},        // mask rd = ra,rb,[ds,ms,mc]
   // Endian byte swap
   {"bswap",          OPCLASS_LOGIC,         A, ANYINT},
   // Flag operations
@@ -143,13 +142,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
   {"addf",           OPCLASS_FP_ALU,        F, ANYFPU},
   {"subf",           OPCLASS_FP_ALU,        F, ANYFPU},
-  {"addaf",          OPCLASS_FP_ALU,        F, ANYFPU},
-  {"addsf",          OPCLASS_FP_ALU,        F, ANYFPU},
-  {"subaf",          OPCLASS_FP_ALU,        F, ANYFPU},
-  {"subsf",          OPCLASS_FP_ALU,        F, ANYFPU},
   {"mulf",           OPCLASS_FP_ALU,        F, ANYFPU},
-  {"maddf",          OPCLASS_FP_ALU,        F, ANYFPU},
-  {"msubf",          OPCLASS_FP_ALU,        F, ANYFPU},
   {"divf",           OPCLASS_FP_DIVSQRT,    F, FPU0}, //++MTY This should be cracked into a newton-raphson chain of frcp/fmadd
   {"sqrtf",          OPCLASS_FP_DIVSQRT,    F, FPU1}, //++MTY This should be cracked into a newton-raphson chain of frsqrt/fmadd
   {"rcpf",           OPCLASS_FP_DIVSQRT,    F, FPU0},
@@ -323,7 +316,7 @@ stringbuf& operator <<(stringbuf& sb, const TransOp& op) {
     sb << "] ";
   }
 
-  if (isbranch(op.opcode)) sb << " [taken ", (void*)op.riptaken, ", seq ", (void*)op.ripseq, "]";
+  if (isbranch(op.opcode)) sb << " [taken ", (void*)(Waddr)op.riptaken, ", seq ", (void*)(Waddr)op.ripseq, "]";
 
   if (op.som) sb << " (", (int)op.bytes, "b ", (int)op.tagcount, "t ", (int)op.storecount, "s ", (int)op.loadcount, "l ", (int)op.branchcount, "br)";
 
@@ -386,12 +379,12 @@ BasicBlock* BasicBlock::clone() {
 }
 
 ostream& operator <<(ostream& os, const BasicBlock& bb) {
-  os << "BasicBlock ", (void*)bb.rip, ": ", bb.count, " transops (", bb.tagcount, "t ", bb.memcount, "m ", bb.storecount, "s";
+  os << "BasicBlock ", (void*)(Waddr)bb.rip, ": ", bb.count, " transops (", bb.tagcount, "t ", bb.memcount, "m ", bb.storecount, "s";
   if (bb.repblock) os << " rep";
   os << ", uses ", bitstring(bb.usedregs, 64, true), "), ";
-  os << bb.refcount, " refs, ", bb.bytes, " bytes compressed, ", (void*)bb.rip_taken, " taken, ", (void*)bb.rip_not_taken, " not taken:", endl;
+  os << bb.refcount, " refs, ", bb.bytes, " bytes compressed, ", (void*)(Waddr)bb.rip_taken, " taken, ", (void*)(Waddr)bb.rip_not_taken, " not taken:", endl;
   const byte* p = bb.data;
-  W64 rip = bb.rip;
+  Waddr rip = bb.rip;
   int bytes_in_insn;
 
   foreach (i, bb.count) {
@@ -409,7 +402,7 @@ ostream& operator <<(ostream& os, const BasicBlock& bb) {
 
     //if (transop.eom) os << "  ;;", endl;
   }
-  os << "Basic block terminates with taken rip ", (void*)bb.rip_taken, ", not taken rip ", (void*)bb.rip_not_taken, endl;
+  os << "Basic block terminates with taken rip ", (void*)(Waddr)bb.rip_taken, ", not taken rip ", (void*)(Waddr)bb.rip_not_taken, endl;
   return os;
 }
 
@@ -500,7 +493,7 @@ ostream& operator <<(ostream& os, const CoreState& ctx) {
   os << ctx.specarf;
 
   os << "Exception Flags", endl;
-  os << "  Last exception:            ", (void*)ctx.exception, " (", exception_name(ctx.exception), ")", endl;
+  os << "  Last exception:            ", "0x", hexstring(ctx.exception, 64), " (", exception_name(ctx.exception), ")", endl;
 
   return os;
 }

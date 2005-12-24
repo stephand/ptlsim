@@ -55,7 +55,7 @@ void show_stats_and_switch_to_native() {
   save_stats();
 
   if (exit_after_fullsim) {
-    logfile << endl, "=== Exiting after full simulation on tid ", gettid(), " at rip ", (void*)ctx.commitarf[REG_rip], " ===", endl, endl;
+    logfile << endl, "=== Exiting after full simulation on tid ", sys_gettid(), " at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl;
     logfile.flush();
     remove_exit_callback();
     sys_exit(0);
@@ -72,9 +72,7 @@ void switch_to_sim() {
 
   logfile << "Baseline state:", endl;
   logfile << ctx.commitarf;
-  // Sanitize flags (AMD and Intel CPUs also use bits 1 and 3 for reserved bits, but not for INV and WAIT like we do).
 
-#ifdef __x86_64__
   bool done = false;
 
   if (sequential_mode_insns)
@@ -84,23 +82,23 @@ void switch_to_sim() {
     if (use_out_of_order_core)
       out_of_order_core_toplevel_loop();
   }
-#endif
 
-  ctx.commitarf[REG_flags] &= FLAG_NOT_WAIT_INV; // sanitize flags
+  // Sanitize flags (AMD and Intel CPUs also use bits 1 and 3 for reserved bits, but not for INV and WAIT like we do).
+  ctx.commitarf[REG_flags] &= FLAG_NOT_WAIT_INV;
 
   logfile << "Final state:", endl;
   logfile << ctx.commitarf;
 
   if (dumpcode_filename) {
-    if (asp.check((void*)ctx.commitarf[REG_rip], PROT_READ)) {
-      logfile << "Dumping code at ", (void*)ctx.commitarf[REG_rip], " to ", dumpcode_filename, "...", endl, flush;
+    if (asp.check((void*)(Waddr)ctx.commitarf[REG_rip], PROT_READ)) {
+      logfile << "Dumping code at ", (void*)(Waddr)ctx.commitarf[REG_rip], " to ", dumpcode_filename, "...", endl, flush;
       odstream os(dumpcode_filename);
-      os.write((void*)ctx.commitarf[REG_rip], PAGE_SIZE);
+      os.write((void*)(Waddr)ctx.commitarf[REG_rip], PAGE_SIZE);
       os.close();
     }
   }
 
-  logfile << "Switching to native: returning to rip ", (void*)ctx.commitarf[REG_rip], endl, flush;
+  logfile << "Switching to native: returning to rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
 
   disable_ptlsim_call_gate();
   show_stats_and_switch_to_native();
@@ -138,14 +136,14 @@ int main(int argc, char* argv[]) {
   init_uops();
   init_translate();
 
-  void* interp_entry = (void*)ctx.commitarf[REG_rip];
-  void* program_entry = (void*)find_auxv_entry(AT_ENTRY)->a_un.a_val;
+  void* interp_entry = (void*)(Waddr)ctx.commitarf[REG_rip];
+  void* program_entry = (void*)(Waddr)find_auxv_entry(AT_ENTRY)->a_un.a_val;
 
   logfile << "loader: interp_entry ", interp_entry, ", program_entry ", program_entry, endl, flush;
 
   if (!user_profile_only && !trigger_mode) {
     if (start_at_rip)
-      set_switch_to_sim_breakpoint((void*)start_at_rip);
+      set_switch_to_sim_breakpoint((void*)(Waddr)start_at_rip);
     else if (include_dyn_linker)
       set_switch_to_sim_breakpoint(interp_entry);
     else set_switch_to_sim_breakpoint(program_entry);

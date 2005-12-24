@@ -526,6 +526,7 @@ ostream& DataStoreNode::print(ostream& os, bool percents, int depth, double supe
 
 struct DataStoreNodeArrayHeader {
   W32 count;
+  W32 padding;
   W64 histomin;
   W64 histomax;
   W64 histostride;
