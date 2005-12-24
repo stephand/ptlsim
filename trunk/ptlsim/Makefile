@@ -6,7 +6,7 @@
 # Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
 #
 
-ifeq ($(findstring "x86_64",$(MACHTYPE)),)
+ifeq ($(findstring x86_64,$(MACHTYPE)),x86_64)
 __x86_64__=1
 endif
 
@@ -18,8 +18,9 @@ CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trappi
 #CFLAGS = -O0 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type
 CFLAGS32BIT = -m32
 else
-# 32-bit PTLsim32 only:
-CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -funit-at-a-time -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+# 32-bit PTLsim32 only, on a Pentium 4:
+CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -funit-at-a-time -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+# No optimizations:
 #CFLAGS = -O0 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
 CFLAGS32BIT = 
 endif

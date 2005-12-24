@@ -732,14 +732,24 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
 
   byte* stackbase = null;
 
+  // Count lines
+  int linecount = 0;
+
+  while (p && (*p)) {
+    p = strchr(p, '\n');
+    if (p) { linecount++; p++; }
+  }
+
+  p = mapdata;
+
+  int line = 0;
+
   while (p && (*p)) {
     if (map == &startmap[count]) break;
 
     char* s = p;
     p = strchr(p, '\n');
     if (p) *p++ = 0; // skip over newline
-
-    // logfile << "/proc/self/maps: ", p, endl;
 
     byte* start = null;
     byte* stop = null;
@@ -766,12 +776,18 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
     // some kernels incorrectly report the size of this region,
     // but it is always 4 KB long.
     //
+
+    map->start = start;
+    map->length = stop - start;
+
     bool vdso = ((pattr && strequal(pattr, "[vdso]")) || 
         ((map->start == (byte*)0xffffe000) &&
          (map->length == PAGE_SIZE)));
 
-    map->start = start;
-    map->length = stop - start;
+    // 2.6 kernels always have the stack second-to-last and vdso last in the list:
+    bool stack = (((pattr && strequal(pattr, "[stack]")) || 
+                   (line == (linecount-2))) ? MAP_STACK : 0);
+
     map->prot = 
       ((rperm == 'r') ? PROT_READ : 0) |
       ((wperm == 'w') ? PROT_WRITE : 0) |
@@ -780,7 +796,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
       ((private_or_shared == 'p') ? MAP_PRIVATE : 0) |
       ((private_or_shared == 's') ? MAP_SHARED : 0) |
       ((!devmajor && !devminor && !inode) ? MAP_ANONYMOUS : 0) |
-      ((pattr && strequal(pattr, "[stack]")) ? MAP_STACK : 0) |
+      (stack ? MAP_STACK : 0) |
       ((pattr && strequal(pattr, "[heap]")) ? MAP_HEAP : 0) |
       ((pfilename && strequal(pfilename, "/zero (deleted)")) ? MAP_ZERO : 0) |
       (vdso ? MAP_VDSO : 0);
@@ -797,6 +813,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
     if (map->flags & MAP_VDSO) map->prot |= PROT_READ|PROT_EXEC;
 
     map++;
+    line++;
   }
 
   ptl_free_private_pages(mapdata, MAX_PROC_MAPS_SIZE);

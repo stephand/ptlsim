@@ -30,6 +30,10 @@
 // This is an internal MSR required to correctly truncate ld/st pointers in 32-bit mode
 extern W64 virt_addr_mask;
 
+extern W64 total_uops_committed;
+extern W64 total_user_insns_committed;
+extern W64 sim_cycle;
+
 namespace SequentialCore {
 
   BasicBlock* current_basic_block = null;
@@ -55,9 +59,6 @@ namespace SequentialCore {
   // to avoid confusing the other core models:
   //
   W64 last_stats_captured_at_cycle = 0;
-  W64 total_uops_committed = 0;
-  W64 total_user_insns_committed = 0;
-  W64 sim_cycle = 0;
 
   CycleTimer ctseq;
   CycleTimer ctfetch;
@@ -496,6 +497,10 @@ namespace SequentialCore {
     return false;
   }
 
+  W64 seq_total_uops_committed;
+  W64 seq_total_user_insns_committed;
+  W64 seq_sim_cycle;
+
   int sequential_core_toplevel_loop() {
     logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
 
@@ -748,14 +753,22 @@ namespace SequentialCore {
 
     logfile << flush;
 
+    seq_total_uops_committed = total_uops_committed;
+    seq_total_user_insns_committed = total_user_insns_committed;
+    seq_sim_cycle = sim_cycle;
+
+    total_uops_committed = 0;
+    total_user_insns_committed = 0;
+    sim_cycle = 0;
+
     return exiting;
   }
 
   void seq_capture_stats(DataStoreNode& root) {
     DataStoreNode& summary = root("summary"); {
-      summary.add("cycles", sim_cycle);
-      summary.add("uops", total_uops_committed);
-      summary.add("insns", total_user_insns_committed);
+      summary.add("cycles", seq_sim_cycle);
+      summary.add("uops", seq_total_uops_committed);
+      summary.add("insns", seq_total_user_insns_committed);
     }
 
     DataStoreNode& simulator = root("simulator"); {
@@ -767,8 +780,8 @@ namespace SequentialCore {
       DataStoreNode& rate = simulator("rate"); {
         rate.addfloat("total-secs", ctseq.seconds());
         double seconds = ctseq.seconds();
-        rate.addfloat("commits-per-sec", (double)total_uops_committed / seconds);
-        rate.addfloat("user-commits-per-sec", (double)total_user_insns_committed / seconds);
+        rate.addfloat("commits-per-sec", (double)seq_total_uops_committed / seconds);
+        rate.addfloat("user-commits-per-sec", (double)seq_total_user_insns_committed / seconds);
       }
 
       DataStoreNode& bbcache = simulator("bbcache"); {
@@ -787,5 +800,5 @@ int sequential_core_toplevel_loop() {
 }
 
 void seq_capture_stats(DataStoreNode& root) {
-  return SequentialCore::seq_capture_stats(root);
+  SequentialCore::seq_capture_stats(root);
 }

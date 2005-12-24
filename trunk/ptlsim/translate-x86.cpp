@@ -2035,7 +2035,7 @@ namespace TranslateX86 {
           TransOp   addop(OP_adda, REG_rdi,   REG_rdi,    REG_zero,  REG_temp3, 3);                  // adda    rdi = rdi,0,t1*SZ
           addop.extshift = sizeshift;
           this << addop;
-          this << TransOp(OP_sub,  REG_temp2, REG_temp0,  REG_rax,   REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU); // sub    t2 = t0,t1 (zco)
+          this << TransOp(OP_sub,  REG_temp2, REG_temp1,  REG_rax,   REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU); // sub    t2 = t1,rax (zco)
 
           if (rep) {
             TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, (ctx.use64 ? 3 : 2), 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]

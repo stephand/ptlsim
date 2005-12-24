@@ -23,7 +23,7 @@ void save_stats() {
   logfile << "(Capturing final stats bundle ", snapshotid, " at cycle ", sim_cycle, ")", endl, flush;
 
   if ((sequential_mode_insns > 0) && dsroot)
-    seq_capture_stats((*dsroot)("seq")); 
+    seq_capture_stats((*dsroot)("seq"));
 
   if (use_out_of_order_core)
     ooo_capture_stats();
