@@ -134,10 +134,10 @@ PTLsim
 
 PTLsim is very different from most cycle accurate simulators used in research
  applications.
- It runs directly on the same platform it is simulating (an x86-64 machine
+ It runs directly on the same platform it is simulating (an x86 machine
  running Linux) and is able to switch in and out of full out of order simulation
- mode and native x86-64 mode at any time completely transparent to the running
- user code.
+ mode and native x86 or x86-64 mode at any time completely transparent to
+ the running user code.
  This lets users quickly profile a small section of the user code without
  the overhead of emulating the uninteresting parts.
  It is also capable of switching between 32-bit and 64-bit threads on the
@@ -168,11 +168,9 @@ PTLsim was designed and developed by Matt T.
 \size default 
  with its beginnings dating back to 2001.
  The main PTLsim code base, including the out of order processor model,
- has been in active development since 2003 and has been extensively used
+ has been in active development since 2003 and has been used extensively
  by our processor design research group at the State University of New York
- at Binghamton.
- The out of order simulator was based on an earlier model, also developed
- by Matt Yourst, designed around the Alpha instruction set.
+ at Binghamton in addition to many other academic and industry organizations.
 \layout Standard
 
 PTLsim is not related to other widely used simulators.
@@ -244,25 +242,28 @@ Building PTLsim
 
 PTLsim is written in C++ with extensive use of x86 and x86-64 inline assembly
  code for performance and virtualization purposes.
- In its present release, it is designed for use on an x86-64 host system
- running Linux 2.6.
-\layout Standard
-
-
-\series bold 
-Notes:
+ In its present release, it is designed for use on both x86 and x86-64 host
+ systems running Linux 2.6.
 \layout Itemize
 
-
+PTLsim can be built on 
 \series bold 
-PTLsim is currently intended for x86-64 machines only.
-
+both 64-bit x86-64 machines
 \series default 
- Do not attempt to build it on a normal 32-bit x86 machine - it will not
- work.
- However, we will be modifying PTLsim in the near future to run on regular
- 32-bit x86 systems (albeit with lower performance and the lack of x86-64
- support).
+ (AMD Athlon 64 / Opteron / Turion, Intel Pentium 4 with EM64T and future
+ Pentium M models) 
+\series bold 
+as well as ordinary 32-bit x86 systems
+\series default 
+.
+ If built for x86-64, PTLsim will run both 64-bit and 32-bit programs automatica
+lly.
+ If built on a 32-bit Linux distribution and compiler, PTLsim only supports
+ ordinary x86 programs and will typically be 
+\series bold 
+slower than the 64-bit build
+\series default 
+, even on 32-bit user programs.
 \layout Itemize
 
 PTLsim is very sensitive to the 
@@ -270,12 +271,10 @@ PTLsim is very sensitive to the
 Linux kernel
 \series default 
  version it is running on.
- We have tested this version of PTLsim on 2.6.12 and 
-\series bold 
-2.6.13
-\series default 
-, but it may break on earlier versions due to changes in certain undocumented
- system calls and structures we use for virtualization purposes.
+ We have tested this version of PTLsim on stock 2.6.12 to 2.6.15 kernels (SMP
+ and uniprocessor), but it may break on earlier versions due to changes
+ in certain undocumented system calls and structures we use for virtualization
+ purposes.
  Section 
 \begin_inset LatexCommand \ref{sec:PTLsimInternals}
 
@@ -289,18 +288,34 @@ Linux kernel
 \series bold 
 gcc 3.4.x
 \series default 
- should be used to compile the code, although it should also work with gcc
- 3.3 or 4.0 (we have not tested this though)
+ should be used to compile the code, as this is the only version we have
+ tested.
+ Initial versions of gcc 4.0 mis-compile PTLsim, although later versions
+ may work.
+ Earlier gcc versions (prior to 3.3) may not accept certain low level extensions
+ (C++ and inline assembly constructs) used within PTLsim.
 \layout Itemize
 
-We have not tried PTLsim on an 
+PTLsim should also work on 
 \series bold 
 Intel based x86-64
 \series default 
  (a.k.a.
- EM64T) capable processor, but in theory it should work correctly.
- You may need to adjust the Makefile options to specify this.
- Let us know if you get this working!
+ EM64T) capable processors, although we have not tried this.
+ You will need to adjust the Makefile options to specify this (i.e.
+ to use 
+\family typewriter 
+\size small 
+-march=nocona
+\family default 
+\size default 
+ instead of 
+\family typewriter 
+\size small 
+-march=k8
+\family default 
+\size default 
+).
 \layout Standard
 
 To build PTLsim, unpack the sources (or obtain them via CVS checkout) and
@@ -792,9 +807,9 @@ N
 
 
 \series bold 
--stop
+-stoprip
 \series default 
-rip\SpecialChar ~
+\SpecialChar ~
 
 \emph on 
 addr
@@ -1145,9 +1160,9 @@ kernel.h
 \size default 
  is where all the virtual machine "black magic" takes place to let PTLsim
  transparently switch between simulation and native mode and 32-bit/64-bit
- mode.
+ mode (or only 32-bit mode on a 32-bit x86 machine).
  In general you should not need to touch this since it is very Linux kernel
- specific (this version works with 2.6.12 - 2.6.13) and works at a level below
+ specific (this version works with 2.6.12 - 2.6.14) and works at a level below
  the standard C/C++ libraries.
 \layout Itemize
 
@@ -1227,33 +1242,16 @@ ion.
 \family typewriter 
 \series bold 
 \size small 
-uopinterface.cpp
+uopimpl.cpp
 \family default 
 \series default 
 \size default 
- contains code for mapping uop opcodes and characteristics to their implementati
-on in 
-\family typewriter 
-\size small 
-uopimpl.S
-\family default 
-\size default 
-.
-\layout Itemize
-
-
-\family typewriter 
-\series bold 
-\size small 
-uopimpl.S
-\family default 
-\series default 
-\size default 
- contains x86-64 assembly language implementations of all uops and their
- variations.
- PTLsim implements most ALU and floating point uops in assembler so as to
- leverage the exact semantics and flags generated by real x86 instructions,
- since most PTLsim uops are so similar to the equivalent x86 instructions.
+ contains implementations of all uops and their variations.
+ PTLsim implements most ALU and floating point uops in assembly language
+ so as to leverage the exact semantics and flags generated by real x86 instructi
+ons, since most PTLsim uops are so similar to the equivalent x86 instructions.
+ When compiled on a 32-bit system, some of the 64-bit uops must be emulated
+ using slower C++ code.
 \layout Itemize
 
 
@@ -1323,7 +1321,7 @@ lowlevel-64bit.S
 \series default 
 \size default 
  contains 64-bit startup and context switching code.
- PTLsim execution starts here.
+ PTLsim execution starts here if run on an x86-64 system.
 \layout Itemize
 
 
@@ -1335,6 +1333,7 @@ lowlevel-32bit.S
 \series default 
 \size default 
  contains 32-bit startup and context switching code.
+ PTLsim execution starts here if run on a 32-bit x86 system.
 \layout Itemize
 
 
@@ -2262,6 +2261,14 @@ Note:
  manager, independent of the out of order simulation engine.
  If you are only interested in modifying the simulator itself, you can skip
  this section.
+\layout Subsection
+
+
+\begin_inset LatexCommand \label{sub:Injection-On-x86-64}
+
+\end_inset 
+
+Startup on x86-64
 \layout Standard
 
 PTLsim is a very unusual Linux program.
@@ -2549,6 +2556,21 @@ main()
 \family default 
 \size default 
  to allow the simulator to start up normally.
+\layout Subsection
+
+Startup on 32-bit x86
+\layout Standard
+
+The PTLsim startup process on a 32-bit x86 system is essentially a streamlined
+ version of the process above (Section 
+\begin_inset LatexCommand \ref{sub:Injection-On-x86-64}
+
+\end_inset 
+
+), since there is no need for the same PTLsim binary to support both 32-bit
+ and 64-bit user programs.
+ The injection process is very similar to the case where the user program
+ is always a 32-bit program.
 \layout Section
 
 Simulator Startup
@@ -2688,14 +2710,18 @@ kernel.cpp
 \family default 
 \size default 
 ) to track the attributes of each page within the virtual address space.
- To do this, PTLsim uses Shadow Page Access Tables (SPATs), which are essentiall
-y large two-level bitmaps.
+ When compiled for x86-64 systems, PTLsim uses Shadow Page Access Tables
+ (SPATs), which are essentially large two-level bitmaps.
  Since pages are 4096 bytes in size, each 64 kilobyte chunk of the bitmap
  can track 2 GB of virtual address space.
  In each SPAT, each top level array entry points to a chunk mapping 2 GB,
  such that with 131072 top level pointers, the full 48 bit virtual address
  space can typically be mapped with under a megabyte of SPAT chunks, assuming
  the address space is sparse.
+\layout Standard
+
+When compiled for 32-bit x86 systems, each SPAT is just a 128 KByte bitmap,
+ with one bit for each of the 1048576 4 KB pages in the 4 GB address space.
 \layout Standard
 
 In the AddressSpace structure, there are separate SPAT tables for readable
@@ -2874,6 +2900,29 @@ free()
 not
 \emph default 
  be accessible to user code.
+\layout Section
+
+Implementation of uops
+\layout Standard
+
+PTLsim provides implementations for all micro-operations (uops) in the 
+\family typewriter 
+\size small 
+uopimpl.cpp
+\family default 
+\size default 
+ file.
+ C++ templates are combined with gcc's smart inline assembler type selection
+ constraints to translate all possible permutations (sizes, condition codes,
+ etc) of each uop into highly optimized code.
+ In many cases, a real x86 instruction is used at the core of each corresponding
+ uop's implementation; code after the instruction just captures the generated
+ x86 condition code flags, rather than having to manually emulate the same
+ condition codes ourselves.
+ The code implementing each uop is then called from elsewhere in the simulator
+ whenever that uop must be executed.
+ Note that loads and stores are implemented elsewhere, since they are too
+ dependent on the specific core model to be expressed in this generic manner.
 \layout Section
 
 
@@ -3720,6 +3769,7 @@ gateway page
  32-to-64-bit far jump into PTLsim, while in simulated mode it contains
  a reserved x86 opcode interpreted by the x86 decoder as a special kind
  of system call.
+ If PTLsim is built on a 32-bit only system, no mode switch is required.
 \layout Standard
 
 Generally these calls are used to perform 
@@ -12197,7 +12247,7 @@ cc
 
 \family typewriter 
 \size small 
-rd = (ra),rb,rc
+rd = ra,rb,(rc)
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -12207,7 +12257,11 @@ rd = (ra),rb,rc
 
 
 \family sans 
-rd = (EvalFlags(ra)) ? rc : rb
+rd = ra 
+\begin_inset Formula $\leftarrow$
+\end_inset 
+
+ (EvalFlags(rc)) ? rb : ra
 \end_inset 
 </cell>
 </row>
@@ -12244,24 +12298,9 @@ sel
 \size default 
  uop merges the selected operand with 
 \emph on 
-rb
-\emph default 
- in accordance with the standard x86 merging rules described previously
- (except that 
-\family typewriter 
-\size small 
-sel
-\family sans 
-\size default 
- uses 
-\emph on 
-rb
-\emph default 
- as the merge target instead of 
-\emph on 
 ra
 \emph default 
-)
+ in accordance with the standard x86 merging rules described previously
 \layout Itemize
 
 
@@ -12273,7 +12312,7 @@ The 64-bit result and all flags are treated as a single value for selection
 
 
 \family sans 
-If one of the (rb, rc) operands is not valid (has 
+If one of the (ra, rb) operands is not valid (has 
 \family typewriter 
 \size small 
 FLAG_INV
@@ -12284,7 +12323,7 @@ FLAG_INV
  selected input is valid.
  If the 
 \emph on 
-ra
+rc
 \emph default 
  operand is invalid, the result is always invalid.
 \layout Itemize
@@ -12299,6 +12338,16 @@ FLAG_WAIT
 \size default 
  is set), the uop does not issue, even if the selected input was ready.
  This is a pipeline simplification.
+\layout Itemize
+
+
+\family sans 
+set rd = (a),b
+\layout Itemize
+
+
+\family sans 
+sel rd = b,0,1,c
 \layout Standard
 \line_bottom \pagebreak_top 
 
@@ -12381,7 +12430,7 @@ cc
 
 \family typewriter 
 \size small 
-rd = (ra),rb
+rd = ra,rb,(rc)
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -12391,11 +12440,11 @@ rd = (ra),rb
 
 
 \family sans 
-rd = rb 
+rd = ra 
 \begin_inset Formula $\leftarrow$
 \end_inset 
 
- EvalFlags(ra) ? 1 : 0
+ EvalFlags(rc) ? rb : 0
 \end_inset 
 </cell>
 </row>
@@ -12771,7 +12820,7 @@ br
 
 \family typewriter 
 \size small 
-rip = (ra),riptaken,ripseq
+rip = (ra,rb),riptaken,ripseq
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -12859,6 +12908,8 @@ riptaken
 ripseq
 \emph default 
  immediates and invert the condition of the branch.
+ All condition encodings can be inverted by inverting bit 0 of the 4-bit
+ condition specifier.
 \layout Itemize
 
 
@@ -12874,8 +12925,8 @@ REG_rip
 
 
 \family sans 
-If the target RIP falls within an unmapped page, not present page or a marked
- as no-execute (NX), the 
+If the target RIP falls within an unmapped page, not present page or a page
+ marked as no-execute (NX), the 
 \family typewriter 
 \size small 
 PageFaultOnExec
@@ -13129,7 +13180,9 @@ riptaken
 \emph on 
 ripseq
 \emph default 
- immediates and invert the condition of the branch
+ immediates and invert the condition of the branch.
+ All condition encodings can be inverted by inverting bit 0 of the 4-bit
+ condition specifier.
 \layout Itemize
 
 
@@ -13145,8 +13198,8 @@ REG_rip
 
 
 \family sans 
-If the target RIP falls within an unmapped page, not present page or a marked
- as no-execute (NX), the 
+If the target RIP falls within an unmapped page, not present page or a page
+ marked as no-execute (NX), the 
 \family typewriter 
 \size small 
 PageFaultOnExec
@@ -16238,7 +16291,7 @@ rd = ra
 \begin_inset Formula $\leftarrow$
 \end_inset 
 
- ByteSwap(ra)
+ ByteSwap(rb)
 \end_inset 
 </cell>
 </row>
@@ -16265,7 +16318,7 @@ bswap
 \size default 
  uop reverses the endianness of the 
 \emph on 
-ra
+rb
 \emph default 
  operand.
  The uop's effective result size determines the range of bytes which are
@@ -17415,9 +17468,13 @@ rd = ra
 
 
 \family sans 
-rd.zf = (ra == 0)
+rd.zf = (rb == 0)
 \newline 
-rd = (ra) ? LSBIndex(ra) : 0
+rd = ra 
+\begin_inset Formula $\leftarrow$
+\end_inset 
+
+ (rb) ? LSBIndex(rb) : 0
 \end_inset 
 </cell>
 </row>
@@ -17452,9 +17509,13 @@ rd = ra
 
 
 \family sans 
-rd.zf = (ra == 0)
+rd.zf = (rb == 0)
 \newline 
-rd = (ra) ? MSBIndex(ra) : 0
+rd = ra 
+\begin_inset Formula $\leftarrow$
+\end_inset 
+
+ (rb) ? MSBIndex(rb) : 0
 \end_inset 
 </cell>
 </row>
@@ -17475,7 +17536,7 @@ Notes:
 \family sans 
 These uops find the bit index of the first '1' bit in 
 \emph on 
-ra
+rb
 \emph default 
 , starting from the lowest bit 0 (for 
 \family typewriter 
@@ -17483,7 +17544,7 @@ ra
 ctz
 \family sans 
 \size default 
-) or the highest bit 63 (for 
+) or the highest bit of the data type (for 
 \family typewriter 
 \size small 
 clz
@@ -17501,11 +17562,11 @@ The result is zero (technically, undefined) if ra is zero.
 \family sans 
 The ZF flag of the result is 1 if 
 \emph on 
-ra
+rb
 \emph default 
  was zero, or 0 if 
 \emph on 
-ra
+rb
 \emph default 
  was nonzero.
  Other condition code flags are undefined.
@@ -19032,7 +19093,7 @@ cvtf.i2s.p
 
 \family typewriter 
 \size small 
-rd = ra
+rd = zero,rb
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -19042,9 +19103,9 @@ rd = ra
 
 
 \family sans 
-rd[31:0] = Int32ToFloat(ra[31:0])
+rd[31:0] = Int32ToFloat(rb[31:0])
 \newline 
-rd[63:32] = Int32ToFloat(ra[63:32])
+rd[63:32] = Int32ToFloat(rb[63:32])
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -19080,7 +19141,7 @@ cvtf.i2d.lo
 
 \family typewriter 
 \size small 
-rd = ra
+rd = zero,rb
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -19090,7 +19151,7 @@ rd = ra
 
 
 \family sans 
-rd = Int32ToDouble(ra[31:0])
+rd = Int32ToDouble(rb[31:0])
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -19128,7 +19189,7 @@ cvtf.i2d.hi
 
 \family typewriter 
 \size small 
-rd = ra
+rd = zero,rb
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -19138,7 +19199,7 @@ rd = ra
 
 
 \family sans 
-rd = Int32ToDouble(ra[63:32])
+rd = Int32ToDouble(rb[63:32])
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -20088,7 +20149,7 @@ cvtf.d2s.p
 
 \family typewriter 
 \size small 
-rd = ra
+rd = ra,rb
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -20136,7 +20197,7 @@ cvtf.s2d.lo
 
 \family typewriter 
 \size small 
-rd = ra
+rd = zero,rb
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -20146,7 +20207,7 @@ rd = ra
 
 
 \family sans 
-rd = FloatToDouble(ra[31:0])
+rd = FloatToDouble(rb[31:0])
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -20184,7 +20245,7 @@ cvtf.s2d.hi
 
 \family typewriter 
 \size small 
-rd = ra
+rd = zero,rb
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
@@ -20194,7 +20255,7 @@ rd = ra
 
 
 \family sans 
-rd = FloatToDouble(ra[63:32])
+rd = FloatToDouble(rb[63:32])
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
