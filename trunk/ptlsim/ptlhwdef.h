@@ -821,20 +821,9 @@ static inline stringbuf& operator <<(stringbuf& sb, const flagstring& bs) {
   return sb;
 }
 
-enum {
-  ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
-  ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
-  ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSRET, ASSIST_CPUID,
-  ASSIST_INVALID_OPCODE, ASSIST_PTLCALL,
-  ASSIST_COUNT,
-};
-
-extern const char* assist_names[ASSIST_COUNT];
-
 typedef void (*assist_func_t)();
 
-extern "C" assist_func_t assistid_to_func[ASSIST_COUNT];
-
+const char* assist_name(assist_func_t func);
 
 
 #endif // __ASM_ONLY__

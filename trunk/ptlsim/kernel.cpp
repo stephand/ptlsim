@@ -1367,6 +1367,22 @@ struct old_mmap32_arg_struct {
 
 const char* syscall_names_32bit[] = {"restart_syscall", "exit", "fork", "read", "write", "open", "close", "waitpid", "creat", "link", "unlink", "execve", "chdir", "time", "mknod", "chmod", "lchown", "break", "oldstat", "lseek", "getpid", "mount", "umount", "setuid", "getuid", "stime", "ptrace", "alarm", "oldfstat", "pause", "utime", "stty", "gtty", "access", "nice", "ftime", "sync", "kill", "rename", "mkdir", "rmdir", "dup", "pipe", "times", "prof", "brk", "setgid", "getgid", "signal", "geteuid", "getegid", "acct", "umount2", "lock", "ioctl", "fcntl", "mpx", "setpgid", "ulimit", "oldolduname", "umask", "chroot", "ustat", "dup2", "getppid", "getpgrp", "setsid", "sigaction", "sgetmask", "ssetmask", "setreuid", "setregid", "sigsuspend", "sigpending", "sethostname", "setrlimit", "getrlimit", "getrusage", "gettimeofday", "settimeofday", "getgroups", "setgroups", "select", "symlink", "oldlstat", "readlink", "uselib", "swapon", "reboot", "readdir", "mmap", "munmap", "truncate", "ftruncate", "fchmod", "fchown", "getpriority", "setpriority", "profil", "statfs", "fstatfs", "ioperm", "socketcall", "syslog", "setitimer", "getitimer", "stat", "lstat", "fstat", "olduname", "iopl", "vhangup", "idle", "vm86old", "wait4", "swapoff", "sysinfo", "ipc", "fsync", "sigreturn", "clone", "setdomainname", "uname", "modify_ldt", "adjtimex", "mprotect", "sigprocmask", "create_module", "init_module", "delete_module", "get_kernel_syms", "quotactl", "getpgid", "fchdir", "bdflush", "sysfs", "personality", "afs_syscall", "setfsuid", "setfsgid", "_llseek", "getdents", "_newselect", "flock", "msync", "readv", "writev", "getsid", "fdatasync", "_sysctl", "mlock", "munlock", "mlockall", "munlockall", "sched_setparam", "sched_getparam", "sched_setscheduler", "sched_getscheduler", "sched_yield", "sched_get_priority_max", "sched_get_priority_min", "sched_rr_get_interval", "nanosleep", "mremap", "setresuid", "getresuid", "vm86", "query_module", "poll", "nfsservctl", "setresgid", "getresgid", "prctl", "rt_sigreturn", "rt_sigaction", "rt_sigprocmask", "rt_sigpending", "rt_sigtimedwait", "rt_sigqueueinfo", "rt_sigsuspend", "pread64", "pwrite64", "chown", "getcwd", "capget", "capset", "sigaltstack", "sendfile", "getpmsg", "putpmsg", "vfork", "ugetrlimit", "mmap2", "truncate64", "ftruncate64", "stat64", "lstat64", "fstat64", "lchown32", "getuid32", "getgid32", "geteuid32", "getegid32", "setreuid32", "setregid32", "getgroups32", "setgroups32", "fchown32", "setresuid32", "getresuid32", "setresgid32", "getresgid32", "chown32", "setuid32", "setgid32", "setfsuid32", "setfsgid32", "pivot_root", "mincore", "madvise", "madvise1", "getdents64", "fcntl64", "<unused>", "<unused>", "gettid", "readahead", "setxattr", "lsetxattr", "fsetxattr", "getxattr", "lgetxattr", "fgetxattr", "listxattr", "llistxattr", "flistxattr", "removexattr", "lremovexattr", "fremovexattr", "tkill", "sendfile64", "futex", "sched_setaffinity", "sched_getaffinity", "set_thread_area", "get_thread_area", "io_setup", "io_destroy", "io_getevents", "io_submit", "io_cancel", "fadvise64", "<unused>", "exit_group", "lookup_dcookie", "epoll_create", "epoll_ctl", "epoll_wait", "remap_file_pages", "set_tid_address", "timer_create", "statfs64", "fstatfs64", "tgkill", "utimes", "fadvise64_64", "vserver", "mbind", "get_mempolicy", "set_mempolicy", "mq_open", "sys_kexec_load", "waitid"};
 
+W32 sysenter_retaddr = 0;
+
+W32 get_sysenter_retaddr(W32 end_of_sysenter_insn) {
+  if (!sysenter_retaddr) {
+    byte* p = (byte*)end_of_sysenter_insn;
+    logfile << "First sysenter call: finding return point starting from ", p, endl, flush;
+    while (*p != 0x90) p++;
+    assert(*p == 0xeb); // short jump
+    p++;
+    assert(*p == 0x5d); // "pop %ebp" instruction
+    logfile << "Found sysenter return address at ", p, endl, flush;
+    sysenter_retaddr = (W32)(Waddr)p;
+  }
+  return sysenter_retaddr;
+}
+
 void handle_syscall_32bit(int semantics) {
   bool DEBUG = 1; //analyze_in_detail();
   //
@@ -1395,6 +1411,38 @@ void handle_syscall_32bit(int semantics) {
     arg5 = ctx.commitarf[REG_rdi];
     arg6 = ctx.commitarf[REG_rbp];
     retaddr = ctx.commitarf[REG_sr1];
+  } else if (semantics == SYSCALL_SEMANTICS_SYSENTER) {
+    //
+    // SYSENTER is just like int 0x80, but it only works in 32-bit
+    // mode. Its semantics are identical to int 0x80, except that
+    // %ebp contains the stack pointer to restore, and *(%ebp)
+    // is the sixth argument. It always returns to a fixed address
+    // in the VDSO page, so there's no need to store the address.
+    // We do need to dynamically find that address though.
+    //
+    assert(!ctx.use64);
+    syscallid = ctx.commitarf[REG_rax];
+    arg1 = ctx.commitarf[REG_rbx];
+    arg2 = ctx.commitarf[REG_rcx];
+    arg3 = ctx.commitarf[REG_rdx];
+    arg4 = ctx.commitarf[REG_rsi];
+    arg5 = ctx.commitarf[REG_rdi];
+
+    W32* arg6ptr = (W32*)(Waddr)LO32(ctx.commitarf[REG_rbp]);
+
+    if (!asp.check(arg6ptr, PROT_READ)) {
+      ctx.commitarf[REG_rax] = (W64)(-EFAULT);
+      ctx.commitarf[REG_rip] = retaddr;
+      if (DEBUG) logfile << "handle_syscall (#", syscallid, " ", ((syscallid < lengthof(syscall_names_32bit)) ? syscall_names_32bit[syscallid] : "???"), 
+                   " via ", semantics_name[semantics], ") from ", (void*)(Waddr)retaddr, " args ", " (", (void*)(Waddr)arg1, ", ", (void*)(Waddr)arg2, ", ", 
+                   (void*)(Waddr)arg3, ", ", (void*)(Waddr)arg4, ", ", (void*)(Waddr)arg5, ", ???", ") at iteration ", iterations, ": arg6 @ ", arg6ptr,
+                   " inaccessible via SYSENTER; returning -EFAULT", endl, flush;
+    }
+
+    arg6 = *arg6ptr;
+
+    retaddr = get_sysenter_retaddr(ctx.commitarf[REG_sr1]);
+
   } else if (semantics == SYSCALL_SEMANTICS_SYSCALL) {
     assert(!ctx.use64);
     //

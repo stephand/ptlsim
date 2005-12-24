@@ -46,10 +46,18 @@ void debug_assist_call(const char* name) {
   logfile << "assist: ", name, " called from ", (void*)(Waddr)ctx.commitarf[REG_sr0], ", return to ", (void*)(Waddr)ctx.commitarf[REG_sr1], ", argument ", (void*)(Waddr)ctx.commitarf[REG_sr2], endl; 
 }
 
+enum {
+  ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
+  ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
+  ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
+  ASSIST_INVALID_OPCODE, ASSIST_PTLCALL,
+  ASSIST_COUNT,
+};
+
 extern "C" {
   void assist_int();
   void assist_syscall();
-  void assist_sysret();
+  void assist_sysenter();
   void assist_cpuid();
   void assist_invalid_opcode();
 };
@@ -77,9 +85,8 @@ void assist_syscall() {
   }
 }
 
-void assist_sysret() {
-  // This should never be possible from user code
-  debug_assist_call("sysret"); assert(false);
+void assist_sysenter() {
+  handle_syscall_32bit(SYSCALL_SEMANTICS_SYSENTER);
 }
 
 static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
@@ -184,16 +191,26 @@ assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_div<byte>, assist_div<W16>, assist_div<W32>, assist_div<W64>,
   assist_idiv<byte>, assist_idiv<W16>, assist_idiv<W32>, assist_idiv<W64>,
 
-  assist_int, assist_syscall, assist_sysret, assist_cpuid,
+  assist_int, assist_syscall, assist_sysenter, assist_cpuid,
   assist_invalid_opcode, assist_ptlcall,
 };
 
 const char* assist_names[ASSIST_COUNT] = {
   "div8",  "div16",  "div32",  "div64",
   "idiv8", "idiv16", "idiv32", "idiv64",
-  "int", "syscall", "sysret", "cpuid",
+  "int", "syscall", "sysenter", "cpuid",
   "invopcode", "ptlcall",
 };
+
+const char* assist_name(assist_func_t assist) {
+  foreach (i, ASSIST_COUNT) {
+    if (assistid_to_func[i] == assist) { 
+      return assist_names[i];
+    }
+  }
+
+  return "unknown";
+}
 
 bool split_unaligned_memops_during_translate = false;
 
@@ -3200,6 +3217,18 @@ namespace TranslateX86 {
       // Saves return address into %rcx and jumps to MSR_LSTAR
       immediate(REG_rcx, 3, (Waddr)rip);
       microcode_assist(ASSIST_SYSCALL, ripstart, rip);
+      end_of_block = 1;
+      break;
+    }
+
+    case 0x134: {
+      // sysenter
+      //
+      // Technically, sysenter does not save anything (even the return address)
+      // but we do not have the information the kernel has about the fixed %eip
+      // to return to, so we have to pretend:
+      //
+      microcode_assist(ASSIST_SYSENTER, ripstart, rip);
       end_of_block = 1;
       break;
     }

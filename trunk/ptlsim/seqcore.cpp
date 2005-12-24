@@ -443,16 +443,7 @@ namespace SequentialCore {
     core_to_external_state();
     assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
-    const char* assist_name = "unknown";
-
-    foreach (i, ASSIST_COUNT) {
-      if (assistid_to_func[i] == assist) { 
-        assist_name = assist_names[i];
-        break;
-      }
-    }
-
-    if (logable(1)) logfile << "Barrier (", (void*)assist, " ", assist_name, " called from ", (void*)(Waddr)ctx.commitarf[REG_sr1],
+    if (logable(1)) logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ", (void*)(Waddr)ctx.commitarf[REG_sr1],
       ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
 
     if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
