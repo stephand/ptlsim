@@ -93,7 +93,9 @@ void switch_to_sim() {
     if (asp.check((void*)(Waddr)ctx.commitarf[REG_rip], PROT_READ)) {
       logfile << "Dumping code at ", (void*)(Waddr)ctx.commitarf[REG_rip], " to ", dumpcode_filename, "...", endl, flush;
       odstream os(dumpcode_filename);
-      os.write((void*)(Waddr)ctx.commitarf[REG_rip], PAGE_SIZE);
+      byte buf[256];
+      memcpy(buf, (void*)(Waddr)ctx.commitarf[REG_rip], sizeof(buf));
+      os.write(buf, 256);
       os.close();
     }
   }
