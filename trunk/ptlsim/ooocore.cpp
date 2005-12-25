@@ -4046,7 +4046,7 @@ bool handle_exception() {
   //
   if (ctx.exception == EXCEPTION_SkipBlock) {
     ctx.commitarf[REG_rip] = chk_recovery_rip;
-    logfile << "SkipBlock pseudo-exception: skipping to ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
+    if (logable(1)) logfile << "SkipBlock pseudo-exception: skipping to ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
     flush_pipeline(ctx.commitarf[REG_rip]);
     external_to_core_state();
     cttotal.start();
