@@ -60,7 +60,7 @@ struct BTBEntry {
   }
 
   ostream& print(ostream& os, W64 tag) const {
-    os << (void*)target;
+    os << (void*)(Waddr)target;
     return os;
   }
 };
@@ -133,7 +133,7 @@ ostream& operator <<(ostream& os, ReturnAddressStack<SIZE>& ras) {
   os << "ReturnAddressStack<", SIZE, ">: top ", ras.top, ":", endl;
   foreach (i, ras.top+8) {
     if (i == ras.top) os << "   ---- top ----", endl;
-    os << "  ", intstring(i, 3), ": ", (void*)ras[i], endl;
+    os << "  ", intstring(i, 3), ": ", (void*)(Waddr)ras[i], endl;
   }
 
   return os;

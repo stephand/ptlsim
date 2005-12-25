@@ -1373,9 +1373,9 @@ W32 get_sysenter_retaddr(W32 end_of_sysenter_insn) {
   if (!sysenter_retaddr) {
     byte* p = (byte*)end_of_sysenter_insn;
     logfile << "First sysenter call: finding return point starting from ", p, endl, flush;
-    while (*p != 0x90) p++;
+    while (*p == 0x90) p++;
     assert(*p == 0xeb); // short jump
-    p++;
+    p += 2;
     assert(*p == 0x5d); // "pop %ebp" instruction
     logfile << "Found sysenter return address at ", p, endl, flush;
     sysenter_retaddr = (W32)(Waddr)p;
@@ -1420,6 +1420,8 @@ void handle_syscall_32bit(int semantics) {
     // in the VDSO page, so there's no need to store the address.
     // We do need to dynamically find that address though.
     //
+    retaddr = get_sysenter_retaddr(ctx.commitarf[REG_sr1]);
+
     assert(!ctx.use64);
     syscallid = ctx.commitarf[REG_rax];
     arg1 = ctx.commitarf[REG_rbx];
@@ -1440,8 +1442,6 @@ void handle_syscall_32bit(int semantics) {
     }
 
     arg6 = *arg6ptr;
-
-    retaddr = get_sysenter_retaddr(ctx.commitarf[REG_sr1]);
 
   } else if (semantics == SYSCALL_SEMANTICS_SYSCALL) {
     assert(!ctx.use64);
@@ -1486,7 +1486,7 @@ void handle_syscall_32bit(int semantics) {
 
   if (DEBUG) 
     logfile << "handle_syscall (#", syscallid, " ", ((syscallid < lengthof(syscall_names_32bit)) ? syscall_names_32bit[syscallid] : "???"), 
-      " via ", semantics_name[semantics], ") from ", (void*)(Waddr)ctx.commitarf[REG_rcx], " args ", " (", (void*)(Waddr)arg1, ", ", 
+      " via ", semantics_name[semantics], ") from ", (void*)(Waddr)retaddr, " args ", " (", (void*)(Waddr)arg1, ", ", 
       (void*)(Waddr)arg2, ", ", (void*)(Waddr)arg3, ", ", (void*)(Waddr)arg4, ", ", (void*)(Waddr)arg5, ", ", (void*)(Waddr)arg6,
       ") at iteration ", iterations, endl, flush;
 
@@ -2203,8 +2203,15 @@ byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
   auxv_start = destauxv;
 
   while (auxv->a_type != AT_NULL) {
-    destauxv->a_type = auxv->a_type;
-    destauxv->a_un.a_val = auxv->a_un.a_val;
+    if ((auxv->a_type == AT_SYSINFO) || (auxv->a_type == AT_SYSINFO_EHDR)) {
+      // We do not support SYSENTER-style VDSOs, so disable this:
+      logfile << "copy_args_env_auxv: Disabled 32-bit AT_SYSINFO auxv", endl;
+      destauxv->a_type = AT_IGNORE;
+      auxv->a_type = AT_IGNORE;
+    } else {
+      destauxv->a_type = auxv->a_type;
+      destauxv->a_un.a_val = auxv->a_un.a_val;
+    }
     auxv++; destauxv++;
   }
   
