@@ -996,7 +996,8 @@ void fpu_state_to_ptlsim_state() {
 
 void ptlsim_state_to_fpu_state() {
   // x87state.cw already filled and assumed not to be modified
-  x87state.sw.data = 0; // clear all exceptions
+  // clear everything but 4 FP status flag bits (c3/c2/c1/c0):
+  x87state.sw.data = ctx.commitarf[REG_fpsw] & ((0x7 << 8) | (1 << 14));
   int tos = ctx.commitarf[REG_fptos] >> 3;
   assert(inrange(tos, 0, 7));
   x87state.sw.fields.tos = tos;
@@ -1011,6 +1012,9 @@ void ptlsim_state_to_fpu_state() {
   foreach (i, 8) {
     x87_fp_64bit_to_80bit(x87state.stack[i], fpregs[lowbits(tos + i, 3)]);
   }
+
+  ctx.commitarf[REG_fpsw] = x87state.sw.data;
+  ctx.commitarf[REG_fptags] = x87state.tw;
 }
 
 #define ARCH_ENABLE_EXIT_HOOK 0x2001
@@ -1214,13 +1218,19 @@ extern void switch_to_sim();
 extern "C" void switch_to_native_restore_context_lowlevel(const UserContext& ctx, int switch_64_to_32);
 
 void switch_to_native_restore_context() {
-  logfile << endl, "=== Switching to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
-
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
 
   thunkpage->call_code_addr = (Waddr)&thunkpage->switch_to_sim_thunk;
   thunkpage->simulated = 0;
   ptlsim_state_to_fpu_state();
+
+  logfile << endl, "=== Preparing to switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
+
+  logfile << "Final state:", endl;
+  logfile << ctx.commitarf;
+
+  logfile << endl, "=== Switching to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
+
   switch_to_native_restore_context_lowlevel(ctx.commitarf, !ctx.use64);
 }
 
@@ -1371,7 +1381,7 @@ W32 sysenter_retaddr = 0;
 
 W32 get_sysenter_retaddr(W32 end_of_sysenter_insn) {
   if (!sysenter_retaddr) {
-    byte* p = (byte*)end_of_sysenter_insn;
+    byte* p = (byte*)(Waddr)end_of_sysenter_insn;
     logfile << "First sysenter call: finding return point starting from ", p, endl, flush;
     while (*p == 0x90) p++;
     assert(*p == 0xeb); // short jump

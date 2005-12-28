@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -208,14 +208,14 @@ namespace SequentialCore {
         // effect on the cycle accurate results.
         //
         if (logable(1)) {
-          logfile << intstring(current_uuid, 20), " stalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ",
+          logfile << intstring(current_uuid, 20), " stalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
             "0x", hexstring(addr, 48), " size ", (1<<uop.size), " ", uop, endl;
         }
 
         return ISSUE_REFETCH;
       }
 
-      if (logable(1)) logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", state, " ", uop, endl;
+      if (logable(1)) logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop, endl;
 
       return ISSUE_EXCEPTION;
     }
@@ -241,7 +241,7 @@ namespace SequentialCore {
     state.datavalid = 1;
 
     if (logable(1)) {
-      logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", state, " ", uop;
+      logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop;
       if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
       logfile << endl;
     }
@@ -314,14 +314,14 @@ namespace SequentialCore {
       if (exception == EXCEPTION_UnalignedAccess) {
         // (see notes above for issuestore case)
         if (logable(1)) {
-          logfile << intstring(current_uuid, 20), " ldalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ",
+          logfile << intstring(current_uuid, 20), " ldalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
             "0x", hexstring(addr, 48), " size ", (1<<sizeshift), " ", uop, endl;
         }
 
         return ISSUE_REFETCH;
       }
 
-      logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", state, " ", uop, endl;
+      logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop, endl;
 
       return ISSUE_EXCEPTION;
     }
@@ -368,7 +368,7 @@ namespace SequentialCore {
         state.datavalid = 1;
 
         if (logable(1)) {
-          logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ",
+          logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
             "0x", hexstring(addr, 48), " was annulled (high unaligned load)", endl;
         }
 
@@ -390,7 +390,7 @@ namespace SequentialCore {
     state.bytemask = 0xff;
 
     if (logable(1)) {
-      logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", state, " ", uop;
+      logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", "0x", hexstring(state.data, 64), "|     ", " ", uop;
       if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
       logfile << endl;
     }
@@ -519,8 +519,8 @@ namespace SequentialCore {
         logfile << "Start logging (level ", loglevel, ") at cycle ", sim_cycle, endl, flush;
       }
 
-      if (logable(9)) logfile << "Cycle ", sim_cycle, ":", endl;
-      if (logable(9)) print_state(logfile);
+      //if (logable(9)) logfile << "Cycle ", sim_cycle, ":", endl;
+      //if (logable(9)) print_state(logfile);
 
       Waddr rip = arf[REG_rip];
 
@@ -604,7 +604,7 @@ namespace SequentialCore {
       int exception = 0;
       bool refetch = 0;
 
-      if (logable(1)) logfile << "Executing synthop ", (void*)synthop, endl;
+      //if (logable(1)) logfile << "Executing synthop ", (void*)synthop, endl;
 
       if (ld|st) {
         int status = (ld) ? issueload(uop, sfr, radata, rbdata, rcdata) : issuestore(uop, sfr, radata, rbdata, rcdata);

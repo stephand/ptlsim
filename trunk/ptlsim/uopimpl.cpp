@@ -479,6 +479,15 @@ void exp_op_mask(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbf
   W64 M = mask_gen_lut[mcms];
   W64 rd = (ra & ~M) | (rotr64(rb, ds) & M);
 
+#if 0
+  // For debugging purposes:
+  if (logable(99)) {
+    logfile << "mask (ms=", ms, " mc=", mc, " ds=", ds, "):", endl;
+    logfile << "  M      = ", bitstring(M, 64), endl;
+    logfile << "  rot rb = ", bitstring(rotr64(rb, ds), 64), endl;
+  }
+#endif
+
   if (ZEROEXT) {
     // mask_zxt_lut[] = 1'[(ms+mc-1):0]
     rd = rd & mask_zxt_lut[mcms];

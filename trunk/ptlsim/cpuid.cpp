@@ -60,7 +60,6 @@ static const char* x86_ext_cap_flags[] = {
   "fxsr", "CAP25", "CAP26", "CAP27", "CAP28", "lm", "3dnowext", "3dnow",
 };
 
-
 int main(int argc, char* argv[]) {
   W32 eax, ebx, ecx, edx;
   W32 maxfuncs;
