@@ -63,48 +63,48 @@ all: ptlsim ptlstats ptlcalls.o cpuid
 	@echo "Compiled successfully..."
 
 genoffsets: genoffsets.o superstl.o
-	g++ -g -O2 genoffsets.o superstl.o -o genoffsets
+	$(CC) -g -O2 genoffsets.o superstl.o -o genoffsets
 
 cpuid: cpuid.o
-	g++ -O2 cpuid.o superstl.o -o cpuid
+	$(CC) -O2 cpuid.o superstl.o -o cpuid
 
 simsynth-offsets.h: genoffsets
 	./genoffsets > simsynth-offsets.h
 
 # Compile this fast:
 ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h config.h
-	gcc $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -c ptlstats.cpp
+	$(CC) $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -march=k8 -fno-exceptions -fno-rtti -c ptlstats.cpp
 
 ifdef __x86_64__
 injectcode-64bit.o: injectcode.cpp
-	g++ $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
+	$(CC) $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
 
 injectcode-32bit.o: injectcode.cpp
-	g++ $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
+	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
 else
 injectcode-32bit.o: injectcode.cpp
-	g++ $(CFLAGS) $(INCFLAGS) -DPTLSIM_FORCE_32BIT_ONLY -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
+	$(CC) $(CFLAGS) $(INCFLAGS) -DPTLSIM_FORCE_32BIT_ONLY -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
 endif
 
 lowlevel-32bit.o: lowlevel-32bit.S
-	gcc -c $(CFLAGS32BIT) $(INCFLAGS) -g -O3 lowlevel-32bit.S
+	$(CC) -c $(CFLAGS32BIT) $(INCFLAGS) -g -O3 lowlevel-32bit.S
 
 ptlcalls-32bit.o: ptlcalls.c
-	gcc -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer ptlcalls.c -o ptlcalls-32bit.o
+	$(CC) -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer ptlcalls.c -o ptlcalls-32bit.o
 
 ifdef __x86_64__
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
-	g++ -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
+	$(CC) -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
 else
 ptlsim: $(OBJFILES) Makefile ptlsim32.lds
-	g++ -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim32.lds -Wl,-e,ptlsim_preinit_entry
+	$(CC) -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim32.lds -Wl,-e,ptlsim_preinit_entry
 endif
 
 ptlsim.objdump: ptlsim Makefile
 	objdump -Crtd --no-show-raw-insn ptlsim | convert-disasm-x86 > ptlsim.objdump
 
 ptlstats: ptlstats.o ptlhwdef.o superstl.o datastore.o config.o Makefile
-	g++ -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
+	$(CC) -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
 
 BASEADDR = 0
 
@@ -123,7 +123,7 @@ test.dat-32bit.S: test.dat Makefile
 	$(CC) $(CFLAGS) $(INCFLAGS) -c $*.S
 
 .c.o:
-	gcc $(CFLAGS) $(INCFLAGS) -c $*.c
+	$(CC) $(CFLAGS) $(INCFLAGS) -c $*.c
 
 clean:
 	rm -fv ptlsim ptlstats cpuid genoffsets *.o simsynth-offsets.h core core.[0-9]* .depend *.gch
