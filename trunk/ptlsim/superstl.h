@@ -1703,8 +1703,10 @@ namespace superstl {
 
     size_t popcountop() const {
       size_t result = 0;
+
       foreach (i, N)
-        result += __builtin_popcountl(w[i]);
+        result += popcount64(w[i]);
+
       return result;
     }
 
@@ -1816,7 +1818,7 @@ namespace superstl {
     void resetop() { w = 0; }
     bool equalop(const bitvecbase<1>& x) const { return w == x.w; }
     bool nonzeroop() const { return (!!w); }
-    size_t popcountop() const { return __builtin_popcountl(w); }
+    size_t popcountop() const { return popcount64(w); }
     unsigned long integerop() const { return w; }
     size_t lsbop() const { return __builtin_ctzl(w); }
     size_t msbop() const { return __builtin_clzl(w); }

@@ -194,10 +194,10 @@ inline void ctzclzop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
   state.reg.rdflags = (((T)rb) == 0) ? FLAG_ZF : 0;
 }
 
-make_exp_aluop(exp_op_ctz, (rd = (rb) ? __builtin_ctzll(rb) : 0));
+make_exp_aluop(exp_op_ctz, (rd = (rb) ? lsbindex64(rb) : 0));
 make_anyop_all_sizes(implmap_ctz, ctzclzop, exp_op_ctz, ZAPS);
 
-make_exp_aluop(exp_op_clz, (rd = (rb) ? __builtin_clzll(rb) : 0));
+make_exp_aluop(exp_op_clz, (rd = (rb) ? msbindex64(rb) : 0));
 make_anyop_all_sizes(implmap_clz, ctzclzop, exp_op_clz, ZAPS);
 
 void uop_impl_collcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
@@ -526,7 +526,7 @@ struct name { \
     Wmax rdx; \
     asm(#opcode " %[rb]; setc %[cf]; seto %[of];" \
         : [rax] "+a" (rax), [rdx] "+d" (rdx), [cf] "=q" (cf), [of] "=q" (of) \
-        : [rb] "r" (rb)); \
+        : [rb] "q" (rb)); \
     Wmax rd; \
     if (sizeof(T) == 1) (extrtextsize1); else (extrtext); \
     return rd; \
