@@ -1209,11 +1209,9 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
 }
 
 void synth_uops_for_bb(BasicBlock& bb) {
-  const byte* p = bb.data;
   bb.synthops = new uopimpl_func_t[bb.count];
   foreach (i, bb.count) {
-    TransOp transop;
-    p = transop.expand(p);
+    const TransOp& transop = bb.transops[i];
     int sfra = 0;
     bool except = 0;
 

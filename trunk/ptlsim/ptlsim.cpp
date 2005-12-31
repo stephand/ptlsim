@@ -61,6 +61,34 @@ void show_stats_and_switch_to_native() {
     sys_exit(0);
   }
 
+  if (overshoot_and_dump | dump_at_end) {
+    Waddr rip = ctx.commitarf[REG_rip];
+
+    BasicBlock** bbp = bbcache(rip);
+    BasicBlock* bb;
+    if (bbp) {
+      bb = *bbp;
+    } else {
+      bb = translate_basic_block((byte*)rip);
+      bbcache.add(rip, bb);
+    }
+
+    assert(bb->transops[0].som);
+    int bytes = bb->transops[0].bytes;
+    Waddr ripafter = rip + (overshoot_and_dump ? bytes : 0);
+
+    logfile << endl;
+    logfile << "Overshoot and dump enabled:", endl;
+    logfile << "- Return to rip ", (void*)rip, " in native mode", endl;
+    if (overshoot_and_dump) logfile << "- Execute one x86 insn of ", bytes, " bytes at rip ", (void*)rip, endl;
+    logfile << "- Breakpoint and dump core at rip ", (void*)ripafter, endl, endl, flush;
+
+    int rc = mprotect((void*)floor(ripafter, PAGE_SIZE), PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
+    assert(!rc);
+
+    *((byte*)ripafter) = 0xfb; // x86 invalid opcode
+  }
+
   logfile.flush();
   init_exit_callback();
   switch_to_native_restore_context();
@@ -85,9 +113,6 @@ void switch_to_sim() {
 
   // Sanitize flags (AMD and Intel CPUs also use bits 1 and 3 for reserved bits, but not for INV and WAIT like we do).
   ctx.commitarf[REG_flags] &= FLAG_NOT_WAIT_INV;
-
-  logfile << "Final state:", endl;
-  logfile << ctx.commitarf;
 
   if (dumpcode_filename) {
     if (asp.check((void*)(Waddr)ctx.commitarf[REG_rip], PROT_READ)) {

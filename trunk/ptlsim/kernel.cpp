@@ -922,34 +922,6 @@ void flush_cpu_caches() {
 // See Documentation/vm/overcommit-accounting for details on how to control the commit charges.
 //
 
-typedef byte X87Reg[10];
-
-union X87StatusWord {
-  struct { W16 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, sf:1, es:1, c0:1, c1:1, c2:1, tos:3, c3:1, b:1; } fields;
-  W16 data;
-};
-
-union X87ControlWord {
-  struct { W16 im:1, dm:1, zm:1, om:1, um:1, pm:1, res1:2, pc:2, rc:2, y:1, res2:3; } fields;
-  W16 data;
-};
-
-struct X87State {
-  X87ControlWord cw;
-  W16 reserved1;
-  X87StatusWord sw;
-  W16 reserved2;
-  W16 tw;
-  W16 reserved3;
-  W32 eip;
-  W16 cs;
-  W16 opcode;
-  W32 dataoffs;
-  W16 ds;
-  W16 reserved4;
-  X87Reg stack[8];
-} __attribute__((packed));
-
 // Saved and restored by asm code:
 X87State x87state;
 

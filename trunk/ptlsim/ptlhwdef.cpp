@@ -334,7 +334,6 @@ void BasicBlock::reset(W64 rip) {
   hashlink(this);
   this->rip = rip_taken = rip_not_taken = rip;
   count = 0;
-  bytes = 0;
   refcount = 0;
   repblock = 0;
   usedregs = 0;
@@ -360,13 +359,12 @@ void BasicBlock::free() {
 }
 
 BasicBlock* BasicBlock::clone() {
-  BasicBlock* bb = (BasicBlock*)malloc(sizeof(BasicBlockBase) + bytes);
+  BasicBlock* bb = (BasicBlock*)malloc(sizeof(BasicBlockBase) + (count * sizeof(TransOp)));
   bb->hashlink(bb);
   bb->rip = rip;
   bb->rip_taken = rip_taken;
   bb->rip_not_taken = rip_not_taken;
   bb->count = count;
-  bb->bytes = bytes;
   bb->refcount = refcount;
   bb->repblock = repblock;
   bb->tagcount = tagcount;
@@ -374,7 +372,7 @@ BasicBlock* BasicBlock::clone() {
   bb->storecount = storecount;
   bb->usedregs = usedregs;
   bb->synthops = null;
-  memcpy(bb->data, this->data, bytes);
+  foreach (i, count) bb->transops[i] = this->transops[i];
   return bb;
 }
 
@@ -382,15 +380,12 @@ ostream& operator <<(ostream& os, const BasicBlock& bb) {
   os << "BasicBlock ", (void*)(Waddr)bb.rip, ": ", bb.count, " transops (", bb.tagcount, "t ", bb.memcount, "m ", bb.storecount, "s";
   if (bb.repblock) os << " rep";
   os << ", uses ", bitstring(bb.usedregs, 64, true), "), ";
-  os << bb.refcount, " refs, ", bb.bytes, " bytes compressed, ", (void*)(Waddr)bb.rip_taken, " taken, ", (void*)(Waddr)bb.rip_not_taken, " not taken:", endl;
-  const byte* p = bb.data;
+  os << bb.refcount, " refs, ", (void*)(Waddr)bb.rip_taken, " taken, ", (void*)(Waddr)bb.rip_not_taken, " not taken:", endl;
   Waddr rip = bb.rip;
   int bytes_in_insn;
 
   foreach (i, bb.count) {
-    TransOp transop;
-    const byte* oldp = p;
-    p = transop.expand(p);
+    const TransOp& transop = bb.transops[i];
     os << "  ", (void*)rip, ": ", transop;
 
     if (transop.som) os << " [som bytes ", transop.bytes, "]";

@@ -7,6 +7,7 @@
 
 #include <globals.h>
 #include <ptlsim.h>
+#include <math.h>
 
 Hashtable<W64, BasicBlock*, 16384> bbcache;
 
@@ -49,6 +50,8 @@ void debug_assist_call(const char* name) {
 enum {
   ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
   ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
+  ASSIST_X87_FPREM, ASSIST_X87_FYL2XP1, ASSIST_X87_FSQRT, ASSIST_X87_FSINCOS,
+  ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS,
   ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
   ASSIST_INVALID_OPCODE, ASSIST_PTLCALL,
   ASSIST_COUNT,
@@ -59,6 +62,14 @@ extern "C" {
   void assist_syscall();
   void assist_sysenter();
   void assist_cpuid();
+  void assist_x87_fprem();
+  void assist_x87_fyl2xp1();
+  void assist_x87_fsqrt(); // (implemented inline)
+  void assist_x87_fsincos();
+  void assist_x87_frndint();
+  void assist_x87_fscale();
+  void assist_x87_fsin();
+  void assist_x87_fcos();
   void assist_invalid_opcode();
 };
 
@@ -187,10 +198,75 @@ template void assist_div<W16>();
 template void assist_div<W32>();
 template void assist_div<W64>();
 
+//
+// x87 assists
+//
+union SSEType {
+  double d;
+  struct { float lo, hi; } f;
+  W64 w64;
+  struct { W32 lo, hi; } w32;
+
+  SSEType() { }
+  SSEType(W64 w) { w64 = w; }
+  operator W64() const { return w64; }
+};
+
+void assist_x87_fprem() {
+  assert(false);
+}
+
+void assist_x87_fyl2xp1() {
+  assert(false);
+}
+
+void assist_x87_fsqrt() {
+  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
+  SSEType ra(r); ra.d = math::sqrt(ra.d); r = ra.w64;
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c1 = 0; sw->fields.c2 = 0;
+}
+
+void assist_x87_fsincos() {
+  W64& ra = fpregs[ctx.commitarf[REG_fptos] >> 3];
+  W64& rb = fpregs[((ctx.commitarf[REG_fptos] >> 3) + 1) & 0x7];
+  SSEType rau(ra); SSEType rbu(rb);
+  rau.d = math::sin(rau.d); rbu.d = math::cos(rbu.d);
+  ra = rau.w64; rb = rbu.w64;
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c1 = 0; sw->fields.c2 = 0;
+}
+
+void assist_x87_frndint() {
+  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
+  SSEType ra(r); ra.d = math::round(ra.d); r = ra.w64;
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c1 = 0; sw->fields.c2 = 0;
+}
+
+void assist_x87_fscale() {
+  assert(false);
+}
+
+void assist_x87_fsin() {
+  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
+  SSEType ra(r); ra.d = math::sin(ra.d); r = ra.w64;
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c1 = 0; sw->fields.c2 = 0;
+}
+
+void assist_x87_fcos() {
+  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
+  SSEType ra(r); ra.d = math::cos(ra.d); r = ra.w64;
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c1 = 0; sw->fields.c2 = 0;
+}
+
 assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_div<byte>, assist_div<W16>, assist_div<W32>, assist_div<W64>,
   assist_idiv<byte>, assist_idiv<W16>, assist_idiv<W32>, assist_idiv<W64>,
-
+  assist_x87_fprem, assist_x87_fyl2xp1, assist_x87_fsqrt, assist_x87_fsincos,
+  assist_x87_frndint, assist_x87_fscale, assist_x87_fsin, assist_x87_fcos,
   assist_int, assist_syscall, assist_sysenter, assist_cpuid,
   assist_invalid_opcode, assist_ptlcall,
 };
@@ -198,6 +274,8 @@ assist_func_t assistid_to_func[ASSIST_COUNT] = {
 const char* assist_names[ASSIST_COUNT] = {
   "div8",  "div16",  "div32",  "div64",
   "idiv8", "idiv16", "idiv32", "idiv64",
+  "x87_fprem", "x87_fyl2xp1", "x87_fsqrt", "x87_fsincos",
+  "x87_frndint", "x87_fscape", "x87_fsin", "x87_fcos",
   "int", "syscall", "sysenter", "cpuid",
   "invopcode", "ptlcall",
 };
@@ -601,7 +679,6 @@ namespace TranslateX86 {
 
   struct TraceDecoder {
     BasicBlock bb;
-    byte* bbp;
 
     TransOp transbuf[MAX_TRANSOPS_PER_USER_INSN];
     int transbufcount;
@@ -627,7 +704,6 @@ namespace TranslateX86 {
     void reset(W64 rip) {
       this->rip = (byte*)(Waddr)rip;
       bb.reset(rip);
-      bbp = bb.data;
       transbufcount = 0;
 
       prefixes = 0;
@@ -709,7 +785,6 @@ namespace TranslateX86 {
         logfile << "ERROR: Too many transops (", bb.count, ") in basic block (max ", MAXBBLEN, " allowed)", endl, flush;
         assert(bb.count < MAXBBLEN);
       }
-      byte* oldp = bbp;
 
       bool ld = isload(transop.opcode);
       bool st = isstore(transop.opcode);
@@ -717,70 +792,55 @@ namespace TranslateX86 {
       if ((ld|st) && unaligned) {
         if (ld) {
           // ld rd = [ra+rb]        =>   ld.low rd = [ra+rb]           and    ld.hi rd = [ra+rb],rd
-          TransOp ldlo = transop;
-          TransOp ldhi = transop;
+          TransOp& ldlo = bb.transops[bb.count+0];
+          TransOp& ldhi = bb.transops[bb.count+1];
+
           ldlo = transop;
           ldlo.rd = REG_temp4;
           ldlo.cond = LDST_ALIGN_LO;
           ldlo.size = 3; // always load 64-bit word
           ldlo.eom = 0;
 
+          ldhi = transop;
           ldhi.rc = REG_temp4;
           ldhi.cond = LDST_ALIGN_HI;
           ldhi.som = 0;
 
-          if (logable(1)) logfile << "  ", intstring(bb.count, 2), ": ", ldlo, endl;
-          if (logable(1)) logfile << "  ", intstring(bb.count, 2), ": ", ldhi, endl;
-
-          bbp = ldlo.compress(bbp);
-          bbp = ldhi.compress(bbp);
-
-          //logfile << "translate rip ", ripstart, ": split load ", transop, endl;
           bb.memcount += 2;
           bb.tagcount += 2;
           bb.count += 2;
         } else {
           assert(st);
           // For stores, expand     st sfrd = [ra+rb],rc    =>   st.low sfrd1 = [ra+rb],rc    and    st.hi sfrd2 = [ra+rb],rc
-          TransOp stlo = transop;
-          TransOp sthi = transop;
+          TransOp& stlo = bb.transops[bb.count+0];
+          TransOp& sthi = bb.transops[bb.count+1];
 
+          stlo = transop;
           stlo = transop;
           stlo.cond = LDST_ALIGN_LO;
           stlo.eom = 0;
-          
+
+          sthi = transop;
           sthi = transop;
           sthi.cond = LDST_ALIGN_HI;
           sthi.som = 0;
 
-          if (logable(1)) logfile << "  ", intstring(bb.count, 2), ": ", stlo, endl;
-          if (logable(1)) logfile << "  ", intstring(bb.count, 2), ": ", sthi, endl;
-
-          bbp = stlo.compress(bbp);
-          bbp = sthi.compress(bbp);
-
-          //logfile << "translate rip ", ripstart, ": split load ", transop, endl;
           bb.memcount += 2;
           bb.storecount += 2;
           bb.tagcount += 2;
           bb.count += 2;
         }
       } else {
-        if (logable(1)) logfile << "  ", intstring(bb.count, 2), ": ", transop, endl;
-
-        bbp = transop.compress(bbp);
+        bb.transops[bb.count++] = transop;
         if (ld|st) bb.memcount++;
         if (st) bb.storecount++;
         bb.tagcount++;
-        bb.count++;
       }
 
       if (transop.rd < ARCHREG_COUNT) setbit(bb.usedregs, transop.rd);
       if (transop.ra < ARCHREG_COUNT) setbit(bb.usedregs, transop.ra);
       if (transop.rb < ARCHREG_COUNT) setbit(bb.usedregs, transop.rb);
       if (transop.rc < ARCHREG_COUNT) setbit(bb.usedregs, transop.rc);
-
-      bb.bytes += (bbp - oldp);
     }
     transbufcount = 0;
   }
@@ -1910,13 +1970,17 @@ namespace TranslateX86 {
       this << TransOp(OP_movrcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
 
       break;
-
     }
-    case 0x9e ... 0x9f: {
-      // lahf sahf (invalid in 64-bit mode)
-      // This is the source of the infamous Intel x86-64 screwup: these insns are missing
-      // on Prescott/Nocona, so AMD had to also invalidate them for compatibility reasons.
-      MakeInvalid();
+
+    case 0x9e: { // sahf: %flags[7:0] = %ah
+      this << TransOp(OP_mask, REG_temp0, REG_zero, REG_rax, REG_imm, 3, 0, make_mask_control_info(0, 8, 8));
+      this << TransOp(OP_movrcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
+      break;
+    }
+
+    case 0x9f: { // lahf: %ah = %flags[7:0]
+      this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+      this << TransOp(OP_mask, REG_rax, REG_rax, REG_temp0, REG_imm, 3, 0, make_mask_control_info(56, 8, 56));
       break;
     }
 
@@ -2562,7 +2626,7 @@ namespace TranslateX86 {
 
     case 0x612:
     case 0x613: { // fst/fstp mem32 or fnop
-      if (modrm.mod == 0x3) {
+      if (modrm.mod == 3) {
         // fnop
         this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
       } else {
@@ -2587,14 +2651,17 @@ namespace TranslateX86 {
 
     case 0x652:
     case 0x653: { // fst/fstp mem64 or fst st(0) to FP stack reg
-      if (modrm.mod == 0x3) {
+      if (modrm.mod == 3) {
         // fst st(0) to FP stack reg
         this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
 
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
         TransOp stp(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
 
-        if (bit(op, 0)) this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: fstp
+        if (bit(op, 0)) {
+          this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
+          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: adjust top of stack
+        }
       } else {
         // store st0 to memory
         // ldd          t0 = [mem]
@@ -2611,7 +2678,7 @@ namespace TranslateX86 {
 
         if (bit(op, 0)) {
           this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
-          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: fstp
+          this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: adjust top of stack
         }
       }
       break;
@@ -2674,6 +2741,35 @@ namespace TranslateX86 {
       }
       break;
     }
+
+    case 0x617: { // fnstcw | fprem fyl2xp1 fsqrt fsincos frndint fscale fsin fcos
+      if (modrm.mod == 3) {
+        // Microcoded FP functions, except for sqrt
+        int x87op = modrm.reg;
+        if (x87op == 2) {
+          // sqrt can be inlined
+          TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
+          this << TransOp(OP_sqrtf, REG_temp0, REG_temp0, REG_temp0, REG_zero, 2);
+          TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
+        } else {
+          static const int x87op_to_assist_idx[8] = {
+            ASSIST_X87_FPREM, ASSIST_X87_FYL2XP1, ASSIST_X87_FSQRT, ASSIST_X87_FSINCOS,
+            ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS
+          };
+
+          microcode_assist(x87op_to_assist_idx[x87op], ripstart, rip);
+          end_of_block = 1;
+        }
+      } else {
+        // fnstcw
+        DECODE(eform, rd, w_mode);
+        CheckInvalid();
+        result_store(REG_fpsw, REG_fpcw, rd);
+        break;
+      }
+      break;
+    }
+
 
     case 0x670: { // ffreep (free and pop: not documented but widely used)
       if (modrm.mod == 0x3) {
@@ -3118,8 +3214,6 @@ namespace TranslateX86 {
 
         microcode_assist(subop_and_size_to_assist_idx[modrm.reg - 6][size], ripstart, rip);
         end_of_block = 1;
-        //++MTY FIXME We need to handle getting the result back into the correct output
-        // register when it's ah/bh/ch/dh.
       }
       break;
     }
@@ -3518,23 +3612,55 @@ namespace TranslateX86 {
     case 0x1ab: { // bts ra,rb
       DECODE(eform, rd, v_mode);
       DECODE(gform, ra, v_mode);
-      // Mem form is too complicated and very rare: we don't support it
-      if (rd.type != OPTYPE_REG) MakeInvalid();
       CheckInvalid();
 
-      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-      int opcode;
-      switch (op) {
-      case 0x1a3: opcode = OP_bt; break;
-      case 0x1ab: opcode = OP_bts; break;
-      case 0x1b3: opcode = OP_btr; break;
-      case 0x1bb: opcode = OP_btc; break;
+      if (rd.type == OPTYPE_REG) {
+        int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+        int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+        int opcode;
+        switch (op) {
+        case 0x1a3: opcode = OP_bt; break;
+        case 0x1ab: opcode = OP_bts; break;
+        case 0x1b3: opcode = OP_btr; break;
+        case 0x1bb: opcode = OP_btc; break;
+        }
+        
+        // bt has no output - just flags:
+        this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
+        break;
+      } else {
+        // Mem form is more complicated:
+        int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+
+        int basereg = arch_pseudo_reg_to_arch_reg[rd.mem.basereg];
+        int indexreg = arch_pseudo_reg_to_arch_reg[rd.mem.indexreg];
+
+        // [ra + rb*scale + imm32]
+        basereg = bias_by_segreg(basereg);
+        TransOp addop(OP_adda, REG_temp1, basereg, REG_imm, indexreg, 3, rd.mem.offset);
+        addop.extshift = rd.mem.scale;
+        this << addop;
+
+        this << TransOp(OP_sar, REG_temp2, rareg, REG_imm, REG_zero, 3, 3); // byte index
+
+        this << TransOp(OP_ld, REG_temp0, REG_temp1, REG_temp2, REG_zero, 0);
+
+        int opcode;
+        switch (op) {
+        case 0x1a3: opcode = OP_bt; break;
+        case 0x1ab: opcode = OP_bts; break;
+        case 0x1b3: opcode = OP_btr; break;
+        case 0x1bb: opcode = OP_btc; break;
+        }
+
+        this << TransOp(opcode, REG_temp0, REG_temp0, rareg, REG_zero, 0, 0, 0, SETFLAG_CF);
+
+        if (opcode != OP_bt) {
+          this << TransOp(OP_st, REG_mem, REG_temp1, REG_temp2, REG_temp0, 0);
+        }
+
+        break;
       }
- 
-      // bt has no output - just flags:
-      this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
-      break;
     }
 
     case 0x1ba: { // bt|btc|btr|bts ra,imm
@@ -3599,6 +3725,40 @@ namespace TranslateX86 {
       this << TransOp(OP_bswap, rdreg, (sizeshift >= 2) ? REG_zero : rdreg, rdreg, REG_zero, sizeshift);
       break;
     }
+
+      //
+      // SSE Logical
+      //
+    case 0x5db:   // pand      66 0f db
+    case 0x5df:   // pandn     66 0f df
+    case 0x5eb:   // por       66 0f eb
+    case 0x5ef: { // pxor      66 0f ef
+      DECODE(gform, rd, x_mode);
+      DECODE(eform, ra, x_mode);
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg;
+
+      if (ra.type == OPTYPE_MEM) {
+        rareg = REG_temp0;
+        operand_load(REG_temp0, ra, OP_ld, 1);
+        ra.mem.offset += 8;
+        operand_load(REG_temp1, ra, OP_ld, 1);
+      } else {
+        rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      }
+
+      int opcode = (op == 0x5db) ? OP_and : (op == 0x5df) ? OP_andnot : (op == 0x5eb) ? OP_or : (op == 0x5ef) ? OP_xor : OP_nop;
+
+      this << TransOp(opcode, rdreg+0, rdreg+0, rareg+0, REG_zero, 3);
+      this << TransOp(opcode, rdreg+1, rdreg+1, rareg+1, REG_zero, 3);
+      break;
+    }
+
+      //
+      // SSE Arithmetic
+      //
 
       // 0x2xx = XXXss:
     case 0x251: // sqrt

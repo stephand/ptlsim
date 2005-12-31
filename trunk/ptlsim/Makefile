@@ -59,7 +59,7 @@ endif
 
 CFLAGS += -D__PTLSIM_OOO_ONLY__
 
-all: ptlsim ptlstats ptlcalls.o cpuid
+all: ptlsim ptlstats ptlcalls.o ptlcalls-32bit.o cpuid
 	@echo "Compiled successfully..."
 
 genoffsets: genoffsets.o superstl.o

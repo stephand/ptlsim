@@ -2174,6 +2174,93 @@ namespace superstl {
 #undef __builtin_ctzl
 #undef __builtin_clzl
 
+  inline W64s expandword(const byte*& p, int type) {
+    W64s v;
+
+    switch (type) {
+    case 0: 
+      return 0;
+    case 1:
+      v = *((W8s*)p);
+      p += 1;
+      return v;
+    case 2:
+      v = *((W16s*)p);
+      p += 2;
+      return v;
+    case 3:
+      v = *((W32s*)p);
+      p += 4;
+      return v;
+    case 4: // signed or unsigned W64
+      v = *((W64s*)p);
+      p += 8;
+      return v;
+    case 5: // unsigned byte
+      v = *((byte*)p);
+      p += 1;
+      return v;
+    case 6: // unsigned W16
+      v = *((W16*)p);
+      p += 2;
+      return v;
+    case 7: // unsigned W32
+      v = *((W32*)p);
+      p += 4;
+      return v;
+    }
+
+    return v;
+  }
+
+  inline int compressword(byte*& p, W64s v) {
+    int f;
+
+    if (!v) {
+      f = 0;
+    } else if (v >= 0) {
+      if (inrange(v, 0LL, 255LL)) {
+        *((byte*)p) = bits(v, 0, 8);
+        p += 1;
+        f = 5;
+      } else if (inrange(v, 0LL, 65535LL)) {
+        *((W16*)p) = bits(v, 0, 16);
+        p += 2;
+        f = 6;
+      } else if (inrange(v, 0LL, 4294967295LL)) {
+        *((W32*)p) = bits(v, 0, 32);
+        p += 4;
+        f = 7;
+      } else {
+        // default to W64:
+        *((W64*)p) = v;
+        p += 8;
+        f = 4;
+      }
+    } else {
+      if (inrange(v, -128LL, 127LL)) {
+        *((byte*)p) = bits(v, 0, 8);
+        p += 1;
+        f = 1;
+      } else if (inrange(v, -32768LL, 32767LL)) {
+        *((W16*)p) = bits(v, 0, 16);
+        p += 2;
+        f = 2;
+      } else if (inrange(v, -2147483648LL, -2147483647LL)) {
+        *((W32*)p) = bits(v, 0, 32);
+        p += 4;
+        f = 3;
+      } else {
+        // default to W64:
+        *((W64*)p) = v;
+        p += 8;
+        f = 4;
+      }
+    }
+
+    return f;
+  }
+
   class CycleTimer {
   public:
     CycleTimer() { total = 0; tstart = 0; iterations = 0; title = "(generic)"; running = 0; }

@@ -38,6 +38,8 @@ W64 perfect_cache = 0;
 W64 snapshot_cycles = MAX_CYCLE;
 W64 flush_interval = MAX_CYCLE;
 W64 pause_at_startup = 0;
+W64 overshoot_and_dump = 0;
+W64 dump_at_end = 0;
 
 
 W64 use_out_of_order_core = 1;
@@ -78,6 +80,8 @@ static ConfigurationOption optionlist[] = {
   {"exitend",                            OPTION_TYPE_BOOL,    0, "Kill the thread after full simulation completes rather than going native", &exit_after_fullsim},
   {null,                                 OPTION_TYPE_SECTION, 0, "Debugging", null},
   {"dumpcode",                           OPTION_TYPE_STRING,  0, "Save page of user code at final rip to file <dumpcode>", &dumpcode_filename},
+  {"dump-at-end",                        OPTION_TYPE_BOOL,    0, "Set breakpoint and dump core before first instruction executed on return to native mode", &dump_at_end},
+  {"overshoot-and-dump",                 OPTION_TYPE_BOOL,    0, "Set breakpoint and dump core after first instruction executed on return to native mode", &overshoot_and_dump},
   {"pause-at-startup",                   OPTION_TYPE_W64,     0, "Pause for N seconds after starting up (to allow debugger to attach)", &pause_at_startup},
   {"perfect-cache",                      OPTION_TYPE_BOOL,    0, "Perfect cache hit rate", &perfect_cache},
 

@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-#define ENABLE_CHECKS
-#define ENABLE_LOGGING
+//#define ENABLE_CHECKS
+//#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -38,7 +38,6 @@ namespace SequentialCore {
 
   BasicBlock* current_basic_block = null;
   Waddr current_basic_block_rip = 0;
-  const byte* current_basic_block_transop = null;
   int current_basic_block_transop_index = 0;
   int bytes_in_current_insn = 0;
   int current_uop_in_macro_op;
@@ -48,7 +47,7 @@ namespace SequentialCore {
   W64 fetch_blocks_fetched;
   W64 fetch_uops_fetched;
   W64 fetch_user_insns_fetched;
-  
+
   W64 bbcache_inserts;
   W64 bbcache_removes;
   
@@ -97,13 +96,10 @@ namespace SequentialCore {
     return os;
   }
 
-  // call this in response to a branch mispredict:
   void reset_fetch(W64 realrip) {
-    //logfile << "Reset fetch at ", (void*)realrip, endl;
     arf[REG_rip] = realrip;
     current_basic_block = null;
     current_basic_block_rip = 0;
-    current_basic_block_transop = null;
     current_basic_block_transop_index = 0;
   }
 
@@ -492,6 +488,28 @@ namespace SequentialCore {
   W64 seq_total_user_insns_committed;
   W64 seq_sim_cycle;
 
+  BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
+    BasicBlock** bb = bbcache(rip);
+    
+    if (bb) {
+      current_basic_block = *bb;
+      current_basic_block_rip = rip;
+    } else {
+      current_basic_block = translate_basic_block((byte*)rip);
+      current_basic_block_rip = rip;
+      assert(current_basic_block);
+      synth_uops_for_bb(*current_basic_block);
+      
+      if (logable(1)) logfile << padstring("", 20), " xlate  rip ", (void*)rip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
+      bbcache.add(rip, current_basic_block);
+      bbcache_inserts++;
+    }
+    
+    current_basic_block_transop_index = 0;
+
+    return current_basic_block;
+  }
+
   int sequential_core_toplevel_loop() {
     logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
 
@@ -546,27 +564,10 @@ namespace SequentialCore {
       }
 
       if ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
-        BasicBlock** bb = bbcache(rip);
-
-        if (bb) {
-          current_basic_block = *bb;
-          current_basic_block_rip = rip;
-        } else {
-          current_basic_block = translate_basic_block((byte*)rip);
-          current_basic_block_rip = rip;
-          assert(current_basic_block);
-          synth_uops_for_bb(*current_basic_block);
-      
-          if (logable(1)) logfile << padstring("", 20), " xlate  rip ", (void*)rip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
-          bbcache.add(rip, current_basic_block);
-          bbcache_inserts++;
-        }
-    
-        current_basic_block_transop = current_basic_block->data;
-        current_basic_block_transop_index = 0;
+        fetch_or_translate_basic_block(rip);
       }
 
-      current_basic_block_transop = uop.expand(current_basic_block_transop);
+      uop = current_basic_block->transops[current_basic_block_transop_index];
   
       if (uop.som) {
         current_uop_in_macro_op = 0;

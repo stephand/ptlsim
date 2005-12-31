@@ -547,100 +547,6 @@ extern const char* setflag_names[SETFLAG_COUNT];
 extern const char* x86_flag_names[FLAG_COUNT];
 extern const W16 setflags_to_x86_flags[1<<3];
 
-#undef COMPRESS_TRANSOPS
-
-#ifdef COMPRESS_TRANSOPS
-//
-// Immediate compression
-//
-inline W64s expandword(const byte*& p, int type) {
-  W64s v;
-
-  switch (type) {
-  case 0: 
-    return 0;
-  case 1:
-    v = *((W8s*)p);
-    p += 1;
-    return v;
-  case 2:
-    v = *((W16s*)p);
-    p += 2;
-    return v;
-  case 3:
-    v = *((W32s*)p);
-    p += 4;
-    return v;
-  case 4: // signed or unsigned W64
-    v = *((W64s*)p);
-    p += 8;
-    return v;
-  case 5: // unsigned byte
-    v = *((byte*)p);
-    p += 1;
-    return v;
-  case 6: // unsigned W16
-    v = *((W16*)p);
-    p += 2;
-    return v;
-  case 7: // unsigned W32
-    v = *((W32*)p);
-    p += 4;
-    return v;
-  }
-
-  return v;
-}
-
-inline int compressword(byte*& p, W64s v) {
-  int f;
-
-  if (!v) {
-    f = 0;
-  } else if (v >= 0) {
-    if (inrange(v, 0, 255)) {
-      *((byte*)p) = bits(v, 0, 8);
-      p += 1;
-      f = 5;
-    } else if (inrange(v, 0, 65535)) {
-      *((W16*)p) = bits(v, 0, 16);
-      p += 2;
-      f = 6;
-    } else if (inrange(v, 0, 4294967295LL)) {
-      *((W32*)p) = bits(v, 0, 32);
-      p += 4;
-      f = 7;
-    } else {
-      // default to W64:
-      *((W64*)p) = v;
-      p += 8;
-      f = 4;
-    }
-  } else {
-    if (inrange(v, -128, 127)) {
-      *((byte*)p) = bits(v, 0, 8);
-      p += 1;
-      f = 1;
-    } else if (inrange(v, -32768, 32767)) {
-      *((W16*)p) = bits(v, 0, 16);
-      p += 2;
-      f = 2;
-    } else if (inrange(v, -2147483648LL, -2147483647LL)) {
-      *((W32*)p) = bits(v, 0, 32);
-      p += 4;
-      f = 3;
-    } else {
-      // default to W64:
-      *((W64*)p) = v;
-      p += 8;
-      f = 4;
-    }
-  }
-
-  return f;
-}
-#endif
-
 //
 // Structures
 //
@@ -685,65 +591,6 @@ struct TransOp: public TransOpBase {
     this->extshift = 0;
     this->cachelevel = 0;
   }
-
-  byte* compress(byte* p) const {
-#ifdef COMPRESS_TRANSOPS
-    TransOpBase* origp = (TransOpBase*)p;
-    TransOpBase base = *this;
-
-    p += sizeof(TransOpBase);
-    base.rbimmsz = compressword(p, rbimm);
-    base.rcimmsz = compressword(p, rcimm);
-
-    base.has_riptaken = (riptaken != 0);
-    if (riptaken) {
-      *((W64*)p) = riptaken;
-      p += 8;
-    }
-
-    base.has_ripseq = (ripseq != 0);
-    if (ripseq) {
-      *((W64*)p) = ripseq;
-      p += 8;
-    }
-
-    *origp = base;
-    return p;
-#else
-    *((TransOp*)p) = *this;
-    p += sizeof(TransOp);
-    return p;
-#endif
-  }
-
-  const byte* expand(const byte* p) {
-#ifdef COMPRESS_TRANSOPS
-    memcpy(this, p, sizeof(TransOpBase));
-    p += sizeof(TransOpBase);
-
-    rbimm = expandword(p, rbimmsz);
-    rcimm = expandword(p, rcimmsz);
-
-    riptaken = 0;
-    if (has_riptaken) {
-      riptaken = *((W64*)p);
-      p += 8;
-    }
-
-    ripseq = 0;
-    if (has_ripseq) {
-      ripseq = *((W64*)p);
-      p += 8;
-    }
-
-    return p;
-#else
-    *this = *((TransOp*)p);
-    p += sizeof(TransOp);
-    return p;
-#endif
-  }
-
 };
 
 ostream& operator <<(ostream& os, const TransOp& op);
@@ -759,7 +606,6 @@ struct BasicBlockBase {
   W64 rip_taken;
   W64 rip_not_taken;
   W16 count;
-  W16 bytes;
   int refcount;
   W64 tagcount:10, memcount:8, storecount:8, repblock:1;
   W64 usedregs;
@@ -777,8 +623,7 @@ struct BasicBlockBase {
 };
 
 struct BasicBlock: public BasicBlockBase {
-  //TransOp ops[MAXBBLEN];
-  byte data[(MAXBBLEN*2) * sizeof(TransOp)];
+  TransOp transops[MAXBBLEN*2];
 
   void reset(W64 rip = 0);
   BasicBlock* clone();

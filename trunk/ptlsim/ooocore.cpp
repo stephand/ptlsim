@@ -470,6 +470,12 @@ struct FetchBufferEntry: public TransOp {
 
   int init(int idx) { return 0; }
   void validate() { }
+
+  FetchBufferEntry() { }
+
+  FetchBufferEntry(const TransOp& transop) {
+    *((TransOp*)this) = transop;
+  }
 };
 
 struct ReorderBufferEntry: public selfqueuelink {
@@ -1097,7 +1103,6 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
 
 Waddr current_basic_block_rip = 0;
 BasicBlock* current_basic_block = null;
-const byte* current_basic_block_transop = null;
 int current_basic_block_transop_index = 0;
 int bytes_in_current_insn = 0;
 
@@ -1126,8 +1131,36 @@ void reset_fetch_unit(W64 realrip) {
   fetchq.reset();
   current_basic_block = null;
   current_basic_block_rip = realrip;
-  current_basic_block_transop = null;
   current_basic_block_transop_index = 0;
+}
+
+CycleTimer cttrans;
+
+W64 bbcache_inserts;
+W64 bbcache_removes;
+
+BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
+  BasicBlock** bb = bbcache(fetchrip);
+  
+  if (bb) {
+    current_basic_block = *bb;
+    current_basic_block_rip = fetchrip;
+  } else {
+    start_timer(cttrans);
+    current_basic_block = translate_basic_block((byte*)fetchrip);
+    current_basic_block_rip = fetchrip;
+    assert(current_basic_block);
+    synth_uops_for_bb(*current_basic_block);
+    stop_timer(cttrans);
+    
+    if (logable(1)) logfile << padstring("", 20), " xlate  rip 0x", (void*)fetchrip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
+    bbcache.add(fetchrip, current_basic_block);
+    bbcache_inserts++;
+  }
+  
+  current_basic_block_transop_index = 0;
+
+  return current_basic_block;
 }
 
 int FetchBufferEntry::index() const {
@@ -1137,7 +1170,6 @@ int FetchBufferEntry::index() const {
 W64 fetch_uuid = 0;
 
 CycleTimer ctfetch;
-CycleTimer cttrans;
 
 W64 fetch_width_histogram[FETCH_WIDTH+1];
 W64 branchpred_predictions;
@@ -1164,9 +1196,6 @@ W64 fetch_stop_full_width;
 W64 fetch_blocks_fetched;
 W64 fetch_uops_fetched;
 W64 fetch_user_insns_fetched;
-
-W64 bbcache_inserts;
-W64 bbcache_removes;
 
 W64 fetch_opclass_histogram[OPCLASS_COUNT];
 
@@ -1237,30 +1266,11 @@ void fetch() {
     }
 
     if ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
-      BasicBlock** bb = bbcache(fetchrip);
-
-      if (bb) {
-        current_basic_block = *bb;
-        current_basic_block_rip = fetchrip;
-      } else {
-        start_timer(cttrans);
-        current_basic_block = translate_basic_block((byte*)fetchrip);
-        current_basic_block_rip = fetchrip;
-        assert(current_basic_block);
-        synth_uops_for_bb(*current_basic_block);
-        stop_timer(cttrans);
-
-        if (logable(1)) logfile << padstring("", 20), " xlate  rip 0x", (void*)fetchrip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
-        bbcache.add(fetchrip, current_basic_block);
-        bbcache_inserts++;
-      }
-
-      current_basic_block_transop = current_basic_block->data;
-      current_basic_block_transop_index = 0;
+      fetch_or_translate_basic_block(fetchrip);
     }
 
     FetchBufferEntry& transop = *fetchq.alloc();
-    current_basic_block_transop = transop.expand(current_basic_block_transop);
+    transop = current_basic_block->transops[current_basic_block_transop_index];
     transop.synthop = current_basic_block->synthops[current_basic_block_transop_index];
     current_basic_block_transop_index++;
 
