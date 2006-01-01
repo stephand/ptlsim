@@ -47,32 +47,6 @@ void debug_assist_call(const char* name) {
   logfile << "assist: ", name, " called from ", (void*)(Waddr)ctx.commitarf[REG_sr0], ", return to ", (void*)(Waddr)ctx.commitarf[REG_sr1], ", argument ", (void*)(Waddr)ctx.commitarf[REG_sr2], endl; 
 }
 
-enum {
-  ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
-  ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
-  ASSIST_X87_FPREM, ASSIST_X87_FYL2XP1, ASSIST_X87_FSQRT, ASSIST_X87_FSINCOS,
-  ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS,
-  ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
-  ASSIST_INVALID_OPCODE, ASSIST_PTLCALL,
-  ASSIST_COUNT,
-};
-
-extern "C" {
-  void assist_int();
-  void assist_syscall();
-  void assist_sysenter();
-  void assist_cpuid();
-  void assist_x87_fprem();
-  void assist_x87_fyl2xp1();
-  void assist_x87_fsqrt(); // (implemented inline)
-  void assist_x87_fsincos();
-  void assist_x87_frndint();
-  void assist_x87_fscale();
-  void assist_x87_fsin();
-  void assist_x87_fcos();
-  void assist_invalid_opcode();
-};
-
 void assist_invalid_opcode() {
   // This is handled specially elsewhere
   assert(false);
@@ -201,6 +175,9 @@ template void assist_div<W64>();
 //
 // x87 assists
 //
+
+#define FP_STACK_MASK 0x3f
+
 union SSEType {
   double d;
   struct { float lo, hi; } f;
@@ -216,57 +193,139 @@ void assist_x87_fprem() {
   assert(false);
 }
 
-void assist_x87_fyl2xp1() {
-  assert(false);
+#define make_two_input_x87_func_with_pop(name, expr) \
+void assist_x87_##name() { \
+  W64& tos = ctx.commitarf[REG_fptos]; \
+  W64& st0 = fpregs[tos >> 3]; \
+  W64& st1 = fpregs[((tos >> 3) + 1) & 0x7]; \
+  SSEType st0u(st0); SSEType st1u(st1); \
+  (expr); \
+  st1 = st1u.w64; \
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw]; \
+  sw->fields.c1 = 0; sw->fields.c2 = 0; \
+  clearbit(ctx.commitarf[REG_fptags], tos); \
+  tos = (tos + 8) & FP_STACK_MASK; \
 }
 
-void assist_x87_fsqrt() {
-  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
-  SSEType ra(r); ra.d = math::sqrt(ra.d); r = ra.w64;
-  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
-  sw->fields.c1 = 0; sw->fields.c2 = 0;
-}
+// Fix macro problems:
+#define old_log2 log2
+#undef log2
 
-void assist_x87_fsincos() {
-  W64& ra = fpregs[ctx.commitarf[REG_fptos] >> 3];
-  W64& rb = fpregs[((ctx.commitarf[REG_fptos] >> 3) + 1) & 0x7];
-  SSEType rau(ra); SSEType rbu(rb);
-  rau.d = math::sin(rau.d); rbu.d = math::cos(rbu.d);
-  ra = rau.w64; rb = rbu.w64;
-  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
-  sw->fields.c1 = 0; sw->fields.c2 = 0;
-}
+// st(1) = st(1) + log2(st(0)) and pop st(0)
+make_two_input_x87_func_with_pop(fyl2x, st1u.d = st1u.d * math::log2(st0u.d));
 
-void assist_x87_frndint() {
-  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
-  SSEType ra(r); ra.d = math::round(ra.d); r = ra.w64;
-  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
-  sw->fields.c1 = 0; sw->fields.c2 = 0;
-}
+// st(1) = st(1) + log2(st(0) + 1.0) and pop st(0)
+make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = st1u.d * math::log2(st0u.d + 1));
+
+// st(1) = st(1) + log2(st(0) + 1.0) and pop st(0)
+make_two_input_x87_func_with_pop(fpatan, st1u.d = math::atan(st1u.d / st0u.d));
 
 void assist_x87_fscale() {
+  W64& tos = ctx.commitarf[REG_fptos];
+  W64& st0 = fpregs[tos >> 3];
+  W64& st1 = fpregs[((tos >> 3) + 1) & 0x7];
+  SSEType st0u(st0); SSEType st1u(st1);
+  st0u.d = st0u.d * math::exp2(math::trunc(st1u.d));
+  st0 = st0u.w64;
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c1 = 0; sw->fields.c2 = 0;
+}
+
+#define log2 old_log2
+
+#define make_unary_x87_func(name, expr) \
+void assist_x87_##name() { \
+  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3]; \
+  SSEType ra(r); ra.d = (expr); r = ra.w64; \
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw]; \
+  sw->fields.c1 = 0; sw->fields.c2 = 0; \
+}
+
+make_unary_x87_func(fsqrt, math::sqrt(ra.d));
+make_unary_x87_func(fsin, math::sin(ra.d));
+make_unary_x87_func(fcos, math::cos(ra.d));
+make_unary_x87_func(f2xm1, math::exp2(ra.d) - 1);
+
+void assist_x87_frndint() {
+  X87ControlWord cw; cw.data = ctx.commitarf[REG_fpcw];
+  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
+  SSEType ra(r);
+  switch (cw.fields.rc) {
+  case 0: // round to nearest (round)
+    ra.d = math::round(ra.d); break;
+  case 1: // round down (floor)
+    ra.d = math::floor(ra.d); break;
+  case 2: // round up (ceil)
+    ra.d = math::ceil(ra.d); break;
+  case 3: // round towards zero (trunc)
+    ra.d = math::trunc(ra.d); break;
+  }
+  r = ra.w64;
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c1 = 0; sw->fields.c2 = 0;
+}
+
+#define make_two_output_x87_func_with_push(name, expr) \
+void assist_x87_##name() { \
+  W64& tos = ctx.commitarf[REG_fptos]; \
+  W64& st0 = fpregs[tos >> 3]; \
+  W64& st1 = fpregs[((tos >> 3) - 1) & 0x7]; \
+  SSEType st0u(st0); SSEType st1u(st1); \
+  expr; \
+  st0 = st0u.w64; st1 = st1u.w64; \
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw]; \
+  sw->fields.c1 = 0; sw->fields.c2 = 0; \
+  tos = (tos - 8) & FP_STACK_MASK; \
+  setbit(ctx.commitarf[REG_fptags], tos); \
+}
+
+// st(0) = sin(st(0)) and push cos(orig st(0))
+make_two_output_x87_func_with_push(fsincos, (st1u.d = math::cos(st0u.d), st0u.d = math::sin(st0u.d)));
+
+// st(0) = tan(st(0)) and push value 1.0
+make_two_output_x87_func_with_push(fptan, (st1u.d = 1.0, st0u.d = math::tan(st0u.d)));
+
+void assist_x87_fxtract() {
   assert(false);
 }
 
-void assist_x87_fsin() {
-  W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
-  SSEType ra(r); ra.d = math::sin(ra.d); r = ra.w64;
-  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
-  sw->fields.c1 = 0; sw->fields.c2 = 0;
+void assist_x87_fprem1() {
+  assert(false);
 }
 
-void assist_x87_fcos() {
+void assist_x87_fxam() {
   W64& r = fpregs[ctx.commitarf[REG_fptos] >> 3];
-  SSEType ra(r); ra.d = math::cos(ra.d); r = ra.w64;
+  SSEType ra(r);
+
+  X87StatusWord fpsw;
+  asm("fxam; fstsw %%ax" : "=a" (fpsw.data) : "t" (ra.d));
+
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
-  sw->fields.c1 = 0; sw->fields.c2 = 0;
+  sw->fields.c0 = fpsw.fields.c0;
+  sw->fields.c1 = fpsw.fields.c1;
+  sw->fields.c2 = fpsw.fields.c2;
+  sw->fields.c3 = fpsw.fields.c3;
 }
+
+enum {
+  ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
+  ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
+  ASSIST_X87_FPREM, ASSIST_X87_FYL2XP1, ASSIST_X87_FSQRT, ASSIST_X87_FSINCOS,
+  ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS,
+  ASSIST_X87_FXAM, ASSIST_X87_F2XM1, ASSIST_X87_FYL2X, ASSIST_X87_FPTAN,
+  ASSIST_X87_FPATAN, ASSIST_X87_FXTRACT, ASSIST_X87_FPREM1,
+  ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
+  ASSIST_INVALID_OPCODE, ASSIST_PTLCALL,
+  ASSIST_COUNT,
+};
 
 assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_div<byte>, assist_div<W16>, assist_div<W32>, assist_div<W64>,
   assist_idiv<byte>, assist_idiv<W16>, assist_idiv<W32>, assist_idiv<W64>,
   assist_x87_fprem, assist_x87_fyl2xp1, assist_x87_fsqrt, assist_x87_fsincos,
   assist_x87_frndint, assist_x87_fscale, assist_x87_fsin, assist_x87_fcos,
+  assist_x87_fxam, assist_x87_f2xm1, assist_x87_fyl2x, assist_x87_fptan,
+  assist_x87_fpatan, assist_x87_fxtract, assist_x87_fprem1,
   assist_int, assist_syscall, assist_sysenter, assist_cpuid,
   assist_invalid_opcode, assist_ptlcall,
 };
@@ -275,7 +334,9 @@ const char* assist_names[ASSIST_COUNT] = {
   "div8",  "div16",  "div32",  "div64",
   "idiv8", "idiv16", "idiv32", "idiv64",
   "x87_fprem", "x87_fyl2xp1", "x87_fsqrt", "x87_fsincos",
-  "x87_frndint", "x87_fscape", "x87_fsin", "x87_fcos",
+  "x87_frndint", "x87_fscale", "x87_fsin", "x87_fcos",
+  "x87_fxam", "x87_f2xm1", "x87_fyl2x", "x87_fptan",
+  "x87_fpatan", "x87_fxtract", "x87_fprem1"
   "int", "syscall", "sysenter", "cpuid",
   "invopcode", "ptlcall",
 };
@@ -328,9 +389,10 @@ namespace TranslateX86 {
   static const int PFX_DATA      = (1 << 9);
   static const int PFX_ADDR      = (1 << 10);
   static const int PFX_REX       = (1 << 11);
-  static const int PFX_count     = 12;
+  static const int PFX_FWAIT     = (1 << 12);
+  static const int PFX_count     = 13;
 
-  static const char* prefix_names[] = {"repz", "repnz", "lock", "cs", "ss", "ds", "es", "fs", "gs", "datasz", "addrsz", "rex"};
+  static const char* prefix_names[] = {"repz", "repnz", "lock", "cs", "ss", "ds", "es", "fs", "gs", "datasz", "addrsz", "rex", "fwait"};
 
   static const W16 prefix_map_x86_64[256] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -342,7 +404,7 @@ namespace TranslateX86 {
     0, 0, 0, 0, PFX_FS, PFX_GS, PFX_DATA, PFX_ADDR, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, PFX_FWAIT, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -361,7 +423,7 @@ namespace TranslateX86 {
     0, 0, 0, 0, PFX_FS, PFX_GS, PFX_DATA, PFX_ADDR, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, PFX_FWAIT, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -2498,8 +2560,6 @@ namespace TranslateX86 {
       // 0x670 (0xdf): fild fisttp fist fistp fbld fild fbstp fistp
       //
 
-#define FP_STACK_MASK 0x3f
-
     case 0x600 ... 0x607: // 0xd8 xx: st(0) = st(0) OP [mem32 | st(modrm.rm)]
     case 0x640 ... 0x647: // 0xdc xx: st(modrm.rm) = st(modrm.rm) OP [mem64 | st(0)]
     case 0x660 ... 0x667: { // 0xde xx: [st(modrm.rm) = st(modrm.rm) OP st(0) and pop] | [st(0) = st(0) - mem16int (fiOP)]
@@ -2528,8 +2588,8 @@ namespace TranslateX86 {
       static const int x87_d8da_translate_ra[8] = {REG_temp0, REG_temp0, REG_temp0, REG_temp0,  REG_temp0, REG_temp1, REG_temp0, REG_temp1};
       static const int x87_d8da_translate_rb[8] = {REG_temp1, REG_temp1, REG_temp1, REG_temp1,  REG_temp1, REG_temp0, REG_temp1, REG_temp0};
       // incredibly, the 0xdc and 0xde encodings have some of these flips reversed!
-      static const int x87_dcde_translate_ra[8] = {REG_temp0, REG_temp0, REG_temp0, REG_temp0,  REG_temp1, REG_temp0, REG_temp1, REG_temp0};
-      static const int x87_dcde_translate_rb[8] = {REG_temp1, REG_temp1, REG_temp1, REG_temp1,  REG_temp0, REG_temp1, REG_temp0, REG_temp1};
+      static const int x87_dcde_translate_ra[8] = {REG_temp0, REG_temp0, REG_temp0, REG_temp0,  REG_temp0, REG_temp1, REG_temp0, REG_temp1};
+      static const int x87_dcde_translate_rb[8] = {REG_temp1, REG_temp1, REG_temp1, REG_temp1,  REG_temp1, REG_temp0, REG_temp1, REG_temp0};
 
       int translated_opcode = x87_translate_opcode[x87op];
       int ra = ((dcform|deform) & (!memform)) ? x87_dcde_translate_ra[x87op] : x87_d8da_translate_ra[x87op];
@@ -2597,13 +2657,26 @@ namespace TranslateX86 {
         DECODE(eform, ra, d_mode);
         CheckInvalid();
         operand_load(REG_temp0, ra, OP_ld, 1);
-        this << TransOp(OP_cvtf_s2d_lo, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
+        this << TransOp(OP_cvtf_s2d_lo, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
         this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
       }
       break;
     }
+
+    case 0x616: { // misc functions
+      if (modrm.mod != 3) MakeInvalid();
+      int subop = modrm.rm;
+      if (inrange(subop, 0, 5)) {
+        static const int subop_to_assistid[6] = { ASSIST_X87_F2XM1, ASSIST_X87_FYL2X, ASSIST_X87_FPTAN, ASSIST_X87_FPATAN, ASSIST_X87_FXTRACT, ASSIST_X87_FPREM1 };
+        microcode_assist(subop_to_assistid[subop], ripstart, rip); end_of_block = 1;
+      } else {
+        // fdecstp or fincstp
+        this << TransOp((subop == 6) ? OP_subm : OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK);
+      }
+      break;
+    };
 
     case 0x650: { // fld mem64 or ffree
       if (modrm.mod == 3) {
@@ -2737,15 +2810,17 @@ namespace TranslateX86 {
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // push: set used bit in tag word
       } else {
         // fldcw
-        MakeInvalid();
+        DECODE(eform, ra, w_mode);
+        CheckInvalid();
+        operand_load(REG_fpcw, ra, OP_ld);
       }
       break;
     }
 
     case 0x617: { // fnstcw | fprem fyl2xp1 fsqrt fsincos frndint fscale fsin fcos
       if (modrm.mod == 3) {
+        int x87op = modrm.rm;
         // Microcoded FP functions, except for sqrt
-        int x87op = modrm.reg;
         if (x87op == 2) {
           // sqrt can be inlined
           TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
@@ -2764,8 +2839,7 @@ namespace TranslateX86 {
         // fnstcw
         DECODE(eform, rd, w_mode);
         CheckInvalid();
-        result_store(REG_fpsw, REG_fpcw, rd);
-        break;
+        result_store(REG_fpcw, REG_temp0, rd);
       }
       break;
     }
@@ -2801,16 +2875,32 @@ namespace TranslateX86 {
       case 0: { // fchs
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
         this << TransOp(OP_xor, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, (1LL << 63)); break;
+        TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
+        break;
       } 
       case 1: { // fabs
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
         this << TransOp(OP_and, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, ~(1LL << 63)); break;
+        TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
+        break;
+      }
+      case 4: { // ftst: compare st(0) to 0.0
+        TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
+        this << TransOp(OP_cmpccf, REG_temp0, REG_temp0, REG_zero, REG_zero, 2);
+        TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_cmpccf_to_x87); ldpxlate.internal = 1; this << ldpxlate;
+        this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, make_mask_control_info((64-8), 3, (64-8)));
+        this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, make_mask_control_info((64-14), 1, (64-11)));
+        break;
+      }
+      case 5: { // fxam
+        microcode_assist(ASSIST_X87_FXAM, ripstart, rip);
+        end_of_block = 1;
+        break;
       }
       default:
         MakeInvalid();
         break;
       }
-      TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
       break;
     }
 

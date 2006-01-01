@@ -43,7 +43,7 @@ void save_stats() {
 }
 
 void user_process_terminated(int rc) {
-  logfile << "user_process_terminated(rc = ", rc, "): initiating PTL shutdown...", endl, flush;
+  logfile << "user_process_terminated(rc = ", rc, "): initiating shutdown at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits...", endl, flush;
   save_stats();
   logfile << "PTLsim exiting...", endl, flush;
   logfile.close();

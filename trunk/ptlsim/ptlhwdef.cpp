@@ -445,7 +445,10 @@ ostream& operator <<(ostream& os, const UserContext& arf) {
     os << "  ", padstring(arch_reg_names[i], -6), " 0x", hexstring(arf[i], 64), "  ";
     if ((i % width) == (width-1)) os << endl;
   }
-
+  for (int i = 7; i >= 0; i--) {
+    int stackid = (i - (arf[REG_fptos] >> 3)) & 0x7;
+    os << "  fp", i, "  st(", stackid, ")  ", /* (bit(arf[REG_fptags], i*8) ? "Valid" : "Empty"), */ "  0x", hexstring(fpregs[i], 64), " => ", *((double*)&fpregs[i]), endl;
+  }
   return os;
 }
 
