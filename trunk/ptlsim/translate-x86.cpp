@@ -8,6 +8,7 @@
 #include <globals.h>
 #include <ptlsim.h>
 #include <math.h>
+#include <datastore.h>
 
 Hashtable<W64, BasicBlock*, 16384> bbcache;
 
@@ -347,7 +348,7 @@ const char* assist_names[ASSIST_COUNT] = {
   "x87_fprem", "x87_fyl2xp1", "x87_fsqrt", "x87_fsincos",
   "x87_frndint", "x87_fscale", "x87_fsin", "x87_fcos",
   "x87_fxam", "x87_f2xm1", "x87_fyl2x", "x87_fptan",
-  "x87_fpatan", "x87_fxtract", "x87_fprem1"
+  "x87_fpatan", "x87_fxtract", "x87_fprem1",
   "int", "syscall", "sysenter", "cpuid",
   "invopcode", "ptlcall",
 };
@@ -370,6 +371,22 @@ const char* assist_name(assist_func_t assist) {
   }
 
   return "unknown";
+}
+
+W64 assist_histogram[ASSIST_COUNT];
+
+void update_assist_stats(assist_func_t assist) {
+  int idx = assist_index(assist);
+  assert(inrange(idx, 0, ASSIST_COUNT-1));
+  assist_histogram[idx]++;
+}
+
+void reset_assist_stats() {
+  setzero(assist_histogram);
+}
+
+void save_assist_stats(DataStoreNode& root) {
+  root.histogram(assist_names, assist_histogram, ASSIST_COUNT);
 }
 
 bool split_unaligned_memops_during_translate = false;

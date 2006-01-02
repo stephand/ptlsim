@@ -55,5 +55,17 @@ bool check_unaligned_ldst_rip(W64 rip);
 
 extern Hashtable<W64, BasicBlock*, 16384> bbcache;
 
+//
+// Assists
+//
+
+typedef void (*assist_func_t)();
+
+const char* assist_name(assist_func_t func);
+int assist_index(assist_func_t func);
+void update_assist_stats(assist_func_t assist);
+void reset_assist_stats();
+void save_assist_stats(DataStoreNode& root);
+
 
 #endif // _PTLSIM_H_

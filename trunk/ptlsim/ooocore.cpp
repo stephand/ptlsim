@@ -4004,6 +4004,7 @@ bool handle_barrier() {
 
   if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
 
+  update_assist_stats(assist);
   assist();
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_sr1];
   if (logable(1)) {
@@ -4352,6 +4353,8 @@ void ooo_capture_stats(DataStoreNode& root) {
     branchpred.add("predictions", branchpred_predictions);
     branchpred.add("updates", branchpred_updates);
   }
+
+  save_assist_stats(root("assist"));
 
   dcache_save_stats(root("dcache"));
 

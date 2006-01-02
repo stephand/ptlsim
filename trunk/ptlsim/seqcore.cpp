@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-#define ENABLE_CHECKS
-#define ENABLE_LOGGING
+//#define ENABLE_CHECKS
+//#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -444,6 +444,7 @@ namespace SequentialCore {
 
     if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
 
+    update_assist_stats(assist);
     assist();
     ctx.commitarf[REG_rip] = ctx.commitarf[REG_sr1];
     if (logable(1)) {
@@ -783,6 +784,7 @@ namespace SequentialCore {
       }
 
       root("opclass").histogram(opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
+      save_assist_stats(root("assist"));
     }
   }
 };
