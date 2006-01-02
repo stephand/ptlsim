@@ -285,12 +285,23 @@ make_two_output_x87_func_with_push(fsincos, (st1u.d = math::cos(st0u.d), st0u.d 
 // st(0) = tan(st(0)) and push value 1.0
 make_two_output_x87_func_with_push(fptan, (st1u.d = 1.0, st0u.d = math::tan(st0u.d)));
 
-void assist_x87_fxtract() {
-  assert(false);
-}
+make_two_output_x87_func_with_push(fxtract, (st1u.d = math::significand(st0u.d), st0u.d = math::ilogb(st0u.d)));
 
 void assist_x87_fprem1() {
-  assert(false);
+  W64& tos = ctx.commitarf[REG_fptos];
+  W64& st0 = fpregs[tos >> 3];
+  W64& st1 = fpregs[((tos >> 3) - 1) & 0x7];
+  SSEType st0u(st0); SSEType st1u(st1);
+
+  X87StatusWord fpsw;
+  asm("fld %[st1]; fld %[st0]; fprem1; fstsw %%ax; fstp %[st0]; ffree %%st(0); fincstp;" : [st0] "+m" (st0u.d), "=a" (fpsw.data) : [st1] "m" (st1u.d));
+  st0 = st0u.w64;
+
+  X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
+  sw->fields.c0 = fpsw.fields.c0;
+  sw->fields.c1 = fpsw.fields.c1;
+  sw->fields.c2 = fpsw.fields.c2;
+  sw->fields.c3 = fpsw.fields.c3;
 }
 
 void assist_x87_fxam() {
@@ -340,6 +351,16 @@ const char* assist_names[ASSIST_COUNT] = {
   "int", "syscall", "sysenter", "cpuid",
   "invopcode", "ptlcall",
 };
+
+int assist_index(assist_func_t assist) {
+  foreach (i, ASSIST_COUNT) {
+    if (assistid_to_func[i] == assist) { 
+      return i;
+    }
+  }
+
+  return -1;
+}
 
 const char* assist_name(assist_func_t assist) {
   foreach (i, ASSIST_COUNT) {
@@ -2035,8 +2056,10 @@ namespace TranslateX86 {
     }
 
     case 0x9e: { // sahf: %flags[7:0] = %ah
+      // extract value from %ah
       this << TransOp(OP_mask, REG_temp0, REG_zero, REG_rax, REG_imm, 3, 0, make_mask_control_info(0, 8, 8));
-      this << TransOp(OP_movrcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
+      // only low 8 bits affected (OF not included)
+      this << TransOp(OP_movrcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 3, 0, 0, SETFLAG_ZF|SETFLAG_CF);
       break;
     }
 
@@ -2697,6 +2720,22 @@ namespace TranslateX86 {
       break;
     }
 
+    case 0x651:   // fisttp
+    case 0x677: { // fistp
+      if (modrm.rm == 3) {
+        MakeInvalid();
+      } else {
+        DECODE(eform, rd, q_mode);
+        CheckInvalid();
+        TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
+        this << TransOp(OP_cvtf_d2q, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x651) ? 3 : 2);
+        result_store(REG_temp0, REG_temp1, rd);
+        this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
+        this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: adjust top of stack
+      }
+      break;
+    }
+
     case 0x612:
     case 0x613: { // fst/fstp mem32 or fnop
       if (modrm.mod == 3) {
@@ -2832,6 +2871,7 @@ namespace TranslateX86 {
             ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS
           };
 
+          if (x87op == 0) MakeInvalid(); // we don't support very old fprem form
           microcode_assist(x87op_to_assist_idx[x87op], ripstart, rip);
           end_of_block = 1;
         }
@@ -2843,7 +2883,6 @@ namespace TranslateX86 {
       }
       break;
     }
-
 
     case 0x670: { // ffreep (free and pop: not documented but widely used)
       if (modrm.mod == 0x3) {
@@ -2864,6 +2903,20 @@ namespace TranslateX86 {
         this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
+      }
+      break;
+    }
+
+    case 0x671 ... 0x673: { // [fisttp | fist | fistp] mem16
+      DECODE(eform, rd, w_mode);
+      TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
+      this << TransOp(OP_cvtf_d2i_p, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x671) ? 3 : 2);
+      result_store(REG_temp0, REG_temp1, rd);
+
+      int x87op = modrm.rm;
+      if ((x87op == 1) | (x87op == 3)) {
+        this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
+        this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: adjust top of stack
       }
       break;
     }
@@ -3001,7 +3054,8 @@ namespace TranslateX86 {
 
     case 0x630 ... 0x633: { // [fcmovnb fcmovne fcmovnbe fcmovnu] | [fild fisttp fist fistp]
       int x87op = modrm.reg;
-      DECODE(eform, ra, d_mode);
+
+      DECODE(eform, rd, d_mode);
       CheckInvalid();
 
       if (modrm.mod == 3) {
@@ -3013,7 +3067,7 @@ namespace TranslateX86 {
         int cmptype = lowbits(op, 2);
         int rcond;
         int cond;
-        bool invert = 1; // ((op & 0xff0) == 0x630);
+        bool invert = 1;
         
         switch (lowbits(op, 2)) {
         case 0: // fcmovb (CF = 1)
@@ -3045,30 +3099,26 @@ namespace TranslateX86 {
         this << stp;
       } else {
         switch (x87op) {
-        case 0: { // fild
-          // fild mem32
-          // ldxd         t0 = [mem]
-          // fcvt.q2d.lo  t0 = t0
-          // st.lm.p      [FPREGS + fptos],t0
-          // subm         fptos = fptos,8,0x3f
-          // bts          fptags = fptags,fptos
-          operand_load(REG_temp0, ra, OP_ldx, 1);
+        case 0: { // fild mem32
+          operand_load(REG_temp0, rd, OP_ldx, 1);
           this << TransOp(OP_cvtf_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
           this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
           TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
           this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
           break;
         }
-        case 1: { // fisttp
-          MakeInvalid();
-          break;
-        }
-        case 2: {
-          MakeInvalid(); // fist
-          break;
-        }
-        case 3: { // fistp
-          MakeInvalid();
+        case 1:   // fisttp w32
+        case 2:   // fist w32
+        case 3: { // fistp w32
+          TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
+          this << TransOp(OP_cvtf_d2i_p, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1) ? 3 : 2);
+          result_store(REG_temp0, REG_temp1, rd);
+
+          if ((x87op == 1) | (x87op == 3)) {
+            this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
+            this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: adjust top of stack
+          }
+
           break;
         }
         }

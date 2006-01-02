@@ -162,21 +162,21 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // x0 = normal IEEE-style rounding
   // x1 = truncate to zero
   {"cvtf.i2s.ins",   OPCLASS_FP_CONVERTI2F, F, FPU0}, // one W32s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss)
-  {"cvtf.i2s.p",     OPCLASS_FP_CONVERTI2F, F, FPU0}, // pair of W32s <ra> to pair of singles <rd> (for cvtdq2ps, cvtpi2ps)
-  {"cvtf.i2d.lo",    OPCLASS_FP_CONVERTI2F, F, FPU0}, // low W32s in <ra> to double in <rd> (for cvtdq2pd part 1, cvtpi2pd part 1, cvtsi2sd)
-  {"cvtf.i2d.hi",    OPCLASS_FP_CONVERTI2F, F, FPU0}, // high W32s in <ra> to double in <rd> (for cvtdq2pd part 2, cvtpi2pd part 2)
+  {"cvtf.i2s.p",     OPCLASS_FP_CONVERTI2F, F, FPU0}, // pair of W32s <rb> to pair of singles <rd> (for cvtdq2ps, cvtpi2ps)
+  {"cvtf.i2d.lo",    OPCLASS_FP_CONVERTI2F, F, FPU0}, // low W32s in <rb> to double in <rd> (for cvtdq2pd part 1, cvtpi2pd part 1, cvtsi2sd)
+  {"cvtf.i2d.hi",    OPCLASS_FP_CONVERTI2F, F, FPU0}, // high W32s in <rb> to double in <rd> (for cvtdq2pd part 2, cvtpi2pd part 2)
   {"cvtf.q2s.ins",   OPCLASS_FP_CONVERTI2F, F, FPU0}, // one W64s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss with REX.mode64 prefix)
   {"cvtf.q2d",       OPCLASS_FP_CONVERTI2F, F, FPU0}, // one W64s <rb> to double in <rd>, ignore <ra> (for cvtsi2sd with REX.mode64 prefix)
-  {"cvtf.s2i",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one single <ra> to W32s in <rd> (for cvtss2si, cvttss2si)
-  {"cvtf.s2q",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one single <ra> to W64s in <rd> (for cvtss2si, cvttss2si with REX.mode64 prefix)
-  {"cvtf.s2i.p",     OPCLASS_FP_CONVERTF2I, F, FPU1}, // pair of singles in <ra> to pair of W32s in <rd> (for cvtps2pi, cvttps2pi, cvtps2dq, cvttps2dq)
-  {"cvtf.d2i",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one double <ra> to W32s in <rd> (for cvtsd2si, cvttsd2si)
-  {"cvtf.d2q",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one double <ra> to W64s in <rd> (for cvtsd2si with REX.mode64 prefix)
+  {"cvtf.s2i",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one single <rb> to W32s in <rd> (for cvtss2si, cvttss2si)
+  {"cvtf.s2q",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one single <rb> to W64s in <rd> (for cvtss2si, cvttss2si with REX.mode64 prefix)
+  {"cvtf.s2i.p",     OPCLASS_FP_CONVERTF2I, F, FPU1}, // pair of singles in <rb> to pair of W32s in <rd> (for cvtps2pi, cvttps2pi, cvtps2dq, cvttps2dq)
+  {"cvtf.d2i",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one double <rb> to W32s in <rd> (for cvtsd2si, cvttsd2si)
+  {"cvtf.d2q",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one double <rb> to W64s in <rd> (for cvtsd2si with REX.mode64 prefix)
   {"cvtf.d2i.p",     OPCLASS_FP_CONVERTF2I, F, FPU1}, // pair of doubles in <ra> (high), <rb> (low) to pair of W32s in <rd> (for cvtpd2pi, cvttpd2pi, cvtpd2dq, cvttpd2dq), clear high 64 bits of dest xmm
   {"cvtf.d2s.ins",   OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // double in <rb> to single, insert into low 32 bits of <ra> (for cvtsd2ss)
   {"cvtf.d2s.p",     OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // pair of doubles in <ra> (high), <rb> (low) to pair of singles in <rd> (for cvtpd2ps)
-  {"cvtf.s2d.lo",    OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // low single in <ra> to double in <rd> (for cvtps2pd, part 1, cvtss2sd)
-  {"cvtf.s2d.hi",    OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // high single in <ra> to double in <rd> (for cvtps2pd, part 2)
+  {"cvtf.s2d.lo",    OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // low single in <rb> to double in <rd> (for cvtps2pd, part 1, cvtss2sd)
+  {"cvtf.s2d.hi",    OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // high single in <rb> to double in <rd> (for cvtps2pd, part 2)
 };
 
 #undef A

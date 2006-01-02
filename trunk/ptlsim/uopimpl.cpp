@@ -207,15 +207,15 @@ void uop_impl_collcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
 }
 
 void uop_impl_movrcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  int flags = raflags & FLAG_NOT_WAIT_INV;
+  int flags = ra & FLAG_NOT_WAIT_INV;
   state.reg.rddata = flags;
   state.reg.rdflags = flags;
 }
 
 void uop_impl_movccr(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   int flags = raflags;
-  state.reg.rddata = raflags;
-  state.reg.rdflags = raflags;
+  state.reg.rddata = flags;
+  state.reg.rdflags = flags;
 }
 
 void uop_impl_andcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {

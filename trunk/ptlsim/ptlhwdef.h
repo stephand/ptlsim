@@ -669,6 +669,7 @@ static inline stringbuf& operator <<(stringbuf& sb, const flagstring& bs) {
 typedef void (*assist_func_t)();
 
 const char* assist_name(assist_func_t func);
+int assist_index(assist_func_t func);
 
 
 #endif // __ASM_ONLY__
