@@ -945,6 +945,15 @@ file
 
 
 \series bold 
+-overshoot-and-dump
+\series default 
+ Set breakpoint and dump core after first instruction executed on return
+ to native mode (to debug translation against real machine)
+\layout List
+\labelwidthstring WWWWWWWW
+
+
+\series bold 
 -pause-at-startup
 \series default 
  Pause for N seconds at startup to let a debugger attach [disabled] (see
@@ -19908,7 +19917,7 @@ CVTPD2DQ
 \family typewriter 
 \series bold 
 \size small 
-cvtf.s2q
+cvtf.d2q
 \end_inset 
 </cell>
 <cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
