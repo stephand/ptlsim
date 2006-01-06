@@ -116,14 +116,14 @@ test.dat-32bit.S: test.dat Makefile
 	objdump --adjust-vma=$(BASEADDR) -rtd -b binary -m i386:intel --disassemble-all test.dat > test.dat-32bit.S
 	objdump --adjust-vma=$(BASEADDR) -rtd -b binary -m i386 --disassemble-all test.dat > test.dat-32bit.alt.S
 
-.cpp.o:
-	$(CC) $(CFLAGS) $(INCFLAGS) -c $*.cpp
+%.o: %.cpp
+	$(CC) $(CFLAGS) $(INCFLAGS) -c $<
 
-.S.o:
-	$(CC) $(CFLAGS) $(INCFLAGS) -c $*.S
+%.o: %.S
+	$(CC) $(CFLAGS) $(INCFLAGS) -c $<
 
-.c.o:
-	$(CC) $(CFLAGS) $(INCFLAGS) -c $*.c
+%.o: %.c
+	$(CC) $(CFLAGS) $(INCFLAGS) -c $<
 
 clean:
 	rm -fv ptlsim ptlstats cpuid genoffsets *.o simsynth-offsets.h core core.[0-9]* .depend *.gch
