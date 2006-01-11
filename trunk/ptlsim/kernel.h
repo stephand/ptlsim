@@ -50,6 +50,9 @@
 
 #else
 
+#undef __syscall_return
+#define __syscall_return(type, res) return (type)(res);
+
 #define declare_syscall0(sysid,type,name) type name(void) { long __res; asm volatile ("int $0x80" \
   : "=a" (__res) : "0" (sysid)); __syscall_return(type,__res); }
 
