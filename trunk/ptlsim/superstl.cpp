@@ -340,6 +340,22 @@ namespace superstl {
     return p;
   }
 
+  template <>
+  char* dynarray<char*>::tokenize(const char* string, const char* seplist) {
+    char* pbase = strdup(string);
+    char* p = pbase;
+
+    while (*p) {
+      push(p);
+      char* endp = strpbrk(p, seplist);
+      if (!endp) break;
+      *endp = 0;
+      p = endp+1;
+    }
+    
+    return pbase;
+  }
+
   //
   // Global streams:
   //

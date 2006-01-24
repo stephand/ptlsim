@@ -1,6 +1,6 @@
 // -*- c++ -*-
 //
-// Copyright 1997-2004 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1997-2005 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.
@@ -52,6 +52,25 @@ namespace math {
 
 #define nan NAN
 #define inf INFINITY
+
+template <typename T> struct limits { static const T min = 0; static const T max = 0; };
+#define MakeLimits(T, __min, __max) template <> struct limits<T> { static const T min = (__min); static const T max = (__max); };
+MakeLimits(W8, 0, 0xff);
+MakeLimits(W16, 0, 0xffff);
+MakeLimits(W32, 0, 0xffffffff);
+MakeLimits(W64, 0, 0xffffffffffffffffULL);
+MakeLimits(W8s, 0x80, 0x7f);
+MakeLimits(W16s, 0x8000, 0x7fff);
+MakeLimits(W32s, 0x80000000, 0x7fffffff);
+MakeLimits(W64s, 0x8000000000000000LL, 0x7fffffffffffffffLL);
+#ifdef __x86_64__
+MakeLimits(signed long, 0x8000000000000000LL, 0x7fffffffffffffffLL);
+MakeLimits(unsigned long, 0x0000000000000000LL, 0xffffffffffffffffLL);
+#else
+MakeLimits(signed long, 0x80000000, 0x7fffffff);
+MakeLimits(unsigned long, 0, 0xffffffff);
+#endif
+#undef MakeLimits
 
 // Typecasts in bizarre ways required for binary form access
 union W32orFloat { W32 w; float f; };
@@ -414,6 +433,11 @@ inline bool modulo_ranges_intersect(int a0, int a1, int b0, int b1, int size) {
 template <int n> struct lg { static const int value = 1 + lg<n/2>::value; };
 template <> struct lg<1> { static const int value = 0; };
 #define log2(v) (lg<(v)>::value)
+
+template <int n> struct lg10 { static const int value = 1 + lg10<n/10>::value; };
+template <> struct lg10<1> { static const int value = 0; };
+template <> struct lg10<0> { static const int value = 0; };
+#define log10(v) (lg10<(v)>::value)
 
 #define __stringify_1(x) #x
 #define stringify(x) __stringify_1(x)

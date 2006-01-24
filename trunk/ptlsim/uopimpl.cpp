@@ -434,7 +434,7 @@ W64 mask_sxt_lut[64*64]; // 1'[63:(ms+mc)]
 void gen_mask_uop_masks() {
   foreach (mc, 64) {
     foreach (ms, 64) {
-      W64 t = x86_rotr64(bitmask(mc), ms);
+      W64 t = rotr64(bitmask(mc), ms);
       mask_gen_lut[(mc << 6) + ms] = t;
     }
   }
@@ -732,7 +732,8 @@ void uop_impl_brp(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rb
 template <int evaltype>
 inline void uop_impl_chk(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   bool passed = evaluate_cond<evaltype>(raflags, rbflags);
-  state.reg.rddata = (passed) ? 0 : rc;
+  state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
+  state.reg.addr = rc;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
 }
 
@@ -741,7 +742,8 @@ inline void uop_impl_chk_sub(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
   sub_flag_gen_op<T> func;
   int flags = func(ra, rb);
   bool passed = evaluate_cond<evaltype>(flags, flags);
-  state.reg.rddata = (passed) ? 0 : rc;
+  state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
+  state.reg.addr = rc;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
 }
 
@@ -750,7 +752,8 @@ inline void uop_impl_chk_and(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
   and_flag_gen_op<T> func;
   int flags = func(ra, rb);
   bool passed = evaluate_cond<evaltype>(flags, flags);
-  state.reg.rddata = (passed) ? 0 : rc;
+  state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
+  state.reg.addr = rc;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
 }
 
@@ -845,12 +848,31 @@ void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W
   state.reg.rdflags = 0; \
 }
 
+#define make_x86_floatop3(name, opcode1, opcode2, typemask) \
+template <int datatype> \
+void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
+  W64 rd; \
+  vec16b fpa, fpb, fpc; \
+  if ((datatype == 0) & bit(typemask, 0)) asm(MOV_TO_XMM " %[ra],%[fpa]; " MOV_TO_XMM " %[rb],%[fpb]; " MOV_TO_XMM " %[rc],%[fpc]; " #opcode1 "ss %[fpb],%[fpa]; " #opcode2 "ss %[fpc],%[fpa]; movq %[fpa],%[rd];" \
+     : [rd] "=" W64_CONSTRAINT (rd), [fpa] "=x" (fpa), [fpb] "=x" (fpb), [fpc] "=x" (fpc) : [ra] W64_CONSTRAINT (ra), [rb] W64_CONSTRAINT (rb), [rc] W64_CONSTRAINT (rc)); \
+  if ((datatype == 1) & bit(typemask, 1)) asm(MOV_TO_XMM " %[ra],%[fpa]; " MOV_TO_XMM " %[rb],%[fpb]; " MOV_TO_XMM " %[rc],%[fpc]; " #opcode1 "ps %[fpb],%[fpa]; " #opcode2 "ps %[fpc],%[fpa]; movq %[fpa],%[rd];" \
+     : [rd] "=" W64_CONSTRAINT (rd), [fpa] "=x" (fpa), [fpb] "=x" (fpb), [fpc] "=x" (fpc) : [ra] W64_CONSTRAINT (ra), [rb] W64_CONSTRAINT (rb), [rc] W64_CONSTRAINT (rc)); \
+  if ((datatype == 2) & bit(typemask, 2)) asm(MOV_TO_XMM " %[ra],%[fpa]; " MOV_TO_XMM " %[rb],%[fpb]; " MOV_TO_XMM " %[rc],%[fpc]; " #opcode1 "sd %[fpb],%[fpa]; " #opcode2 "sd %[fpc],%[fpa]; movq %[fpa],%[rd];" \
+     : [rd] "=" W64_CONSTRAINT (rd), [fpa] "=x" (fpa), [fpb] "=x" (fpb), [fpc] "=x" (fpc) : [ra] W64_CONSTRAINT (ra), [rb] W64_CONSTRAINT (rb), [rc] W64_CONSTRAINT (rc)); \
+  state.reg.rddata = rd; \
+  state.reg.rdflags = 0; \
+}
+
 #define SS (1<<0)
 #define PS (1<<1)
 #define DP (1<<2)
 
 #define make_x86_floatop_alltypes(name, opcode, typemask) \
   make_x86_floatop2(x86_op_##name, opcode, typemask, ""); \
+  uopimpl_func_t implmap_##name[4] = {&x86_op_##name<0>, &x86_op_##name<1>, &x86_op_##name<2>, &x86_op_##name<3>}
+
+#define make_x86_floatop3_alltypes(name, opcode1, opcode2, typemask) \
+  make_x86_floatop3(x86_op_##name, opcode1, opcode2, typemask); \
   uopimpl_func_t implmap_##name[4] = {&x86_op_##name<0>, &x86_op_##name<1>, &x86_op_##name<2>, &x86_op_##name<3>}
 
 make_x86_floatop_alltypes(addf, add, SS|PS|DP);
@@ -863,6 +885,9 @@ make_x86_floatop_alltypes(rsqrtf, rsqrt, SS|PS);
 make_x86_floatop_alltypes(minf, min, SS|PS|DP);
 make_x86_floatop_alltypes(maxf, max, SS|PS|DP);
 
+make_x86_floatop3_alltypes(maddf, mul, add, SS|PS|DP);
+make_x86_floatop3_alltypes(msubf, mul, sub, SS|PS|DP);
+
 make_x86_floatop2(x86_op_cmpf0, cmp, SS|PS|DP, "$0,");
 make_x86_floatop2(x86_op_cmpf1, cmp, SS|PS|DP, "$1,");
 make_x86_floatop2(x86_op_cmpf2, cmp, SS|PS|DP, "$2,");
@@ -872,7 +897,6 @@ make_x86_floatop2(x86_op_cmpf5, cmp, SS|PS|DP, "$5,");
 make_x86_floatop2(x86_op_cmpf6, cmp, SS|PS|DP, "$6,");
 make_x86_floatop2(x86_op_cmpf7, cmp, SS|PS|DP, "$7,");
 
-//++MTY Make sure we use [cond][type], NOT [type][cond]
 uopimpl_func_t implmap_cmpf[8][4] = {
   {&x86_op_cmpf0<0>, &x86_op_cmpf0<1>, &x86_op_cmpf0<2>, &x86_op_cmpf0<3>},
   {&x86_op_cmpf1<0>, &x86_op_cmpf1<1>, &x86_op_cmpf1<2>, &x86_op_cmpf1<3>},
@@ -912,8 +936,6 @@ void uop_impl_cmpccf(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
 }
 
 uopimpl_func_t implmap_cmpccf[8][4] = {&uop_impl_cmpccf<0>, &uop_impl_cmpccf<1>, &uop_impl_cmpccf<2>, &uop_impl_cmpccf<3>};
-
-//++MTY See http://www.mactech.com/articles/mactech/Vol.14/14.01/FastSquareRootCalc/
 
 #define make_simple_fp_convop(name, opcode, highpart) \
 void uop_impl_##name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
@@ -1099,7 +1121,6 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
   case OP_ldx:
   case OP_st:
     func = uop_impl_nop; break;
-
   case OP_rotl: 
     func = implmap_rotl[size][setflags]; break;
   case OP_rotr: 
@@ -1115,6 +1136,15 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
   case OP_sar:
     func = implmap_sar[size][setflags]; break;
   case OP_mask:
+    func = implmap_mask[size][cond]; break;
+
+  case OP_shls: 
+    func = implmap_shl[size][setflags]; break;
+  case OP_shrs: 
+    func = implmap_shr[size][setflags]; break;
+  case OP_sars:
+    func = implmap_sar[size][setflags]; break;
+  case OP_maskb:
     func = implmap_mask[size][cond]; break;
 
   case OP_bswap:
@@ -1159,6 +1189,10 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = implmap_subf[size]; break;
   case OP_mulf:
     func = implmap_mulf[size]; break;
+  case OP_maddf:
+    func = implmap_maddf[size]; break;
+  case OP_msubf:
+    func = implmap_msubf[size]; break;
   case OP_divf:
     func = implmap_divf[size]; break;
   case OP_sqrtf:

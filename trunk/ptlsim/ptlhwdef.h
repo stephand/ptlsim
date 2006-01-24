@@ -47,7 +47,7 @@
 
 //
 // Exceptions:
-// These are PT2x internal exceptions, NOT x86 exceptions:
+// These are PTL internal exceptions, NOT x86 exceptions:
 //
 #define EXCEPTION_NoException         0
 // Exceptions causing rollbacks
@@ -311,8 +311,8 @@ enum {
 #define FU_LDU1       (1 << 2)
 #define FU_STU1       (1 << 3)
 #define FU_ALU0       (1 << 4)
-#define FU_ALU1       (1 << 5)
-#define FU_FPU0       (1 << 6)
+#define FU_FPU0       (1 << 5)
+#define FU_ALU1       (1 << 6)
 #define FU_FPU1       (1 << 7)
 #define FU_COUNT      8
 
@@ -323,8 +323,6 @@ struct FunctionalUnit {
 };
 
 extern struct FunctionalUnit FU[FU_COUNT];
-
-#define MAX_INTEGER_PIPELINE_DEPTH 4
 
 //
 // Operation Classes
@@ -358,7 +356,7 @@ extern struct FunctionalUnit FU[FU_COUNT];
 #define OPCLASS_PREFETCH                (1 << 12)
 #define OPCLASS_MEM                     (OPCLASS_LOAD|OPCLASS_STORE|OPCLASS_PREFETCH)
 
-#define OPCLASS_BYTEOP                  (1 << 13)
+#define OPCLASS_SIMPLE_SHIFT            (1 << 13)
 #define OPCLASS_SHIFTROT                ((1 << 14) | OPCLASS_USESFLAGS | OPCLASS_USESRC)
 #define OPCLASS_MULTIPLY                (1 << 15)
 #define OPCLASS_BITSCAN                 (1 << 16)
@@ -438,6 +436,11 @@ enum {
   OP_sar,
   OP_mask,
 
+  OP_shls,
+  OP_shrs,
+  OP_sars,
+  OP_maskb,
+
   OP_bswap,
 
   OP_collcc,
@@ -460,6 +463,8 @@ enum {
   OP_addf,
   OP_subf,
   OP_mulf,
+  OP_maddf,
+  OP_msubf,
   OP_divf,
   OP_sqrtf,
   OP_rcpf,
@@ -487,6 +492,9 @@ enum {
   OP_cvtf_s2d_hi,
   OP_MAX_OPCODE,
 };
+
+// Limit for shls, shrs, sars rb immediate:
+#define SIMPLE_SHIFT_LIMIT 8
 
 struct OpcodeInfo {
   const char* name;

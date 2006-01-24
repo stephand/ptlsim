@@ -12,10 +12,15 @@
 char* mode_subtree;
 char* mode_histogram;
 char* mode_collect;
+char* mode_collect_sum;
+char* mode_collect_average;
+char* mode_table;
 
-W64 format_text = 1;
-W64 format_html;
-W64 format_latex;
+char* table_row_names;
+char* table_col_names;
+char* table_row_col_sep = "/";
+char* table_type_name = "text";
+bool table_use_percents = false;
 
 char* graph_title;
 double graph_width = 300.0;
@@ -27,18 +32,36 @@ double graph_logk = 100.;
 char* delta_start = null;
 char* delta_end = "final";
 
+W64 show_sum_of_subtrees_only = 0;
+
+W64 maxdepth = limits<int>::max;
+
+W64 table_scale_rel_to_col = limits<int>::max;
+
+W64 percent_digits = 1; // e.g. "66.7%"
+
 static ConfigurationOption optionlist[] = {
   {null,                                 OPTION_TYPE_SECTION, 0, "Mode", null},
   {"subtree",                            OPTION_TYPE_STRING,  0, "Subtree (specify path to node)", &mode_subtree},
   {"collect",                            OPTION_TYPE_STRING,  0, "Collect specific statistic from multiple data stores", &mode_collect},
+  {"collectsum",                         OPTION_TYPE_STRING,  0, "Sum of same tree in all data stores", &mode_collect_sum},
+  {"collectaverage",                     OPTION_TYPE_STRING,  0, "Average of same tree in all data stores", &mode_collect_average},
   {"histogram",                          OPTION_TYPE_STRING,  0, "Histogram of specific node (specify path to node)", &mode_histogram},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Output Format", null},
-  {"text",                               OPTION_TYPE_BOOL,    0, "Text", &format_text},
-  {"html",                               OPTION_TYPE_BOOL,    0, "HTML", &format_html},
-  {"latex",                              OPTION_TYPE_BOOL,    0, "LaTeX", &format_latex},
+  {"table",                              OPTION_TYPE_STRING,  0, "Table of one node across multiple data stores", &mode_table},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Table", null},
+  {"rows",                               OPTION_TYPE_STRING,  0, "Row names (comma separated)", &table_row_names},
+  {"cols",                               OPTION_TYPE_STRING,  0, "Column names (comma separated)", &table_col_names},
+  {"rowcolsep",                          OPTION_TYPE_STRING,  0, "Separator between row and column used to create stats filename", &table_row_col_sep},
+  {"tabletype",                          OPTION_TYPE_STRING,  0, "Table type (text, latex, html)", &table_type_name},
+  {"scale-relative-to-col",              OPTION_TYPE_W64,     0, "Scale all other table columns relative to specified column", &table_scale_rel_to_col},
+  {"table-percents",                     OPTION_TYPE_BOOL,    0, "Show percents (as in tree) rather than absolute values", &table_use_percents},
   {null,                                 OPTION_TYPE_SECTION, 0, "Statistics Range", null},
   {"deltastart",                         OPTION_TYPE_STRING,  0, "Snapshot to start at", &delta_start},
   {"deltaend",                           OPTION_TYPE_STRING,  0, "Snapshot to end at (i.e. subtract end - start)", &delta_end},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Display Control", null},
+  {"sum-subtrees-only",                  OPTION_TYPE_BOOL,    0, "Show only the sum of subtrees in applicable nodes", &show_sum_of_subtrees_only},
+  {"maxdepth",                           OPTION_TYPE_W64,     0, "Maximum tree depth", &maxdepth},
+  {"percent-digits",                     OPTION_TYPE_W64,     0, "Precision of percentage listings in digits", &percent_digits},
   {null,                                 OPTION_TYPE_SECTION, 0, "Histogram Options", null},
   {"title",                              OPTION_TYPE_STRING,  0, "Graph Title", &graph_title},
   {"width",                              OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_width},
@@ -637,7 +660,7 @@ void create_time_lapse_graph(ostream& os, DataStoreNode& root, const LineAttribu
 
     DataStoreNode& node = root(sb);
 
-    DataStoreNode& diff = *node.subtract(prev);
+    DataStoreNode& diff = *(node - prev);
 
     TimeLapseFields fields;
 
@@ -708,20 +731,6 @@ void create_time_lapse_graph(ostream& os, DataStoreNode& root, const LineAttribu
   delete[] xpoints;
 }
 
-void print_usage() {
-  cerr << "Syntax: ptlstats <command> <statsdir> [<statsdir> ...]", endl;
-  cerr << "Command is:", endl;
-  cerr << "  -dump             Full statistics in text format", endl;
-  cerr << "  -dumpraw          Dump raw data store tree nodes", endl;
-  cerr << "  -shorthtml        Short statistics of multiple benchmarks in HTML table format", endl;
-  cerr << "  -shortlatex       Short statistics of multiple benchmarks in LaTeX table format", endl;
-  cerr << "  -histogram <node> Histogram node", endl;
-  cerr << "  -graph-all        Graph of numerous statistics plotted over cycles executed", endl;
-  cerr << "  -graph-rawdata    Print raw data to be graphed in spreadsheet format", endl;
-  cerr << "  -examplehisto     Graph example histogram", endl;
-  cerr << endl;
-}
-
 #define NOLINE {0, 0, {0, 0, 0, 0}, 0.00, 0.00, 0.00, 0.00, 0, {0, 0, 0, 0}}
 
 static const LineAttributes linetype_allfields[fieldcount] = {
@@ -735,6 +744,187 @@ void printbanner() {
   cerr << "//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>", endl;
   cerr << "//  ", endl;
   cerr << endl;
+}
+
+DataStoreNode* collect_into_supernode(int argc, char** argv, char* path) {
+  DataStoreNode* supernode = new DataStoreNode("super");
+
+  foreach (i, argc) {
+    char* filename = argv[i];
+        
+    idstream is(filename);
+    if (!is) {
+      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+      return null;
+    }
+        
+    DataStoreNode* ds = new DataStoreNode(is);
+    ds = ds->searchpath(path);
+        
+    if (!ds) {
+      cerr << "ptlstats: Error: cannot find subtree '", path, "'", endl;
+      return null;
+    }
+
+    // Can't have slashes in tree pathnames
+    int filenamelen = strlen(filename);
+    foreach (i, filenamelen) { if (filename[i] == '/') filename[i] = ':'; }
+
+    ds->rename(filename);
+
+    supernode->add(ds);
+  }
+
+  return supernode;
+}
+
+class TableCreator {
+public:
+  ostream& os;
+  dynarray<char*>& rownames;
+  dynarray<char*>& colnames;
+  int row_name_width;
+public:
+  TableCreator(ostream& os_, dynarray<char*>& rownames_, dynarray<char*>& colnames_):
+    os(os_), rownames(rownames_), colnames(colnames_) {
+    row_name_width = 0;
+    foreach (i, rownames.size()) row_name_width = max(row_name_width, (int)strlen(rownames[i]));
+  }
+
+  virtual void start_header_row() {
+    os << padstring("", row_name_width);
+  }
+
+  virtual void print_header(int col) {
+    os << " ", colnames[col];
+  }
+
+  virtual void end_header_row() {
+    os << endl;
+  }
+
+  virtual void start_row(int row) {
+    os << padstring(rownames[row], row_name_width);
+  }
+
+  virtual void print_data(double value, int row, int column) {
+    bool isint = ((value - math::floor(value)) < 0.0000001);
+    if (isint) os << (W64s)value; else os << floatstring(value, 0, 3);
+  }
+
+  virtual void end_row() {
+    os << endl;
+  }
+
+  virtual void end_table() { }
+};
+
+class LaTeXTableCreator: public TableCreator {
+public:
+  LaTeXTableCreator(ostream& os_, dynarray<char*>& rownames_, dynarray<char*>& colnames_):
+    TableCreator(os_, rownames_, colnames_) {
+    os << "\\documentclass{article}", endl;
+    os << "\\makeatletter", endl;
+    os << "\\providecommand{\\tabularnewline}{\\\\}", endl;
+    os << "\\makeatother", endl;
+    os << "\\begin{document}", endl;
+
+    os << "\\begin{tabular}{|c|";
+    foreach (i, colnames.size()) { os << "|c"; }
+    os << "|}", endl;
+    os << "\\hline", endl;
+  }
+
+  virtual void start_header_row() { }
+
+  virtual void print_header(int col) {
+    os << "&", colnames[col];
+  }
+
+  virtual void end_header_row() {
+    os << "\\tabularnewline\\hline\\hline", endl;
+  }
+
+  virtual void start_row(int row) {
+    os << rownames[row];
+  }
+
+  virtual void print_data(double value, int row, int column) {
+    os << "&";
+    bool isint = ((value - math::floor(value)) < 0.0000001);
+    if (isint) os << (W64s)value; else os << floatstring(value, 0, 1);
+  }
+
+  virtual void end_row() {
+    os << "\\tabularnewline\\hline", endl;
+  }
+
+  virtual void end_table() {
+    os << "\\end{tabular}", endl;
+    os << "\\end{document}", endl;
+  }
+};
+
+enum { TABLE_TYPE_TEXT, TABLE_TYPE_LATEX, TABLE_TYPE_HTML };
+
+void create_table(ostream& os, int tabletype, const char* statname, const char* rownames, const char* colnames, const char* rowcolsep, int scale_relative_to_col) {
+  dynarray<char*> rowlist;
+  rowlist.tokenize(rownames, ",");
+  dynarray<char*> collist;
+  collist.tokenize(colnames, ",");
+
+  TableCreator* creator;
+  switch (tabletype) {
+  case TABLE_TYPE_TEXT:
+    creator = new TableCreator(os, rowlist, collist); break;
+  case TABLE_TYPE_LATEX:
+    creator = new LaTeXTableCreator(os, rowlist, collist); break;
+  case TABLE_TYPE_HTML:
+    assert(false);
+  }
+
+  creator->start_header_row();
+  for (int col = 0; col < collist.size(); col++) creator->print_header(col);
+  creator->end_header_row();
+
+  for (int row = 0; row < rowlist.size(); row++) {
+    double relative_base = 0;
+    creator->start_row(row);
+    for (int col = 0; col < collist.size(); col++) {
+      stringbuf filename;
+      filename << rowlist[row], rowcolsep, collist[col];
+
+      idstream is(filename);
+      if (!is) {
+        cerr << "ptlstats: Cannot open '", filename, "' for row ", row, ", col ", col, endl, endl;
+        return;
+      }
+        
+      DataStoreNode* ds = new DataStoreNode(is);
+      assert(ds);
+      ds = ds->searchpath(statname);
+
+      double value;
+      if (ds) {
+        value = *ds;
+      } else { 
+        cerr << "ptlstats: Warning: cannot find subtree '", statname, "' for row ", row, ", col ", col, endl;
+        value = 0;
+      }
+
+      if (scale_relative_to_col < collist.size()) {
+        if (col == scale_relative_to_col) {
+          relative_base = value;
+        } else {
+          value = ((relative_base / value) - 1.0) * 100.0;
+        }
+      }
+
+      creator->print_data(value, row, col);
+    }
+    creator->end_row();
+  }
+  creator->end_table();
 }
 
 int main(int argc, char* argv[]) {
@@ -753,16 +943,23 @@ int main(int argc, char* argv[]) {
 
   int n = options.parse(argc, argv);
 
-  if (n < 0) {
+  bool no_args_needed = mode_table;
+
+  if ((n < 0) & (!no_args_needed)) {
     printbanner();
-    logfile << "ptlstats: Error: no statistics data store filename given", endl, endl;
+    cerr << "ptlstats: Error: no statistics data store filename given", endl, endl;
     cerr << "Syntax is:", endl;
     cerr << "  ptlstats [-options] statsfile", endl, endl;
     options.printusage(cerr);
     return 1;
   }
 
-  char* filename = argv[n];
+  char* filename = (no_args_needed) ? null : argv[n];
+
+  DataStoreNodePrintSettings printinfo;
+  printinfo.force_sum_of_subtrees_only = show_sum_of_subtrees_only;
+  printinfo.maxdepth = maxdepth;
+  printinfo.percent_digits = percent_digits;
 
   if (mode_histogram) {
     idstream is(filename);
@@ -787,29 +984,32 @@ int main(int argc, char* argv[]) {
     create_svg_of_histogram_percent_bargraph(cout, *ds, ds->count, graph_title, graph_width, graph_height);
     delete ds;
   } else if (mode_collect) {
-    argv += n;
-    argc -= n;
-    foreach (i, argc) {
-      filename = argv[i];
+    argv += n; argc -= n;
 
-      idstream is(filename);
-      if (!is) {
-        cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
-        return 2;
-      }
-
-      DataStoreNode* ds = new DataStoreNode(is);
-
-      ds = ds->searchpath(mode_collect);
-      if (!ds) {
-        cerr << "ptlstats: Error: cannot find subtree '", mode_collect, "'", endl;
-        return 1;
-      }
-
-      cout << filename, ": ";
-      ds->print(cout);
-      delete ds;
-    } 
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect);
+    if (!supernode) return -1;
+    supernode->identical_subtrees = 0;
+    supernode->print(cout, printinfo);
+    delete supernode;
+  } else if (mode_collect_sum) {
+    argv += n; argc -= n;
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_sum);
+    if (!supernode) return -1;
+    supernode->identical_subtrees = 1;
+    DataStoreNode* sumnode = supernode->sum_of_subtrees();
+    sumnode->rename(mode_collect_sum);
+    sumnode->print(cout, printinfo);
+    delete supernode;
+  } else if (mode_collect_average) {
+    argv += n; argc -= n;
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_average);
+    if (!supernode) return -1;
+    supernode->identical_subtrees = 1;
+    DataStoreNode* avgnode = supernode->average_of_subtrees();
+    avgnode->summable = 1;
+    avgnode->rename(mode_collect_average);
+    avgnode->print(cout, printinfo);
+    delete supernode;
   } else if (delta_start) {
     idstream is(filename);
     if (!is) {
@@ -833,12 +1033,31 @@ int main(int argc, char* argv[]) {
       return 1;
     }
 
-    DataStoreNode* deltads = endds->subtract(*startds);
+    DataStoreNode* deltads = *endds - *startds;
 
-    deltads->print(cout);
+    deltads->print(cout, printinfo);
 
     delete deltads;
     delete ds;
+  } else if (mode_table) {
+    if ((!table_row_names) | (!table_col_names)) {
+      cerr << "ptlstats: Error: must specify both -rows and -cols options for the table mode", endl;
+      return 1;
+    }
+
+    int tabletype = TABLE_TYPE_TEXT;
+    if (strequal(table_type_name, "text"))
+      tabletype = TABLE_TYPE_TEXT;
+    else if (strequal(table_type_name, "latex"))
+      tabletype = TABLE_TYPE_LATEX;
+    else if (strequal(table_type_name, "html"))
+      tabletype = TABLE_TYPE_HTML;
+    else {
+      cerr << "ptlstats: Error: unknown table type '", table_type_name, "'", endl;
+      return 1;
+    }
+
+    create_table(cout, tabletype, mode_table, table_row_names, table_col_names, table_row_col_sep, table_scale_rel_to_col);
   } else {
     idstream is(filename);
     if (!is) {
@@ -857,7 +1076,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    ds->print(cout);
+    ds->print(cout, printinfo);
     delete ds;
   }
 }

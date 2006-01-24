@@ -211,6 +211,30 @@ struct X87State {
   X87Reg stack[8];
 } __attribute__((packed));
 
+inline W64 x87_fp_80bit_to_64bit(const X87Reg& x87reg) {
+  W64 reg64;
+  asm("fldt %[mem80]\n"
+      "fstpl %[mem64]\n"
+      : [mem64] "=m" (reg64) 
+      : [mem80] "m" (x87reg));
+  return reg64;
+}
+
+inline void x87_fp_64bit_to_80bit(X87Reg& x87reg, W64 reg64) {
+  asm("fldl %[mem64]\n"
+      "fstpt %[mem80]\n"
+      : [mem80] "=m" (x87reg) 
+      : [mem64] "m" (reg64));
+}
+
+inline void cpu_fsave(X87State& state) {
+  asm volatile("fsave %[state]" : [state] "=m" (*&state));
+}
+
+inline void cpu_frstor(X87State& state) {
+  asm volatile("frstor %[state]" : : [state] "m" (*&state));
+}
+
 //
 // Address space management
 //

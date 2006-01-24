@@ -1,4 +1,5 @@
 //
+// PTLsim: Cycle Accurate x86-64 Simulator
 // Branch Prediction
 //
 // Copyright 2002-2005 Matt T. Yourst <yourst@yourst.com>

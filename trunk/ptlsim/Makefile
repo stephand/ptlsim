@@ -68,9 +68,6 @@ genoffsets: genoffsets.o superstl.o
 cpuid: cpuid.o
 	$(CC) -O2 cpuid.o superstl.o -o cpuid
 
-simsynth-offsets.h: genoffsets
-	./genoffsets > simsynth-offsets.h
-
 # Compile this fast:
 ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h config.h
 	$(CC) $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -fno-exceptions -fno-rtti -c ptlstats.cpp
@@ -126,14 +123,11 @@ test.dat-32bit.S: test.dat Makefile
 	$(CC) $(CFLAGS) $(INCFLAGS) -c $<
 
 clean:
-	rm -fv ptlsim ptlstats cpuid genoffsets *.o simsynth-offsets.h core core.[0-9]* .depend *.gch
+	rm -fv ptlsim ptlstats cpuid genoffsets *.o core core.[0-9]* .depend *.gch
 
 OBJFILES = $(COMMONOBJS) $(PT2XOBJS) $(OOOOBJS)
 INCLUDEFILES = $(COMMONINCLUDES) $(PT2XINCLUDES) $(OOOINCLUDES)
 CPPFILES = $(COMMONCPPFILES) $(PT2XCPPFILES) $(OOOCPPFILES)
-
-simsynth.out.S: simsynth.out
-	objdump -rtd -b binary -m i386:x86-64:intel --disassemble-all simsynth.out > simsynth.out.S
 
 #
 # Miscellaneous:

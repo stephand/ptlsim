@@ -55,7 +55,8 @@ void show_stats_and_switch_to_native() {
   save_stats();
 
   if (exit_after_fullsim) {
-    logfile << endl, "=== Exiting after full simulation on tid ", sys_gettid(), " at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl;
+    logfile << endl, "=== Exiting after full simulation on tid ", sys_gettid(), " at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " (", 
+      sim_cycle, " cycles, ", total_user_insns_committed, " user commits, ", iterations, " iterations) ===", endl, endl;
     logfile.flush();
     remove_exit_callback();
     sys_exit(0);

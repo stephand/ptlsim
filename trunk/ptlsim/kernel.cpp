@@ -229,7 +229,7 @@ void ptl_zero_private_pages(void* addr, Waddr bytecount) {
  * This is the minimum chunk size we will ask the kernel for; this should
  * be a multiple of the page size on all architectures.
  */
-#define MALLOC_CHUNK_SIZE	65536
+#define MALLOC_CHUNK_SIZE	1048576
 #define MALLOC_CHUNK_MASK (MALLOC_CHUNK_SIZE-1)
 
 /*
@@ -924,30 +924,6 @@ void flush_cpu_caches() {
 
 // Saved and restored by asm code:
 X87State x87state;
-
-W64 x87_fp_80bit_to_64bit(const X87Reg& x87reg) {
-  W64 reg64;
-  asm("fldt %[mem80]\n"
-      "fstpl %[mem64]\n"
-      : [mem64] "=m" (reg64) 
-      : [mem80] "m" (x87reg));
-  return reg64;
-}
-
-void x87_fp_64bit_to_80bit(X87Reg& x87reg, W64 reg64) {
-  asm("fldl %[mem64]\n"
-      "fstpt %[mem80]\n"
-      : [mem80] "=m" (x87reg) 
-      : [mem64] "m" (reg64));
-}
-
-void cpu_fsave(X87State& state) {
-  asm volatile("fsave %[state]" : [state] "=m" (*&state));
-}
-
-void cpu_frstor(X87State& state) {
-  asm volatile("frstor %[state]" : : [state] "m" (*&state));
-}
 
 void fpu_state_to_ptlsim_state() {
   ctx.commitarf[REG_fptos] = x87state.sw.fields.tos * 8;

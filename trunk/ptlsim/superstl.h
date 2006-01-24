@@ -667,7 +667,7 @@ namespace superstl {
    * Simple array class with optional bounds checking
    */  
   template <typename T, int size>
-  class array {
+  struct array {
   public:
     array() { }
     static const int length = size;
@@ -690,6 +690,62 @@ namespace superstl {
     void clear() {
       foreach(i, size) data[i] = T();
     }
+
+    void fill(const T& v) {
+      foreach(i, size) data[i] = v;
+    }
+  };
+
+  template <typename T, int size>
+  struct stack {
+  public:
+    int sp;
+    static const int length = size;
+    T data[size];
+
+    void reset() { sp = size; }
+
+    stack() { reset(); }
+
+    const T& operator [](int i) const { 
+#ifdef CHECK_BOUNDS
+      assert((sp + i) < size);
+#endif
+      return data[sp + i]; 
+    }
+
+    T& operator [](int i) { 
+#ifdef CHECK_BOUNDS
+      assert((sp + i) < size);
+#endif
+      return data[sp + i]; 
+    }
+
+    T& push() {
+      T& v = data[--sp];
+#ifdef CHECK_BOUNDS
+      assert(sp >= 0);
+#endif
+      return v;
+    }
+
+    T& push(const T& v) {
+      T& r = push();
+      r = v;
+      return r;
+    }
+
+    T& pop() {
+      T& v = data[sp++];
+#ifdef CHECK_BOUNDS
+      assert(sp <= size);
+#endif
+      return v;
+    } 
+
+    int count() const { return size - sp; }
+    bool empty() const { return (count() == 0); }
+    bool full() const { return (count() == size); }
   };
 
   template <typename T, int size>
@@ -779,12 +835,18 @@ namespace superstl {
     }
     
     void trim() {
-      //++MTY FIXME
+      //++MTY FIXME realloc is not always available!
       //reserved = count;
       //data = (T*)realloc(data, count * sizeof(T));
       //data = renew(data, count, newsize);
     }
+
+    // Only works with specialization for character arrays:
+    char* tokenize(const char* string, const char* seplist) { abort(); }
   };
+
+  template <>
+  char* dynarray<char*>::tokenize(const char* string, const char* seplist);
 
   template <class T>
   inline ostream& operator <<(ostream& os, const dynarray<T>& v) {

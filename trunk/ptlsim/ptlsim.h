@@ -14,6 +14,7 @@
 #include <kernel.h>
 #include <dcache.h>
 #include <config.h>
+#include <datastore.h>
 
 extern W64 sim_cycle;
 
@@ -21,9 +22,11 @@ void user_process_terminated(int rc);
 
 ostream& print_user_context(ostream& os, const UserContext& ctx, int width = 4);
 
-void init_translate();
 void init_uops();
+void init_translate();
 BasicBlock* translate_basic_block(void* rip);
+void capture_translate_timers(DataStoreNode& root);
+void capture_translate_stats(DataStoreNode& root);
 extern bool split_unaligned_memops_during_translate;
 
 int out_of_order_core_toplevel_loop();

@@ -41,7 +41,6 @@ W64 pause_at_startup = 0;
 W64 overshoot_and_dump = 0;
 W64 dump_at_end = 0;
 
-
 W64 use_out_of_order_core = 1;
 W64 use_out_of_order_core_dummy;
 
@@ -85,7 +84,7 @@ static ConfigurationOption optionlist[] = {
   {"pause-at-startup",                   OPTION_TYPE_W64,     0, "Pause for N seconds after starting up (to allow debugger to attach)", &pause_at_startup},
   {"perfect-cache",                      OPTION_TYPE_BOOL,    0, "Perfect cache hit rate", &perfect_cache},
 
-  {"ooo",                                OPTION_TYPE_BOOL,    0, "Use out of order core instead of PT2x core", &use_out_of_order_core_dummy},
+  {"ooo",                                OPTION_TYPE_BOOL,    0, "Use out of order core (always)", &use_out_of_order_core_dummy},
 };
 
 ostream& ConfigurationParser::printusage(ostream& os) const {
@@ -271,7 +270,7 @@ void print_banner(ostream& os, int argc, char* argv[]) {
 #else
   os << "//  PTLsim: Cycle Accurate x86 Simulator (32-bit version)", endl;
 #endif
-  os << "//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>", endl;
+  os << "//  Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>", endl;
   os << "// ", endl;
   os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
     stringify(__GNUC__), ".", stringify(__GNUC_MINOR__), endl;

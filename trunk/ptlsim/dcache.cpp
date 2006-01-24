@@ -1043,21 +1043,6 @@ int initiate_icache_miss(W64 addr) {
   return mb;
 }
 
-template <int CACHELEVEL>
-void issueprefetch(IssueState& state, W64 addr, W64 rc, SFR& sfra, W64 lsi) {
-  initiate_prefetch(addr, CACHELEVEL);
-
-  state.reg.rddata = 0;
-  state.reg.rdflags = 0;
-}
-
-#define CompileIssuePrefetch(aa) template void issueprefetch<aa>(IssueState& state, W64 raddr, W64 rstore, SFR& sfra, W64 lsi)
-
-CompileIssuePrefetch(0);
-CompileIssuePrefetch(1);
-CompileIssuePrefetch(2);
-CompileIssuePrefetch(3);
-
 static inline W64 storemask(W64 addr, W64 data, byte bytemask) {
   W64& mem = *(W64*)(Waddr)addr;
   mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);

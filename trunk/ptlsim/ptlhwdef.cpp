@@ -17,7 +17,7 @@ extern void print_message(const char* text);
 
 const char* opclass_names[OPCLASS_COUNT] = {
   "logic", "addsub", "addsubc", "addshift", "sel", "cmp", "br.cc", "jmp", "bru", 
-  "assist", "ld", "st", "ld.pre", "byteop", "shift", "mul", "bitscan", "flags",  "chk", 
+  "assist", "ld", "st", "ld.pre", "shiftsimple", "shift", "mul", "bitscan", "flags",  "chk", 
   "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f"
 };
 
@@ -30,8 +30,8 @@ struct FunctionalUnit FU[FU_COUNT] = {
   {"ldu1"},
   {"stu1"},
   {"alu0"},
-  {"alu1"},
   {"fpu0"},
+  {"alu1"},
   {"fpu1"},
 };
 
@@ -48,7 +48,6 @@ struct FunctionalUnit FU[FU_COUNT] = {
 #define FPU1 FU_FPU1
 #define A 1 // ALU latency, assuming fast bypass
 #define L LOADLAT
-#define F 5 // FPU latency
 
 #define ANYALU ALU0|ALU1
 #define ANYLDU LDU0|LDU1
@@ -59,7 +58,7 @@ struct FunctionalUnit FU[FU_COUNT] = {
 const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // name, opclass, latency, fu
   {"nop",            OPCLASS_LOGIC,         A, ANYINT|ANYFPU},
-  {"mov",            OPCLASS_LOGIC,         A, ANYINT}, // move or merge
+  {"mov",            OPCLASS_LOGIC,         A, ANYINT|ANYFPU}, // move or merge
   // Simple ALU operations
   {"and",            OPCLASS_LOGIC,         A, ANYINT|ANYFPU},
   {"or",             OPCLASS_LOGIC,         A, ANYINT|ANYFPU},
@@ -83,16 +82,16 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"set",            OPCLASS_SELECT,        A, ANYINT},
   {"set.sub",        OPCLASS_SELECT,        A, ANYINT},
   {"set.and",        OPCLASS_SELECT,        A, ANYINT},
-  {"br",             OPCLASS_COND_BRANCH,   A, ANYALU|ANYLDU}, // branch
-  {"br.sub",         OPCLASS_COND_BRANCH,   A, ANYALU|ANYLDU}, // compare and branch ("cmp" form: subtract)
-  {"br.and",         OPCLASS_COND_BRANCH,   A, ANYALU|ANYLDU}, // compare and branch ("test" form: and)
-  {"jmp",            OPCLASS_INDIR_BRANCH,  A, ANYALU|ANYLDU}, // indirect user branch
+  {"br",             OPCLASS_COND_BRANCH,   A, ANYINT}, // branch
+  {"br.sub",         OPCLASS_COND_BRANCH,   A, ANYINT}, // compare and branch ("cmp" form: subtract)
+  {"br.and",         OPCLASS_COND_BRANCH,   A, ANYINT}, // compare and branch ("test" form: and)
+  {"jmp",            OPCLASS_INDIR_BRANCH,  A, ANYINT}, // indirect user branch
   {"jmpp",           OPCLASS_INDIR_BRANCH|OPCLASS_BARRIER,  A, ANYALU|ANYLDU}, // indirect branch within PTL
-  {"bru",            OPCLASS_UNCOND_BRANCH, A, ANYALU|ANYLDU}, // unconditional branch (branch cap)
+  {"bru",            OPCLASS_UNCOND_BRANCH, A, ANYINT}, // unconditional branch (branch cap)
   {"brp",            OPCLASS_UNCOND_BRANCH|OPCLASS_BARRIER, A, ANYALU|ANYLDU}, // unconditional branch (PTL only)
-  {"chk",            OPCLASS_CHECK,         A, ANYALU|ANYLDU}, // check condition and rollback if false (uses cond codes); rcimm is exception type
-  {"chk.sub",        OPCLASS_CHECK,         A, ANYALU|ANYLDU}, // check ("cmp" form: subtract)
-  {"chk.and",        OPCLASS_CHECK,         A, ANYALU|ANYLDU}, // check ("test" form: and)
+  {"chk",            OPCLASS_CHECK,         A, ANYINT}, // check condition and rollback if false (uses cond codes); rcimm is exception type
+  {"chk.sub",        OPCLASS_CHECK,         A, ANYINT}, // check ("cmp" form: subtract)
+  {"chk.and",        OPCLASS_CHECK,         A, ANYINT}, // check ("test" form: and)
   // User loads and stores
   {"ld",             OPCLASS_LOAD,          L, ANYLDU}, // load zero extended
   {"ldx",            OPCLASS_LOAD,          L, ANYLDU}, // load sign extended
@@ -100,7 +99,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"ld.and",         OPCLASS_LOAD|OPCLASS_LOGIC, 2, ANYLDU}, // load and and (for test)
   {"ld.lm",          OPCLASS_LOAD,          1, ANYLDU}, // load from local memory 
   {"ldx.lm",         OPCLASS_LOAD,          1, ANYLDU}, // load from local memory, sign extended
-  {"ld.pre",         OPCLASS_PREFETCH,      1, ANYALU}, // prefetch
+  {"ld.pre",         OPCLASS_PREFETCH,      1, ANYLDU}, // prefetch
   {"st",             OPCLASS_STORE,         1, ANYSTU}, // store
   {"st.lm",          OPCLASS_STORE,         1, ANYSTU}, // store to local memory
   // Shifts and rotates
@@ -112,71 +111,79 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"shr",            OPCLASS_SHIFTROT,      1, ANYALU},
   {"sar",            OPCLASS_SHIFTROT,      1, ANYALU},   
   // Masking, insert and extract
-  {"mask",           OPCLASS_SHIFTROT,      1, ANYALU},        // mask rd = ra,rb,[ds,ms,mc]
+  {"mask",           OPCLASS_SHIFTROT,      1, ANYALU}, // mask rd = ra,rb,[ds,ms,mc]
+  // Simple shifting (restricted to small immediate)
+  {"shls",           OPCLASS_SIMPLE_SHIFT,  1, ANYINT}, // rb imm limited to 0-8
+  {"shrs",           OPCLASS_SIMPLE_SHIFT,  1, ANYINT}, // rb imm limited to 0-8
+  {"sars",           OPCLASS_SIMPLE_SHIFT,  1, ANYINT}, // rb imm limited to 0-8
+  {"maskb",          OPCLASS_SIMPLE_SHIFT,  1, ANYINT}, // mask rd = ra,rb,[ds,ms,mc], bytes only
   // Endian byte swap
   {"bswap",          OPCLASS_LOGIC,         A, ANYINT},
   // Flag operations
-  {"collcc",         OPCLASS_FLAGS,         A, ANYALU},
-  {"movccr",         OPCLASS_FLAGS,         A, ANYALU},
-  {"movrcc",         OPCLASS_FLAGS,         A, ANYALU},
-  {"andcc",          OPCLASS_FLAGS,         A, ANYALU},
-  {"orcc",           OPCLASS_FLAGS,         A, ANYALU},
-  {"ornotcc",        OPCLASS_FLAGS,         A, ANYALU},
-  {"xorcc",          OPCLASS_FLAGS,         A, ANYALU},
+  {"collcc",         OPCLASS_FLAGS,         A, ANYINT},
+  {"movccr",         OPCLASS_FLAGS,         A, ANYINT},
+  {"movrcc",         OPCLASS_FLAGS,         A, ANYINT},
+  {"andcc",          OPCLASS_FLAGS,         A, ANYINT},
+  {"orcc",           OPCLASS_FLAGS,         A, ANYINT},
+  {"ornotcc",        OPCLASS_FLAGS,         A, ANYINT},
+  {"xorcc",          OPCLASS_FLAGS,         A, ANYINT},
   // Multiplication
-  {"mull",           OPCLASS_MULTIPLY,      3, ALU0},
-  {"mulh",           OPCLASS_MULTIPLY,      3, ALU1},
-  {"mulhu",          OPCLASS_MULTIPLY,      3, ALU1},
+  {"mull",           OPCLASS_MULTIPLY,      4, ANYFPU},
+  {"mulh",           OPCLASS_MULTIPLY,      4, ANYFPU},
+  {"mulhu",          OPCLASS_MULTIPLY,      4, ANYFPU},
   // Bit testing
   {"bt",             OPCLASS_LOGIC,         A, ANYALU},
   {"bts",            OPCLASS_LOGIC,         A, ANYALU},
   {"btr",            OPCLASS_LOGIC,         A, ANYALU},
   {"btc",            OPCLASS_LOGIC,         A, ANYALU},
-  {"ctz",            OPCLASS_BITSCAN,       2, ALU0|ALU1},
-  {"clz",            OPCLASS_BITSCAN,       2, ALU0|ALU1},
-  {"ctpop",          OPCLASS_BITSCAN,       2, ALU0},  
+  // Bit scans
+  {"ctz",            OPCLASS_BITSCAN,       3, ANYFPU},
+  {"clz",            OPCLASS_BITSCAN,       3, ANYFPU},
+  {"ctpop",          OPCLASS_BITSCAN,       3, ANYFPU},  
   // Floating point
   // uop.size bits have following meaning:
   // 00 = single precision, scalar (preserve high 32 bits of ra)
   // 01 = single precision, packed (two 32-bit floats)
   // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
-  {"addf",           OPCLASS_FP_ALU,        F, ANYFPU},
-  {"subf",           OPCLASS_FP_ALU,        F, ANYFPU},
-  {"mulf",           OPCLASS_FP_ALU,        F, ANYFPU},
-  {"divf",           OPCLASS_FP_DIVSQRT,    F, FPU0}, //++MTY This should be cracked into a newton-raphson chain of frcp/fmadd
-  {"sqrtf",          OPCLASS_FP_DIVSQRT,    F, FPU1}, //++MTY This should be cracked into a newton-raphson chain of frsqrt/fmadd
-  {"rcpf",           OPCLASS_FP_DIVSQRT,    F, FPU0},
-  {"rsqrtf",         OPCLASS_FP_DIVSQRT,    F, FPU1},
-  {"minf",           OPCLASS_FP_COMPARE,    F, ANYFPU},
-  {"maxf",           OPCLASS_FP_COMPARE,    F, ANYFPU},
-  {"cmpf",           OPCLASS_FP_COMPARE,    F, ANYFPU},
+  {"addf",           OPCLASS_FP_ALU,        6, ANYFPU},
+  {"subf",           OPCLASS_FP_ALU,        6, ANYFPU},
+  {"mulf",           OPCLASS_FP_ALU,        6, ANYFPU},
+  {"maddf",          OPCLASS_FP_ALU,        6, ANYFPU},
+  {"msubf",          OPCLASS_FP_ALU,        6, ANYFPU},
+  {"divf",           OPCLASS_FP_DIVSQRT,    6, ANYFPU}, //++MTY This should be cracked into a newton-raphson chain of frcp/fmadd
+  {"sqrtf",          OPCLASS_FP_DIVSQRT,    6, ANYFPU}, //++MTY This should be cracked into a newton-raphson chain of frsqrt/fmadd
+  {"rcpf",           OPCLASS_FP_DIVSQRT,    6, ANYFPU},
+  {"rsqrtf",         OPCLASS_FP_DIVSQRT,    6, ANYFPU},
+  {"minf",           OPCLASS_FP_COMPARE,    4, ANYFPU},
+  {"maxf",           OPCLASS_FP_COMPARE,    4, ANYFPU},
+  {"cmpf",           OPCLASS_FP_COMPARE,    4, ANYFPU},
   // For fcmpcc, uop.size bits have following meaning:
   // 00 = single precision ordered compare
   // 01 = single precision unordered compare
   // 10 = double precision ordered compare
   // 11 = double precision unordered compare
-  {"cmpccf",         OPCLASS_FP_COMPARE,    F, ANYFPU},
+  {"cmpccf",         OPCLASS_FP_COMPARE,    4, ANYFPU},
   // and/andn/or/xor are done using integer uops
-  {"permf",          OPCLASS_FP_PERMUTE,    F, ANYFPU}, // shuffles
+  {"permf",          OPCLASS_FP_PERMUTE,    3, ANYFPU}, // shuffles
   // For these conversions, uop.size bits select truncation mode:
   // x0 = normal IEEE-style rounding
   // x1 = truncate to zero
-  {"cvtf.i2s.ins",   OPCLASS_FP_CONVERTI2F, F, FPU0}, // one W32s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss)
-  {"cvtf.i2s.p",     OPCLASS_FP_CONVERTI2F, F, FPU0}, // pair of W32s <rb> to pair of singles <rd> (for cvtdq2ps, cvtpi2ps)
-  {"cvtf.i2d.lo",    OPCLASS_FP_CONVERTI2F, F, FPU0}, // low W32s in <rb> to double in <rd> (for cvtdq2pd part 1, cvtpi2pd part 1, cvtsi2sd)
-  {"cvtf.i2d.hi",    OPCLASS_FP_CONVERTI2F, F, FPU0}, // high W32s in <rb> to double in <rd> (for cvtdq2pd part 2, cvtpi2pd part 2)
-  {"cvtf.q2s.ins",   OPCLASS_FP_CONVERTI2F, F, FPU0}, // one W64s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss with REX.mode64 prefix)
-  {"cvtf.q2d",       OPCLASS_FP_CONVERTI2F, F, FPU0}, // one W64s <rb> to double in <rd>, ignore <ra> (for cvtsi2sd with REX.mode64 prefix)
-  {"cvtf.s2i",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one single <rb> to W32s in <rd> (for cvtss2si, cvttss2si)
-  {"cvtf.s2q",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one single <rb> to W64s in <rd> (for cvtss2si, cvttss2si with REX.mode64 prefix)
-  {"cvtf.s2i.p",     OPCLASS_FP_CONVERTF2I, F, FPU1}, // pair of singles in <rb> to pair of W32s in <rd> (for cvtps2pi, cvttps2pi, cvtps2dq, cvttps2dq)
-  {"cvtf.d2i",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one double <rb> to W32s in <rd> (for cvtsd2si, cvttsd2si)
-  {"cvtf.d2q",       OPCLASS_FP_CONVERTF2I, F, FPU1}, // one double <rb> to W64s in <rd> (for cvtsd2si with REX.mode64 prefix)
-  {"cvtf.d2i.p",     OPCLASS_FP_CONVERTF2I, F, FPU1}, // pair of doubles in <ra> (high), <rb> (low) to pair of W32s in <rd> (for cvtpd2pi, cvttpd2pi, cvtpd2dq, cvttpd2dq), clear high 64 bits of dest xmm
-  {"cvtf.d2s.ins",   OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // double in <rb> to single, insert into low 32 bits of <ra> (for cvtsd2ss)
-  {"cvtf.d2s.p",     OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // pair of doubles in <ra> (high), <rb> (low) to pair of singles in <rd> (for cvtpd2ps)
-  {"cvtf.s2d.lo",    OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // low single in <rb> to double in <rd> (for cvtps2pd, part 1, cvtss2sd)
-  {"cvtf.s2d.hi",    OPCLASS_FP_CONVERTFP,  F, ANYFPU}, // high single in <rb> to double in <rd> (for cvtps2pd, part 2)
+  {"cvtf.i2s.ins",   OPCLASS_FP_CONVERTI2F, 6, ANYFPU}, // one W32s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss)
+  {"cvtf.i2s.p",     OPCLASS_FP_CONVERTI2F, 6, ANYFPU}, // pair of W32s <rb> to pair of singles <rd> (for cvtdq2ps, cvtpi2ps)
+  {"cvtf.i2d.lo",    OPCLASS_FP_CONVERTI2F, 6, ANYFPU}, // low W32s in <rb> to double in <rd> (for cvtdq2pd part 1, cvtpi2pd part 1, cvtsi2sd)
+  {"cvtf.i2d.hi",    OPCLASS_FP_CONVERTI2F, 6, ANYFPU}, // high W32s in <rb> to double in <rd> (for cvtdq2pd part 2, cvtpi2pd part 2)
+  {"cvtf.q2s.ins",   OPCLASS_FP_CONVERTI2F, 6, ANYFPU}, // one W64s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss with REX.mode64 prefix)
+  {"cvtf.q2d",       OPCLASS_FP_CONVERTI2F, 6, ANYFPU}, // one W64s <rb> to double in <rd>, ignore <ra> (for cvtsi2sd with REX.mode64 prefix)
+  {"cvtf.s2i",       OPCLASS_FP_CONVERTF2I, 6, ANYFPU}, // one single <rb> to W32s in <rd> (for cvtss2si, cvttss2si)
+  {"cvtf.s2q",       OPCLASS_FP_CONVERTF2I, 6, ANYFPU}, // one single <rb> to W64s in <rd> (for cvtss2si, cvttss2si with REX.mode64 prefix)
+  {"cvtf.s2i.p",     OPCLASS_FP_CONVERTF2I, 6, ANYFPU}, // pair of singles in <rb> to pair of W32s in <rd> (for cvtps2pi, cvttps2pi, cvtps2dq, cvttps2dq)
+  {"cvtf.d2i",       OPCLASS_FP_CONVERTF2I, 6, ANYFPU}, // one double <rb> to W32s in <rd> (for cvtsd2si, cvttsd2si)
+  {"cvtf.d2q",       OPCLASS_FP_CONVERTF2I, 6, ANYFPU}, // one double <rb> to W64s in <rd> (for cvtsd2si with REX.mode64 prefix)
+  {"cvtf.d2i.p",     OPCLASS_FP_CONVERTF2I, 6, ANYFPU}, // pair of doubles in <ra> (high), <rb> (low) to pair of W32s in <rd> (for cvtpd2pi, cvttpd2pi, cvtpd2dq, cvttpd2dq), clear high 64 bits of dest xmm
+  {"cvtf.d2s.ins",   OPCLASS_FP_CONVERTFP,  6, ANYFPU}, // double in <rb> to single, insert into low 32 bits of <ra> (for cvtsd2ss)
+  {"cvtf.d2s.p",     OPCLASS_FP_CONVERTFP,  6, ANYFPU}, // pair of doubles in <ra> (high), <rb> (low) to pair of singles in <rd> (for cvtpd2ps)
+  {"cvtf.s2d.lo",    OPCLASS_FP_CONVERTFP,  6, ANYFPU}, // low single in <rb> to double in <rd> (for cvtps2pd, part 1, cvtss2sd)
+  {"cvtf.s2d.hi",    OPCLASS_FP_CONVERTFP,  6, ANYFPU}, // high single in <rb> to double in <rd> (for cvtps2pd, part 2)
 };
 
 #undef A
@@ -437,7 +444,6 @@ stringbuf& nameof(stringbuf& sbname, const TransOp& uop) {
   
   return sbname;
 }
-
 
 ostream& operator <<(ostream& os, const UserContext& arf) {
   static const int width = 4;

@@ -15,20 +15,11 @@
 using namespace superstl;
 
 DataStoreNode::DataStoreNode() {
-  subnodes = null;
-  parent = null;
-  type = DS_NODE_TYPE_NULL;
-  count = 0;
-  name = null;
-  summable = 0;
-  histogramarray = 0;
-  histomin = 0;
-  histomax = 0;
-  histostride = 0;
+  init(null, DS_NODE_TYPE_NULL, 0);
 }
 
 DataStoreNode::DataStoreNode(const char* name) {
-  init(name, DS_NODE_TYPE_NULL, 0);
+  init(name, DS_NODE_TYPE_NULL, 1);
 }
 
 DataStoreNode::DataStoreNode(const char* name, NodeType type, int count) {
@@ -37,14 +28,46 @@ DataStoreNode::DataStoreNode(const char* name, NodeType type, int count) {
 
 void DataStoreNode::init(const char* name, int type, int count) {
   this->type = type;
-  this->name = strdup(name);
+  this->name = (name) ? strdup(name) : null;
   this->count = count;
+  value.w = 0;
   subnodes = null;
   parent = null;
   summable = 0;
+  histogramarray = 0;
+  identical_subtrees = 0;
+  histomin = 0;
+  histomax = 0;
+  histostride = 0;
+  dynamic = 0;
+  sum_of_subtrees_cache = null;
+  average_of_subtrees_cache = null;
+  total_sum_cache = -1;
+}
+
+void DataStoreNode::rename(const char* newname) {
+  DataStoreNode* oldparent = parent;
+
+  if (oldparent)
+    assert(oldparent->remove(name));
+
+  delete name;
+  name = strdup(newname);
+
+  if (oldparent) oldparent->add(this);
+}
+
+void DataStoreNode::invalidate_caches() {
+  if (sum_of_subtrees_cache) delete sum_of_subtrees_cache;
+  sum_of_subtrees_cache = null;
+  if (average_of_subtrees_cache) delete average_of_subtrees_cache;
+  average_of_subtrees_cache = null;
+  total_sum_cache = -1;
+  if (parent) parent->invalidate_caches();
 }
 
 void DataStoreNode::cleanup() {
+  invalidate_caches();
   if (type == DS_NODE_TYPE_STRING) {
     if (count > 1) {
       foreach (i, count) {
@@ -120,6 +143,15 @@ DataStoreNode::DataType DataStoreNode::getdata() const {
 DataStoreNode* DataStoreNode::search(const char* key) const {
   if (!subnodes)
     return null;
+
+  if (strequal(key, "[total]")) {
+    return sum_of_subtrees();
+  }
+
+  if (strequal(key, "[average]")) {
+    return average_of_subtrees();
+  }
+
   DataStoreNode** nodeptr = (*subnodes)(key);
   return (nodeptr) ? *nodeptr : null;
 }
@@ -300,85 +332,27 @@ DataStoreNodeDirectory& DataStoreNode::getentries() const {
   return (subnodes) ? subnodes->getentries() : *(new DataStoreNodeDirectory());
 }
 
-DataStoreNode* DataStoreNode::subtract(DataStoreNode& prev) {
-  DataStoreNode* newnode = null;
+double DataStoreNode::total() const {
+  if (total_sum_cache > 0) return total_sum_cache;
 
-  assert(prev.type == type);
-  assert(prev.count == count);
-
-  switch (type) {
-  case DS_NODE_TYPE_NULL: {
-    newnode = new DataStoreNode(name);
-    break;
-  }
-  case DS_NODE_TYPE_INT: {
-    if (count == 1) {
-      newnode = new DataStoreNode(name, (W64s)((W64s)(*this) - (W64s)prev));
-    } else {
-      W64s* a = new W64s[count];
-      W64s* nodearray = (*this);
-      W64s* prevarray = prev;
-
-      foreach (i, count) {
-        a[i] = nodearray[i] - prevarray[i];
-      }
-
-      newnode = new DataStoreNode(name, a, count);
-    }
-    break;
-  }
-  case DS_NODE_TYPE_FLOAT: {
-    if (count == 1) {
-      newnode = new DataStoreNode(name, (double)((double)(*this) - (double)prev));
-    } else {
-      double* a = new double[count];
-      double* nodearray = (*this);
-      double* prevarray = prev;
-
-      foreach (i, count) {
-        a[i] = nodearray[i] - prevarray[i];
-      }
-
-      newnode = new DataStoreNode(name, a, count);
-    }
-    break;
-  }
-  case DS_NODE_TYPE_STRING: {
-    if (count == 1) {
-      newnode = new DataStoreNode(name, prev.string());
-    } else {
-      newnode = new DataStoreNode(name, (const char**)prev, prev.count);
-    }
-    break;
-  }
-  default:
-    assert(false);
-  }
-
-  DataStoreNodeDirectory& list = getentries();
-  foreach (i, list.length) {
-    DataStoreNode& subnode = *list[i].value;
-    DataStoreNode& subprev = prev(list[i].key);
-
-    newnode->add(subnode.subtract(subprev));
-  }
-
-  delete &list;
-
-  return newnode;
-}
-
-double DataStoreNode::sum() const {
   double result = (double)(*this);
 
   DataStoreNodeDirectory& list = getentries();
   foreach (i, list.length) {
-    result += list[i].value->sum();
+    result += list[i].value->total();
   }
 
   delete &list;
 
+  ((DataStoreNode*)this)->total_sum_cache = result;
+
   return result;
+}
+
+double DataStoreNode::percent_of_parent() const {
+  if (!parent) return 0;
+  if (parent->subnodes->count == 1) return 1.0;
+  return total() / parent->total();
 }
 
 DataStoreNode& DataStoreNode::histogram(const W64* values, int count) {
@@ -404,16 +378,66 @@ static inline int digits(W64 v) {
   return strlen(sb);
 }
 
-ostream& DataStoreNode::print(ostream& os, bool percents, int depth, double supersum) const {
+DataStoreNode* DataStoreNode::sum_of_subtrees() const {
+  // We can safely override const modifier for caches:
+  DataStoreNode* thisdyn = (DataStoreNode*)this;
+
+  if (!sum_of_subtrees_cache) {
+    DataStoreNodeDirectory& a = getentries();
+
+    // Only works with this type of node
+    if (!identical_subtrees) {
+      thisdyn->sum_of_subtrees_cache = new DataStoreNode("invalid");
+      sum_of_subtrees_cache->dynamic = 1;
+    } else {
+      thisdyn->sum_of_subtrees_cache = a[0].value->clone();
+      sum_of_subtrees_cache->dynamic = 1;
+      sum_of_subtrees_cache->rename("[total]");
+
+      for (int i = 1; i < a.length; i++) (*sum_of_subtrees_cache) += *(a[i].value);
+    }
+  }
+
+  return sum_of_subtrees_cache;
+}
+
+
+DataStoreNode* DataStoreNode::average_of_subtrees() const {
+  // We can safely override const modifier for caches:
+  DataStoreNode* thisdyn = (DataStoreNode*)this;
+
+  if (!average_of_subtrees_cache) {
+    DataStoreNodeDirectory& a = getentries();
+
+    // Only works with this type of node
+    if (!identical_subtrees) {
+      thisdyn->average_of_subtrees_cache = new DataStoreNode("invalid");
+      average_of_subtrees_cache->dynamic = 1;
+    } else {
+      double coeff = 1. / a.size();
+      thisdyn->average_of_subtrees_cache = a[0].value->map(ScaleOperator(coeff));
+      average_of_subtrees_cache->dynamic = 1;
+      average_of_subtrees_cache->rename("[average]");
+
+      for (int i = 1; i < a.length; i++) average_of_subtrees_cache->addscaled(*a[i].value, coeff);
+    }
+  }
+
+  return average_of_subtrees_cache;
+}
+
+ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& printinfo, int depth, double supersum) const {
   stringbuf padding;
   foreach (i, depth) { padding << "  "; }
   os << padding;
 
-  double selfsum = sum();
+  double selfsum = total();
 
-  if (percents && supersum) {
-    double percent = percent(selfsum, supersum);
-    if (selfsum == supersum) os << "[ 100% ] "; else os << "[ ", floatstring(percent, 3, 0), "% ] ";
+  if (parent && parent->summable) {
+    double p = percent_of_parent() * 100.0;
+    if (p >= 99.999)
+      os << "[ ", padstring("100%", 4 + printinfo.percent_digits), " ] ";
+    else os << "[ ", floatstring(p, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";
   }
 
   switch (type) {
@@ -509,12 +533,33 @@ ostream& DataStoreNode::print(ostream& os, bool percents, int depth, double supe
     assert(false);
   }
 
+  if (depth == printinfo.maxdepth) {
+    os << " { ... }", endl;
+    return os;
+  }
+
   if (subnodes) {
-    if (summable) os << " (total ", (W64s)selfsum, ")";
+    bool isint = ((selfsum - math::floor(selfsum)) < 0.0001);
+    if (summable) {
+      os << " (total ";
+      if (isint) os << (W64s)selfsum; else os << (double)selfsum; os << ")";
+    }
     os << " {", endl;
+
     DataStoreNodeDirectory& a = getentries();
-    foreach (i, a.length) {
-      a[i].value->print(os, percents, depth + 1, (summable) ? selfsum : 0);
+
+    if (identical_subtrees) {
+      sum_of_subtrees()->print(os, printinfo, depth + 1, 0);
+
+      if (!printinfo.force_sum_of_subtrees_only) {
+        foreach (i, a.length) {
+          a[i].value->print(os, printinfo, depth + 1, 0);
+        }
+      }
+    } else {
+      foreach (i, a.length) {
+        a[i].value->print(os, printinfo, depth + 1, (summable) ? selfsum : 0);
+      }
     }
     foreach (i, depth) { os << "  "; }
     os << "}";
@@ -536,7 +581,7 @@ struct DataStoreNodeHeader {
   W32 magic;
   byte type;
   byte namelength;
-  W16 isarray:1, summable:1, histogramarray:1;
+  W16 isarray:1, summable:1, histogramarray:1, identical_subtrees:1;
   W32 subcount;
   // (optional DataStoreNodeArrayInfo iff (isarray == 1)
   // (null-terminated name)
@@ -578,6 +623,7 @@ bool DataStoreNode::read(idstream& is) {
   is.read((char*)name, h.namelength+1);
   type = h.type;
   summable = h.summable;
+  identical_subtrees = h.identical_subtrees;
   histogramarray = h.histogramarray;
 
   count = (h.isarray) ? ah.count : 1;
@@ -645,6 +691,7 @@ odstream& DataStoreNode::write(odstream& os) const {
   h.namelength = (byte)namelen;
   h.histogramarray = histogramarray;
   h.summable = summable;
+  h.identical_subtrees = identical_subtrees;
 
   h.isarray = (count > 1);
   if (count > 1) {
