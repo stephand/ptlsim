@@ -403,7 +403,7 @@ make_x86_shiftop_all_sizes(rotr, ror, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 make_x86_shiftop_all_sizes(rotcl, rcl, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 make_x86_shiftop_all_sizes(rotcr, rcr, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 
-#ifdef EMULATE_64BITXX
+#ifdef EMULATE_64BIT
 make_exp_shiftop_64bit(shl, (rb = lowbits(rb, log2(sizeof(W64)*8)), rd = (ra << rb), cf = bit(ra, (sizeof(W64)*8) - rb), of = cf ^ bit(rd, (sizeof(W64)*8)-1), rd));
 make_exp_shiftop_64bit(shr, (rb = lowbits(rb, log2(sizeof(W64)*8)), rd = (ra >> rb), cf = bit(ra, (rb-1)), of = bit(rd, (sizeof(W64)*8)-1), ra));
 make_exp_shiftop_64bit(sar, (rb = lowbits(rb, log2(sizeof(W64)*8)), rd = ((W64s)ra >> rb), cf = bit(ra, (rb-1)), of = bit(rd, (sizeof(W64)*8)-1), ra));
