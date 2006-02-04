@@ -50,7 +50,8 @@ void print_banner(int argc, char* argv[]);
 void print_usage(int argc, char* argv[]);
 int init_config(int argc, char** argv);
 
-#define MAX_CYCLE (1LL << 62)
+static const W64 infinity = limits<W64s>::max;
+static const W64 MAX_CYCLE = infinity;
 
 extern ostream logfile;
 extern W64 sim_cycle;

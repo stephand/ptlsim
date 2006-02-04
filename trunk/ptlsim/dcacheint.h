@@ -366,6 +366,11 @@ namespace DataCache {
     reqmask = bitvec<L1_LINE_SIZE>(bitmask(1 << sizeshift)) << lowbits(addr, log2(L1_LINE_SIZE));
   }
 
+  inline void prep_L2_sframask_and_reqmask(const SFR* sfr, W64 addr, int sizeshift, bitvec<L2_LINE_SIZE>& sframask, bitvec<L2_LINE_SIZE>& reqmask) {
+    sframask = (sfr) ? (bitvec<L2_LINE_SIZE>(sfr->bytemask) << 8*lowbits(sfr->physaddr, log2(L2_LINE_SIZE)-3)) : 0;
+    reqmask = bitvec<L2_LINE_SIZE>(bitmask(1 << sizeshift)) << lowbits(addr, log2(L2_LINE_SIZE));
+  }
+
 #ifdef USE_TLB
   template <int tlbid, int size>
   struct TranslationLookasideBuffer: public FullyAssociativeTags<W64, size> {

@@ -833,7 +833,13 @@ namespace superstl {
       data = renew(data, length, newsize);
       reserved = newsize;
     }
-    
+
+    void fill(const T& value) {
+      foreach (i, length) {
+        data[i] = value;
+      }
+    }
+
     void trim() {
       //++MTY FIXME realloc is not always available!
       //reserved = count;

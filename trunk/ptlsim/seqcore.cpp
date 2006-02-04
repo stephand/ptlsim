@@ -524,7 +524,7 @@ namespace SequentialCore {
     reset_fetch(arf[REG_rip]);
     
     int oldloglevel = loglevel;
-    if (start_log_at_iteration != MAX_CYCLE) loglevel = 0;
+    if (start_log_at_iteration != infinity) loglevel = 0;
 
     bool exiting = false;
 

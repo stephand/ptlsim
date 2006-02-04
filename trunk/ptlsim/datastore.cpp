@@ -355,6 +355,18 @@ double DataStoreNode::percent_of_parent() const {
   return total() / parent->total();
 }
 
+double DataStoreNode::percent_of_toplevel() const {
+  if (!parent) return 0;
+
+  // Find the toplevel summable node:
+  const DataStoreNode* p = this;
+  while (p) {
+    if (p->parent && p->parent->summable) p = p->parent; else break;
+  }
+
+  return total() / p->total();
+}
+
 DataStoreNode& DataStoreNode::histogram(const W64* values, int count) {
   summable = 1;
   foreach (i, count) {
@@ -434,7 +446,7 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
   double selfsum = total();
 
   if (parent && parent->summable) {
-    double p = percent_of_parent() * 100.0;
+    double p = ((printinfo.percent_of_toplevel) ? percent_of_toplevel() : percent_of_parent()) * 100.0;
     if (p >= 99.999)
       os << "[ ", padstring("100%", 4 + printinfo.percent_digits), " ] ";
     else os << "[ ", floatstring(p, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";

@@ -37,8 +37,11 @@ W64 show_sum_of_subtrees_only = 0;
 W64 maxdepth = limits<int>::max;
 
 W64 table_scale_rel_to_col = limits<int>::max;
+W64 table_mark_highest_col = 0;
 
 W64 percent_digits = 1; // e.g. "66.7%"
+
+W64 percent_of_toplevel = 0;
 
 static ConfigurationOption optionlist[] = {
   {null,                                 OPTION_TYPE_SECTION, 0, "Mode", null},
@@ -55,6 +58,7 @@ static ConfigurationOption optionlist[] = {
   {"tabletype",                          OPTION_TYPE_STRING,  0, "Table type (text, latex, html)", &table_type_name},
   {"scale-relative-to-col",              OPTION_TYPE_W64,     0, "Scale all other table columns relative to specified column", &table_scale_rel_to_col},
   {"table-percents",                     OPTION_TYPE_BOOL,    0, "Show percents (as in tree) rather than absolute values", &table_use_percents},
+  {"table-mark-highest-col",             OPTION_TYPE_BOOL,    0, "Mark highest column in each row", &table_mark_highest_col},
   {null,                                 OPTION_TYPE_SECTION, 0, "Statistics Range", null},
   {"deltastart",                         OPTION_TYPE_STRING,  0, "Snapshot to start at", &delta_start},
   {"deltaend",                           OPTION_TYPE_STRING,  0, "Snapshot to end at (i.e. subtract end - start)", &delta_end},
@@ -62,6 +66,7 @@ static ConfigurationOption optionlist[] = {
   {"sum-subtrees-only",                  OPTION_TYPE_BOOL,    0, "Show only the sum of subtrees in applicable nodes", &show_sum_of_subtrees_only},
   {"maxdepth",                           OPTION_TYPE_W64,     0, "Maximum tree depth", &maxdepth},
   {"percent-digits",                     OPTION_TYPE_W64,     0, "Precision of percentage listings in digits", &percent_digits},
+  {"percent-of-toplevel",                OPTION_TYPE_BOOL,    0, "Show percent relative to toplevel node, not parent node", &percent_of_toplevel},
   {null,                                 OPTION_TYPE_SECTION, 0, "Histogram Options", null},
   {"title",                              OPTION_TYPE_STRING,  0, "Graph Title", &graph_title},
   {"width",                              OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_width},
@@ -796,7 +801,7 @@ public:
   }
 
   virtual void print_header(int col) {
-    os << " ", colnames[col];
+    os << "  ", padstring(colnames[col], 8);
   }
 
   virtual void end_header_row() {
@@ -809,11 +814,16 @@ public:
 
   virtual void print_data(double value, int row, int column) {
     bool isint = ((value - math::floor(value)) < 0.0000001);
-    if (isint) os << (W64s)value; else os << floatstring(value, 0, 3);
+    int width = max((int)strlen(colnames[column]), 8) + 2;
+    if (isint) os << intstring((W64s)value, width); else os << floatstring(value, width, 3);
   }
 
   virtual void end_row() {
     os << endl;
+  }
+
+  virtual void start_special_row(const char* title) {
+    os << padstring(title, row_name_width);
   }
 
   virtual void end_table() { }
@@ -847,6 +857,10 @@ public:
 
   virtual void start_row(int row) {
     os << rownames[row];
+  }
+
+  virtual void start_special_row(const char* title) {
+    os << title;
   }
 
   virtual void print_data(double value, int row, int column) {
@@ -883,13 +897,18 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
     assert(false);
   }
 
-  creator->start_header_row();
-  for (int col = 0; col < collist.size(); col++) creator->print_header(col);
-  creator->end_header_row();
+  dynarray<double> sum_of_all_rows;
+  sum_of_all_rows.resize(collist.size());
+  sum_of_all_rows.fill(0);
 
+  dynarray< dynarray<double> > data;
+  data.resize(rowlist.size());
+
+  //
+  // Collect data
+  //
   for (int row = 0; row < rowlist.size(); row++) {
-    double relative_base = 0;
-    creator->start_row(row);
+    data[row].resize(collist.size());
     for (int col = 0; col < collist.size(); col++) {
       stringbuf filename;
       filename << rowlist[row], rowcolsep, collist[col];
@@ -907,10 +926,45 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
       double value;
       if (ds) {
         value = *ds;
+        sum_of_all_rows[col] += value;
       } else { 
         cerr << "ptlstats: Warning: cannot find subtree '", statname, "' for row ", row, ", col ", col, endl;
         value = 0;
       }
+
+      data[row][col] = value;
+    }
+  }
+
+  //
+  // Print data
+  //
+  creator->start_header_row();
+  for (int col = 0; col < collist.size(); col++) creator->print_header(col);
+  creator->end_header_row();
+
+  for (int row = 0; row < rowlist.size(); row++) {
+    double relative_base = 0;
+    creator->start_row(row);
+    for (int col = 0; col < collist.size(); col++) {
+      double value = data[row][col];
+
+      if (scale_relative_to_col < collist.size()) {
+        if (col != scale_relative_to_col) {
+          value = ((data[row][scale_relative_to_col] / value) - 1.0) * 100.0;
+        }
+      }
+
+      creator->print_data(value, row, col);
+    }
+    creator->end_row();
+  }
+
+  {
+    double relative_base = 0;
+    creator->start_special_row("Total");
+    for (int col = 0; col < collist.size(); col++) {
+      double value = sum_of_all_rows[col];
 
       if (scale_relative_to_col < collist.size()) {
         if (col == scale_relative_to_col) {
@@ -920,10 +974,11 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
         }
       }
 
-      creator->print_data(value, row, col);
+      creator->print_data(value, rowlist.size()+0, col);
     }
     creator->end_row();
   }
+
   creator->end_table();
 }
 
@@ -960,6 +1015,7 @@ int main(int argc, char* argv[]) {
   printinfo.force_sum_of_subtrees_only = show_sum_of_subtrees_only;
   printinfo.maxdepth = maxdepth;
   printinfo.percent_digits = percent_digits;
+  printinfo.percent_of_toplevel = percent_of_toplevel;
 
   if (mode_histogram) {
     idstream is(filename);

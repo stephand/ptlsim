@@ -4370,7 +4370,7 @@ void ooo_capture_stats() {
   sb << snapshotid;
   snapshotid++;
 
-  if (snapshot_cycles < MAX_CYCLE)
+  if (snapshot_cycles < infinity)
     ooo_capture_stats((*dsroot)(sb));
 
   cttotal.start();
@@ -4450,7 +4450,7 @@ int out_of_order_core_toplevel_loop() {
   logfile << ctx.commitarf;
 
   int oldloglevel = loglevel;
-  if (start_log_at_iteration != MAX_CYCLE) loglevel = 0;
+  if (start_log_at_iteration != infinity) loglevel = 0;
 
   cttotal.start();
 

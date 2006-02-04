@@ -613,7 +613,7 @@ namespace DataCache {
     int initiate_miss(W64 addr, bool hit_in_L2, bool icache = 0) {
       bool DEBUG = analyze_in_detail();
 
-      addr = floor(addr, L2_LINE_SIZE);
+      addr = floor(addr, L1_LINE_SIZE);
 
       int idx = find(addr);
 
@@ -727,14 +727,18 @@ namespace DataCache {
             if (DEBUG) logfile << "mb", i, ": delivered to L1 switch (map ", mb.lfrqmap, ")", endl;
 
             if (mb.dcache) {
-              if (DEBUG) logfile << "mb", i, ": delivered to L1 dcache (map ", mb.lfrqmap, ")", endl;
+              if (DEBUG) logfile << "mb", i, ": delivered ", (void*)mb.addr, " to L1 dcache (map ", mb.lfrqmap, ")", endl;
+              // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
+              // foreach (i, L2_LINE_SIZE / L1_LINE_SIZE) L1.validate(mb.addr + i*L1_LINE_SIZE, bitvec<L1_LINE_SIZE>().setall());
               L1.validate(mb.addr, bitvec<L1_LINE_SIZE>().setall());
               missbuf_deliver_L2_to_L1++;
               lfrq.wakeup(mb.addr, mb.lfrqmap);
             }
             if (mb.icache) {
               // Sometimes we can initiate an icache miss on an existing dcache line in the missbuf
-              if (DEBUG) logfile << "mb", i, ": delivered to L1 icache", endl;
+              if (DEBUG) logfile << "mb", i, ": delivered ", (void*)mb.addr, " to L1 icache", endl;
+              // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
+              // foreach (i, L2_LINE_SIZE / L1I_LINE_SIZE) L1I.validate(mb.addr + i*L1I_LINE_SIZE, bitvec<L1I_LINE_SIZE>().setall());
               L1I.validate(mb.addr, bitvec<L1I_LINE_SIZE>().setall());
               missbuf_deliver_L2_to_L1I++;
               LoadStoreInfo lsi;
@@ -860,8 +864,8 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
     //
     // We had at least a partial L2 hit, but is the requested data actually mapped into the line?
     //
-    bitvec<L1_LINE_SIZE> sframask, reqmask;
-    prep_sframask_and_reqmask((SFRAUSED) ? &sfra : null, addr, sizeshift, sframask, reqmask);
+    bitvec<L2_LINE_SIZE> sframask, reqmask;
+    prep_L2_sframask_and_reqmask((SFRAUSED) ? &sfra : null, addr, sizeshift, sframask, reqmask);
     L2hit = (SFRAUSED) ? ((reqmask & (sframask | L2line->valid)) == reqmask) : ((reqmask & L2line->valid) == reqmask);
 #ifdef ISSUE_LOAD_STORE_DEBUG
     logfile << "L2hit = ", L2hit, endl, "  cachemask ", L2line->valid, endl,
@@ -987,7 +991,7 @@ void initiate_prefetch(W64 addr, int cachelevel) {
   //bool DEBUG = analyze_in_detail();
   static const bool DEBUG = 0;
 
-  addr = floor(addr, L2_LINE_SIZE);
+  addr = floor(addr, L1_LINE_SIZE);
 
   L1CacheLine* L1line = L1.probe(addr);
 

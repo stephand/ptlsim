@@ -14,7 +14,7 @@ CC = g++
 INCFLAGS = -I. -DBUILDHOST="`hostname -f`"
 
 ifdef __x86_64__
-CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type -minline-all-stringops
 #CFLAGS = -O0 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type
 CFLAGS32BIT = -m32
 else

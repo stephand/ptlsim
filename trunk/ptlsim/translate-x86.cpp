@@ -229,14 +229,23 @@ void assist_x87_##name() { \
 #define old_log2 log2
 #undef log2
 
-// st(1) = st(1) + log2(st(0)) and pop st(0)
-make_two_input_x87_func_with_pop(fyl2x, st1u.d = st1u.d * math::log2(st0u.d));
+//
+// NOTE: Under no circumstances can we let out-of-range values get passed to the
+// standard library math functions! It will screw up the x87 FPU state inside
+// PTLsim and we may never recover.
+//
 
-// st(1) = st(1) + log2(st(0) + 1.0) and pop st(0)
-make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = st1u.d * math::log2(st0u.d + 1));
+// st(1) = st(1) * log2(st(0)) and pop st(0)
+make_two_input_x87_func_with_pop(fyl2x, st1u.d = (st0u.d <= 0) ? INFINITY : (st1u.d * math::log2(st0u.d)));
 
-// st(1) = st(1) + log2(st(0) + 1.0) and pop st(0)
-make_two_input_x87_func_with_pop(fpatan, st1u.d = math::atan(st1u.d / st0u.d));
+// st(1) = st(1) * log2(st(0) + 1.0) and pop st(0)
+// This insn has very strange semantics: if (st0 < -1.0), 
+// such that ((st0 + 1.0) < 0), rather than return NaN, it
+// returns the old value in st0 but still pops the stack.
+make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = (st0u.d <= -1.0) ? st0u.d : (st1u.d * math::log2(st0u.d + 1.0)));
+
+// st(1) = arctan(st(1) / st(0))
+make_two_input_x87_func_with_pop(fpatan, st1u.d = (st0u.d == 0) ? INFINITY : math::atan(st1u.d / st0u.d));
 
 void assist_x87_fscale() {
   W64& tos = ctx.commitarf[REG_fptos];
@@ -312,7 +321,7 @@ void assist_x87_fprem1() {
   SSEType st0u(st0); SSEType st1u(st1);
 
   X87StatusWord fpsw;
-  asm("fld %[st1]; fld %[st0]; fprem1; fstsw %%ax; fstp %[st0]; ffree %%st(0); fincstp;" : [st0] "+m" (st0u.d), "=a" (fpsw.data) : [st1] "m" (st1u.d));
+  asm("fldl %[st1]; fldl %[st0]; fprem1; fstsw %%ax; fstpl %[st0]; ffree %%st(0); fincstp;" : [st0] "+m" (st0u.d), "=a" (fpsw.data) : [st1] "m" (st1u.d));
   st0 = st0u.w64;
 
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
@@ -3682,6 +3691,12 @@ namespace TranslateX86 {
       int rdreg = (rd.type == OPTYPE_MEM) ? REG_temp1 : arch_pseudo_reg_to_arch_reg[rd.reg.reg];
 
       // Form a 64-bit register to shift
+
+      // (int ms, int mc, int ds)
+      // left shift: make it like this:
+      // dddd aaaa     
+      // rotr 32
+
       if (right)
         this << TransOp(OP_maskb, REG_temp0, rdreg, rareg, REG_imm, 3, 0, make_mask_control_info(32, 32, 32)); // 63 RA RD 0
       else this << TransOp(OP_maskb, REG_temp0, rareg, rdreg, REG_imm, 3, 0, make_mask_control_info(32, 32, 32)); // 63 RD RA 0

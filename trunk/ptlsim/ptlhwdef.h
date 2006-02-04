@@ -371,6 +371,8 @@ extern struct FunctionalUnit FU[FU_COUNT];
 #define OPCLASS_FP_CONVERTF2I           (1 << 24)
 #define OPCLASS_FP_CONVERTFP            (1 << 25)
 
+#define OPCLASS_FP                      (OPCLASS_FP_ALU | OPCLASS_FP_DIVSQRT | OPCLASS_FP_COMPARE | OPCLASS_FP_PERMUTE | OPCLASS_FP_CONVERTI2F | OPCLASS_FP_CONVERTF2I, OPCLASS_FP_CONVERTFP)
+
 #define OPCLASS_COUNT                   26
 
 #define OPCLASS_USECOND                 (OPCLASS_COND_BRANCH|OPCLASS_SELECT|OPCLASS_CHECK)
@@ -500,6 +502,7 @@ struct OpcodeInfo {
   const char* name;
   W32 opclass;
   W16 latency;
+  W16 flagops;
   W16 fu;
 };
 

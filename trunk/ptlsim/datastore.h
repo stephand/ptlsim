@@ -20,12 +20,13 @@ struct DataStoreNode;
 struct DataStoreNodePrintSettings {
   int maxdepth;
   int percent_digits;
-  int force_sum_of_subtrees_only:1;
+  int force_sum_of_subtrees_only:1, percent_of_toplevel:1;
 
   DataStoreNodePrintSettings() {
     force_sum_of_subtrees_only = 0;
     maxdepth = limits<int>::max;
     percent_digits = 0;
+    percent_of_toplevel = 0;
   }
 };
 
@@ -201,6 +202,7 @@ struct DataStoreNode {
 
   double total() const;
   double percent_of_parent() const;
+  double percent_of_toplevel() const;
 
   DataStoreNode& histogram(const W64* values, int count);
   DataStoreNode& histogram(const char** names, const W64* values, int count);

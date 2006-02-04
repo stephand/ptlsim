@@ -22,21 +22,21 @@ char* log_filename = null;
 W64 include_dyn_linker = 1;
 W64 start_at_rip = 0;
 W64 start_at_rip_repeat = 1;
-W64 stop_at_iteration = MAX_CYCLE;
+W64 stop_at_iteration = infinity;
 W64 insns_in_last_basic_block = 65536;
 W64 stop_at_rip = 0;
-W64 stop_at_user_insns = MAX_CYCLE;
+W64 stop_at_user_insns = infinity;
 W64 sequential_mode_insns = 0;
-W64 start_log_at_iteration = MAX_CYCLE;
-W64 start_short_log_at_iteration = MAX_CYCLE;
+W64 start_log_at_iteration = infinity;
+W64 start_short_log_at_iteration = infinity;
 W64 user_profile_only = 0;
 W64 trigger_mode = 0;
 W64 exit_after_fullsim;
 char* stats_filename = null;
 char* dumpcode_filename = null;
 W64 perfect_cache = 0;
-W64 snapshot_cycles = MAX_CYCLE;
-W64 flush_interval = MAX_CYCLE;
+W64 snapshot_cycles = infinity;
+W64 flush_interval = infinity;
 W64 pause_at_startup = 0;
 W64 overshoot_and_dump = 0;
 W64 dump_at_end = 0;
@@ -103,9 +103,11 @@ ostream& ConfigurationParser::printusage(ostream& os) const {
     switch (options[i].type) {
     case OPTION_TYPE_NONE:
       break;
-    case OPTION_TYPE_W64:
-      os << *((W64*)(options[i].variable));
+    case OPTION_TYPE_W64: {
+      W64 v = *((W64*)(options[i].variable));
+      if (v == infinity) os << "inf"; else os << v;
       break;
+    }
     case OPTION_TYPE_FLOAT:
       os << *((double*)(options[i].variable));
       break;
@@ -168,7 +170,7 @@ int ConfigurationParser::parse(int argc, char* argv[]) {
                 multiplier = 1000000000000LL; c = 0; break;
               }
             }
-            W64 v = (isinf) ? MAX_CYCLE : strtoll(p, &endp, 0);
+            W64 v = (isinf) ? infinity : strtoll(p, &endp, 0);
             if ((!isinf) && (endp[0] != 0)) {
               cerr << "Warning: invalid value '", p, "' for option ", argv[i-1], "; ignoring", endl;
             }
@@ -218,7 +220,7 @@ ostream& ConfigurationParser::print(ostream& os) const {
       W64 v = *((W64*)(options[i].variable));
       if (v == 0) {
         os << 0;
-      } else if (v == MAX_CYCLE) {
+      } else if (v == infinity) {
         os << "infinity";
       } else if ((v % 1000000000LL) == 0) {
         os << (v / 1000000000LL), " G";
@@ -371,7 +373,7 @@ int init_config(int argc, char** argv) {
   //
   // Fix up parameter defaults:
   //
-  if ((start_log_at_iteration == MAX_CYCLE) && (loglevel > 0))
+  if ((start_log_at_iteration == infinity) && (loglevel > 0))
     start_log_at_iteration = 0;
 
   logfile << options;

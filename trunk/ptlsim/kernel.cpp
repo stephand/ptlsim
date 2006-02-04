@@ -917,11 +917,6 @@ void flush_cpu_caches() {
   close(fd);
 }
 
-//
-// NOTE: Linux puts a cap on the amount of non-reserved private memory we can allocate per process. 
-// See Documentation/vm/overcommit-accounting for details on how to control the commit charges.
-//
-
 // Saved and restored by asm code:
 X87State x87state;
 
