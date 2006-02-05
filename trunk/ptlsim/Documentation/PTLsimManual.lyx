@@ -67,7 +67,7 @@ Matt T.
 <yourst@yourst.com>
 \layout Standard
 \noindent \align center 
-Revision 20051202
+Revision 20060204
 \layout Standard
 \added_space_top vfill \noindent \align center 
 The latest version of PTLsim and this document are always available at:
@@ -85,7 +85,7 @@ www.ptlsim.org
 \begin_inset Formula $\copyright$
 \end_inset 
 
- 1999-2005 Matt T.
+ 1999-2006 Matt T.
  Yourst 
 \family typewriter 
 \size small 
@@ -997,8 +997,7 @@ If you use the "
 \series bold 
 do not run it forever by accident
 \series default 
- since the log files will go on for gigabytes.
- Use 
+ since the log files will go on for gigabytes! Use 
 \family typewriter 
 \size small 
 -startlog
@@ -3163,15 +3162,21 @@ superstl.cpp
 
 \end_inset 
 
-Statistics Collection and Control
+Using PTLstats
 \layout Section
 
-Using PTLstats to Analyze Statistics
+Introducing PTLstats
 \layout Standard
 
 PTLsim maintains a huge number of statistical counters and data points during
- the simulation process, and can optionally save this data to a statistics
- data store by using the 
+ the simulation process; the specific data are documented in Section 
+\begin_inset LatexCommand \ref{sec:PerformanceCounters}
+
+\end_inset 
+
+.
+ PTLsim can optionally save this data to a statistics data store by using
+ the 
 \begin_inset Quotes eld
 \end_inset 
 
@@ -3230,144 +3235,19 @@ N
 \layout Standard
 
 The 
+\series bold 
 \emph on 
 PTLstats
+\series default 
 \emph default 
  program is used to analyze the statistics data store files produced by
  PTLsim.
- The syntax of this command is 
-\begin_inset Quotes eld
-\end_inset 
-
-
-\family typewriter 
-\size small 
-ptlstats -
-\family default 
-\size default 
-\emph on 
-options
-\emph default 
- 
-\emph on 
-filename
-\emph default 
-
-\begin_inset Quotes erd
-\end_inset 
-
-.
-\layout Standard
-
-The following major actions) are supported:
-\layout List
-\labelwidthstring WWWWWWWW
-
-(no\SpecialChar ~
-options) Print the full PTLsim statistics tree in the textual format
- shown below.
-\layout List
-\labelwidthstring WWWWWWWW
-
-
-\series bold 
--subtree
-\emph on 
-\SpecialChar ~
-
-\series default 
-root
-\emph default 
- Print a subtree of the statistics tree.
- For instance, to print just the load unit statistics in the final snapshot,
- use 
-\begin_inset Quotes eld
-\end_inset 
-
-
-\family typewriter 
-\size small 
-ptlstats 
-\series bold 
--subtree final/dcache/load
-\series default 
- 
-\emph on 
-filename.stats
-\family default 
-\size default 
-\emph default 
-
-\begin_inset Quotes erd
-\end_inset 
-
-.
-\layout List
-\labelwidthstring WWWWWWWW
-
-
-\series bold 
--collect
-\emph on 
-\SpecialChar ~
-
-\series default 
-root
-\emph default 
- Collect the same subtree from muliple statistics files and print all the
- subtrees.
- For instance, to print the L1 cache hit rate for two benchmarks, use 
-\begin_inset Quotes eld
-\end_inset 
-
-
-\family typewriter 
-\size small 
-ptlstats 
-\series bold 
--collect /final/dcache/load/hit/L1
-\series default 
- bench1.stats bench2.stats ...
-\family default 
-\size default 
-
-\begin_inset Quotes erd
-\end_inset 
-
-.
- This option is useful for taking a cross section from all benchmarks of
- a specific statistic (or subtree of statistics).
-\layout List
-\labelwidthstring WWWWWWWW
-
-
-\series bold 
--histogram
-\emph on 
-\SpecialChar ~
-
-\series default 
-root
-\emph default 
- Generate a histogram graph, in SVG (Scalable Vector Graphics) format, of
- the specified statistics node.
- The node must be an array of integers previously marked as a histogram
- (see the source code examples for details).
- Various other options are provided to control the graph size, title, data
- percentile cutoff and log scaling.
- 
-\layout Standard
-
-Additional options and their descriptions can be found by running 
-\family typewriter 
-\size small 
-ptlstats
-\family default 
-\size default 
- without any arguments.
-\layout Standard
-
-The following is an example of the type of output you can expect from PTLstats:
+ Internally, PTLsim and PTLstats represent statistics data store nodes in
+ a tree format.
+ Each node can contain other data store nodes as well as a value (64-bit
+ integer, floating point, character string) or an array of values.
+ The following is an example of one node in the statistics tree, as printed
+ by PTLstats:
 \layout LyX-Code
 
 
@@ -3458,13 +3338,489 @@ dcache {
 Notice how PTLstats will automatically sum up all entries in certain branches
  of the tree to provide the user with a breakdown by percentages of the
  total for that subtree in addition to the raw values.
+ Many other node attributes can be specified to help format the data in
+ similar ways, as is described in the following sections.
+\layout Section
+
+Working with Statistics Trees: Collection, Averaging and Summing
+\layout Standard
+
+The basic syntax of the PTLstats command is 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+ptlstats -
+\family default 
+\size default 
+\emph on 
+options
+\emph default 
+ 
+\emph on 
+filename
+\emph default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+.
+ If no options are specified, PTLstats prints out the entire statistics
+ tree from its root, including all snapshots.
+\layout Standard
+
+To select a specific subtree of interest (for instance, a specific snapshot
+ or a node within a snapshot), use the syntax of the following example:
+\layout LyX-Code
+
+
+\size small 
+ptlstats 
+\series bold 
+-collect
+\series default 
+ /final/dcache/load example1.stats example2.stats ...
+\layout Standard
+
+This will print out the subtree 
+\family typewriter 
+\size small 
+dcache/load
+\family default 
+\size default 
+ in the snapshot named 
+\family typewriter 
+\size small 
+final
+\family default 
+\size default 
+ for each of the named statistics files 
+\family typewriter 
+\size small 
+example1.stats
+\family default 
+\size default 
+, 
+\family typewriter 
+\size small 
+example2.stats
+\family default 
+\size default 
+ and so on.
+ Multiple files are generally used to examine a specific subnode across
+ several benchmarks.
+\layout Standard
+
+Subtrees can also be summed and averaged across many files, using the 
+\family typewriter 
+\series bold 
+\size small 
+-collectsum
+\family default 
+\series default 
+\size default 
+ or 
+\family typewriter 
+\series bold 
+\size small 
+-collectaverage
+\family default 
+\series default 
+\size default 
+ commands in place of 
+\family typewriter 
+\size small 
+-collect
+\family default 
+\size default 
+.
+ The subtrees must be identical in structure (but not in their data) across
+ all files for these two options to work.
+\layout Section
+
+Traversal and Printing Options
+\layout Standard
+
+The 
+\family typewriter 
+\series bold 
+\size small 
+-maxdepth
+\family default 
+\series default 
+\size default 
+ option is useful for limiting the depth (in nodes) PTLstats will descend
+ into the specified subtree.
+ This is appropriate when you want to summarize certain classes of statistics
+ printed as percentages of the whole, yet don't want a breakdown of every
+ sub-statistic.
+\layout Standard
+
+The 
+\family typewriter 
+\size small 
+-percent-of-toplevel
+\family default 
+\size default 
+ option changes the way percentages are displayed.
+ By default, percentages are calculated by dividing the total value of each
+ node by the total of its immediate parent node.
+ When 
+\family typewriter 
+\size small 
+-percent-of-toplevel
+\family default 
+\size default 
+ is enabled, the divisor becomes the total of the entire subtree, possibly
+ going back several levels (i.e.
+ back to the highest level node marked with the 
+\emph on 
+summable
+\emph default 
+ attribute), rather than each node's immediate parent.
+\layout Section
+
+Table Generation
+\layout Standard
+
+PTLstats provides a facility to easily generate R-row by C-column data tables
+ from a set of R benchmarks run with C different sets of parameters.
+ Tables can be output in a variety of formats, including plain text with
+ tab or space delimiters (suitable for import into a spreadsheet), LaTeX
+ (for direct insertion into research reports) or HTML.
+ To generate a table, use the following syntax:
+\layout LyX-Code
+
+
+\size small 
+ptlstats 
+\series bold 
+-table 
+\series default 
+/final/summary/cycles -rows gzip,gcc,perlbmk,mesa -cols small,large,huge
+ -table-pattern "%row/ptlsim.stats.%col"
+\layout Standard
+
+In this example, the benchmarks (
+\begin_inset Quotes eld
+\end_inset 
+
+gzip
+\begin_inset Quotes erd
+\end_inset 
+
+, 
+\begin_inset Quotes eld
+\end_inset 
+
+gcc
+\begin_inset Quotes erd
+\end_inset 
+
+, 
+\begin_inset Quotes eld
+\end_inset 
+
+perlbmk
+\begin_inset Quotes erd
+\end_inset 
+
+, 
+\begin_inset Quotes eld
+\end_inset 
+
+mesa
+\begin_inset Quotes erd
+\end_inset 
+
+) will form the rows of the table, while three trials done for each benchmark
+ (
+\begin_inset Quotes eld
+\end_inset 
+
+small
+\begin_inset Quotes erd
+\end_inset 
+
+, 
+\begin_inset Quotes eld
+\end_inset 
+
+large
+\begin_inset Quotes erd
+\end_inset 
+
+, 
+\begin_inset Quotes eld
+\end_inset 
+
+huge
+\begin_inset Quotes erd
+\end_inset 
+
+) will be listed in the columns.
+ The row and column names will be combined using the pattern 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+%row/ptlsim.stats.%col
+\family default 
+\size default 
+
+\begin_inset Quotes eld
+\end_inset 
+
+ to generate statistics data store filenames like 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+gzip/ptlsim.stats.small
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+.
+ PTLstats will then load the data store for each benchmark and trial combination
+ to create the table.
+\layout Standard
+
+Notice that you must create your own scripts, or manually run each benchmark
+ and trial with the desired PTLsim options, plus 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+-stats ptlsim.stats.
+\emph on 
+trialname
+\family default 
+\size default 
+\emph default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+.
+ PTLstats will only report these results in table form; it will not actually
+ run any benchmarks.
+\layout Standard
+
+The 
+\family typewriter 
+\series bold 
+\size small 
+-tabletype
+\family default 
+\series default 
+\size default 
+ option specifies the data format of the table: 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+text
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ (plain text with space delimiters, suitable for import into a spreadsheet),
+ 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+latex
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ (LaTeX format, useful for directly inserting into research reports), or
+ 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\size small 
+html
+\family default 
+\size default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ (HTML format for web pages).
+\layout Standard
+
+The 
+\begin_inset Quotes eld
+\end_inset 
+
+
+\family typewriter 
+\series bold 
+\size small 
+-scale-relative-to-col
+\series default 
+ 
+\emph on 
+N
+\family default 
+\size default 
+\emph default 
+
+\begin_inset Quotes erd
+\end_inset 
+
+ option forces PTLstats to compute the percentage of increase or decrease
+ for each cell relative to the corresponding row in some other reference
+ column 
+\emph on 
+N
+\emph default 
+.
+ This is useful when running a 
+\begin_inset Quotes eld
+\end_inset 
+
+baseline
+\begin_inset Quotes erd
+\end_inset 
+
+ case, to be displayed as a raw value (usually the cycle count, 
+\family typewriter 
+\size small 
+/final/summary/cycles
+\family default 
+\size default 
+) in column 0, while all other experimental cases are displayed as a percentage
+ increase (fewer cycles, for a positive percentage) or percentage decrease
+ (negative value) relative to this first column (
+\emph on 
+N
+\emph default 
+ = 0).
+\layout Section
+
+Histogram Generation
+\layout Standard
+
+Certain nodes in the statistics tree can be tagged as 
+\begin_inset Quotes eld
+\end_inset 
+
+histogram
+\begin_inset Quotes erd
+\end_inset 
+
+ nodes when they are generated, meaning that they comprise an array of raw
+ values, plus a lower bound, upper bound, scale and bucket size.
+ For instance, the 
+\family typewriter 
+\size small 
+frontend/consumer-count
+\family default 
+\size default 
+ node in the out-of-order core is a histogram node.
+ PTLstats can directly create graphs (in Scalable Vector Graphics (SVG)
+ format) for these special nodes, using the 
+\family typewriter 
+\series bold 
+\size small 
+-histogram
+\family default 
+\series default 
+\size default 
+ option:
+\layout LyX-Code
+
+
+\size small 
+ptlstats 
+\series bold 
+-histogram 
+\series default 
+/final/frontend/consumer-count > example.svg
+\layout Standard
+
+The histogram's layout can be extensively customized using the options 
+\family typewriter 
+\size small 
+-title
+\family default 
+\size default 
+, 
+\family typewriter 
+\size small 
+-width
+\family default 
+\size default 
+, 
+\family typewriter 
+\size small 
+-height
+\family default 
+\size default 
+.
+ In addition, the 
+\family typewriter 
+\size small 
+-percentile
+\family default 
+\size default 
+ option is useful for controlling the displayed data range by excluding
+ data under the Nth percentile.
+ The 
+\family typewriter 
+\size small 
+-logscale
+\family default 
+\size default 
+ and 
+\family typewriter 
+\size small 
+-logk
+\family default 
+\size default 
+ options can be used to apply a log scale (instead of a linear scale) to
+ the histogram bars.
+ The syntax of these options can be obtained by running 
+\family typewriter 
+\size small 
+ptlstats
+\family default 
+\size default 
+ without arguments.
+\layout Chapter
+
+Statistics Collection and Control
 \layout Section
 
 Statistics support in code
 \layout Standard
 
-Internally, PTLsim represents data store nodes in a tree format via the
- 
+Internally, PTLsim represents data store nodes in its statistics tree format
+ via the 
 \family typewriter 
 \size small 
 DataStoreNode
@@ -3651,7 +4007,6 @@ ooo_capture_stats()
 \family default 
 \size default 
  like that shown above.
- 
 \layout Standard
 
 We suggest using the data store mechanism to store 
