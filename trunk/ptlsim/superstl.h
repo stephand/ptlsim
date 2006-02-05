@@ -365,6 +365,29 @@ namespace superstl {
 
   DeclareStringBufToStream(padstring);
 
+  struct substring {
+    const char* str;
+    int length;
+
+    substring() { }
+
+    substring(const char* str, int start, int length) {
+      int r = strlen(str);
+      this->length = min(length, r - start);
+      this->str = str + min(start, r);
+    }
+  };
+
+  stringbuf& operator <<(stringbuf& os, const substring& s);
+
+  DeclareStringBufToStream(substring);
+
+  //
+  // String tools
+  //
+  int stringsubst(stringbuf& sb, const char* pattern, const char* find, const char* replace);
+  int stringsubst(stringbuf& sb, const char* pattern, const char* find[], const char* replace[], int substcount);
+
   //
   // Output stream for raw data
   //

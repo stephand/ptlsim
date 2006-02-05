@@ -18,7 +18,7 @@ char* mode_table;
 
 char* table_row_names;
 char* table_col_names;
-char* table_row_col_sep = "/";
+char* table_row_col_pattern = "%r/%c.stats";
 char* table_type_name = "text";
 bool table_use_percents = false;
 
@@ -54,7 +54,7 @@ static ConfigurationOption optionlist[] = {
   {null,                                 OPTION_TYPE_SECTION, 0, "Table", null},
   {"rows",                               OPTION_TYPE_STRING,  0, "Row names (comma separated)", &table_row_names},
   {"cols",                               OPTION_TYPE_STRING,  0, "Column names (comma separated)", &table_col_names},
-  {"rowcolsep",                          OPTION_TYPE_STRING,  0, "Separator between row and column used to create stats filename", &table_row_col_sep},
+  {"table-pattern",                      OPTION_TYPE_STRING,  0, "Pattern to convert row (%row) and column (%col) names into stats filename", &table_row_col_pattern},
   {"tabletype",                          OPTION_TYPE_STRING,  0, "Table type (text, latex, html)", &table_type_name},
   {"scale-relative-to-col",              OPTION_TYPE_W64,     0, "Scale all other table columns relative to specified column", &table_scale_rel_to_col},
   {"table-percents",                     OPTION_TYPE_BOOL,    0, "Show percents (as in tree) rather than absolute values", &table_use_percents},
@@ -881,7 +881,7 @@ public:
 
 enum { TABLE_TYPE_TEXT, TABLE_TYPE_LATEX, TABLE_TYPE_HTML };
 
-void create_table(ostream& os, int tabletype, const char* statname, const char* rownames, const char* colnames, const char* rowcolsep, int scale_relative_to_col) {
+void create_table(ostream& os, int tabletype, const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern, int scale_relative_to_col) {
   dynarray<char*> rowlist;
   rowlist.tokenize(rownames, ",");
   dynarray<char*> collist;
@@ -907,11 +907,17 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
   //
   // Collect data
   //
+  const char* findarray[2] = {"%row", "%col"};
+
   for (int row = 0; row < rowlist.size(); row++) {
     data[row].resize(collist.size());
     for (int col = 0; col < collist.size(); col++) {
       stringbuf filename;
-      filename << rowlist[row], rowcolsep, collist[col];
+
+      const char* replarray[2];
+      replarray[0] = rowlist[row];
+      replarray[1] = collist[col];
+      stringsubst(filename, table_row_col_pattern, findarray, replarray, 2);
 
       idstream is(filename);
       if (!is) {
@@ -1113,7 +1119,7 @@ int main(int argc, char* argv[]) {
       return 1;
     }
 
-    create_table(cout, tabletype, mode_table, table_row_names, table_col_names, table_row_col_sep, table_scale_rel_to_col);
+    create_table(cout, tabletype, mode_table, table_row_names, table_col_names, table_row_col_pattern, table_scale_rel_to_col);
   } else {
     idstream is(filename);
     if (!is) {

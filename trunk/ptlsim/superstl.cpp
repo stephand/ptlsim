@@ -297,6 +297,70 @@ namespace superstl {
     return os;
   }
 
+  stringbuf& operator <<(stringbuf& os, const substring& s) {
+    os.reserve(s.length + 1);
+    memcpy(os.p, s.str, s.length);
+    os.p += s.length;
+    *os.p = 0;
+
+    return os;
+  }
+
+  //
+  // String tools
+  //
+  int stringsubst(stringbuf& sb, const char* pattern, const char* find, const char* replace) {
+    sb.reset();
+
+    if (strequal(find, replace)) {
+      // Prevent infinite recursion if the caller does something stupid:
+      sb << pattern;
+      return 0;
+    }
+
+    int n = 0;
+    for (;;) {
+      const char* pp = strstr(pattern, find);
+      if (!pp) {
+        sb << pattern;
+        return n;
+      }
+
+      int presize =  pp - pattern;
+    
+      sb << substring(pattern, 0, pp - pattern);
+      sb << replace;
+      pattern = pp + strlen(find);
+      n++;
+    }
+
+    return n;
+  }
+
+  int stringsubst(stringbuf& sb, const char* pattern, const char* find[], const char* replace[], int substcount) {
+    stringbuf sbwork[2];
+    int alt = 0;
+
+    int iters = 0;
+
+    int nn = 0;
+
+    for (;;) {
+      int n = 0;
+      foreach (i, substcount) {
+        sbwork[alt].reset();
+        n += stringsubst(sbwork[alt], (!iters) ? pattern : sbwork[!alt], find[i], replace[i]);
+        alt = !alt;
+      }
+      iters++;
+      nn += n;
+      if (!n) {
+        sb << (char*)sbwork[!alt];
+        return nn;
+      }
+    }
+  }
+
   //
   // Input streams
   //
