@@ -45,18 +45,36 @@ inside_sim_escape_code_template_32bit_end:
 .extern ptlsim_init
 .extern _start
 
+.extern stack_min_addr
+.extern inside_ptlsim
+
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
-  #
-  # We may be a 64-bit process running in a 32-bit address space,
-  # which means argv, argc, etc. will be in 32-bit format and need
-  # to be converted before any initialization routines.
-  #
   mov   %eax,%esp       # origrsp
   push  offset _start   # next_init_func
   push  %eax
   call  ptlsim_preinit
-  mov   %esp,%eax            # update to new stack pointer
+  add   %esp,8
+
+  mov   %ebp,%eax            # save new PTL private stack pointer
+
+  /*
+   * Give user thread a really big stack by accessing memory
+   * below the grows-down stack object. We have to do this
+   * now since PTLsim has no concept of grow down auto allocate
+   * stacks and will just throw erroneous page faults unless
+   * the stack pages are already visible to mqueryall().
+   */
+
+  xor   %eax,%eax
+  mov   %esi,[stack_min_addr]
+1:
+  sub   %esp,4096
+  mov   [%esp],%eax
+  cmp   %esp,%esi
+  jae   1b
+
+  mov   %esp,%ebp            # update to new stack pointer
   jmp   _start
 
 /*
@@ -80,7 +98,6 @@ ptlsim_preinit_entry:
 
 .global save_context_switch_to_sim_lowlevel
 save_context_switch_to_sim_lowlevel:
-#++MTY FIXME zero out high 32 bits of everything, and all 64 bits of r8-r15
   mov      [ctx + 8*REG_rax + 8*0],%eax
   mov      [ctx + 8*REG_rax + 8*1],%ecx
   mov      [ctx + 8*REG_rax + 8*2],%edx
@@ -105,9 +122,13 @@ save_context_switch_to_sim_lowlevel:
 
   mov      %esp,[basetls + ThreadState_rsp]      # Switch to private thread stack
 
-  and      %esp,-16
   pushfd                                         # Save rflags
   pop      dword ptr [ctx + 8*REG_flags + 8]     # Put flags into structure
+
+  and      %esp,-16
+
+  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
+  stmxcsr  [ctx + 8*REG_mxcsr]                   # Save SSE flags
 
   # SSE registers
   movlpd   [ctx + 8*REG_xmml0],%xmm0
@@ -127,9 +148,6 @@ save_context_switch_to_sim_lowlevel:
   movhpd   [ctx + 8*REG_xmmh5],%xmm5
   movhpd   [ctx + 8*REG_xmmh6],%xmm6
   movhpd   [ctx + 8*REG_xmmh7],%xmm7
-
-  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
-  stmxcsr  [ctx + 8*REG_mxcsr]                   # Save SSE flags
 
   # Save x87 state
   fsave    x87state

@@ -232,20 +232,38 @@ void assist_x87_##name() { \
 //
 // NOTE: Under no circumstances can we let out-of-range values get passed to the
 // standard library math functions! It will screw up the x87 FPU state inside
-// PTLsim and we may never recover.
+// PTLsim and we may never recover. Instead, we take control right here.
 //
 
+double x87_fyl2xp1(double st1, double st0) {
+  double stout;
+  asm("fldl %[st1]; fldl %[st0]; fyl2xp1; fstpl %[stout];" : [stout] "=m" (stout) : [st0] "m" (st0), [st1] "m" (st1));
+  return stout;
+}
+
+double x87_fyl2x(double st1, double st0) {
+  double stout;
+  asm("fldl %[st1]; fldl %[st0]; fyl2x; fstpl %[stout];" : [stout] "=m" (stout) : [st0] "m" (st0), [st1] "m" (st1));
+  return stout;
+}
+
+double x87_fpatan(double st1, double st0) {
+  double stout;
+  asm("fldl %[st1]; fldl %[st0]; fpatan; fstpl %[stout];" : [stout] "=m" (stout) : [st0] "m" (st0), [st1] "m" (st1));
+  return stout;
+}
+ 
 // st(1) = st(1) * log2(st(0)) and pop st(0)
-make_two_input_x87_func_with_pop(fyl2x, st1u.d = (st0u.d <= 0) ? INFINITY : (st1u.d * math::log2(st0u.d)));
+make_two_input_x87_func_with_pop(fyl2x, st1u.d = x87_fyl2x(st1u.d, st0u.d));
 
 // st(1) = st(1) * log2(st(0) + 1.0) and pop st(0)
 // This insn has very strange semantics: if (st0 < -1.0), 
 // such that ((st0 + 1.0) < 0), rather than return NaN, it
 // returns the old value in st0 but still pops the stack.
-make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = (st0u.d <= -1.0) ? st0u.d : (st1u.d * math::log2(st0u.d + 1.0)));
+make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = x87_fyl2xp1(st1u.d, st0u.d));
 
 // st(1) = arctan(st(1) / st(0))
-make_two_input_x87_func_with_pop(fpatan, st1u.d = (st0u.d == 0) ? INFINITY : math::atan(st1u.d / st0u.d));
+make_two_input_x87_func_with_pop(fpatan, st1u.d = x87_fpatan(st1u.d, st0u.d));
 
 void assist_x87_fscale() {
   W64& tos = ctx.commitarf[REG_fptos];
@@ -3013,13 +3031,13 @@ namespace TranslateX86 {
       switch (modrm.rm) {
       case 0: { // fchs
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
-        this << TransOp(OP_xor, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, (1LL << 63)); break;
+        this << TransOp(OP_xor, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, (1LL << 63));
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
         break;
       } 
       case 1: { // fabs
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
-        this << TransOp(OP_and, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, ~(1LL << 63)); break;
+        this << TransOp(OP_and, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, ~(1LL << 63));
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
         break;
       }
@@ -3237,8 +3255,8 @@ namespace TranslateX86 {
         //
         bool unordered = bit(op, 0);
         this << TransOp(OP_cmpccf, REG_temp0, REG_temp0, REG_temp1, REG_zero, (unordered ? 3 : 2), 0, 0, FLAGS_DEFAULT_ALU);
-        
-        if (bit(op, 0)) {
+
+        if ((op >> 4) == 0x67) {
           this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
           this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: fstp
         }

@@ -965,9 +965,9 @@ void uop_impl_##name(IssueState& state, W64 raraw, W64 rbraw, W64 rcraw, W16 raf
   SSEType ra, rb, rc, rd; ra.w64 = raraw; rb.w64 = rbraw; rc.w64 = rcraw; op; state.reg.rddata = rd.w64; state.reg.rdflags = 0; \
 }
 
-make_intsrc_fp_convop(cvtf_i2s_ins, (rd.f.lo = (float)rb.w32.lo, rd.w32.hi = ra.w32.hi));
-make_intsrc_fp_convop(cvtf_q2s_ins, (rd.f.lo = (float)rb.w64, rd.w32.hi = ra.w32.hi));
-make_intsrc_fp_convop(cvtf_q2d, (rd.d = (double)rb.w64));
+make_intsrc_fp_convop(cvtf_i2s_ins, (rd.f.lo = (float)(W32s)rb.w32.lo, rd.w32.hi = ra.w32.hi));
+make_intsrc_fp_convop(cvtf_q2s_ins, (rd.f.lo = (float)(W64s)rb.w64, rd.w32.hi = ra.w32.hi));
+make_intsrc_fp_convop(cvtf_q2d, (rd.d = (double)(W64s)rb.w64));
 
 #define make_intdest_fp_convop(name, desttype, roundop, truncop) \
 template <int trunc> \

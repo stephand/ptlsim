@@ -682,7 +682,7 @@ W16 gsreg;
  *
  * MAP_ZERO         Inheritable shared memory on /dev/zero
  * MAP_HEAP         Heap terminated by brk
- * MAP_VDOS         VDSO (vsyscall) gateway page
+ * MAP_VDSO         VDSO (vsyscall) gateway page
  * MAP_KERNEL       special mapping reserved by kernel
  *
  */
@@ -2175,30 +2175,6 @@ byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
   return (byte*)destauxv;
 }
 
-//
-// Give user thread a really big stack by accessing memory
-// below the grows-down stack object. We have to do this
-// now since PTLsim has no concept of grow down auto allocate
-// stacks and will just throw page faults.
-//
-// In this clever function, we just keep on recursively
-// descending into the stack until the desired rsp is hit.
-//
-#ifdef __x86_64__
-inline void* get_rsp() { W64 rsp; asm volatile("mov %%rsp,%[dest]" : [dest] "=r" (rsp)); return (void*)rsp; }
-#else // ! __x86_64__
-inline void* get_rsp() { W32 esp; asm volatile("mov %%esp,%[dest]" : [dest] "=r" (esp)); return (void*)esp; }
-#endif
-
-void expand_user_stack_to_addr(W64 desired_rsp) {
-  byte dummy[PAGE_SIZE];
-
-  Waddr current_rsp = (Waddr)get_rsp();
-
-  if (current_rsp > desired_rsp)
-    expand_user_stack_to_addr(desired_rsp);
-}
-
 extern time_t ptlsim_build_timestamp;
 
 //
@@ -2230,6 +2206,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 
   if (!inside_ptlsim) {
     // We're still a normal process - don't do anything special
+    stack_min_addr = (Waddr)origrsp;
     return origrsp;
   }
 
@@ -2264,8 +2241,6 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   stack_min_addr = floor(stack_max_addr - user_stack_size, PAGE_SIZE) + 65536;
 
   assert(stack_min_addr >= (PTL_PAGE_POOL_BASE + 128*1024*1024));
-
-  expand_user_stack_to_addr(stack_min_addr);
 
   asp.reset();
 

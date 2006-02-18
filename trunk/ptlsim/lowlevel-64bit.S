@@ -16,6 +16,8 @@
 .extern ptlsim_init
 .extern _start
 
+.extern stack_min_addr
+
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
   #
@@ -26,7 +28,24 @@ ptlsim_preinit_entry:
   mov   %rdi,%rsp            # origrsp
   mov   %rsi,offset _start   # next_init_func
   call  ptlsim_preinit
-  mov   %rsp,%rax            # update to new stack pointer
+  mov   %rbp,%rax            # update to new stack pointer
+
+  /*
+   * Give user thread a really big stack by accessing memory
+   * below the grows-down stack object. We have to do this
+   * now since PTLsim has no concept of grow down auto allocate
+   * stacks and will just throw erroneous page faults unless
+   * the stack pages are already visible to mqueryall().
+   */
+  xor   %eax,%eax
+  mov   %rsi,[stack_min_addr]
+1:
+  sub   %rsp,4096
+  mov   [%rsp],%rax
+  cmp   %rsp,%rsi
+  jae   1b
+
+  mov   %rsp,%rbp            # update to new stack pointer
   jmp   _start
 
 /*
@@ -70,9 +89,11 @@ save_context_switch_to_sim_lowlevel:
   mov      %rax,[%rsp]                           # Get return %rip (if we got here through a CALL insn)
   mov      [ctx + 8*REG_rip],%rax                # Save %rip
   mov      %rsp,[basetls + ThreadState_rsp]      # Switch to private thread stack
-  and      %rsp,-16
+
   pushfq                                         # Save rflags
   pop      qword ptr [ctx + 8*REG_flags + 8]     # Put flags into structure
+
+  and      %rsp,-16
 
   # SSE registers
   movlpd   [ctx + 8*REG_xmml0],%xmm0
@@ -183,14 +204,6 @@ switch_to_native_restore_context_lowlevel:
   mov      %r14,[%rdi + 8*REG_rax + 8*14]
   mov      %r15,[%rdi + 8*REG_rax + 8*15]
 
-  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
-# mov      %rip,[%rdi + 8*REG_rip]      # (do later)
-# mov      %rflags,[%rdi + 8*REG_flags] # (already done)
-# fldsw    [%rdi + 8*REG_mxcsr + 4]     # Restore FP status word     ++MTY FIXME there is a fstsw but no corresponding fldsw
-#  fldcw    [%rdi + 8*REG_mxcsr + 6]     # Restore FP control word
-  ldmxcsr  [%rdi + 8*REG_mxcsr]         # Restore SSE flags
-  # (No need to restore %tr0, %tr1, %tr2, %zero
-
   movlpd   %xmm0,[%rdi + 8*REG_xmml0]
   movlpd   %xmm1,[%rdi + 8*REG_xmml1]
   movlpd   %xmm2,[%rdi + 8*REG_xmml2]
@@ -225,6 +238,7 @@ switch_to_native_restore_context_lowlevel:
   movhpd   %xmm14,[%rdi + 8*REG_xmmh14]
   movhpd   %xmm15,[%rdi + 8*REG_xmmh15]
 
+  ldmxcsr  [%rdi + 8*REG_mxcsr]         # Restore SSE flags
   mov      %rdi,[%rdi + 8*REG_rdi]      # Restore %rdi
 
   jmp      [switch_to_native_restore_context_temp_64_or_32_func]
