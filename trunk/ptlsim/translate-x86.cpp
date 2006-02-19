@@ -3215,7 +3215,7 @@ namespace TranslateX86 {
         case 2:   // fist w32
         case 3: { // fistp w32
           TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
-          this << TransOp(OP_cvtf_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1) ? 3 : 2);
+          this << TransOp(OP_cvtf_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1));
           result_store(REG_temp0, REG_temp1, rd);
 
           if ((x87op == 1) | (x87op == 3)) {
