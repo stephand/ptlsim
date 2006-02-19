@@ -3014,7 +3014,7 @@ namespace TranslateX86 {
     case 0x671 ... 0x673: { // [fisttp | fist | fistp] mem16
       DECODE(eform, rd, w_mode);
       TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
-      this << TransOp(OP_cvtf_d2i_p, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x671) ? 3 : 2);
+      this << TransOp(OP_cvtf_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x671) ? 1 : 0);
       result_store(REG_temp0, REG_temp1, rd);
 
       int x87op = modrm.rm;
@@ -3215,7 +3215,7 @@ namespace TranslateX86 {
         case 2:   // fist w32
         case 3: { // fistp w32
           TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
-          this << TransOp(OP_cvtf_d2i_p, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1) ? 3 : 2);
+          this << TransOp(OP_cvtf_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1) ? 3 : 2);
           result_store(REG_temp0, REG_temp1, rd);
 
           if ((x87op == 1) | (x87op == 3)) {
@@ -4334,7 +4334,7 @@ namespace TranslateX86 {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp((rex.mode64) ? OP_cvtf_d2q : OP_cvtf_d2i, rdreg, rareg, REG_zero, REG_zero, (lowbits(op, 8) == 0x2c));
+      this << TransOp((rex.mode64) ? OP_cvtf_d2q : OP_cvtf_d2i, rdreg, REG_zero, rareg, REG_zero, (lowbits(op, 8) == 0x2c));
       break;
     }
 
@@ -4353,7 +4353,7 @@ namespace TranslateX86 {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp((rex.mode64) ? OP_cvtf_s2q : OP_cvtf_s2i, rdreg, rareg, REG_zero, REG_zero, (lowbits(op, 8) == 0x2c));
+      this << TransOp((rex.mode64) ? OP_cvtf_s2q : OP_cvtf_s2i, rdreg, REG_zero, rareg, REG_zero, (lowbits(op, 8) == 0x2c));
       break;
     }
 

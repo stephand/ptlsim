@@ -974,11 +974,11 @@ template <int trunc> \
 void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
   desttype rd; vec4f fpv; \
   if (trunc) { \
-    asm(MOV_TO_XMM " %[ra],%[fpv]; " #truncop " %[fpv],%[rd];" \
-        : [rd] "=" "r" (rd), [fpv] "=x" (fpv) : [ra] W64_CONSTRAINT (ra)); \
+    asm(MOV_TO_XMM " %[rb],%[fpv]; " #truncop " %[fpv],%[rd];" \
+        : [rd] "=r" (rd), [fpv] "=x" (fpv) : [rb] W64_CONSTRAINT (rb)); \
   } else { \
-    asm(MOV_TO_XMM " %[ra],%[fpv]; " #roundop " %[fpv],%[rd];" \
-        : [rd] "=" "r" (rd), [fpv] "=x" (fpv) : [ra] W64_CONSTRAINT (ra)); \
+    asm(MOV_TO_XMM " %[rb],%[fpv]; " #roundop " %[fpv],%[rd];" \
+        : [rd] "=r" (rd), [fpv] "=x" (fpv) : [rb] W64_CONSTRAINT (rb)); \
   } \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
@@ -1004,9 +1004,9 @@ template <int trunc> \
 void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
   W64 rd = 0; \
   if (trunc) { \
-    asm("fld %[ra]; fisttp %[rd];" : [rd] "=m" (rd) : [ra] "m" (*((T*)&ra))); \
+    asm("fld %[rb]; fisttp %[rd];" : [rd] "=m" (rd) : [rb] "m" (*((T*)&rb))); \
   } else { \
-    asm("fld %[ra]; fistp %[rd];" : [rd] "=m" (rd) : [ra] "m" (*((T*)&ra))); \
+    asm("fld %[rb]; fistp %[rd];" : [rd] "=m" (rd) : [rb] "m" (*((T*)&rb))); \
   } \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
@@ -1226,18 +1226,17 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = uop_impl_cvtf_q2d; break;
 
   case OP_cvtf_s2i:
-    func = implmap_cvtf_s2i[size]; break;
+    func = implmap_cvtf_s2i[size & 1]; break;
   case OP_cvtf_s2q:
-    func = implmap_cvtf_s2q[size]; break;
+    func = implmap_cvtf_s2q[size & 1]; break;
   case OP_cvtf_s2i_p:
-    func = implmap_cvtf_s2i_p[size]; break;
+    func = implmap_cvtf_s2i_p[size & 1]; break;
   case OP_cvtf_d2i:
-    func = implmap_cvtf_d2i[size]; break;
+    func = implmap_cvtf_d2i[size & 1]; break;
   case OP_cvtf_d2q:
-    func = implmap_cvtf_d2q[size]; break;
-
+    func = implmap_cvtf_d2q[size & 1]; break;
   case OP_cvtf_d2i_p:
-    func = implmap_cvtf_d2i_p[size]; break;
+    func = implmap_cvtf_d2i_p[size & 1]; break;
   case OP_cvtf_d2s_ins:
     func = uop_impl_cvtf_d2s_ins; break;
   case OP_cvtf_d2s_p:

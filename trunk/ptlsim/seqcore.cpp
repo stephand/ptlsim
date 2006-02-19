@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -606,7 +606,7 @@ namespace SequentialCore {
       int exception = 0;
       bool refetch = 0;
 
-      //if (logable(1)) logfile << "Executing synthop ", (void*)synthop, endl;
+      if (logable(1)) logfile << "Executing synthop ", (void*)synthop, " at iter ", iterations, endl, flush;
 
       if (ld|st) {
         int status = (ld) ? issueload(uop, sfr, radata, rbdata, rcdata) : issuestore(uop, sfr, radata, rbdata, rcdata);
