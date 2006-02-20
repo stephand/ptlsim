@@ -25,12 +25,31 @@ ostream& print_user_context(ostream& os, const UserContext& ctx, int width = 4);
 void init_uops();
 void init_translate();
 BasicBlock* translate_basic_block(void* rip);
+
+struct TransOpPair {
+  TransOp uops[2];
+  int index;
+};
+
+void split_unaligned(const TransOp& transop, TransOpPair& pair);
+
 void capture_translate_timers(DataStoreNode& root);
 void capture_translate_stats(DataStoreNode& root);
-extern bool split_unaligned_memops_during_translate;
 
 int out_of_order_core_toplevel_loop();
 int sequential_core_toplevel_loop();
+int execute_sequential(BasicBlock* bb);
+
+enum {
+  SEQEXEC_OK = 0,
+  SEQEXEC_EARLY_EXIT,
+  SEQEXEC_CHECK,
+  SEQEXEC_UNALIGNED,
+  SEQEXEC_EXCEPTION,
+  SEQEXEC_INVALIDRIP,
+  SEQEXEC_SKIPBLOCK,
+  SEQEXEC_BARRIER,
+};
 
 void ooo_capture_stats();
 void ooo_capture_stats(DataStoreNode& root);
@@ -51,10 +70,6 @@ struct AddrPair {
 uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal);
 uopimpl_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except);
 void synth_uops_for_bb(BasicBlock& bb);
-
-void add_unaligned_ldst_rip(W64 rip);
-void remove_unaligned_ldst_rip(W64 rip);
-bool check_unaligned_ldst_rip(W64 rip);
 
 extern Hashtable<W64, BasicBlock*, 16384> bbcache;
 

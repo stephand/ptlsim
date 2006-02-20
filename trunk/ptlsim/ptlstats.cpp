@@ -20,7 +20,7 @@ char* table_row_names;
 char* table_col_names;
 char* table_row_col_pattern = "%r/%c.stats";
 char* table_type_name = "text";
-bool table_use_percents = false;
+W64 table_use_percents = false;
 
 char* graph_title;
 double graph_width = 300.0;
@@ -40,6 +40,9 @@ W64 table_scale_rel_to_col = limits<int>::max;
 W64 table_mark_highest_col = 0;
 
 W64 percent_digits = 1; // e.g. "66.7%"
+
+double histogram_thresh = 0.0001;
+W64 cumulative_histogram = 0;
 
 W64 percent_of_toplevel = 0;
 
@@ -74,6 +77,8 @@ static ConfigurationOption optionlist[] = {
   {"percentile",                         OPTION_TYPE_FLOAT,   0, "Clip percentile", &graph_clip_percentile},
   {"logscale",                           OPTION_TYPE_BOOL,    0, "Use log scale", &graph_logscale},
   {"logk",                               OPTION_TYPE_FLOAT,   0, "Log scale constant", &graph_logk},
+  {"cumulative-histogram",               OPTION_TYPE_BOOL,    0, "Cumulative histogram", &cumulative_histogram},
+  {"histogram-thresh",                   OPTION_TYPE_FLOAT,   0, "Histogram threshold (1.0 = print nothing, 0.0 = everything)", &histogram_thresh},
 };
 
 
@@ -1022,6 +1027,8 @@ int main(int argc, char* argv[]) {
   printinfo.maxdepth = maxdepth;
   printinfo.percent_digits = percent_digits;
   printinfo.percent_of_toplevel = percent_of_toplevel;
+  printinfo.histogram_thresh = histogram_thresh;
+  printinfo.cumulative_histogram = cumulative_histogram;
 
   if (mode_histogram) {
     idstream is(filename);

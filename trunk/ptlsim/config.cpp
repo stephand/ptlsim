@@ -112,7 +112,7 @@ ostream& ConfigurationParser::printusage(ostream& os) const {
       os << *((double*)(options[i].variable));
       break;
     case OPTION_TYPE_STRING:
-      os << (*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)";
+      os << ((*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)");
       break;
     case OPTION_TYPE_BOOL:
       os << ((*((W64**)(options[i].variable))) ? "enabled" : "disabled");
@@ -234,10 +234,10 @@ ostream& ConfigurationParser::print(ostream& os) const {
       os << *((double*)(options[i].variable));
       break;
     case OPTION_TYPE_STRING:
-      os << (*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)";
+      os << ((*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)");
       break;
     case OPTION_TYPE_BOOL:
-      os << *((W64*)(options[i].variable)) ? "enabled" : "disabled";
+      os << (*((W64*)(options[i].variable)) ? "enabled" : "disabled");
       break;
     default:
       assert(false);

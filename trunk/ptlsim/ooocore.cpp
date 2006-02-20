@@ -461,8 +461,8 @@ struct BranchPredictorUpdateInfo: public PredictorUpdate {
 
 struct FetchBufferEntry: public TransOp {
   W64 rip;
-  W64 bbrip;
   W64 uuid;
+  TransOp* origop;
   uopimpl_func_t synthop;
   BranchPredictorUpdateInfo predinfo;
 
@@ -475,6 +475,7 @@ struct FetchBufferEntry: public TransOp {
 
   FetchBufferEntry(const TransOp& transop) {
     *((TransOp*)this) = transop;
+    origop = null;
   }
 };
 
@@ -1139,7 +1140,7 @@ CycleTimer cttrans;
 W64 bbcache_inserts;
 W64 bbcache_removes;
 
-BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
+static BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
   BasicBlock** bb = bbcache(fetchrip);
   
   if (bb) {
@@ -1230,6 +1231,9 @@ void fetch() {
     return;
   }
 
+  TransOpPair unaligned_ldst_pair;
+  unaligned_ldst_pair.index = -1;
+
   while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
     if (!fetchq.remaining()) {
       if (!fetchcount)
@@ -1270,9 +1274,38 @@ void fetch() {
     }
 
     FetchBufferEntry& transop = *fetchq.alloc();
-    transop = current_basic_block->transops[current_basic_block_transop_index];
+
+    TransOp& preop = current_basic_block->transops[current_basic_block_transop_index];
+
+    //
+    // Handle loads and stores marked as unaligned in the basic block cache.
+    // These uops are split into two parts (ld.lo, ld.hi or st.lo, st.hi)
+    // and the parts are put into a 2-entry buffer (unaligned_ldst_pair).
+    // Fetching continues from this buffer instead of the basic block
+    // until both uops are forced into the pipeline.
+    //
+    if ((unaligned_ldst_pair.index < 0) & preop.unaligned) {
+      if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": split unaligned load or store ", preop, endl;
+      split_unaligned(preop, unaligned_ldst_pair);
+      unaligned_ldst_pair.index = 0;
+    }
+
+    if (unaligned_ldst_pair.index < 0) {
+      transop = preop;
+      transop.origop = &preop;
+    } else {
+      transop = unaligned_ldst_pair.uops[unaligned_ldst_pair.index];
+      transop.origop = null;
+      assert(unaligned_ldst_pair.index <= 1);
+      unaligned_ldst_pair.index++;
+    }
+
     transop.synthop = current_basic_block->synthops[current_basic_block_transop_index];
-    current_basic_block_transop_index++;
+
+    // Is this the last uop in the pair? If so, reset to start
+    if (unaligned_ldst_pair.index > 1) unaligned_ldst_pair.index = -1;
+
+    current_basic_block_transop_index += (unaligned_ldst_pair.index < 0);
 
     if (transop.som) {
       bytes_in_current_insn = transop.bytes;
@@ -1296,7 +1329,6 @@ void fetch() {
     }
 
     transop.rip = fetchrip;
-    transop.bbrip = current_basic_block_rip;
     transop.uuid = fetch_uuid++;
 
     // Set up branches so mispredicts can be calculated correctly:
@@ -2377,25 +2409,15 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
 
     if (exception == EXCEPTION_UnalignedAccess) {
       //
-      // If we have an unaligned access, mark all loads and stores at this 
-      // macro-op's rip as being unaligned and remove the basic block from
-      // the bbcache so it gets retranslated with properly split loads
-      // and stores after we resume fetching.
+      // If we have an unaligned access, locate the excepting uop in the
+      // basic block cache through the uop.origop pointer. Directly set
+      // the unaligned bit in the uop, and restart fetching at the start
+      // of the x86 macro-op. The frontend will then split the uop into
+      // low and high parts as it is refetched.
       //
-      // As noted elsewhere, the bbcache is for simulator purposes only;
-      // the real hardware would detect unaligned uops in the fetch stage
-      // and split them up on the fly. For simulation, it's more efficient
-      // to just split them once in the bbcache; this has no performance
-      // effect on the cycle accurate results.
-      //
-      if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)(Waddr)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
-
-      BasicBlock* bb = bbcache.remove(uop.bbrip);
-      bbcache_removes++;
-      if (bb) bb->free();
-      // NOTE: bb must not be accessed after this point!
-
-      add_unaligned_ldst_rip(uop.rip);
+      if (logable(1)) logfile << intstring(uop.uuid, 20), " algnfx", " rip ", (void*)(Waddr)uop.rip, ": set unaligned bit for uop ", ((TransOp)uop).index, " (", uop.origop, ") in BB and refetch", endl;
+      assert(uop.origop);
+      uop.origop->unaligned = 1;
 
       W64 recoveryrip = annul_after_and_including();
       reset_fetch_unit(recoveryrip);
@@ -2669,18 +2691,23 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
         "0x", hexstring(addr, 48), ": exception ", exception_name(exception), endl;
 
     if (exception == EXCEPTION_UnalignedAccess) {
-      // (see notes above for issuestore case)
-      if (logable(1)) logfile << intstring(uop.uuid, 20), " unalgn ", (void*)(Waddr)uop.rip, ": mark all uops in macro-op as unaligned and replay to split", endl;
+      //
+      // If we have an unaligned access, locate the excepting uop in the
+      // basic block cache through the uop.origop pointer. Directly set
+      // the unaligned bit in the uop, and restart fetching at the start
+      // of the x86 macro-op. The frontend will then split the uop into
+      // low and high parts as it is refetched.
+      //
 
-      BasicBlock* bb = bbcache.remove(uop.bbrip);
-      bbcache_removes++;
-      if (bb) bb->free();
-      // NOTE: bb must not be accessed after this point!
+      if (logable(1)) logfile << intstring(uop.uuid, 20), " algnfx", " rip ", (void*)(Waddr)uop.rip, ": set unaligned bit for uop ", ((TransOp)uop).index, " (", uop.origop, ") in BB and refetch", endl;
+      assert(uop.origop);
+      uop.origop->unaligned = 1;
 
-      add_unaligned_ldst_rip(uop.rip);
       W64 recoveryrip = annul_after_and_including();
       reset_fetch_unit(recoveryrip);
+
       load_issue_unaligned++;
+
       return ISSUE_MISSPECULATED;
     }
 
@@ -4437,9 +4464,6 @@ int out_of_order_core_toplevel_loop() {
   init_luts();
 
   logfile << "Starting out-of-order core toplevel loop", endl, flush;
-
-  // Make sure the translator splits up unaligned loads and stores during decoding:
-  split_unaligned_memops_during_translate = true;
 
   wakeup_func = load_filled_callback;
   icache_wakeup_func = icache_filled_callback;

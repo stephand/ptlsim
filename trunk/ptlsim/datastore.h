@@ -18,15 +18,18 @@ typedef dynarray< KeyValuePair<const char*, DataStoreNode*> > DataStoreNodeDirec
 struct DataStoreNode;
 
 struct DataStoreNodePrintSettings {
+  int force_sum_of_subtrees_only:1, percent_of_toplevel:1, cumulative_histogram:1;
   int maxdepth;
   int percent_digits;
-  int force_sum_of_subtrees_only:1, percent_of_toplevel:1;
+  float histogram_thresh;
 
   DataStoreNodePrintSettings() {
     force_sum_of_subtrees_only = 0;
     maxdepth = limits<int>::max;
     percent_digits = 0;
     percent_of_toplevel = 0;
+    histogram_thresh = 0.0001;
+    cumulative_histogram = 0;
   }
 };
 

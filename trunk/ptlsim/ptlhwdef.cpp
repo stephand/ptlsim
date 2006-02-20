@@ -108,7 +108,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"subm",           OPCLASS_ADDSUB,        A, 0,     ANYINT}, // lowbits(ra - rb, m)
   {"addc",           OPCLASS_ADDSUBC,       A, ccC,   ANYINT},
   {"subc",           OPCLASS_ADDSUBC,       A, ccC,   ANYINT},
-  {"sel",            OPCLASS_SELECT,        A, ccABC, ANYINT}, // rd = condreg,falsereg,truereg
+  {"sel",            OPCLASS_SELECT,        A, ccABC, ANYINT}, // rd = falsereg,truereg,condreg
   {"set",            OPCLASS_SELECT,        A, ccC,   ANYINT},
   {"set.sub",        OPCLASS_SELECT,        A, 0,     ANYINT},
   {"set.and",        OPCLASS_SELECT,        A, 0,     ANYINT},
@@ -368,7 +368,6 @@ ostream& operator <<(ostream& os, const TransOp& op) {
 }
 
 void BasicBlock::reset(W64 rip) {
-  hashlink(this);
   this->rip = rip_taken = rip_not_taken = rip;
   count = 0;
   refcount = 0;
@@ -397,7 +396,7 @@ void BasicBlock::free() {
 
 BasicBlock* BasicBlock::clone() {
   BasicBlock* bb = (BasicBlock*)malloc(sizeof(BasicBlockBase) + (count * sizeof(TransOp)));
-  bb->hashlink(bb);
+
   bb->rip = rip;
   bb->rip_taken = rip_taken;
   bb->rip_not_taken = rip_not_taken;

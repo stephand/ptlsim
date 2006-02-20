@@ -1348,10 +1348,10 @@ namespace superstl {
 
   template <typename K, int setcount>
   struct HashtableKeyManager {
-    static inline int hash(K key);
-    static inline bool equal(K a, K b);
-    static inline K dup(K key);
-    static inline void free(K key);
+    static inline int hash(const K& key);
+    static inline bool equal(const K& a, const K& b);
+    static inline K dup(const K& key);
+    static inline void free(K& key);
   };
 
   template <typename K, typename T, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
@@ -2258,6 +2258,33 @@ namespace superstl {
   template <size_t N>
   inline stringbuf& operator <<(stringbuf& sb, const bitvec<N>& v) {
     return v.print(sb);
+  }
+
+  template <int size, typename T>
+  T vec_min_index(T* list, const bitvec<size>& include) {
+    int minv = limits<T>::max;
+    int mini = 0;
+    foreach (i, size) {
+      T v = list[i];
+      bool ok = (v < minv) & include[i];
+      minv = (ok) ? v : minv;
+      mini = (ok) ? i : mini;
+    }
+    return mini;
+  }
+
+  template <int size, typename T, typename I>
+  void vec_make_sorting_permute_map(I* permute, T* list) {
+    bitvec<size> include;
+    include++;
+
+    int n = 0;
+    while (*include) {
+      int mini = vec_min_index<size>(list, include);
+      include[mini] = 0;
+      assert(n < size);
+      permute[n++] = mini;
+    }
   }
 
 #undef BITVEC_WORDS

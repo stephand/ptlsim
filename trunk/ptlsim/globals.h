@@ -155,7 +155,7 @@ inline W64 mux64(W64 sel, W64 v0, W64 v1) { return (sel & v1) | ((~sel) & v0); }
 #define ptrmask(ptr, bytes) ((typeof(ptr))((unsigned long)(ptr) & ((bytes)-1)))
 
 template <typename T>
-inline void arraycopy(T* dest, T* source, int count) { memcpy(dest, source, count * sizeof(T)); }
+inline void arraycopy(T* dest, const T* source, int count) { memcpy(dest, source, count * sizeof(T)); }
 
 static inline float randfloat() { return ((float)rand() / RAND_MAX); }
 

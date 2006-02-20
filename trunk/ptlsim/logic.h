@@ -247,11 +247,15 @@ struct HistoryBuffer: public array<T, size> {
    * Index backwards in time: 0 = most recent addition
    */
   T& operator [](int index) {
-    return this->data[add_index_modulo(current, -index, size)];
+    int idx = add_index_modulo(current, -index, size);
+    //assert(inrange(idx, 0, size-1));
+    return this->data[idx];
   }
 
   const T& operator [](int index) const {
-    return this->data[add_index_modulo(current, -index, size)];
+    int idx = add_index_modulo(current, -index, size);
+    //assert(inrange(idx, 0, size-1));
+    return this->data[idx];
   }
 };
 

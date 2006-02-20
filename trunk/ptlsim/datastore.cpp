@@ -476,7 +476,7 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
           maxvalue = max((W64)values[i].w, maxvalue);
         }
 
-        W64 thresh = max((W64)math::ceil((double)total / 1000.0), (W64)1);
+        W64 thresh = max((W64)math::ceil((double)total * printinfo.histogram_thresh), (W64)1);
         W64 base = histomin;
         int width = digits(max(histomin, histomax));
         int valuewidth = digits(maxvalue);
@@ -489,15 +489,24 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
         os << padding, "  ", "Total:   ", intstring(total, w), endl;
         os << padding, "  ", "Thresh:  ", intstring(thresh, w), endl;
 
+        W64 accum = 0;
+
         foreach (i, count) {
           W64 value = (W64)values[i].w;
+          accum += value;
 
           if (value >= thresh) {
             double percent = ((double)value / (double)total) * 100.0;
-            os << padding, "  [ ", floatstring(percent, 3, 0), "% ] ",
-              intstring(base, w), " ", 
+            double cumulative_percent = ((double)accum / (double)total) * 100.0;
+            os << padding, "  [ ", floatstring(percent, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";
+
+            if (cumulative_percent >= 99.9)
+              os << "[ ", padstring("100", 3 + printinfo.percent_digits), "% ] ";
+            else os << "[ ", floatstring(cumulative_percent, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";
+
+            os << intstring(base, w), " ", 
               intstring(base + (histostride-1), w), " ",
-              intstring(values[i].w, w), endl;
+              intstring(value, w), endl;
           }
 
           base += histostride;

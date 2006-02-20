@@ -564,11 +564,10 @@ extern const W16 setflags_to_x86_flags[1<<3];
 
 struct TransOpBase {
   W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, rbimmsz:3, rcimmsz:3, has_riptaken:1, has_ripseq:1;
-  W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2;
+  W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, unaligned:1, index:8;
 };
 
 struct TransOp: public TransOpBase {
-
   W64s rbimm;
   W64s rcimm;
   W64 riptaken;
@@ -601,6 +600,8 @@ struct TransOp: public TransOpBase {
     this->nouserflags = 0;
     this->extshift = 0;
     this->cachelevel = 0;
+    this->unaligned = 0;
+    this->index = 0;
   }
 };
 
@@ -611,8 +612,8 @@ struct BasicBlock;
 
 typedef void (*uopimpl_func_t)(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags);
 
+
 struct BasicBlockBase {
-  listlink<BasicBlock> hashlink;
   W64 rip;
   W64 rip_taken;
   W64 rip_not_taken;

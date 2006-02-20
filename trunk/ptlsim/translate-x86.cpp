@@ -12,27 +12,6 @@
 
 Hashtable<W64, BasicBlock*, 16384> bbcache;
 
-template <>
-int ChunkHashtable<W64, 1024, ChunkHashtableBlock_fit_in_bytes(W64, 64)>::setof(const W64& entry) {
-  return bits(entry, 0, log2(1024));
-}
-
-typedef ChunkHashtable<W64, 1024, ChunkHashtableBlock_fit_in_bytes(W64, 64)> RIPHashtable;
-
-RIPHashtable unaligned_ldst_rip_table;
-
-void add_unaligned_ldst_rip(W64 rip) {
-  unaligned_ldst_rip_table.add(rip);
-}
-
-void remove_unaligned_ldst_rip(W64 rip) {
-  unaligned_ldst_rip_table.remove(rip);
-}
-
-bool check_unaligned_ldst_rip(W64 rip) {
-  return (unaligned_ldst_rip_table(rip) != null);
-}
-
 static const bool ENABLE_LOAD_LATENCY_ADJUSTMENT = 0;
 
 CycleTimer translate_timer("translate");
@@ -472,7 +451,38 @@ void save_assist_stats(DataStoreNode& root) {
   root.histogram(assist_names, assist_histogram, ASSIST_COUNT);
 }
 
-bool split_unaligned_memops_during_translate = false;
+void split_unaligned(const TransOp& transop, TransOpPair& pair) {
+  assert(transop.unaligned);
+
+  bool ld = isload(transop.opcode);
+  bool st = isstore(transop.opcode);
+
+  assert(ld|st);
+
+  pair.uops[0] = transop;
+  pair.uops[0].cond = LDST_ALIGN_LO;
+  pair.uops[0].unaligned = 0;
+  pair.uops[0].eom = 0;
+
+  pair.uops[1] = transop;
+  pair.uops[1].cond = LDST_ALIGN_HI;
+  pair.uops[1].unaligned = 0;
+  pair.uops[1].som = 0;
+
+  if (ld) {
+    // ld rd = [ra+rb]        =>   ld.uops[0]w rd = [ra+rb]           and    ld.hi rd = [ra+rb],rd      
+    pair.uops[0].rd = REG_temp4;
+    pair.uops[0].cond = LDST_ALIGN_LO;
+    pair.uops[0].size = 3; // always load 64-bit word
+    pair.uops[1].rc = REG_temp4;
+  } else {
+    assert(st);
+    // For stores, expand     st sfrd = [ra+rb],rc    =>   st.uops[0]w sfrd1 = [ra+rb],rc    and    st.uops[1] sfrd2 = [ra+rb],rc
+    // (no action: all done above)
+  }
+
+  pair.index = 0;
+}
 
 namespace TranslateX86 {
 
@@ -955,13 +965,6 @@ namespace TranslateX86 {
     TransOp& last = transbuf[transbufcount-1];
     last.eom = 1;
 
-    bool unaligned = (split_unaligned_memops_during_translate && check_unaligned_ldst_rip((Waddr)ripstart));
-
-    if (unaligned) {
-      first.loadcount *= 2;
-      first.storecount *= 2;
-    }
-
     foreach (i, transbufcount) {
       TransOp& transop = transbuf[i];
       if (bb.count >= MAXBBLEN) {
@@ -972,53 +975,13 @@ namespace TranslateX86 {
       bool ld = isload(transop.opcode);
       bool st = isstore(transop.opcode);
 
-      if ((ld|st) && unaligned) {
-        if (ld) {
-          // ld rd = [ra+rb]        =>   ld.low rd = [ra+rb]           and    ld.hi rd = [ra+rb],rd
-          TransOp& ldlo = bb.transops[bb.count+0];
-          TransOp& ldhi = bb.transops[bb.count+1];
+      transop.unaligned = 0;
 
-          ldlo = transop;
-          ldlo.rd = REG_temp4;
-          ldlo.cond = LDST_ALIGN_LO;
-          ldlo.size = 3; // always load 64-bit word
-          ldlo.eom = 0;
-
-          ldhi = transop;
-          ldhi.rc = REG_temp4;
-          ldhi.cond = LDST_ALIGN_HI;
-          ldhi.som = 0;
-
-          bb.memcount += 2;
-          bb.tagcount += 2;
-          bb.count += 2;
-        } else {
-          assert(st);
-          // For stores, expand     st sfrd = [ra+rb],rc    =>   st.low sfrd1 = [ra+rb],rc    and    st.hi sfrd2 = [ra+rb],rc
-          TransOp& stlo = bb.transops[bb.count+0];
-          TransOp& sthi = bb.transops[bb.count+1];
-
-          stlo = transop;
-          stlo = transop;
-          stlo.cond = LDST_ALIGN_LO;
-          stlo.eom = 0;
-
-          sthi = transop;
-          sthi = transop;
-          sthi.cond = LDST_ALIGN_HI;
-          sthi.som = 0;
-
-          bb.memcount += 2;
-          bb.storecount += 2;
-          bb.tagcount += 2;
-          bb.count += 2;
-        }
-      } else {
-        bb.transops[bb.count++] = transop;
-        if (ld|st) bb.memcount++;
-        if (st) bb.storecount++;
-        bb.tagcount++;
-      }
+      transop.index = bb.count;
+      bb.transops[bb.count++] = transop;
+      if (ld|st) bb.memcount++;
+      if (st) bb.storecount++;
+      bb.tagcount++;
 
       if (transop.rd < ARCHREG_COUNT) setbit(bb.usedregs, transop.rd);
       if (transop.ra < ARCHREG_COUNT) setbit(bb.usedregs, transop.ra);
@@ -4784,8 +4747,11 @@ ostream& printflags(ostream& os, W64 flags) {
   return os;
 }
 
-BasicBlock* translate_basic_block(void* rip) {
+BasicBlock* translate_one_basic_block(void* rip) {
   bool DEBUG = analyze_in_detail();
+
+  BasicBlock** bbp = bbcache((W64)rip);
+  if (bbp) return *bbp;
 
   if (DEBUG) logfile << "Translating ", (void*)rip, " at ", total_user_insns_committed, " commits", endl, flush;
 
@@ -4809,6 +4775,12 @@ BasicBlock* translate_basic_block(void* rip) {
 
   translate_timer.stop();
   return bb;
+}
+
+BasicBlock* translate_basic_block(void* rip) {
+  BasicBlock* root = translate_one_basic_block(rip);
+
+  return root;
 }
 
 void init_translate() { }

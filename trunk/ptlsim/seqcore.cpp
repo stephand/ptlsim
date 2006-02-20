@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Sequential Core Simulator
 //
-// Copyright 2003-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -121,8 +121,10 @@ namespace SequentialCore {
     //
     if (annul | internal)
       return 0;
+      
+    bool ok = asp.fastcheck(addr, top);
 
-    return (asp.fastcheck(addr, top)) ? 0 : exception;
+    return (ok) ? 0 : exception;
   }
 
   int issuestore(const TransOp& uop, SFR& state, W64 ra, W64 rb, W64 rc) {
@@ -485,9 +487,10 @@ namespace SequentialCore {
     return false;
   }
 
+  W64 seq_total_basic_blocks;
   W64 seq_total_uops_committed;
   W64 seq_total_user_insns_committed;
-  W64 seq_sim_cycle;
+  W64 seq_total_cycles;
 
   BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
     BasicBlock** bb = bbcache(rip);
@@ -511,64 +514,55 @@ namespace SequentialCore {
     return current_basic_block;
   }
 
-  int sequential_core_toplevel_loop() {
-    logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
+  //
+  // Execute one basic block sequentially
+  //
 
-    // Make sure the translator splits up unaligned loads and stores during decoding:
-    split_unaligned_memops_during_translate = true;
+  int execute_sequential(BasicBlock* bb, W64 insnlimit) {
+    arf[REG_rip] = bb->rip;
 
-    external_to_core_state();
-    print_state(logfile);
-    logfile << endl;
+    Waddr rip = arf[REG_rip];
     
-    reset_fetch(arf[REG_rip]);
+    //
+    // Fetch
+    //
     
-    int oldloglevel = loglevel;
-    if (start_log_at_iteration != infinity) loglevel = 0;
+    bool barrier = 0;
 
-    bool exiting = false;
+    if (logable(1)) logfile << endl, "Sequentially executing basic block ", bb, " (rip ", (void*)(Waddr)bb->rip, ", ", bb->count, " uops), insn limit ", insnlimit, endl, flush;
 
-    W64 stop_at_user_insns_limit = sequential_mode_insns;
+    TransOpPair unaligned_ldst_pair;
+    unaligned_ldst_pair.index = -1;
 
-    ctseq.start();
+    int uopindex = 0;
+    int current_uop_in_macro_op = 0;
 
-    while ((iterations < stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns_limit)) {
-      if ((iterations >= start_log_at_iteration) & (!loglevel)) {
-        loglevel = oldloglevel;
-        logfile << "Start logging (level ", loglevel, ") at cycle ", sim_cycle, endl, flush;
-      }
+    int user_insns = 0;
 
-      //if (logable(9)) logfile << "Cycle ", sim_cycle, ":", endl;
-      //if (logable(9)) print_state(logfile);
+    seq_total_basic_blocks++;
 
-      Waddr rip = arf[REG_rip];
-
-      if (lowbits(sim_cycle, 18) == 0) 
-        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)rip, ")", endl, flush;
-
-      if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
-        //ooo_capture_stats();
-        last_stats_captured_at_cycle = sim_cycle;
-      }
-
-      //
-      // Fetch
-      //
-      
-      TransOp uop;
-
+    while ((uopindex < bb->count) & (user_insns < insnlimit)) {
       if (!asp.fastcheck((byte*)rip, asp.execmap)) {
         if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": bogus RIP", endl;
         ctx.exception = EXCEPTION_PageFaultOnExec;
-        if (!handle_exception()) break;
-        return false;
+        return SEQEXEC_INVALIDRIP;
       }
 
-      if ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
-        fetch_or_translate_basic_block(rip);
+      TransOp uop = bb->transops[uopindex];
+
+      if ((unaligned_ldst_pair.index < 0) & uop.unaligned) {
+        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": split unaligned load or store ", uop, endl;
+        split_unaligned(uop, unaligned_ldst_pair);
+        unaligned_ldst_pair.index = 0;
       }
 
-      uop = current_basic_block->transops[current_basic_block_transop_index];
+      if (unaligned_ldst_pair.index < 0) {
+        assert(uopindex < bb->count);
+      } else {
+        uop = unaligned_ldst_pair.uops[unaligned_ldst_pair.index];
+        assert(unaligned_ldst_pair.index <= 1);
+        unaligned_ldst_pair.index++;
+      }
   
       if (uop.som) {
         current_uop_in_macro_op = 0;
@@ -585,6 +579,7 @@ namespace SequentialCore {
       //
       IssueState state;
       state.reg.rdflags = 0;
+      ctx.exception = 0;
 
       IssueInput input;
       W64 radata = arf[archreg_remap_table[uop.ra]];
@@ -599,25 +594,28 @@ namespace SequentialCore {
       bool st = isstore(uop.opcode);
       bool br = isbranch(uop.opcode);
 
-      uopimpl_func_t synthop = current_basic_block->synthops[current_basic_block_transop_index];
-
+      uopimpl_func_t synthop = bb->synthops[uopindex];
+      
       SFR sfr;
-
-      int exception = 0;
+      
       bool refetch = 0;
-
-      // if (logable(1)) logfile << "Executing synthop ", (void*)synthop, " at iter ", iterations, endl, flush;
 
       if (ld|st) {
         int status = (ld) ? issueload(uop, sfr, radata, rbdata, rcdata) : issuestore(uop, sfr, radata, rbdata, rcdata);
-
+        
         state.reg.rddata = sfr.data;
         state.reg.rdflags = 0;
 
         if (status == ISSUE_EXCEPTION) {
-          exception = state.reg.rddata;
+          ctx.exception = state.reg.rddata;
+          return SEQEXEC_EXCEPTION;
         } else if (status == ISSUE_REFETCH) {
-          refetch = 1;
+          if (logable(1)) {
+            logfile << intstring(current_uuid, 20), " algnfx", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", 
+              uop, ": set unaligned bit for uop index ", uopindex, " at iteration ", iterations, endl;
+          }
+          bb->transops[uopindex].unaligned = 1;
+          continue;
         }
       } else if (br) {
         state.brreg.riptaken = uop.riptaken;
@@ -625,115 +623,163 @@ namespace SequentialCore {
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags); 
 
         if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.fastcheck((void*)(Waddr)state.reg.rddata, asp.execmap))) {
-          // bogus branch
-          state.reg.rdflags |= FLAG_INV;
-          state.reg.rddata = EXCEPTION_PageFaultOnExec;
-          exception = EXCEPTION_PageFaultOnExec;
+          if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": bogus RIP at branch target", endl;
+          ctx.exception = EXCEPTION_PageFaultOnExec;
+          return SEQEXEC_INVALIDRIP;
         }
-
+        
         if (logable(1)) {
           stringbuf rdstr; print_value_and_flags(rdstr, state.reg.rddata, state.reg.rdflags);
-          logfile << intstring(current_uuid, 20), (exception ? " except" : " issue "), " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
+          logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)rip, ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
           if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
           logfile << endl;
         }
       } else {
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags);
-        if (state.reg.rdflags & FLAG_INV) exception = state.reg.rddata;
-
+        if (state.reg.rdflags & FLAG_INV) ctx.exception = state.reg.rddata;
+        
         if (logable(1)) {
           stringbuf rdstr; print_value_and_flags(rdstr, state.reg.rddata, state.reg.rdflags);
-          logfile << intstring(current_uuid, 20), (exception ? " except" : " issue "), " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
+          logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)rip, ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
           if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
           logfile << endl;
+        }
+
+        if (ctx.exception) {
+          if (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
+            W64 chk_recovery_rip = arf[REG_rip] + bytes_in_current_insn;
+            if (logable(1)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)arf[REG_rip], " by ", bytes_in_current_insn, " bytes to ", 
+                              (void*)(Waddr)chk_recovery_rip, endl;
+            current_uuid++;
+            arf[REG_rip] = chk_recovery_rip;
+            return SEQEXEC_SKIPBLOCK;
+          } else {
+            return SEQEXEC_EXCEPTION;
+          }
         }
       }
 
       //
       // Commit
       //
-      if (refetch) {
-        BasicBlock* bb = bbcache.remove(current_basic_block_rip);
-        bbcache_removes++;
-        if (bb) bb->free();
-        // NOTE: bb must not be accessed after this point!
-
-        add_unaligned_ldst_rip(rip);
-        store_issue_unaligned++;
-
-        current_basic_block = null;
-
-        continue;
-      }
 
       total_uops_committed++;
+      seq_total_uops_committed++;
 
-      if (!exception) {
-        if (st) {
-          commitstore_unlocked(sfr);
-        } else if (uop.rd != REG_zero) {
-          arf[uop.rd] = state.reg.rddata;
-          arflags[uop.rd] = state.reg.rdflags;
-          
-          if (!uop.nouserflags) {
-            W64 flagmask = setflags_to_x86_flags[uop.setflags];
-            arf[REG_flags] = (arf[REG_flags] & ~flagmask) | (state.reg.rdflags & flagmask);
-            arflags[REG_flags] = arf[REG_flags];
-          }
+      assert(!ctx.exception);
+
+      if (st) {
+        commitstore_unlocked(sfr);
+      } else if (uop.rd != REG_zero) {
+        arf[uop.rd] = state.reg.rddata;
+        arflags[uop.rd] = state.reg.rdflags;
+        
+        if (!uop.nouserflags) {
+          W64 flagmask = setflags_to_x86_flags[uop.setflags];
+          arf[REG_flags] = (arf[REG_flags] & ~flagmask) | (state.reg.rdflags & flagmask);
+          arflags[REG_flags] = arf[REG_flags];
         }
-
-        if (uop.eom) arf[REG_rip] = (uop.rd == REG_rip) ? state.reg.rddata : (arf[REG_rip] + bytes_in_current_insn);
-        total_user_insns_committed += uop.eom;
       }
 
-      if (isclass(uop.opcode, OPCLASS_BARRIER)) {
-        ctseq.stop();
-        exiting = !handle_barrier();
-        ctseq.start();
-        if (exiting) break;
-      } else if (exception) {
-        ctx.exception = exception;
+      barrier = isclass(uop.opcode, OPCLASS_BARRIER);
 
-        // See notes in handle_exception():
-        if (isclass(uop.opcode, OPCLASS_CHECK) & (exception == EXCEPTION_SkipBlock)) {
-          //
-          // CheckFailed and SkipBlock exceptions are raised by the chk uop.
-          // This uop is used at the start of microcoded instructions to assert
-          // that certain conditions are true so complex corrective actions can
-          // be taken if the check fails.
-          //
-          // SkipBlock is a special case used for checks at the top of REP loops.
-          // Specifically, if the %rcx register is zero on entry to the REP, no
-          // action at all is to be taken; the rip should simply advance to
-          // whatever is in chk_recovery_rip and execution should resume.
-          //
-          // CheckFailed exceptions usually indicate the processor needs to take
-          // evasive action to avoid a user visible exception. For instance, 
-          // CheckFailed is raised when an inlined floating point operand is
-          // denormal or otherwise cannot be handled by inlined fastpath uops,
-          // or when some unexpected segmentation or page table conditions
-          // arise.
-          //
+      if (uop.eom) arf[REG_rip] = (uop.rd == REG_rip) ? state.reg.rddata : (arf[REG_rip] + bytes_in_current_insn);
 
-          W64 chk_recovery_rip = arf[REG_rip] + bytes_in_current_insn;
-          if (logable(1)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)arf[REG_rip], " by ", bytes_in_current_insn, " bytes to ", 
-            (void*)(Waddr)chk_recovery_rip, endl;
-          current_uuid++;
-          reset_fetch(chk_recovery_rip);
-        } else {
-          ctseq.stop();
-          exiting = !handle_exception();
-          ctseq.start();
-          if (exiting) break;
-        }
-      } else {
-        current_uuid++;
-        current_uop_in_macro_op++;
-        current_basic_block_transop_index++;
-      }
+      // Is this the last uop in the pair? If so, reset to start
+      if (unaligned_ldst_pair.index > 1) unaligned_ldst_pair.index = -1;
 
+      seq_total_user_insns_committed += uop.eom;
+      total_user_insns_committed += uop.eom;
+      user_insns += uop.eom;
+
+      current_uuid++;
+      // Don't advance on cracked loads/stores:
+      uopindex += (unaligned_ldst_pair.index < 0);
+      current_uop_in_macro_op++;
       iterations++;
       sim_cycle++;
+      seq_total_cycles++;
+    }
+
+    return (barrier) ? SEQEXEC_BARRIER : (insnlimit < bb->count) ? SEQEXEC_EARLY_EXIT : SEQEXEC_OK;
+  }
+
+  int sequential_core_toplevel_loop() {
+    logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
+
+    external_to_core_state();
+    print_state(logfile);
+    logfile << endl;
+    
+    int oldloglevel = loglevel;
+    if (start_log_at_iteration != infinity) loglevel = 0;
+
+    bool exiting = false;
+
+    W64 stop_at_user_insns_limit = sequential_mode_insns;
+
+    ctseq.start();
+
+    W64 last_printed_status_at_cycle = 0;
+
+    while ((iterations < stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns_limit)) {
+      if ((iterations >= start_log_at_iteration) & (!loglevel)) {
+        loglevel = oldloglevel;
+        logfile << "Start logging (level ", loglevel, ") at cycle ", sim_cycle, endl, flush;
+      }
+
+      Waddr rip = arf[REG_rip];
+
+      if ((sim_cycle - last_printed_status_at_cycle) >= 200000) {
+        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)rip, "), ", iterations, " basic blocks", endl, flush;
+        last_printed_status_at_cycle = sim_cycle;
+      }
+
+      if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
+        last_stats_captured_at_cycle = sim_cycle;
+      }
+
+      //
+      // Fetch
+      //
+
+      if (!asp.fastcheck((byte*)rip, asp.execmap)) {
+        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": bogus RIP", endl;
+        ctx.exception = EXCEPTION_PageFaultOnExec;
+        if (!handle_exception()) break;
+        return false;
+      }
+
+      current_basic_block = fetch_or_translate_basic_block(rip);
+
+      // logfile << "stop_at_user_insns_limit = ", stop_at_user_insns_limit, " - total_user_insns_committed ", total_user_insns_committed, endl;
+
+      int result = execute_sequential(current_basic_block, (stop_at_user_insns_limit - total_user_insns_committed));
+
+      switch (result) {
+      case SEQEXEC_OK:
+      case SEQEXEC_SKIPBLOCK:
+        // no action required
+        break;
+      case SEQEXEC_EARLY_EXIT:
+        exiting = 1;
+        break;
+      case SEQEXEC_EXCEPTION:
+      case SEQEXEC_INVALIDRIP:
+        ctseq.stop();
+        exiting = (!handle_exception());
+        ctseq.start();
+        break;
+      case SEQEXEC_BARRIER:
+        ctseq.stop();
+        exiting = (!handle_barrier());
+        ctseq.start();
+        break;
+      default:
+        assert(false);
+      }
+
+      if (exiting) break;
     }
 
     ctseq.stop();
@@ -746,10 +792,7 @@ namespace SequentialCore {
 
     logfile << flush;
 
-    seq_total_uops_committed = total_uops_committed;
-    seq_total_user_insns_committed = total_user_insns_committed;
-    seq_sim_cycle = sim_cycle;
-
+    // Start counting from zero in out of order core
     total_uops_committed = 0;
     total_user_insns_committed = 0;
     sim_cycle = 0;
@@ -759,7 +802,8 @@ namespace SequentialCore {
 
   void seq_capture_stats(DataStoreNode& root) {
     DataStoreNode& summary = root("summary"); {
-      summary.add("cycles", seq_sim_cycle);
+      summary.add("basicblocks", seq_total_basic_blocks);
+      summary.add("cycles", seq_total_cycles);
       summary.add("uops", seq_total_uops_committed);
       summary.add("insns", seq_total_user_insns_committed);
     }
@@ -791,6 +835,13 @@ namespace SequentialCore {
 
 int sequential_core_toplevel_loop() {
   return SequentialCore::sequential_core_toplevel_loop();
+}
+
+int execute_sequential(BasicBlock* bb) {
+  SequentialCore::external_to_core_state();
+  int rc = SequentialCore::execute_sequential(bb, bb->count);
+  SequentialCore::core_to_external_state();
+  return rc;
 }
 
 void seq_capture_stats(DataStoreNode& root) {
