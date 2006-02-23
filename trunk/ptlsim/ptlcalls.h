@@ -18,6 +18,12 @@ typedef unsigned short W16;
 typedef unsigned int W32;
 typedef unsigned long long W64;
 
+#ifdef __x86_64__
+typedef W64 Waddr;
+#else
+typedef W32 Waddr;
+#endif
+
 // Put at start of address space where nothing normally goes
 #define PTLSIM_THUNK_PAGE 0x1000
 
@@ -73,7 +79,7 @@ enum {
 // Valid in any mode
 static inline W64 ptlcall_nop() { return ptlcall(PTLCALL_MARKER, 0, 0, 0, 0, 0); }
 static inline W64 ptlcall_marker(W64 marker) { return ptlcall(PTLCALL_MARKER, marker, 0, 0, 0, 0); }
-static inline W64 ptlcall_capture_stats(const char* name) { return ptlcall(PTLCALL_CAPTURE_STATS, (W64)name, 0, 0, 0, 0); }
+static inline W64 ptlcall_capture_stats(const char* name) { return ptlcall(PTLCALL_CAPTURE_STATS, (W64)(Waddr)name, 0, 0, 0, 0); }
 
 // Valid in native mode only:
 static inline W64 ptlcall_switch_to_sim() { return ptlcall(PTLCALL_SWITCH_TO_SIM, 0, 0, 0, 0, 0); }
