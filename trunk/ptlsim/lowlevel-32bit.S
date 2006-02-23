@@ -18,10 +18,10 @@ inside_sim_escape_code_template_32bit:
   push    %edx
   push    %ecx
 
-  mov     %edi,[%esp+(4+1+0)*4]
-  mov     %esi,[%esp+(4+1+1)*4]
-  mov     %edx,[%esp+(4+1+2)*4]
-  mov     %ecx,[%esp+(4+1+3)*4]
+  mov     %edi,[%esp+(4+1)*4 + 0*8]
+  mov     %esi,[%esp+(4+1)*4 + 1*8]
+  mov     %edx,[%esp+(4+1)*4 + 2*8]
+  mov     %ecx,[%esp+(4+1)*4 + 3*8]
 
   # Undocumented x86 escape opcode to do PTL calls
   .byte 0x0f
