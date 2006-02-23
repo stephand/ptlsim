@@ -399,29 +399,10 @@ void handle_syscall_64bit();
 #define LDT_SIZE 8192
 extern W64 ldt_seg_base_cache[LDT_SIZE];
 
-static inline W16 get_fs() {
-  Waddr value;
-  asm("mov %%fs,%%ax\n" : "=a" (value));
-  return value;
-}
-
-static inline W16 get_gs() {
-  Waddr value;
-  asm("mov %%gs,%%ax\n" : "=a" (value));
-  return value;
-}
-
-static inline W64 get_limit(W16 desc) {
-  Waddr value;
-  asm("lsl %[desc],%[value]\n" : [value] "=r" (value) : [desc] "m" (desc));
-  return value;
-}
-
-static inline W64 access_tls_segment(W64 offset) {
-  W64 value;
-  asm("movq %%fs:(%[offset]),%[value]\n" : [value] "=r" (value) : [offset] "r" (offset));
-  return value;
-}
+extern "C" {
+  int get_gs();
+  int get_fs();
+};
 
 //
 // This is set if we are running within the target process address space;

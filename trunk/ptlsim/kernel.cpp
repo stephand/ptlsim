@@ -142,6 +142,7 @@ declare_syscall1(__NR_set_thread_area, int, sys_set_thread_area, void*, udesc);
 
 Waddr get_fs_base() {
   user_desc_32bit ud;
+  memset(&ud, 0, sizeof(ud));
   ud.entry_number = get_fs() >> 3;
   int rc = sys_get_thread_area(&ud);
   return (rc) ? 0 : ud.base_addr;
@@ -149,6 +150,7 @@ Waddr get_fs_base() {
 
 Waddr get_gs_base() {
   user_desc_32bit ud;
+  memset(&ud, 0, sizeof(ud));
   ud.entry_number = get_gs() >> 3;
   int rc = sys_get_thread_area(&ud);
   return (rc) ? 0 : ud.base_addr;

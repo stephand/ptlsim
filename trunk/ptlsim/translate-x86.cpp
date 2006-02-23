@@ -4750,7 +4750,7 @@ ostream& printflags(ostream& os, W64 flags) {
 BasicBlock* translate_one_basic_block(void* rip) {
   bool DEBUG = analyze_in_detail();
 
-  BasicBlock** bbp = bbcache((W64)rip);
+  BasicBlock** bbp = bbcache((Waddr)rip);
   if (bbp) return *bbp;
 
   if (DEBUG) logfile << "Translating ", (void*)rip, " at ", total_user_insns_committed, " commits", endl, flush;

@@ -77,6 +77,18 @@ ptlsim_preinit_entry:
   mov   %esp,%ebp            # update to new stack pointer
   jmp   _start
 
+.global get_fs
+get_fs:
+  xor   %eax,%eax
+  mov   %ax,%fs
+  ret
+
+.global get_gs
+get_gs:
+  xor   %eax,%eax
+  mov   %ax,%gs
+  ret
+
 /*
  * struct ThreadState {
  *   ThreadState* self;
