@@ -1527,6 +1527,17 @@ W64 handle_ptlcall(W64 rip, W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, 
     logfile << "  WARNING: already running in simulation mode", endl;
     return (W64)(-EINVAL);
   }
+  case PTLCALL_CAPTURE_STATS: {
+    logfile << "  Capturing statistics snapshot ", snapshotid, endl;
+    const char* snapshotname = (const char*)(Waddr)arg1;
+    if (asp.check((void*)snapshotname, PROT_READ)) {
+      ooo_capture_stats(snapshotname);
+    } else {
+      logfile << "WARNING: invalid snapshotname pointer (", snapshotname, "); using default snapshot ID", endl;
+      ooo_capture_stats(null);
+    }
+    break;
+  }
   case PTLCALL_SWITCH_TO_NATIVE: {
     logfile << "  Switching to native mode at rip ", (void*)(Waddr)rip, endl;
     requested_switch_to_native = 1;

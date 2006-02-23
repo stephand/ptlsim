@@ -73,7 +73,7 @@ enum {
 // Valid in any mode
 static inline W64 ptlcall_nop() { return ptlcall(PTLCALL_MARKER, 0, 0, 0, 0, 0); }
 static inline W64 ptlcall_marker(W64 marker) { return ptlcall(PTLCALL_MARKER, marker, 0, 0, 0, 0); }
-static inline W64 ptlcall_capture_stats() { return ptlcall(PTLCALL_CAPTURE_STATS, 0, 0, 0, 0, 0); }
+static inline W64 ptlcall_capture_stats(const char* name) { return ptlcall(PTLCALL_CAPTURE_STATS, (W64)name, 0, 0, 0, 0); }
 
 // Valid in native mode only:
 static inline W64 ptlcall_switch_to_sim() { return ptlcall(PTLCALL_SWITCH_TO_SIM, 0, 0, 0, 0, 0); }

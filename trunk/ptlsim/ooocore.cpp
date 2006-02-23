@@ -4387,18 +4387,17 @@ void ooo_capture_stats(DataStoreNode& root) {
 
 }
 
-void ooo_capture_stats() {
+void ooo_capture_stats(const char* snapshotname) {
   cttotal.stop();
 
   if (!dsroot)
     return;
 
   stringbuf sb;
-  sb << snapshotid;
+  if (snapshotname) sb << snapshotname; else sb << snapshotid;
   snapshotid++;
 
-  if (snapshot_cycles < infinity)
-    ooo_capture_stats((*dsroot)(sb));
+  ooo_capture_stats((*dsroot)(sb));
 
   cttotal.start();
 }

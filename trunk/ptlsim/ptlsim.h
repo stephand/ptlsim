@@ -51,7 +51,7 @@ enum {
   SEQEXEC_BARRIER,
 };
 
-void ooo_capture_stats();
+void ooo_capture_stats(const char* snapshotname = null);
 void ooo_capture_stats(DataStoreNode& root);
 void seq_capture_stats(DataStoreNode& root);
 void save_stats();
