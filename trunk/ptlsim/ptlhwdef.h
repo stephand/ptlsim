@@ -619,7 +619,7 @@ struct BasicBlockBase {
   W64 rip_not_taken;
   W16 count;
   int refcount;
-  W64 tagcount:10, memcount:8, storecount:8, repblock:1;
+  W64 tagcount:10, memcount:8, storecount:8, repblock:1, user_insn_count:16;
   W64 usedregs;
   uopimpl_func_t* synthops;
 

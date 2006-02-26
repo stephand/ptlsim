@@ -701,7 +701,7 @@ namespace SequentialCore {
       seq_total_cycles++;
     }
 
-    return (barrier) ? SEQEXEC_BARRIER : (insnlimit < bb->count) ? SEQEXEC_EARLY_EXIT : SEQEXEC_OK;
+    return (barrier) ? SEQEXEC_BARRIER : (insnlimit < bb->user_insn_count) ? SEQEXEC_EARLY_EXIT : SEQEXEC_OK;
   }
 
   int sequential_core_toplevel_loop() {
@@ -751,8 +751,6 @@ namespace SequentialCore {
       }
 
       current_basic_block = fetch_or_translate_basic_block(rip);
-
-      // logfile << "stop_at_user_insns_limit = ", stop_at_user_insns_limit, " - total_user_insns_committed ", total_user_insns_committed, endl;
 
       int result = execute_sequential(current_basic_block, (stop_at_user_insns_limit - total_user_insns_committed));
 

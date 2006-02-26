@@ -727,7 +727,7 @@ namespace DataCache {
             if (DEBUG) logfile << "mb", i, ": delivered to L1 switch (map ", mb.lfrqmap, ")", endl;
 
             if (mb.dcache) {
-              if (DEBUG) logfile << "mb", i, ": delivered ", (void*)mb.addr, " to L1 dcache (map ", mb.lfrqmap, ")", endl;
+              if (DEBUG) logfile << "mb", i, ": delivered ", (void*)(Waddr)mb.addr, " to L1 dcache (map ", mb.lfrqmap, ")", endl;
               // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
               // foreach (i, L2_LINE_SIZE / L1_LINE_SIZE) L1.validate(mb.addr + i*L1_LINE_SIZE, bitvec<L1_LINE_SIZE>().setall());
               L1.validate(mb.addr, bitvec<L1_LINE_SIZE>().setall());
@@ -736,7 +736,7 @@ namespace DataCache {
             }
             if (mb.icache) {
               // Sometimes we can initiate an icache miss on an existing dcache line in the missbuf
-              if (DEBUG) logfile << "mb", i, ": delivered ", (void*)mb.addr, " to L1 icache", endl;
+              if (DEBUG) logfile << "mb", i, ": delivered ", (void*)(Waddr)mb.addr, " to L1 icache", endl;
               // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
               // foreach (i, L2_LINE_SIZE / L1I_LINE_SIZE) L1I.validate(mb.addr + i*L1I_LINE_SIZE, bitvec<L1I_LINE_SIZE>().setall());
               L1I.validate(mb.addr, bitvec<L1I_LINE_SIZE>().setall());

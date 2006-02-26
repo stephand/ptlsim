@@ -376,6 +376,7 @@ void BasicBlock::reset(W64 rip) {
   tagcount = 0;
   memcount = 0;
   storecount = 0;
+  user_insn_count = 0;
   synthops = null;
 }
 
@@ -406,6 +407,7 @@ BasicBlock* BasicBlock::clone() {
   bb->tagcount = tagcount;
   bb->memcount = memcount;
   bb->storecount = storecount;
+  bb->user_insn_count = user_insn_count;
   bb->usedregs = usedregs;
   bb->synthops = null;
   foreach (i, count) bb->transops[i] = this->transops[i];

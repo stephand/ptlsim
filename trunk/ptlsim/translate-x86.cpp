@@ -988,6 +988,9 @@ namespace TranslateX86 {
       if (transop.rb < ARCHREG_COUNT) setbit(bb.usedregs, transop.rb);
       if (transop.rc < ARCHREG_COUNT) setbit(bb.usedregs, transop.rc);
     }
+
+    bb.user_insn_count++;
+
     transbufcount = 0;
   }
 

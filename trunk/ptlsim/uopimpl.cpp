@@ -999,21 +999,27 @@ make_intdest_fp_convop_allrounds(cvtf_d2q, W64, cvtsd2si, cvttsd2si);
 // Regular 32-bit x86 does not have SSE instructions to handle 64-bit
 // integer to/from float conversions. Therefore we have to use x87
 //
-#define make_intdest_fp_convop_x87_64bit(name, T) \
+
+#define make_intdest_fp_convop_x87_64bit(name, T, x87op) \
 template <int trunc> \
 void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
   W64 rd = 0; \
   if (trunc) { \
-    asm("fld %[rb]; fisttp %[rd];" : [rd] "=m" (rd) : [rb] "m" (*((T*)&rb))); \
+    /* Important! fisttpll (truncating version) is only available on SSE3 machines (P4 Prescott and later K8s) */ \
+    /* Therefore, use the ordinary fistp with FPCW rounding tricks */ \
+    W16 oldfpcw = cpu_get_fpcw(); \
+    cpu_set_fpcw(oldfpcw | 0xc00); /* set truncate rounding mode */ \
+    asm(x87op " %[rb]; fisttpll %[rd];" : [rd] "=m" (rd) : [rb] "m" (rb)); \
+    cpu_set_fpcw(oldfpcw); \
   } else { \
-    asm("fld %[rb]; fistp %[rd];" : [rd] "=m" (rd) : [rb] "m" (*((T*)&rb))); \
+    asm(x87op " %[rb]; fistpll %[rd];" : [rd] "=m" (rd) : [rb] "m" (rb)); \
   } \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
 }
 
-make_intdest_fp_convop_x87_64bit(uop_impl_cvtf_s2q, float);
-make_intdest_fp_convop_x87_64bit(uop_impl_cvtf_d2q, double);
+make_intdest_fp_convop_x87_64bit(uop_impl_cvtf_s2q, float, "fld");
+make_intdest_fp_convop_x87_64bit(uop_impl_cvtf_d2q, double, "fldl");
 
 uopimpl_func_t implmap_cvtf_s2q[2] = {&uop_impl_cvtf_s2q<0>, &uop_impl_cvtf_s2q<1>};
 uopimpl_func_t implmap_cvtf_d2q[2] = {&uop_impl_cvtf_d2q<0>, &uop_impl_cvtf_d2q<1>};
