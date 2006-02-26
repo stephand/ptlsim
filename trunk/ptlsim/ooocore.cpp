@@ -308,20 +308,22 @@ struct StateList: public selfqueuelink {
   int listid;
   W64 dispatch_source_counter;
   W64 issue_source_counter;
+  W32 flags;
 
   StateList() { }
 
-  void init(const char* name, ListOfStateLists& lol) {
+  void init(const char* name, ListOfStateLists& lol, W32 flags = 0) {
     reset();
     this->name = name;
+    this->flags = flags;
     count = 0;
     listid = lol.add(this);
     dispatch_source_counter = 0;
     issue_source_counter = 0;
   }
 
-  StateList(const char* name, ListOfStateLists& lol) {
-    init(name, lol);
+  StateList(const char* name, ListOfStateLists& lol, W32 flags = 0) {
+    init(name, lol, flags);
   }
 
   void reset() {
@@ -339,6 +341,12 @@ struct StateList: public selfqueuelink {
 
   selfqueuelink* enqueue(selfqueuelink* entry) {
     entry->addtail(this);
+    count++;
+    return entry;
+  }
+
+  selfqueuelink* enqueue_after(selfqueuelink* entry, selfqueuelink* preventry) {
+    if (preventry) entry->addhead(preventry); else entry->addhead(this);
     count++;
     return entry;
   }
@@ -400,7 +408,7 @@ void StateList::checkvalid() {
 #endif
 }
 
-#define DeclareROBList(name, description) StateList name("" description "", rob_states);
+#define DeclareROBList(name, description, flags) StateList name("" description "", rob_states, flags);
 
 //
 // Reorder Buffer (ROB) structure, used for tracking all instructions in flight.
@@ -426,24 +434,34 @@ struct Cluster {
 #define for_each_cluster(iter) for (int iter = 0; iter < MAX_CLUSTERS; iter++)
 #define for_each_operand(iter) for (int iter = 0; iter < MAX_OPERANDS; iter++)
 
+#define ROB_STATE_READY (1 << 0)
+#define ROB_STATE_IN_ISSUE_QUEUE (1 << 1)
+#define ROB_STATE_PRE_READY_TO_DISPATCH (1 << 2)
+
 // Frontend states
-DeclareROBList(rob_free_list, "free");                                         // Free entry
-DeclareROBList(rob_frontend_list, "frontend");                                 // Frontend in progress (artificial delay)
-DeclareROBList(rob_ready_to_dispatch_list, "ready-to-dispatch");               // Ready to dispatch
-DeclareClusteredROBList(rob_dispatched_list, "dispatched");                    // Dispatched but waiting for operands
-DeclareClusteredROBList(rob_ready_to_issue_list, "ready-to-issue");            // Ready to issue (all operands ready)
-DeclareClusteredROBList(rob_ready_to_store_list, "ready-to-store");            // Ready to store (all operands ready except possibly rc)
-DeclareClusteredROBList(rob_ready_to_load_list, "ready-to-load");              // Ready to load (all operands ready)
-
+DeclareROBList(rob_free_list, "free", 0);                                      // Free entry
+DeclareROBList(rob_frontend_list, "frontend",                                  // Frontend in progress (artificial delay)
+               ROB_STATE_PRE_READY_TO_DISPATCH);
+DeclareROBList(rob_ready_to_dispatch_list, "ready-to-dispatch", 0);            // Ready to dispatch
+DeclareClusteredROBList(rob_dispatched_list, "dispatched",                     // Dispatched but waiting for operands
+                        ROB_STATE_IN_ISSUE_QUEUE); 
+DeclareClusteredROBList(rob_ready_to_issue_list, "ready-to-issue",             // Ready to issue (all operands ready)
+                        ROB_STATE_IN_ISSUE_QUEUE);
+DeclareClusteredROBList(rob_ready_to_store_list, "ready-to-store",             // Ready to store (all operands ready except possibly rc)
+                        ROB_STATE_IN_ISSUE_QUEUE);
+DeclareClusteredROBList(rob_ready_to_load_list, "ready-to-load",               // Ready to load (all operands ready)
+                        ROB_STATE_IN_ISSUE_QUEUE);
 // Out of order core states
-DeclareClusteredROBList(rob_issued_list, "issued");                            // Issued and in progress (or for loads, returned here after address is generated)
-DeclareClusteredROBList(rob_completed_list, "completed");                      // Completed and result in transit for local and global forwarding
-DeclareClusteredROBList(rob_ready_to_writeback_list, "ready-to-write");        // Completed; result ready to writeback in parallel across all cluster register files
-
-DeclareROBList(rob_cache_miss_list, "cache-miss");                             // Loads only: wait for cache miss to be serviced
+DeclareClusteredROBList(rob_issued_list, "issued", 0);                         // Issued and in progress (or for loads, returned here after address is generated)
+DeclareClusteredROBList(rob_completed_list, "completed",                       // Completed and result in transit for local and global forwarding
+                        ROB_STATE_READY);
+DeclareClusteredROBList(rob_ready_to_writeback_list, "ready-to-write",         // Completed; result ready to writeback in parallel across all cluster register files
+                        ROB_STATE_READY);
+DeclareROBList(rob_cache_miss_list, "cache-miss", 0);                          // Loads only: wait for cache miss to be serviced
 
 // In-order commit and retirement state
-DeclareROBList(rob_ready_to_commit_queue, "ready-to-commit");                  // Ready to commit
+DeclareROBList(rob_ready_to_commit_queue, "ready-to-commit",                   // Ready to commit
+               ROB_STATE_READY);
 
 #define issueq_operation_on_cluster(cluster, expr) { int dummyrc; issueq_operation_on_cluster_with_result(cluster, dummyrc, expr); }
 
@@ -536,11 +554,11 @@ struct ReorderBufferEntry: public selfqueuelink {
     entry_valid = true;
   }
 
-  void changestate(StateList& newqueue) {
+  void changestate(StateList& newqueue, bool place_at_head = false, ReorderBufferEntry* prevrob = null) {
     if (current_state_list)
       current_state_list->remove(this);
     current_state_list = &newqueue;
-    newqueue.enqueue(this);
+    if (place_at_head) newqueue.enqueue_after(this, prevrob); else newqueue.enqueue(this);
   }
 
   bool operand_ready(int operand) const;
@@ -591,6 +609,8 @@ struct ReorderBufferEntry: public selfqueuelink {
   int commit();
   void replay();
   int pseudocommit();
+  void redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob);
+  void redispatch_dependents(bool inclusive = true);
 
   void loadwakeup();
 
@@ -1008,6 +1028,8 @@ void flush_pipeline(W64 realrip) {
   foreach (i, PHYS_REG_FILE_COUNT) physregfiles[i].reset();
   commitrrt.reset();
   specrrt.reset();
+
+  external_to_core_state();
 }
 
 //
@@ -1336,17 +1358,13 @@ void fetch() {
       if (predrip != transop.riptaken) {
         assert(predrip == transop.ripseq);
         transop.cond = invert_cond(transop.cond);
-
         //
         // We need to be careful here: we already looked up the synthop for this
         // uop according to the old condition, so redo that here so we call the
         // correct code for the swapped condition.
         //
         transop.synthop = get_synthcode_for_cond_branch(transop.opcode, transop.cond, transop.size, 0);
-
-        W64 temp = transop.riptaken;
-        transop.riptaken = transop.ripseq;
-        transop.ripseq = temp;
+        swap(transop.riptaken, transop.ripseq);
       }
     } else if (isclass(transop.opcode, OPCLASS_INDIR_BRANCH)) {
       transop.riptaken = predrip;
@@ -1627,7 +1645,12 @@ void rename() {
       }
       logfile << " -> ";
       foreach (i, MAX_OPERANDS) {
-        logfile << "r", rob.operands[i]->index(), ((i < MAX_OPERANDS-1) ? "," : "");
+        const PhysicalRegister* physreg = rob.operands[i];
+        logfile << "r", physreg->index();
+        if (physreg->rob) 
+          logfile << " (rob ", physreg->rob->index(), " uuid ", physreg->rob->uop.uuid, ")";
+        else logfile << " (arch ", arch_reg_names[physreg->archreg], ")";
+        logfile << ((i < MAX_OPERANDS-1) ? ", " : "");
       }
       logfile << "; renamed";
     }
@@ -1960,11 +1983,11 @@ int ReorderBufferEntry::select_cluster() {
     logfile << intstring(uop.uuid, 20), " clustr rob ", intstring(index(), -3), " allowed FUs = ", 
       bitstring(opinfo[uop.opcode].fu, FU_COUNT, true), " -> clusters ", bitstring(executable_on_cluster_mask, MAX_CLUSTERS, true), " avail";
     foreach (i, MAX_CLUSTERS) logfile << " ", cluster_issue_queue_avail_count[i];
-    logfile << endl;
   }
   
   if (!executable_on_cluster) {
     dispatch_cluster_none_avail++;
+    if (logable(1)) logfile << "-> none ", endl;
     return -1;
   }
   
@@ -1972,13 +1995,15 @@ int ReorderBufferEntry::select_cluster() {
   int cluster = find_random_set_bit(executable_on_cluster, sim_cycle);
   
   foreach (i, MAX_CLUSTERS) {
-    if ((cluster_operand_tally[i] > n) && (executable_on_cluster & (1 << i))) {
+    if ((cluster_operand_tally[i] > n) && bit(executable_on_cluster, i)) {
       n = cluster_operand_tally[i];
       cluster = i;
     }
   }
 
   dispatch_cluster_histogram[cluster]++;
+
+  if (logable(1)) logfile << "-> cluster ", clusters[cluster].name, endl;
 
   return cluster;
 }
@@ -2136,6 +2161,12 @@ CycleTimer ctdispatch;
 
 W64 dispatch_width_histogram[DISPATCH_WIDTH+1];
 
+static const int DISPATCH_DEADLOCK_COUNTDOWN_CYCLES = 32;
+
+int dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+
+void redispatch_deadlock_recovery();
+
 int dispatch() {
   start_timer(ctdispatch);
 
@@ -2158,7 +2189,7 @@ int dispatch() {
     //
     if (rob->cluster < 0) {
       if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " cannot dispatch (no cluster)", endl;
-      break;
+      continue; // try the next uop to avoid deadlock on re-dispatches
     }
 
     int operands_still_needed = rob->find_sources();
@@ -2187,6 +2218,19 @@ int dispatch() {
   dispatch_width_histogram[dispatchcount]++;
 
   stop_timer(ctdispatch);
+
+  if (dispatchcount) {
+    dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+  } else if (!rob_ready_to_dispatch_list.empty()) {
+    dispatch_deadlock_countdown--;
+    if (!dispatch_deadlock_countdown) {
+      if (logable(1)) logfile << "Dispatch deadlock at cycle ", sim_cycle, ", commits ", total_user_insns_committed, ": recovering...", endl;
+      redispatch_deadlock_recovery();
+      dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+      return -1;
+    }
+  }
+
   return dispatchcount;
 }
 
@@ -2279,9 +2323,10 @@ inline int check_access_alignment(W64 addr, AddressSpace::spat_t top, bool annul
 }
 
 enum {
-  ISSUE_COMPLETED = 1,
-  ISSUE_NEEDS_REPLAY = 0,
-  ISSUE_MISSPECULATED = -1,
+  ISSUE_COMPLETED = 1,      // issued correctly
+  ISSUE_NEEDS_REPLAY = 0,   // fast scheduling replay
+  ISSUE_MISSPECULATED = -1, // mis-speculation: redispatch dependent slice
+  ISSUE_NEEDS_REFETCH = -2, // refetch from RIP of bad insn
 };
 
 //
@@ -2306,7 +2351,7 @@ enum {
 // is not allowed to proceed.
 //
 
-struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 16> { };
+struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 4> { };
 LoadStoreAliasPredictor lsap;
 
 // This is an internal MSR required to correctly truncate ld/st pointers in 32-bit mode
@@ -2424,7 +2469,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
 
       store_issue_unaligned++;
 
-      return ISSUE_MISSPECULATED;
+      return ISSUE_NEEDS_REFETCH;
     }
 
     store_issue_exception++;
@@ -2452,6 +2497,15 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
     }
   }
 
+  //
+  // Always update deps in case redispatch is required
+  // because of a future speculation failure: we must
+  // know which loads and stores inherited bogus values
+  //
+  operands[RS]->unref(*this);
+  operands[RS] = (sfra) ? sfra->rob->physreg : &physregfiles[0][PHYS_REG_NULL];
+  operands[RS]->addref(*this);
+
   ready = (!sfra || (sfra && sfra->addrvalid && sfra->datavalid)) && rcready;
 
   //
@@ -2473,11 +2527,6 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   //
 
   if (!ready) {
-    // See notes above on Physical Register Recycling Complications
-    operands[RS]->unref(*this);
-    operands[RS] = (sfra) ? sfra->rob->physreg : &physregfiles[0][PHYS_REG_NULL];
-    operands[RS]->addref(*this);
-
     if (logable(1)) {
       logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
         " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ",
@@ -2562,7 +2611,18 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
 
       // Add the rip to the load to the load/store alias predictor:
       lsap.select(ldbuf.rob->uop.rip);
+      //
+      // The load as dependent on this store. Add a new dependency
+      // on the store to the load so the normal redispatch mechanism
+      // will find this.
+      //
+      ldbuf.rob->operands[RS]->unref(*this);
+      ldbuf.rob->operands[RS] = physreg;
+      ldbuf.rob->operands[RS]->addref(*this);
 
+      redispatch_dependents();
+      /*
+      // Old mechanism:
       //
       // Annul everything after and including the store: this implicitly
       // includes the aliased load following the store in program order.
@@ -2574,6 +2634,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
       // correct branch direction.
       //
       reset_fetch_unit(uop.rip);
+      */
 
       store_issue_ordering++;
 
@@ -2708,7 +2769,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
 
       load_issue_unaligned++;
 
-      return ISSUE_MISSPECULATED;
+      return ISSUE_NEEDS_REFETCH;
     }
 
     load_issue_exception++;
@@ -2744,6 +2805,15 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
 
   bool ready = (!sfra || (sfra && sfra->addrvalid && sfra->datavalid));
 
+  //
+  // Always update deps in case redispatch is required
+  // because of a future speculation failure: we must
+  // know which loads and stores inherited bogus values
+  //
+  operands[RS]->unref(*this);
+  operands[RS] = (sfra) ? sfra->rob->physreg : &physregfiles[0][PHYS_REG_NULL];
+  operands[RS]->addref(*this);
+
   if (!ready) {
     //
     // Load Replay Conditions:
@@ -2765,10 +2835,6 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
     //
 
     assert(sfra);
-    // See notes above on Physical Register Recycling Complications
-    operands[RS]->unref(*this);
-    operands[RS] = sfra->rob->physreg;
-    operands[RS]->addref(*this);
 
     if (logable(1)) {
       logfile << intstring(uop.uuid, 20), " load", (load_store_second_phase ? "2" : " "), "  rob ", intstring(index(), -3), " st", lsq->index(), 
@@ -2893,11 +2959,8 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   changestate(rob_cache_miss_list);
 
   LoadStoreInfo lsi;
-  lsi.info.tag = index();
   lsi.info.rd = physreg->index();
-  lsi.info.cbslot = lsq->index();
-  lsi.info.sequential = 0;
-  lsi.info.commit = 0;
+  lsi.info.tag = index();
   lsi.info.sizeshift = sizeshift;
   lsi.info.aligntype = aligntype;
   lsi.info.sfraused = (sfra != null);
@@ -3070,13 +3133,15 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
   specrrt = commitrrt;
   foreach (i, TRANSREG_COUNT) { specrrt[i]->addspecref(i); }
 
-  if (logable(1)) logfile << "Restored SpecRRT from CommitRRT; walking forward from:", specrrt, endl;
+  if (logable(1)) logfile << "Restored SpecRRT from CommitRRT; walking forward from:", endl, specrrt, endl;
 
   idx = ROB.head;
   for (idx = ROB.head; idx != startidx; idx = add_index_modulo(idx, +1, ROB_SIZE)) {
     ReorderBufferEntry& rob = ROB[idx];
     rob.pseudocommit();
   }
+
+  if (logable(1)) logfile << "Recovered SpecRRT:", endl, specrrt, endl;
 
   //
   // Pass 3: For each speculative ROB, reinitialize and free speculative ROBs
@@ -3155,6 +3220,215 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 }
 
 //
+// Return the specified uop back to the ready_to_dispatch state.
+// All structures allocated to the uop are reset to the same state
+// they had immediately after allocation.
+//
+// This function is used to handle various types of mis-speculations
+// in which only the values are invalid, rather than the actual uops
+// as with branch mispredicts and unaligned accesses. It is also
+// useful for various kinds of value speculation.
+//
+// The normal "fast" replay mechanism is still used for scheduler
+// related replays - this is much more expensive.
+//
+// If this function is called for a given uop U, all of U's
+// consumers must also be re-dispatched. The redispatch_dependents()
+// function automatically does this.
+//
+// The <prevrob> argument should be the previous ROB, in program
+// order, before this one. If this is the first ROB being
+// re-dispatched, <prevrob> should be null.
+//
+
+W64 redispatch_total_trigger_uops;
+
+void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob) {
+  if (logable(1)) {
+    logfile << intstring(uop.uuid, 20), " redisp rob ", intstring(index(), -3), " from state ", current_state_list->name, ": dep on ";
+    if (!dependent_operands) {
+      logfile << " [self]";
+    } else {
+      foreach (i, MAX_OPERANDS) {
+        const PhysicalRegister* depop = operands[i];
+        if (dependent_operands[i]) {
+          assert(depop->rob);
+          logfile << " [r", depop->index(), " rob ", depop->rob->index(), " uuid ", depop->rob->uop.uuid;
+          if (depop->rob->lsq) logfile << " lsq ", depop->rob->lsq->index();
+          logfile << "]";
+        }
+      }
+    }
+
+    logfile << "; redispatch ";
+  }
+
+  redispatch_total_trigger_uops++;
+
+  // Remove from issue queue, if it was already in some issue queue
+  if (cluster >= 0) {
+    bool found = 0;
+    issueq_operation_on_cluster_with_result(cluster, found, annuluop(index()));
+    if (found) {
+      if (logable(1)) logfile << " [iqslot]";
+    }
+    cluster = -1;
+  }
+
+  if (lfrqslot >= 0) {
+    if (logable(1)) logfile << " [lfrqslot ", lfrqslot, "]";
+    annul_lfrq_slot(lfrqslot);
+    lfrqslot = -1;
+  }
+
+  if (lsq) {
+    if (logable(1)) logfile << " [lsq ", lsq->index(), "]";
+    lsq->physaddr = 0;
+    lsq->addrvalid = 0;
+    lsq->datavalid = 0;
+    lsq->mbtag = -1;
+    lsq->data = 0;
+    lsq->physaddr = 0;
+    lsq->invalid = 0;
+
+    if (operands[RS]->nonnull()) {
+      if (logable(1)) logfile << " [sfra ", operands[RS]->index(), "]";
+      operands[RS]->unref(*this);
+      operands[RS] = &physregfiles[0][PHYS_REG_NULL];
+      operands[RS]->addref(*this);
+    }
+  }
+
+  if (physreg) {
+    if (logable(1)) logfile << " [physreg ", physreg->index(), "]";
+    // Return physreg to state just after allocation
+    physreg->data = 0;
+    physreg->flags = FLAG_WAIT;
+    physreg->changestate(PHYSREG_WAITING);
+  }
+
+  if (logable(1)) logfile << " [rob ", index(), "]";
+  // Force ROB to be re-dispatched in program order
+
+  cycles_left = 0;
+  forward_cycle = 0;
+  load_store_second_phase = 0;
+  changestate(rob_ready_to_dispatch_list, true, prevrob);
+  if (logable(1)) logfile << endl;
+}
+
+W64 redispatch_dependent_uop_count_histogram[ROB_SIZE+1];
+W64 redispatch_total_dependent_uops;
+
+//
+// Find all uops dependent on the specified uop, and 
+// redispatch each of them.
+//
+
+void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
+  bitvec<ROB_SIZE> depmap;
+  depmap = 0;
+  depmap[index()] = 1;
+
+  if (logable(1)) {
+    logfile << intstring(uop.uuid, 20), " redisp rob ", intstring(index(), -3), " find all dependents", endl;
+  }
+
+  //
+  // Go through the ROB and identify the slice of all uops
+  // depending on this one, through the use of physical
+  // registers as operands.
+  //
+  int count = 0;
+
+  ReorderBufferEntry* prevrob = null;
+
+  foreach_forward_from(ROB, this, robidx) {
+    ReorderBufferEntry& reissuerob = ROB[robidx];
+
+    if (!inclusive) {
+      depmap[reissuerob.index()] = 1;
+      continue;
+    }
+
+    bitvec<MAX_OPERANDS> dependent_operands;
+    dependent_operands = 0;
+
+    foreach (i, MAX_OPERANDS) {
+      const PhysicalRegister* operand = reissuerob.operands[i];
+      dependent_operands[i] = (operand->rob && depmap[operand->rob->index()]);
+    }
+
+    bool dep = (*dependent_operands) | (robidx == index());
+
+    if (dep) {
+      count++;
+      redispatch_total_dependent_uops += (robidx != index());
+      depmap[reissuerob.index()] = 1;
+      reissuerob.redispatch(dependent_operands, prevrob);
+      prevrob = &reissuerob;
+    }
+  }
+
+  assert(inrange(count, 1, ROB_SIZE));
+  redispatch_dependent_uop_count_histogram[count-1]++;
+
+  if (logable(1)) {
+    logfile << intstring(uop.uuid, 20), " redisp rob ", intstring(index(), -3), " redispatched ", (count-1), " dependent uops", endl;
+  }
+}
+
+//
+// Re-dispatch all uops in the ROB that have not yet generated
+// a result or are otherwise stalled.
+//
+W64 redispatch_total_deadlock_flushes;
+W64 redispatch_total_deadlock_uops_flushed;
+
+void redispatch_deadlock_recovery() {
+  if (logable(1)) {
+    logfile << padstring("", 20), " recovr all recover from deadlock", endl;
+  }
+
+  if (logable(1)) dump_ooo_state();
+
+  redispatch_total_deadlock_flushes++;
+
+  flush_pipeline(ctx.commitarf[REG_rip]);
+
+  /*
+  //
+  // This is a more selective scheme than the full pipeline flush.
+  // Presently it does not work correctly in all cases, so it's
+  // disabled to ensure deadlock-free operation.
+  //
+
+  ReorderBufferEntry* prevrob = null;
+  bitvec<MAX_OPERANDS> noops = 0;
+
+  foreach_forward(ROB, robidx) {
+    ReorderBufferEntry& rob = ROB[robidx];
+
+    //
+    // Only re-dispatch those uops that have not yet generated a value
+    // or are guaranteed to produce a value soon without tying up resources.
+    // This must occur in program order to avoid deadlock!
+    // 
+    // bool recovery_required = (rob.current_state_list->flags & ROB_STATE_IN_ISSUE_QUEUE) || (rob.current_state_list == &rob_ready_to_dispatch_list);
+    bool recovery_required = 1; // for now, just to be safe
+
+    if (recovery_required) {
+      rob.redispatch(noops, prevrob);
+      prevrob = &rob;
+      redispatch_total_deadlock_uops_flushed++;
+    }
+  }
+
+  if (logable(1)) dump_ooo_state();
+  */
+}
+
+//
 // Issue a single ROB. 
 //
 // Returns:
@@ -3169,7 +3443,8 @@ W64 issue_total_uops;
 W64 issue_result_no_fu;
 W64 issue_result_no_intercluster_bandwidth;
 W64 issue_result_replay;
-W64 issue_result_misspeculation;
+W64 issue_result_refetch;
+W64 issue_result_misspeculated;
 W64 issue_result_branch_mispredict;
 W64 issue_result_exception;
 W64 issue_result_complete;
@@ -3276,7 +3551,11 @@ int ReorderBufferEntry::issue() {
       int completed = (ld) ? issueload(*lsq, radata, rbdata, rcdata) : issuestore(*lsq, radata, rbdata, rcdata, operand_ready(2));
       stop_timer((ld ? ctload : ctstore));
       if (completed == ISSUE_MISSPECULATED) {
-        issue_result_misspeculation++;
+        issue_result_misspeculated++;
+        return -1;
+      }
+      if (completed == ISSUE_NEEDS_REFETCH) {
+        issue_result_refetch++;
         return -1;
       }
       state.reg.rddata = lsq->data;
@@ -3317,7 +3596,12 @@ int ReorderBufferEntry::issue() {
     //
     cycles_left = 0;
     changestate(rob_ready_to_commit_queue);
-    stall_frontend = true;
+    //
+    // NOTE: The frontend should not necessarily be stalled on exceptions
+    // when extensive speculation is in use, since re-dispatch can be used
+    // without refetching to resolve these situations.
+    //
+    // stall_frontend = true;
   }
 
   bool mispredicted = (physreg->data != uop.riptaken);
@@ -3340,7 +3624,8 @@ int ReorderBufferEntry::issue() {
 
   //
   // Release the issue queue entry, since we are beyond the point of no return:
-  // the uop cannot possibly be replayed at this point, but may still be annulled.
+  // the uop cannot possibly be replayed at this point, but may still be annulled
+  // or re-dispatched in case of speculation failures.
   //
   release();
 
@@ -3361,6 +3646,34 @@ int ReorderBufferEntry::issue() {
         branchpred_total_mispred++;
 
         W64 realrip = physreg->data;
+
+        //
+        // Correct the branch directions and cond code field.
+        // This is required since the branch may again be
+        // re-dispatched if we mis-identified a mispredict
+        // due to very deep speculation.
+        //
+        // Basically the riptaken field must always point
+        // to the correct next instruction in the ROB after
+        // the branch.
+        //
+        if (isclass(uop.opcode, OPCLASS_COND_BRANCH)) {
+          assert(realrip == uop.ripseq);
+          uop.cond = invert_cond(uop.cond);
+          
+          //
+          // We need to be careful here: we already looked up the synthop for this
+          // uop according to the old condition, so redo that here so we call the
+          // correct code for the swapped condition.
+          //
+          uop.synthop = get_synthcode_for_cond_branch(uop.opcode, uop.cond, uop.size, 0);
+          swap(uop.riptaken, uop.ripseq);
+        } else if (isclass(uop.opcode, OPCLASS_INDIR_BRANCH)) {
+          uop.riptaken = realrip;
+          uop.ripseq = realrip;
+        } else if (isclass(uop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
+          assert(realrip == uop.riptaken);
+        }
 
         //
         // Early misprediction handling. Annul everything after the
@@ -3804,12 +4117,21 @@ int ReorderBufferEntry::commit() {
     logfile << intstring(uop.uuid, 20), " commit rob ", intstring(index(), -3);
   }
 
+  if (uop.som) { 
+    if (ctx.commitarf[REG_rip] != uop.rip) {
+      logfile << "RIP mismatch: ctx.commitarf[REG_rip] = ", (void*)(Waddr)ctx.commitarf[REG_rip], " vs uop.rip ", (void*)(Waddr)uop.rip, endl;
+      assert(ctx.commitarf[REG_rip] == uop.rip); 
+    }
+  }
+
   if (archdest_can_commit[uop.rd]) {
     commitrrt[uop.rd]->uncommitref(uop.rd);
     commitrrt[uop.rd] = physreg;
     commitrrt[uop.rd]->addcommitref(uop.rd);
 
     if (uop.rd < ARCHREG_COUNT) ctx.commitarf[uop.rd] = physreg->data;
+
+    physreg->rob = null;
 
     if (logable(1)) {
       logfile << " [rrt ", arch_reg_names[uop.rd], " = r", physreg->index(), " 0x", hexstring(physreg->data, 64), "]";
@@ -3818,8 +4140,10 @@ int ReorderBufferEntry::commit() {
 
   if (uop.eom) {
     if (uop.rd == REG_rip) {
+      assert(isbranch(uop.opcode));
       ctx.commitarf[REG_rip] = physreg->data;
     } else {
+      assert(!isbranch(uop.opcode));
       ctx.commitarf[REG_rip] += bytes_in_current_insn_to_commit;
     }
     if (logable(1)) logfile << " [rip = ", (void*)(Waddr)ctx.commitarf[REG_rip], "]";
@@ -4041,7 +4365,6 @@ bool handle_barrier() {
   }
 
   flush_pipeline(ctx.commitarf[REG_sr1]);
-  external_to_core_state();
 
   cttotal.start();
 
@@ -4086,7 +4409,6 @@ bool handle_exception() {
     ctx.commitarf[REG_rip] = chk_recovery_rip;
     if (logable(1)) logfile << "SkipBlock pseudo-exception: skipping to ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
     flush_pipeline(ctx.commitarf[REG_rip]);
-    external_to_core_state();
     cttotal.start();
     return true;
   }
@@ -4116,6 +4438,7 @@ void dump_ooo_state() {
   foreach (i, PHYS_REG_FILE_COUNT) {
     logfile << physregfiles[i];
   }
+  dcache_print(logfile);
   logfile << flush;
 }
 
@@ -4178,7 +4501,7 @@ void ooo_capture_stats(DataStoreNode& root) {
   }
 
   DataStoreNode& fetch = root("fetch"); {
-    fetch("width").histogram(fetch_width_histogram, FETCH_WIDTH+1);
+    fetch.histogram("width", fetch_width_histogram, FETCH_WIDTH+1);
 
     DataStoreNode& stop = fetch("stop"); {
       stop.summable = 1;
@@ -4193,7 +4516,7 @@ void ooo_capture_stats(DataStoreNode& root) {
     fetch.add("uops", fetch_uops_fetched);
     fetch.add("user-insns", fetch_user_insns_fetched);
 
-    fetch("opclass").histogram(opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
+    fetch.histogram("opclass", opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
   }
 
   DataStoreNode& frontend = root("frontend"); {
@@ -4215,9 +4538,9 @@ void ooo_capture_stats(DataStoreNode& root) {
       renamed.add("reg-and-flags", frontend_renamed_reg_and_flags);
     }
 
-    frontend.add("consumer-count", (W64s*)&frontend_rename_consumer_count_histogram, 
-                 lengthof(frontend_rename_consumer_count_histogram), 0, 
-                 lengthof(frontend_rename_consumer_count_histogram)-1, 1);
+    frontend.histogram("consumer-count", frontend_rename_consumer_count_histogram, 
+                       lengthof(frontend_rename_consumer_count_histogram), 0, 
+                       lengthof(frontend_rename_consumer_count_histogram)-1, 1);
 
     DataStoreNode& alloc = frontend("alloc"); {
       alloc.summable = 1;
@@ -4236,7 +4559,7 @@ void ooo_capture_stats(DataStoreNode& root) {
       }
     }
 
-    frontend("width").histogram(frontend_width_histogram, FRONTEND_WIDTH+1);
+    frontend.histogram("width", frontend_width_histogram, FRONTEND_WIDTH+1);
   }
 
   DataStoreNode& dispatch = root("dispatch"); {
@@ -4263,6 +4586,13 @@ void ooo_capture_stats(DataStoreNode& root) {
 
       cluster.add("none", dispatch_cluster_none_avail);
     }
+
+    DataStoreNode& redispatch = dispatch("redispatch"); {
+      redispatch.add("trigger-uops", redispatch_total_trigger_uops);
+      redispatch.add("deadlock-flushes", redispatch_total_deadlock_flushes);
+      redispatch.add("deadlock-uops-flushed", redispatch_total_deadlock_uops_flushed);
+      redispatch.histogram("dependent-uops", redispatch_dependent_uop_count_histogram, ROB_SIZE+1);
+    }
   }
 
   DataStoreNode& issue = root("issue"); {
@@ -4270,7 +4600,8 @@ void ooo_capture_stats(DataStoreNode& root) {
       result.summable = 1;
       result.add("no-fu", issue_result_no_fu);
       result.add("replay", issue_result_replay);
-      result.add("misspeculation", issue_result_misspeculation);
+      result.add("misspeculation", issue_result_misspeculated);
+      result.add("refetch", issue_result_refetch);
       result.add("branch-mispredict", issue_result_branch_mispredict);
       result.add("exception", issue_result_exception);
       result.add("complete", issue_result_complete);
@@ -4292,11 +4623,11 @@ void ooo_capture_stats(DataStoreNode& root) {
 
     DataStoreNode& cluster = issue("width"); {
       foreach (i, MAX_CLUSTERS) {
-        cluster(clusters[i].name).histogram(issue_width_histogram[i], MAX_ISSUE_WIDTH+1);
+        cluster.histogram(clusters[i].name, issue_width_histogram[i], MAX_ISSUE_WIDTH+1);
       }
     }
 
-    issue("opclass").histogram(opclass_names, issue_opclass_histogram, OPCLASS_COUNT);
+    issue.histogram("opclass", opclass_names, issue_opclass_histogram, OPCLASS_COUNT);
   }
 
   DataStoreNode& writeback = root("writeback"); {
@@ -4310,7 +4641,7 @@ void ooo_capture_stats(DataStoreNode& root) {
 
     DataStoreNode& cluster = writeback("width"); {
       foreach (i, MAX_CLUSTERS) {
-        cluster(clusters[i].name).histogram(writeback_width_histogram[i], WRITEBACK_WIDTH+1);
+        cluster.histogram(clusters[i].name, writeback_width_histogram[i], WRITEBACK_WIDTH+1);
       }
     }
   }
@@ -4343,9 +4674,8 @@ void ooo_capture_stats(DataStoreNode& root) {
       setflags.add("no", commit_flags_unset);
     }
 
-    commit("width").histogram(commit_width_histogram, COMMIT_WIDTH+1);
-
-    commit("opclass").histogram(opclass_names, commit_opclass_histogram, OPCLASS_COUNT);
+    commit.histogram("width", commit_width_histogram, COMMIT_WIDTH+1);
+    commit.histogram("opclass", opclass_names, commit_opclass_histogram, OPCLASS_COUNT);
   }
 
   DataStoreNode& branchpred = root("branchpred"); {
@@ -4468,7 +4798,6 @@ int out_of_order_core_toplevel_loop() {
   icache_wakeup_func = icache_filled_callback;
 
   flush_pipeline(ctx.commitarf[REG_rip]);
-  external_to_core_state();
   logfile << "Core State:", endl;
   logfile << ctx.commitarf;
 
@@ -4486,9 +4815,9 @@ int out_of_order_core_toplevel_loop() {
       loglevel = oldloglevel;
       logfile << "Start logging (level ", loglevel, ") at cycle ", sim_cycle, endl, flush;
     }
-    if (logable(1)) logfile << "Cycle ", sim_cycle, ":", endl;
+    if (logable(1)) logfile << "Cycle ", sim_cycle, ((stall_frontend) ? " (frontend stalled)" : ""), ": commit rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
 
-    if ((sim_cycle - last_commit_at_cycle) > 2048) {
+    if ((sim_cycle - last_commit_at_cycle) > 1024) {
       stringbuf sb;
       sb << "WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, 
         " user commits: no instructions have committed for ", (sim_cycle - last_commit_at_cycle),
@@ -4519,19 +4848,19 @@ int out_of_order_core_toplevel_loop() {
 
     for_each_cluster(i) { issue(i); complete(i); }
 
-    dispatch();
+    int dispatchrc = dispatch();
 
-    if (!stall_frontend) {
+    if ((!stall_frontend) && (dispatchrc >= 0)) {
       frontend();
       rename();
       fetch();
     }
 
-    foreach_issueq(clock());
+    if (dispatchrc >= 0) foreach_issueq(clock());
 
 #ifdef ENABLE_CHECKS
     // This significantly slows down simulation; only enable it if absolutely needed:
-    // check_refcounts();
+    //check_refcounts();
 #endif
 
     if (commitrc == COMMIT_RESULT_BARRIER) {

@@ -448,7 +448,7 @@ void reset_assist_stats() {
 }
 
 void save_assist_stats(DataStoreNode& root) {
-  root.histogram(assist_names, assist_histogram, ASSIST_COUNT);
+  root.histogram("assists", assist_names, assist_histogram, ASSIST_COUNT);
 }
 
 void split_unaligned(const TransOp& transop, TransOpPair& pair) {
@@ -4774,6 +4774,10 @@ BasicBlock* translate_one_basic_block(void* rip) {
     logfile << "=====================================================================", endl;
     logfile << *bb, endl;
     logfile << "End of basic block: rip ", (void*)(Waddr)trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;
+  }
+
+  if ((W64)rip == 0x50218b) {
+    logfile << *bb;
   }
 
   translate_timer.stop();

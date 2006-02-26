@@ -150,6 +150,8 @@ template <typename T, typename A> static inline T* ceilptr(T* x, A a) { return (
 template <typename T, typename A> static inline T* maskptr(T* x, A a) { return (T*)mask((Waddr)x, a); }
 inline W64 mux64(W64 sel, W64 v0, W64 v1) { return (sel & v1) | ((~sel) & v0); }
 
+template <typename T> void swap(T& a, T& b) { T t = a;  a = b; b = t; }
+
 #define typeof __typeof__
 #define ptralign(ptr, bytes) ((typeof(ptr))((unsigned long)(ptr) & ~((bytes)-1)))
 #define ptrmask(ptr, bytes) ((typeof(ptr))((unsigned long)(ptr) & ((bytes)-1)))
@@ -439,11 +441,40 @@ template <> struct lg10<1> { static const int value = 0; };
 template <> struct lg10<0> { static const int value = 0; };
 #define log10(v) (lg10<(v)>::value)
 
+//
+// Express bitstring constant as octal but convert
+// to binary for easy Verilog-style expressions:
+//
+#define bitseq(x) \
+  (bit(x,  0*3) <<  0) + \
+  (bit(x,  1*3) <<  1) + \
+  (bit(x,  2*3) <<  2) + \
+  (bit(x,  3*3) <<  3) + \
+  (bit(x,  4*3) <<  4) + \
+  (bit(x,  5*3) <<  5) + \
+  (bit(x,  6*3) <<  6) + \
+  (bit(x,  7*3) <<  7) + \
+  (bit(x,  8*3) <<  8) + \
+  (bit(x,  9*3) <<  9) + \
+  (bit(x, 10*3) << 10) + \
+  (bit(x, 11*3) << 11) + \
+  (bit(x, 12*3) << 12) + \
+  (bit(x, 13*3) << 13) + \
+  (bit(x, 14*3) << 14) + \
+  (bit(x, 15*3) << 15) + \
+  (bit(x, 16*3) << 16) + \
+  (bit(x, 17*3) << 17) + \
+  (bit(x, 18*3) << 18) + \
+  (bit(x, 19*3) << 19) + \
+  (bit(x, 20*3) << 20) + \
+  (bit(x, 21*3) << 21)
+
 #define __stringify_1(x) #x
 #define stringify(x) __stringify_1(x)
 
 #define alignto(x) __attribute__ ((aligned (x)))
 #define insection(x) __attribute__ ((section (x)))
+#define packedstruct __attribute__ ((packed))
 
 #include <superstl.h>
 

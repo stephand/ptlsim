@@ -151,8 +151,16 @@ struct DataStoreNode {
   DataStoreNode(const char* name, const W64s* values, int count, bool histogram = false);
 
   DataStoreNode& add(const char* key, W64s value) { return add(new DataStoreNode(key, (W64s)value)); }
-  DataStoreNode& add(const char* key, W64s* value, int count) { return add(new DataStoreNode(key, (W64s*)value, count)); }
-  DataStoreNode& add(const char* key, W64s* value, int count, W64s histomin, W64s histomax, W64s histostride);
+
+  DataStoreNode& add(const char* key, const W64s* value, int count) { return add(new DataStoreNode(key, (W64s*)value, count)); }
+
+  DataStoreNode& histogram(const char* key, const W64* value, int count, W64s histomin, W64s histomax, W64s histostride);
+
+  DataStoreNode& histogram(const char* key, const W64* value, int count) {
+    return histogram(key, value, count, 0, count-1, 1);
+  }
+
+  DataStoreNode& histogram(const char* key, const char** names, const W64* values, int count);
 
   operator W64s() const;
 
@@ -206,9 +214,6 @@ struct DataStoreNode {
   double total() const;
   double percent_of_parent() const;
   double percent_of_toplevel() const;
-
-  DataStoreNode& histogram(const W64* values, int count);
-  DataStoreNode& histogram(const char** names, const W64* values, int count);
 
   ostream& print(ostream& os, const DataStoreNodePrintSettings& printinfo = DataStoreNodePrintSettings(), int depth = 0, double supersum = 0) const;
 

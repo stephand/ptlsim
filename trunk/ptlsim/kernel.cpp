@@ -1528,13 +1528,12 @@ W64 handle_ptlcall(W64 rip, W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, 
     return (W64)(-EINVAL);
   }
   case PTLCALL_CAPTURE_STATS: {
+    logfile << "  Capturing statistics snapshot ", snapshotid, endl;
     const char* snapshotname = (const char*)(Waddr)arg1;
     if (asp.check((void*)snapshotname, PROT_READ)) {
-    logfile << "  Capturing statistics snapshot ", snapshotname, endl;
       ooo_capture_stats(snapshotname);
     } else {
       logfile << "WARNING: invalid snapshotname pointer (", snapshotname, "); using default snapshot ID", endl;
-    logfile << "  Capturing statistics snapshot ", snapshotid, endl;
       ooo_capture_stats(null);
     }
     break;

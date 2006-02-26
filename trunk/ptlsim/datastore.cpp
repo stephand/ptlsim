@@ -206,8 +206,7 @@ DataStoreNode::DataStoreNode(const char* name, const W64s* values, int count, bo
   if (this->values) arraycopy(this->values, (DataType*)values, count);
 }
 
-
-DataStoreNode& DataStoreNode::add(const char* key, W64s* value, int count, W64s histomin, W64s histomax, W64s histostride) {
+DataStoreNode& DataStoreNode::histogram(const char* key, const W64* value, int count, W64s histomin, W64s histomax, W64s histostride) {
   DataStoreNode* ds = new DataStoreNode(key, (W64s*)value, count);
   ds->histogramarray = 1;
   ds->histomin = histomin;
@@ -367,21 +366,13 @@ double DataStoreNode::percent_of_toplevel() const {
   return total() / p->total();
 }
 
-DataStoreNode& DataStoreNode::histogram(const W64* values, int count) {
-  summable = 1;
+DataStoreNode& DataStoreNode::histogram(const char* key, const char** names, const W64* values, int count) {
+  DataStoreNode* ds = new DataStoreNode(key);
+  ds->summable = 1;
   foreach (i, count) {
-    stringbuf sb; sb << i;
-    add(sb, values[i]);
+    ds->add(names[i], values[i]);
   }
-  return *this;
-}
-
-DataStoreNode& DataStoreNode::histogram(const char** names, const W64* values, int count) {
-  summable = 1;
-  foreach (i, count) {
-    add(names[i], values[i]);
-  }
-  return *this;
+  return *ds;
 }
 
 static inline int digits(W64 v) {
@@ -406,7 +397,9 @@ DataStoreNode* DataStoreNode::sum_of_subtrees() const {
       sum_of_subtrees_cache->dynamic = 1;
       sum_of_subtrees_cache->rename("[total]");
 
-      for (int i = 1; i < a.length; i++) (*sum_of_subtrees_cache) += *(a[i].value);
+      for (int i = 1; i < a.length; i++) {
+        (*sum_of_subtrees_cache) += *(a[i].value);
+      }
     }
   }
 

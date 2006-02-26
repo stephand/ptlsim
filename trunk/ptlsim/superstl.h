@@ -2200,7 +2200,7 @@ namespace superstl {
       return b;
     }
 
-    bitvec<N> operator %(size_t b) {
+    bitvec<N> operator %(size_t b) const {
       return mask(b);
     }
  
@@ -2212,15 +2212,15 @@ namespace superstl {
       return extract(index, count);
     }
 
-    bitvec<N> operator &(const bitvec<N>& y) {
+    bitvec<N> operator &(const bitvec<N>& y) const {
       return bitvec<N>(*this) &= y;
     }
 
-    bitvec<N> operator |(const bitvec<N>& y) {
+    bitvec<N> operator |(const bitvec<N>& y) const {
       return bitvec<N>(*this) |= y;
     }
 
-    bitvec<N> operator ^(const bitvec<N>& y) {
+    bitvec<N> operator ^(const bitvec<N>& y) const {
       return bitvec<N>(*this) ^= y;
     }
 

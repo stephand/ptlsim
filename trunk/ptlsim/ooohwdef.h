@@ -121,11 +121,11 @@ void sched_get_all_issueq_free_slots(int* a) {
   case 3: rc = issueq_fp.expr; break; \
   }
 
-#define DeclareClusteredROBList(name, description) StateList name[MAX_CLUSTERS] = { \
-  StateList("" description "-int0", rob_states), \
-  StateList("" description "-int1", rob_states), \
-  StateList("" description "-ld", rob_states), \
-  StateList("" description "-fp", rob_states) }
+#define DeclareClusteredROBList(name, description, flags) StateList name[MAX_CLUSTERS] = { \
+  StateList("" description "-int0", rob_states, flags), \
+  StateList("" description "-int1", rob_states, flags), \
+  StateList("" description "-ld", rob_states, flags), \
+  StateList("" description "-fp", rob_states, flags) }
 
 #endif // DECLARE_CLUSTERS
 

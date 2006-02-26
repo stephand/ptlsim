@@ -20,10 +20,10 @@ struct LoadStoreInfo {
   union {
     W64 data;
     struct {
-      W16 tag;
       W16 rd;
-      W16 cbslot;
-      W16 sequential:1, commit:1, sizeshift:2, aligntype:2, sfraused:1, internal:1, signext:1;
+      W16 tag;
+      W16 aligntype:2, sfraused:1, internal:1, signext:1, sizeshift:2;
+      W16 padding;
     } info;
   };
 
@@ -53,6 +53,7 @@ void dcache_rollback();
 void dcache_complete();
 void dcache_print_commit();
 void dcache_print_rollback();
+ostream& dcache_print(ostream& os);
 
 // sum of 100%:
 extern W64 load_issue_unaligned;

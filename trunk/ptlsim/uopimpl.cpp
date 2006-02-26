@@ -8,6 +8,9 @@
 #include <globals.h>
 #include <ptlsim.h>
 
+// No operation
+inline void capture_uop_context(const IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags, int opcode, int size, int cond = 0, int extshift = 0, W64 riptaken = 0, W64 ripseq = 0) { }
+
 #ifndef __x86_64__
 #define EMULATE_64BIT
 #endif
@@ -126,37 +129,39 @@ struct name { \
 void uop_impl_nop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   state.reg.rddata = 0;
   state.reg.rdflags = 0;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_nop, 0);
 }
 
 //
 // 2-operand ALU operation
 //
-template <template<typename, int> class func, typename T, int genflags>
+template <int ptlopcode, template<typename, int> class func, typename T, int genflags>
 inline void aluop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   byte cf = 0, of = 0;
   func<T, genflags> f;
   T rt = f(ra, rb, rc, raflags, rbflags, rcflags, cf, of);
   state.reg.rddata = x86_merge<T>(ra, rt);
   state.reg.rdflags = (of << 11) | cf | ((genflags & SETFLAG_ZF) ? x86_genflags<T>(rt) : 0);
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)));
 }
 
-#define make_anyop_all_sizes(mapname, opclass, nativeop, flagset) \
+#define make_anyop_all_sizes(ptlopcode, mapname, opclass, nativeop, flagset) \
 uopimpl_func_t mapname[4][2] = { \
-  {&opclass<nativeop, W8,  0>, &opclass<nativeop, W8,  (flagset)>}, \
-  {&opclass<nativeop, W16, 0>, &opclass<nativeop, W16, (flagset)>}, \
-  {&opclass<nativeop, W32, 0>, &opclass<nativeop, W32, (flagset)>}, \
-  {&opclass<nativeop, W64, 0>, &opclass<nativeop, W64, (flagset)>} \
+  {&opclass<ptlopcode, nativeop, W8,  0>, &opclass<ptlopcode, nativeop, W8,  (flagset)>}, \
+  {&opclass<ptlopcode, nativeop, W16, 0>, &opclass<ptlopcode, nativeop, W16, (flagset)>}, \
+  {&opclass<ptlopcode, nativeop, W32, 0>, &opclass<ptlopcode, nativeop, W32, (flagset)>}, \
+  {&opclass<ptlopcode, nativeop, W64, 0>, &opclass<ptlopcode, nativeop, W64, (flagset)>} \
 }
 
-#define make_aluop_all_sizes(mapname, nativeop, flagset) make_anyop_all_sizes(mapname, aluop, nativeop, flagset);
+#define make_aluop_all_sizes(ptlopcode, mapname, nativeop, flagset) make_anyop_all_sizes(ptlopcode, mapname, aluop, nativeop, flagset);
 
 #define make_exp_aluop_all_sizes(name, exp, setflags) \
   make_exp_aluop(exp_op_ ## name, (exp)); \
-  make_aluop_all_sizes(implmap_ ## name, exp_op_ ## name, (setflags));
+  make_aluop_all_sizes(OP_ ## name, implmap_ ## name, exp_op_ ## name, (setflags));
 
 #define make_x86_aluop_all_sizes(name, opcode, setflags, pretext) \
   make_x86_aluop2(x86_op_ ## name, opcode, pretext); \
-  make_aluop_all_sizes(implmap_ ## name, x86_op_ ## name, (setflags));
+  make_aluop_all_sizes(OP_ ## name, implmap_ ## name, x86_op_ ## name, (setflags));
 
 #define PRETEXT_NO_FLAGS_IN ""
 #define PRETEXT_ALL_FLAGS_IN "pushw %[rcflags]; popfw;"
@@ -185,57 +190,65 @@ template <typename T> inline W64 x86_bswap(T v) { asm("bswap %[v]" : [v] "+r" (v
 
 make_exp_aluop_all_sizes(bswap, (rd = ((sizeof(T) >= 4) ? x86_bswap(rb) : 0)), 0);
 
-template <template<typename, int> class func, typename T, int genflags>
+template <int ptlopcode, template<typename, int> class func, typename T, int genflags>
 inline void ctzclzop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   byte cf = 0, of = 0;
   func<T, genflags> f;
   T rt = f(ra, rb, rc, raflags, rbflags, rcflags, cf, of);
   state.reg.rddata = x86_merge<T>(ra, rt);
   state.reg.rdflags = (((T)rb) == 0) ? FLAG_ZF : 0;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)));
 }
 
 make_exp_aluop(exp_op_ctz, (rd = (rb) ? lsbindex64(rb) : 0));
-make_anyop_all_sizes(implmap_ctz, ctzclzop, exp_op_ctz, ZAPS);
+make_anyop_all_sizes(OP_ctz, implmap_ctz, ctzclzop, exp_op_ctz, ZAPS);
 
 make_exp_aluop(exp_op_clz, (rd = (rb) ? msbindex64(rb) : 0));
-make_anyop_all_sizes(implmap_clz, ctzclzop, exp_op_clz, ZAPS);
+make_anyop_all_sizes(OP_clz, implmap_clz, ctzclzop, exp_op_clz, ZAPS);
 
 void uop_impl_collcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   int flags = (raflags & FLAG_ZAPS) | (rbflags & FLAG_CF) | (rcflags & FLAG_OF);
   state.reg.rddata = flags;
   state.reg.rdflags = flags;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_collcc, 0);
 }
 
 void uop_impl_movrcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   int flags = ra & FLAG_NOT_WAIT_INV;
   state.reg.rddata = flags;
   state.reg.rdflags = flags;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_movrcc, 0);
 }
 
 void uop_impl_movccr(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   int flags = raflags;
   state.reg.rddata = flags;
   state.reg.rdflags = flags;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_movccr, 0);
 }
 
 void uop_impl_andcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   state.reg.rddata = 0;
   state.reg.rdflags = (raflags & rbflags) & FLAG_NOT_WAIT_INV;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_andcc, 0);
 }
 
 void uop_impl_orcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   state.reg.rddata = 0;
   state.reg.rdflags = (raflags | rbflags) & FLAG_NOT_WAIT_INV;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_orcc, 0);
 }
 
 void uop_impl_ornotcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   state.reg.rddata = 0;
   state.reg.rdflags = (raflags | (~rbflags)) & FLAG_NOT_WAIT_INV;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_ornot, 0);
 }
 
 void uop_impl_xorcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   state.reg.rddata = 0;
   state.reg.rdflags = (raflags ^ rbflags) & FLAG_NOT_WAIT_INV;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_xorcc, 0);
 }
 
 #ifdef EMULATE_64BIT
@@ -278,52 +291,60 @@ struct name { \
   } \
 }
 
-template <template<typename, int> class func, typename T, int genflags, int rcshift>
+template <int ptlopcode, template<typename, int> class func, typename T, int genflags, int rcshift>
 inline void aluop3s(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   byte cf = 0, of = 0;
   func<T, genflags> f;
   T rt = f(ra, rb, rc << rcshift, raflags, rbflags, rcflags, cf, of);
   state.reg.rddata = x86_merge<T>(ra, rt);
   state.reg.rdflags = (of << 11) | cf | ((genflags & SETFLAG_ZF) ? x86_genflags<T>(rt) : 0);
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), 0, rcshift);
 }
 
 // [size][extshift][setflags]
-#define make_aluop3s_all_sizes_all_shifts(mapname, nativeop, flagset) \
+#define make_aluop3s_all_sizes_all_shifts(ptlopcode, mapname, nativeop, flagset) \
 uopimpl_func_t mapname[4][4][2] = { \
   { \
-    {&aluop3s<nativeop, W8,  0, 0>, &aluop3s<nativeop, W8,  (flagset), 0>}, \
-    {&aluop3s<nativeop, W8,  0, 1>, &aluop3s<nativeop, W8,  (flagset), 1>}, \
-    {&aluop3s<nativeop, W8,  0, 2>, &aluop3s<nativeop, W8,  (flagset), 2>}, \
-    {&aluop3s<nativeop, W8,  0, 3>, &aluop3s<nativeop, W8,  (flagset), 3>}, \
+    {&aluop3s<ptlopcode, nativeop, W8,  0, 0>, &aluop3s<ptlopcode, nativeop, W8,  (flagset), 0>}, \
+    {&aluop3s<ptlopcode, nativeop, W8,  0, 1>, &aluop3s<ptlopcode, nativeop, W8,  (flagset), 1>}, \
+    {&aluop3s<ptlopcode, nativeop, W8,  0, 2>, &aluop3s<ptlopcode, nativeop, W8,  (flagset), 2>}, \
+    {&aluop3s<ptlopcode, nativeop, W8,  0, 3>, &aluop3s<ptlopcode, nativeop, W8,  (flagset), 3>}, \
   }, \
   { \
-    {&aluop3s<nativeop, W16, 0, 0>, &aluop3s<nativeop, W16, (flagset), 0>}, \
-    {&aluop3s<nativeop, W16, 0, 1>, &aluop3s<nativeop, W16, (flagset), 1>}, \
-    {&aluop3s<nativeop, W16, 0, 2>, &aluop3s<nativeop, W16, (flagset), 2>}, \
-    {&aluop3s<nativeop, W16, 0, 3>, &aluop3s<nativeop, W16, (flagset), 3>}, \
+    {&aluop3s<ptlopcode, nativeop, W16, 0, 0>, &aluop3s<ptlopcode, nativeop, W16, (flagset), 0>}, \
+    {&aluop3s<ptlopcode, nativeop, W16, 0, 1>, &aluop3s<ptlopcode, nativeop, W16, (flagset), 1>}, \
+    {&aluop3s<ptlopcode, nativeop, W16, 0, 2>, &aluop3s<ptlopcode, nativeop, W16, (flagset), 2>}, \
+    {&aluop3s<ptlopcode, nativeop, W16, 0, 3>, &aluop3s<ptlopcode, nativeop, W16, (flagset), 3>}, \
   }, \
   { \
-    {&aluop3s<nativeop, W32, 0, 0>, &aluop3s<nativeop, W32, (flagset), 0>}, \
-    {&aluop3s<nativeop, W32, 0, 1>, &aluop3s<nativeop, W32, (flagset), 1>}, \
-    {&aluop3s<nativeop, W32, 0, 2>, &aluop3s<nativeop, W32, (flagset), 2>}, \
-    {&aluop3s<nativeop, W32, 0, 3>, &aluop3s<nativeop, W32, (flagset), 3>}, \
+    {&aluop3s<ptlopcode, nativeop, W32, 0, 0>, &aluop3s<ptlopcode, nativeop, W32, (flagset), 0>}, \
+    {&aluop3s<ptlopcode, nativeop, W32, 0, 1>, &aluop3s<ptlopcode, nativeop, W32, (flagset), 1>}, \
+    {&aluop3s<ptlopcode, nativeop, W32, 0, 2>, &aluop3s<ptlopcode, nativeop, W32, (flagset), 2>}, \
+    {&aluop3s<ptlopcode, nativeop, W32, 0, 3>, &aluop3s<ptlopcode, nativeop, W32, (flagset), 3>}, \
   }, \
   { \
-    {&aluop3s<nativeop, W64, 0, 0>, &aluop3s<nativeop, W64, (flagset), 0>}, \
-    {&aluop3s<nativeop, W64, 0, 1>, &aluop3s<nativeop, W64, (flagset), 1>}, \
-    {&aluop3s<nativeop, W64, 0, 2>, &aluop3s<nativeop, W64, (flagset), 2>}, \
-    {&aluop3s<nativeop, W64, 0, 3>, &aluop3s<nativeop, W64, (flagset), 3>}, \
+    {&aluop3s<ptlopcode, nativeop, W64, 0, 0>, &aluop3s<ptlopcode, nativeop, W64, (flagset), 0>}, \
+    {&aluop3s<ptlopcode, nativeop, W64, 0, 1>, &aluop3s<ptlopcode, nativeop, W64, (flagset), 1>}, \
+    {&aluop3s<ptlopcode, nativeop, W64, 0, 2>, &aluop3s<ptlopcode, nativeop, W64, (flagset), 2>}, \
+    {&aluop3s<ptlopcode, nativeop, W64, 0, 3>, &aluop3s<ptlopcode, nativeop, W64, (flagset), 3>}, \
   }, \
 }
 
-#define make_x86_aluop3_all_sizes_all_shifts(name, opcode1, opcode2, setflags) \
-  make_x86_aluop3(x86_op_ ## name, opcode1, opcode2); \
-  make_aluop3s_all_sizes_all_shifts(implmap_ ## name, x86_op_ ## name, (setflags));
+  //make_x86_aluop3(x86_op_ ## name, opcode1, opcode2); \
 
+#define make_exp_aluop3_all_sizes_all_shifts(ptlopcode, name, expr, setflags) \
+  make_exp_aluop(exp_op_ ## name, (expr)); \
+  make_aluop3s_all_sizes_all_shifts(ptlopcode, implmap_ ## name, exp_op_ ## name, (setflags));
+
+make_exp_aluop3_all_sizes_all_shifts(OP_adda, adda, (rd = (ra + rb + rc)), 0);
+make_exp_aluop3_all_sizes_all_shifts(OP_suba, suba, (rd = (ra - rb + rc)), 0);
+
+/*
 make_x86_aluop3_all_sizes_all_shifts(adda, add, add, ZAPS|CF|OF);
 make_x86_aluop3_all_sizes_all_shifts(adds, add, sub, ZAPS|CF|OF);
 make_x86_aluop3_all_sizes_all_shifts(suba, sub, add, ZAPS|CF|OF);
 make_x86_aluop3_all_sizes_all_shifts(subs, sub, sub, ZAPS|CF|OF);
+*/
 
 #ifdef EMULATE_64BIT
 
@@ -345,10 +366,12 @@ struct x86_op_ ## name <W64, genflags> { \
   } \
 }
 
+/*
 make_x86_aluop3_chained_64bit(adda, add, add, adc, adc);
 make_x86_aluop3_chained_64bit(adds, add, sub, adc, sbb);
 make_x86_aluop3_chained_64bit(suba, sub, add, sbb, adc);
 make_x86_aluop3_chained_64bit(subs, sub, sub, sbb, sbb);
+*/
 
 #endif
 
@@ -367,7 +390,7 @@ struct name { \
   } \
 }
 
-template <template<typename, int> class func, typename T, int genflags>
+template <int ptlopcode, template<typename, int> class func, typename T, int genflags>
 inline void shiftop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   byte cf = 0, of = 0;
   func<T, genflags> f;
@@ -375,13 +398,14 @@ inline void shiftop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 
   state.reg.rddata = x86_merge<T>(ra, rt);
   int allflags = (of << 11) | cf | x86_genflags<T>(rt);
   state.reg.rdflags = (rb == 0) ? rcflags : allflags;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)));
 }
 
-#define make_shiftop_all_sizes(mapname, nativeop, flagset) make_anyop_all_sizes(mapname, shiftop, nativeop, flagset)
+#define make_shiftop_all_sizes(ptlopcode, mapname, nativeop, flagset) make_anyop_all_sizes(ptlopcode, mapname, shiftop, nativeop, flagset)
 
 #define make_x86_shiftop_all_sizes(name, opcode, setflags, pretext) \
   make_x86_shiftop(x86_op_ ## name, opcode, pretext); \
-  make_shiftop_all_sizes(implmap_ ## name, x86_op_ ## name, (setflags));
+  make_shiftop_all_sizes(OP_ ## name, implmap_ ## name, x86_op_ ## name, (setflags));
 
 #ifdef EMULATE_64BIT
 
@@ -467,7 +491,7 @@ void gen_mask_uop_masks() {
 
 // See testmasks.cpp for more information
 
-template <typename T, int ZEROEXT, int SIGNEXT>
+template <int ptlopcode, typename T, int ZEROEXT, int SIGNEXT>
 void exp_op_mask(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   int ms = bits(rc, 0, 6);
   int mc = bits(rc, 6, 6);
@@ -504,14 +528,24 @@ void exp_op_mask(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbf
 
   state.reg.rddata = x86_merge<T>(ra, rd);
   state.reg.rdflags = x86_genflags<T>(rd);
+
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, 0);
 }
 
 // [size][exttype]
 uopimpl_func_t implmap_mask[4][3] = {
-  {&exp_op_mask<W8,  0, 0>, &exp_op_mask<W8,  1, 0>, &exp_op_mask<W8,  0, 1>},
-  {&exp_op_mask<W16, 0, 0>, &exp_op_mask<W16, 1, 0>, &exp_op_mask<W16, 0, 1>},
-  {&exp_op_mask<W32, 0, 0>, &exp_op_mask<W32, 1, 0>, &exp_op_mask<W32, 0, 1>},
-  {&exp_op_mask<W64, 0, 0>, &exp_op_mask<W64, 1, 0>, &exp_op_mask<W64, 0, 1>}
+  {&exp_op_mask<OP_mask, W8,  0, 0>, &exp_op_mask<OP_mask, W8,  1, 0>, &exp_op_mask<OP_mask, W8,  0, 1>},
+  {&exp_op_mask<OP_mask, W16, 0, 0>, &exp_op_mask<OP_mask, W16, 1, 0>, &exp_op_mask<OP_mask, W16, 0, 1>},
+  {&exp_op_mask<OP_mask, W32, 0, 0>, &exp_op_mask<OP_mask, W32, 1, 0>, &exp_op_mask<OP_mask, W32, 0, 1>},
+  {&exp_op_mask<OP_mask, W64, 0, 0>, &exp_op_mask<OP_mask, W64, 1, 0>, &exp_op_mask<OP_mask, W64, 0, 1>}
+};
+
+// [size][exttype]
+uopimpl_func_t implmap_maskb[4][3] = {
+  {&exp_op_mask<OP_maskb, W8,  0, 0>, &exp_op_mask<OP_maskb, W8,  1, 0>, &exp_op_mask<OP_maskb, W8,  0, 1>},
+  {&exp_op_mask<OP_maskb, W16, 0, 0>, &exp_op_mask<OP_maskb, W16, 1, 0>, &exp_op_mask<OP_maskb, W16, 0, 1>},
+  {&exp_op_mask<OP_maskb, W32, 0, 0>, &exp_op_mask<OP_maskb, W32, 1, 0>, &exp_op_mask<OP_maskb, W32, 0, 1>},
+  {&exp_op_mask<OP_maskb, W64, 0, 0>, &exp_op_mask<OP_maskb, W64, 1, 0>, &exp_op_mask<OP_maskb, W64, 0, 1>}
 };
 
 //
@@ -543,7 +577,7 @@ uopimpl_func_t mapname[4][2] = { \
 
 #define make_x86_mulop_all_sizes(name, opcode, setflags, extrtext, extrtextsize1) \
   make_x86_mulop(x86_op_ ## name, opcode, extrtext, extrtextsize1); \
-  make_aluop_all_sizes(implmap_ ## name, x86_op_ ## name, (setflags));
+  make_aluop_all_sizes(OP_ ## name, implmap_ ## name, x86_op_ ## name, (setflags));
 
 make_x86_mulop_all_sizes(mull, imul, ZAPS|CF|OF, (rd = (T)rax), (rd = (T)rax));
 make_x86_mulop_all_sizes(mulh, imul, ZAPS|CF|OF, (rd = (T)rdx), (rd = bits(rax, 8, 8)));
@@ -602,46 +636,48 @@ inline bool evaluate_cond(int ra, int rb) {
   }
 }
 
-#define make_condop_all_conds_any(subtype, subarrays, mapname, operation) \
+#define make_condop_all_conds_any(ptlopcode, subtype, subarrays, mapname, operation) \
 uopimpl_func_t implmap_ ## mapname [16]subarrays = { \
-  subtype(operation, 0), \
-  subtype(operation, 1), \
-  subtype(operation, 2), \
-  subtype(operation, 3), \
-  subtype(operation, 4), \
-  subtype(operation, 5), \
-  subtype(operation, 6), \
-  subtype(operation, 7), \
-  subtype(operation, 8), \
-  subtype(operation, 9), \
-  subtype(operation, 10), \
-  subtype(operation, 11), \
-  subtype(operation, 12), \
-  subtype(operation, 13), \
-  subtype(operation, 14), \
-  subtype(operation, 15) \
+  subtype(ptlopcode, operation, 0), \
+  subtype(ptlopcode, operation, 1), \
+  subtype(ptlopcode, operation, 2), \
+  subtype(ptlopcode, operation, 3), \
+  subtype(ptlopcode, operation, 4), \
+  subtype(ptlopcode, operation, 5), \
+  subtype(ptlopcode, operation, 6), \
+  subtype(ptlopcode, operation, 7), \
+  subtype(ptlopcode, operation, 8), \
+  subtype(ptlopcode, operation, 9), \
+  subtype(ptlopcode, operation, 10), \
+  subtype(ptlopcode, operation, 11), \
+  subtype(ptlopcode, operation, 12), \
+  subtype(ptlopcode, operation, 13), \
+  subtype(ptlopcode, operation, 14), \
+  subtype(ptlopcode, operation, 15) \
 }
 
-#define make_condop(operation, cond) &operation<cond>
-#define make_condop_all_sizes(operation, cond) {&operation<W8, cond>, &operation<W16, cond>, &operation<W32, cond>, &operation<W64, cond>}
+#define make_condop(ptlopcode, operation, cond) &operation<ptlopcode, cond>
+#define make_condop_all_sizes(ptlopcode, operation, cond) {&operation<ptlopcode, W8, cond>, &operation<ptlopcode, W16, cond>, &operation<ptlopcode, W32, cond>, &operation<ptlopcode, W64, cond>}
 
 #define make_condop_all_conds(mapname, operation) make_condop_all_conds_any(make_condop_one, [4], mapname, operation)
-#define make_condop_all_conds_all_sizes(mapname, operation) make_condop_all_conds_any(make_condop_all_sizes, [4], mapname, operation)
+#define make_condop_all_conds_all_sizes(mapname, operation) make_condop_all_conds_any(OP_ ## mapname, make_condop_all_sizes, [4], mapname, operation)
 
-template <typename T, int evaltype>
+template <int ptlopcode, typename T, int evaltype>
 inline void selop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   bool istrue = evaluate_cond<evaltype>(rcflags, rcflags);
   state.reg.rddata = x86_merge<T>(ra, (istrue) ? rb : ra);
   state.reg.rdflags = (istrue) ? rbflags : raflags;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype);
 }
 
 make_condop_all_conds_all_sizes(sel, selop);
 
-template <typename T, int evaltype>
+template <int ptlopcode, typename T, int evaltype>
 inline void setop(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   bool istrue = evaluate_cond<evaltype>(rcflags, rcflags);
   state.reg.rddata = x86_merge<T>(ra, (istrue) ? rb : 0);
   state.reg.rdflags = (istrue) ? FLAG_CF : 0;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)));
 }
 
 make_condop_all_conds_all_sizes(set, setop);
@@ -650,20 +686,23 @@ make_condop_all_conds_all_sizes(set, setop);
 // Branches
 //
 
-template <typename T, int evaltype, bool excepting>
+template <int ptlopcode, typename T, int evaltype, bool excepting>
 inline void uop_impl_condbranch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  W64 riptaken = state.brreg.riptaken;
+  W64 ripseq = state.brreg.ripseq;
   bool taken = evaluate_cond<evaltype>(raflags, rbflags);
-  state.reg.rddata = (taken) ? state.brreg.riptaken : state.brreg.ripseq;
+  state.reg.rddata = (taken) ? riptaken : ripseq;
   state.reg.rdflags = 0;
   if (excepting & (!taken)) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
     state.reg.rdflags = FLAG_INV;
   }
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype, excepting, riptaken, ripseq);
 }
 
-#define make_branchop_all_excepts(operation, cond) {&uop_impl_condbranch<W64, cond, false>, &uop_impl_condbranch<W64, cond, true>}
+#define make_branchop_all_excepts(ptlopcode, operation, cond) {&uop_impl_condbranch<ptlopcode, W64, cond, false>, &uop_impl_condbranch<ptlopcode, W64, cond, true>}
 
-make_condop_all_conds_any(make_branchop_all_excepts, [2], br, anything);
+make_condop_all_conds_any(OP_br, make_branchop_all_excepts, [2], br, anything);
 
 #define function(expr, rettype, ...) class { public: rettype operator () (__VA_ARGS__) { return (expr); } }
 
@@ -675,38 +714,44 @@ template <typename T> struct and_flag_gen_op {
   W16 operator ()(T ra, T rb) { return x86_genflags<T>(ra & rb); } 
 };
 
-template <typename T, int evaltype, bool excepting, template<typename> class func_t>
+template <int ptlopcode, typename T, int evaltype, bool excepting, template<typename> class func_t>
 inline void uop_impl_alu_and_condbranch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  W64 riptaken = state.brreg.riptaken;
+  W64 ripseq = state.brreg.ripseq;
   func_t<T> func;
   int flags = func(ra, rb);
   bool taken = evaluate_cond<evaltype>(flags, flags);
-  state.reg.rddata = (taken) ? state.brreg.riptaken : state.brreg.ripseq;
+  state.reg.rddata = (taken) ? riptaken : ripseq;
   state.reg.rdflags = flags;
   if (excepting & (!taken)) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
     state.reg.rdflags = FLAG_INV;
   }
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype, excepting, riptaken, ripseq);
 }
 
-#define make_alu_and_branchop_all_sizes_all_excepts(operation, cond) \
+#define make_alu_and_branchop_all_sizes_all_excepts(ptlopcode, operation, cond) \
   { \
-    {&uop_impl_alu_and_condbranch<W8,  cond, false, operation>, &uop_impl_alu_and_condbranch<W8,  cond, true, operation>}, \
-    {&uop_impl_alu_and_condbranch<W16, cond, false, operation>, &uop_impl_alu_and_condbranch<W16, cond, true, operation>}, \
-    {&uop_impl_alu_and_condbranch<W32, cond, false, operation>, &uop_impl_alu_and_condbranch<W32, cond, true, operation>}, \
-    {&uop_impl_alu_and_condbranch<W64, cond, false, operation>, &uop_impl_alu_and_condbranch<W64, cond, true, operation>}, \
+    {&uop_impl_alu_and_condbranch<ptlopcode, W8,  cond, false, operation>, &uop_impl_alu_and_condbranch<ptlopcode, W8,  cond, true, operation>}, \
+    {&uop_impl_alu_and_condbranch<ptlopcode, W16, cond, false, operation>, &uop_impl_alu_and_condbranch<ptlopcode, W16, cond, true, operation>}, \
+    {&uop_impl_alu_and_condbranch<ptlopcode, W32, cond, false, operation>, &uop_impl_alu_and_condbranch<ptlopcode, W32, cond, true, operation>}, \
+    {&uop_impl_alu_and_condbranch<ptlopcode, W64, cond, false, operation>, &uop_impl_alu_and_condbranch<ptlopcode, W64, cond, true, operation>}, \
   }
 
-make_condop_all_conds_any(make_alu_and_branchop_all_sizes_all_excepts, [4][2], br_and, and_flag_gen_op);
-make_condop_all_conds_any(make_alu_and_branchop_all_sizes_all_excepts, [4][2], br_sub, sub_flag_gen_op);
+make_condop_all_conds_any(OP_br_and, make_alu_and_branchop_all_sizes_all_excepts, [4][2], br_and, and_flag_gen_op);
+make_condop_all_conds_any(OP_br_sub, make_alu_and_branchop_all_sizes_all_excepts, [4][2], br_sub, sub_flag_gen_op);
 
 void uop_impl_jmp(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  bool taken = (state.brreg.riptaken == ra);
+  W64 riptaken = state.brreg.riptaken;
+  bool taken = (riptaken == ra);
   state.reg.rddata = ra;
   state.reg.rdflags = 0;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_jmp, 0, 0, 0, riptaken, riptaken);
 }
 
 void uop_impl_jmp_ex(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  bool taken = (state.brreg.riptaken == ra);
+  W64 riptaken = state.brreg.riptaken;
+  bool taken = (riptaken == ra);
   state.reg.rddata = ra;
   state.reg.rdflags = 0;
 
@@ -714,30 +759,36 @@ void uop_impl_jmp_ex(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
     state.reg.rddata = EXCEPTION_BranchMispredict;
     state.reg.rdflags = FLAG_INV;
   }
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_jmp, 0, 0, 1, riptaken, riptaken);
 }
 
 void uop_impl_bru(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  state.reg.rddata = state.brreg.riptaken;
+  W64 riptaken = state.brreg.riptaken;
+  state.reg.rddata = riptaken;
   state.reg.rdflags = 0;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_bru, 0, 0, 0, riptaken, riptaken);
 }
 
 void uop_impl_brp(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  W64 riptaken = state.brreg.riptaken;
   state.reg.rddata = state.brreg.riptaken;
   state.reg.rdflags = 0;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_brp, 0, 0, 0, riptaken, riptaken);
 }
 
 //
 // Checks
 //
-template <int evaltype>
+template <int ptlopcode, int evaltype>
 inline void uop_impl_chk(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   bool passed = evaluate_cond<evaltype>(raflags, rbflags);
   state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
   state.reg.addr = rc;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_chk, 0);
 }
 
-template <typename T, int evaltype>
+template <int ptlopcode, typename T, int evaltype>
 inline void uop_impl_chk_sub(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   sub_flag_gen_op<T> func;
   int flags = func(ra, rb);
@@ -745,9 +796,10 @@ inline void uop_impl_chk_sub(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
   state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
   state.reg.addr = rc;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype);
 }
 
-template <typename T, int evaltype>
+template <int ptlopcode, typename T, int evaltype>
 inline void uop_impl_chk_and(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   and_flag_gen_op<T> func;
   int flags = func(ra, rb);
@@ -755,9 +807,10 @@ inline void uop_impl_chk_and(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
   state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
   state.reg.addr = rc;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype);
 }
 
-make_condop_all_conds_any(make_condop, [1], chk, uop_impl_chk);
+make_condop_all_conds_any(OP_chk, make_condop, [1], chk, uop_impl_chk);
 make_condop_all_conds_all_sizes(chk_sub, uop_impl_chk_sub);
 make_condop_all_conds_all_sizes(chk_and, uop_impl_chk_and);
 
@@ -768,6 +821,7 @@ inline void uop_impl_prefetch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raf
   initiate_prefetch((ra + rb) & virt_addr_mask, level);
   state.reg.rddata = 0;
   state.reg.rdflags = 0;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_ld_pre, 0, 0, level);
 }
 
 //
@@ -787,7 +841,7 @@ union SSEType {
   struct { W32 lo, hi; } w32;
 };
 
-template <template<typename> class F, int datatype>
+template <int ptlopcode, template<typename> class F, int datatype>
 inline void floatop(IssueState& state, W64 raraw, W64 rbraw, W64 rcraw, W16 raflags, W16 rbflags, W16 rcflags) {
   SSEType ra, rb, rc, rd;
   ra.w64 = raraw; rb.w64 = rbraw; rc.w64 = rcraw;
@@ -813,12 +867,12 @@ inline void floatop(IssueState& state, W64 raraw, W64 rbraw, W64 rcraw, W16 rafl
   }
   state.reg.rddata = rd.w64;
   state.reg.rdflags = 0;
+  capture_uop_context(state, raraw, rbraw, rcraw, raflags, rbflags, rcflags, ptlopcode, datatype);
 }
-
 
 #define make_exp_floatop_alltypes(name, expr) \
   make_exp_floatop(exp_op_##name, expr); \
-  uopimpl_func_t implmap_##name[4] = {&floatop<exp_op_##name, 0>, &floatop<exp_op_##name, 1>,  &floatop<exp_op_##name, 2>,  &floatop<exp_op_##name, 3>}
+  uopimpl_func_t implmap_##name[4] = {&floatop<OP_ ##name, exp_op_##name, 0>, &floatop<OP_ ##name, exp_op_##name, 1>,  &floatop<OP_ ##name, exp_op_##name, 2>,  &floatop<OP_ ##name, exp_op_##name, 3>}
 
 //
 // This looks strange since 32-bit x86 can only move from 64-bit memory to XMM.
@@ -834,7 +888,7 @@ inline void floatop(IssueState& state, W64 raraw, W64 rbraw, W64 rcraw, W16 rafl
 #endif
 
 #define make_x86_floatop2(name, opcode, typemask, extra) \
-template <int datatype> \
+template <int ptlopcode, int datatype> \
 void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
   W64 rd; \
   vec16b fpa, fpb; \
@@ -846,10 +900,11 @@ void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W
      : [rd] "=" W64_CONSTRAINT (rd), [fpa] "=x" (fpa), [fpb] "=x" (fpb) : [ra] W64_CONSTRAINT (ra), [rb] W64_CONSTRAINT (rb)); \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, datatype); \
 }
 
 #define make_x86_floatop3(name, opcode1, opcode2, typemask) \
-template <int datatype> \
+template <int ptlopcode, int datatype> \
 void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
   W64 rd; \
   vec16b fpa, fpb, fpc; \
@@ -861,6 +916,7 @@ void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W
      : [rd] "=" W64_CONSTRAINT (rd), [fpa] "=x" (fpa), [fpb] "=x" (fpb), [fpc] "=x" (fpc) : [ra] W64_CONSTRAINT (ra), [rb] W64_CONSTRAINT (rb), [rc] W64_CONSTRAINT (rc)); \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, datatype); \
 }
 
 #define SS (1<<0)
@@ -869,11 +925,11 @@ void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W
 
 #define make_x86_floatop_alltypes(name, opcode, typemask) \
   make_x86_floatop2(x86_op_##name, opcode, typemask, ""); \
-  uopimpl_func_t implmap_##name[4] = {&x86_op_##name<0>, &x86_op_##name<1>, &x86_op_##name<2>, &x86_op_##name<3>}
+  uopimpl_func_t implmap_##name[4] = {&x86_op_##name<OP_##name, 0>, &x86_op_##name<OP_##name, 1>, &x86_op_##name<OP_##name, 2>, &x86_op_##name<OP_##name, 3>}
 
 #define make_x86_floatop3_alltypes(name, opcode1, opcode2, typemask) \
   make_x86_floatop3(x86_op_##name, opcode1, opcode2, typemask); \
-  uopimpl_func_t implmap_##name[4] = {&x86_op_##name<0>, &x86_op_##name<1>, &x86_op_##name<2>, &x86_op_##name<3>}
+  uopimpl_func_t implmap_##name[4] = {&x86_op_##name<OP_##name, 0>, &x86_op_##name<OP_##name, 1>, &x86_op_##name<OP_##name, 2>, &x86_op_##name<OP_##name, 3>}
 
 make_x86_floatop_alltypes(addf, add, SS|PS|DP);
 make_x86_floatop_alltypes(subf, sub, SS|PS|DP);
@@ -898,14 +954,14 @@ make_x86_floatop2(x86_op_cmpf6, cmp, SS|PS|DP, "$6,");
 make_x86_floatop2(x86_op_cmpf7, cmp, SS|PS|DP, "$7,");
 
 uopimpl_func_t implmap_cmpf[8][4] = {
-  {&x86_op_cmpf0<0>, &x86_op_cmpf0<1>, &x86_op_cmpf0<2>, &x86_op_cmpf0<3>},
-  {&x86_op_cmpf1<0>, &x86_op_cmpf1<1>, &x86_op_cmpf1<2>, &x86_op_cmpf1<3>},
-  {&x86_op_cmpf2<0>, &x86_op_cmpf2<1>, &x86_op_cmpf2<2>, &x86_op_cmpf2<3>},
-  {&x86_op_cmpf3<0>, &x86_op_cmpf3<1>, &x86_op_cmpf3<2>, &x86_op_cmpf3<3>},
-  {&x86_op_cmpf4<0>, &x86_op_cmpf4<1>, &x86_op_cmpf4<2>, &x86_op_cmpf4<3>},
-  {&x86_op_cmpf5<0>, &x86_op_cmpf5<1>, &x86_op_cmpf5<2>, &x86_op_cmpf5<3>},
-  {&x86_op_cmpf6<0>, &x86_op_cmpf6<1>, &x86_op_cmpf6<2>, &x86_op_cmpf6<3>},
-  {&x86_op_cmpf7<0>, &x86_op_cmpf7<1>, &x86_op_cmpf7<2>, &x86_op_cmpf7<3>}
+  {&x86_op_cmpf0<OP_cmpf, 0>, &x86_op_cmpf0<OP_cmpf, 1>, &x86_op_cmpf0<OP_cmpf, 2>, &x86_op_cmpf0<OP_cmpf, 3>},
+  {&x86_op_cmpf1<OP_cmpf, 0>, &x86_op_cmpf1<OP_cmpf, 1>, &x86_op_cmpf1<OP_cmpf, 2>, &x86_op_cmpf1<OP_cmpf, 3>},
+  {&x86_op_cmpf2<OP_cmpf, 0>, &x86_op_cmpf2<OP_cmpf, 1>, &x86_op_cmpf2<OP_cmpf, 2>, &x86_op_cmpf2<OP_cmpf, 3>},
+  {&x86_op_cmpf3<OP_cmpf, 0>, &x86_op_cmpf3<OP_cmpf, 1>, &x86_op_cmpf3<OP_cmpf, 2>, &x86_op_cmpf3<OP_cmpf, 3>},
+  {&x86_op_cmpf4<OP_cmpf, 0>, &x86_op_cmpf4<OP_cmpf, 1>, &x86_op_cmpf4<OP_cmpf, 2>, &x86_op_cmpf4<OP_cmpf, 3>},
+  {&x86_op_cmpf5<OP_cmpf, 0>, &x86_op_cmpf5<OP_cmpf, 1>, &x86_op_cmpf5<OP_cmpf, 2>, &x86_op_cmpf5<OP_cmpf, 3>},
+  {&x86_op_cmpf6<OP_cmpf, 0>, &x86_op_cmpf6<OP_cmpf, 1>, &x86_op_cmpf6<OP_cmpf, 2>, &x86_op_cmpf6<OP_cmpf, 3>},
+  {&x86_op_cmpf7<OP_cmpf, 0>, &x86_op_cmpf7<OP_cmpf, 1>, &x86_op_cmpf7<OP_cmpf, 2>, &x86_op_cmpf7<OP_cmpf, 3>}
 };
 
 template <int comptype>
@@ -933,6 +989,7 @@ void uop_impl_cmpccf(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
   }
   state.reg.rdflags = (zf << 6) + (pf << 2) + (cf << 0);
   state.reg.rddata = state.reg.rdflags;
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_cmpccf, comptype);
 }
 
 uopimpl_func_t implmap_cmpccf[8][4] = {&uop_impl_cmpccf<0>, &uop_impl_cmpccf<1>, &uop_impl_cmpccf<2>, &uop_impl_cmpccf<3>};
@@ -951,6 +1008,7 @@ void uop_impl_##name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
   } \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_##name, 0); \
 }
 
 make_simple_fp_convop(cvtf_i2s_p,  cvtdq2ps, 0);
@@ -963,6 +1021,7 @@ make_simple_fp_convop(cvtf_d2s_ins, cvtsd2ss, 0);
 #define make_intsrc_fp_convop(name, op) \
 void uop_impl_##name(IssueState& state, W64 raraw, W64 rbraw, W64 rcraw, W16 raflags, W16 rbflags, W16 rcflags) { \
   SSEType ra, rb, rc, rd; ra.w64 = raraw; rb.w64 = rbraw; rc.w64 = rcraw; op; state.reg.rddata = rd.w64; state.reg.rdflags = 0; \
+  capture_uop_context(state, raraw, rbraw, rcraw, raflags, rbflags, rcflags, OP_##name, 0); \
 }
 
 make_intsrc_fp_convop(cvtf_i2s_ins, (rd.f.lo = (float)(W32s)rb.w32.lo, rd.w32.hi = ra.w32.hi));
@@ -970,7 +1029,7 @@ make_intsrc_fp_convop(cvtf_q2s_ins, (rd.f.lo = (float)(W64s)rb.w64, rd.w32.hi = 
 make_intsrc_fp_convop(cvtf_q2d, (rd.d = (double)(W64s)rb.w64));
 
 #define make_intdest_fp_convop(name, desttype, roundop, truncop) \
-template <int trunc> \
+template <int ptlopcode, int trunc> \
 void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
   desttype rd; vec4f fpv; \
   if (trunc) { \
@@ -982,11 +1041,12 @@ void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W
   } \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, trunc); \
 }
 
 #define make_intdest_fp_convop_allrounds(name, desttype, roundop, truncop) \
   make_intdest_fp_convop(uop_impl_##name, desttype, roundop, truncop); \
-  uopimpl_func_t implmap_##name[2] = {&uop_impl_##name<0>, &uop_impl_##name<1>}
+  uopimpl_func_t implmap_##name[2] = {&uop_impl_##name<OP_##name, 0>, &uop_impl_##name<OP_##name, 1>}
 
 make_intdest_fp_convop_allrounds(cvtf_s2i, W32, cvtss2si, cvttss2si);
 make_intdest_fp_convop_allrounds(cvtf_d2i, W32, cvtsd2si, cvttsd2si);
@@ -999,7 +1059,6 @@ make_intdest_fp_convop_allrounds(cvtf_d2q, W64, cvtsd2si, cvttsd2si);
 // Regular 32-bit x86 does not have SSE instructions to handle 64-bit
 // integer to/from float conversions. Therefore we have to use x87
 //
-
 #define make_intdest_fp_convop_x87_64bit(name, T, x87op) \
 template <int trunc> \
 void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
@@ -1016,6 +1075,7 @@ void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W
   } \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, trunc); \
 }
 
 make_intdest_fp_convop_x87_64bit(uop_impl_cvtf_s2q, float, "fld");
@@ -1027,7 +1087,7 @@ uopimpl_func_t implmap_cvtf_d2q[2] = {&uop_impl_cvtf_d2q<0>, &uop_impl_cvtf_d2q<
 
 #define make_trunctype_fp_convop(name, roundop, truncop) \
 template <int trunc> \
-void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
+void uop_impl_##name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { \
   W64 rd; vec4f fpa, fpb; \
   if (trunc) { \
     asm(MOV_TO_XMM " %[ra],%[fpa]; " MOV_TO_XMM " %[rb],%[fpb]; movlhps %[fpa],%[fpb]; " #truncop " %[fpb],%[fpb]; " MOV_TO_XMM " %[fpb],%[rd];" \
@@ -1040,10 +1100,11 @@ void name(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W
   } \
   state.reg.rddata = rd; \
   state.reg.rdflags = 0; \
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_##name, trunc); \
 }
 
 #define make_fp_convop_allrounds(name, roundop, truncop) \
-  make_trunctype_fp_convop(uop_impl_##name, roundop, truncop); \
+  make_trunctype_fp_convop(name, roundop, truncop); \
   uopimpl_func_t implmap_##name[2] = {&uop_impl_##name<0>, &uop_impl_##name<1>}
 
 make_fp_convop_allrounds(cvtf_s2i_p, cvtps2dq, cvttps2dq);
@@ -1079,12 +1140,8 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = implmap_sub[size][setflags]; break;
   case OP_adda:
     func = implmap_adda[size][extshift][setflags]; break;
-  case OP_adds:
-    func = implmap_adds[size][extshift][setflags]; break;
   case OP_suba:
     func = implmap_suba[size][extshift][setflags]; break;
-  case OP_subs:
-    func = implmap_subs[size][extshift][setflags]; break;
   case OP_addm:
     func = implmap_addm[size][setflags]; break;
   case OP_subm: 
@@ -1151,7 +1208,7 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
   case OP_sars:
     func = implmap_sar[size][setflags]; break;
   case OP_maskb:
-    func = implmap_mask[size][cond]; break;
+    func = implmap_maskb[size][cond]; break;
 
   case OP_bswap:
     func = implmap_bswap[size][0]; break;

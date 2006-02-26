@@ -15,6 +15,9 @@
 // __ASM_ONLY__ found below.
 //
 
+// Maximum number of SMT threads supported:
+#define MAX_THREADS 2
+
 // These are also used in simtemplates.S
 #define FLAG_CF    0x001     // (1 << 0)
 #define FLAG_INV   0x002     // (1 << 1)
@@ -205,7 +208,13 @@ struct SFR {
   W64 addrvalid:1, invalid:1, datavalid:1, physaddr:45, bytemask:8, tag:8;
 };
 
-ostream& operator <<(ostream& os, const SFR& sfr);
+stringbuf& operator <<(stringbuf& sb, const SFR& sfr);
+
+inline ostream& operator <<(ostream& os, const SFR& sfr) {
+  stringbuf sb;
+  sb << sfr;
+  return os << sb;
+}
 
 struct IssueState {
   union {
@@ -397,9 +406,7 @@ enum {
   OP_add,
   OP_sub,
   OP_adda,
-  OP_adds,
   OP_suba,
-  OP_subs,
   OP_addm,
   OP_subm,
   OP_addc,

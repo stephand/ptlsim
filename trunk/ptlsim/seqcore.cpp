@@ -825,7 +825,7 @@ namespace SequentialCore {
         bbcache.add("removes", bbcache_removes);
       }
 
-      root("opclass").histogram(opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
+      root.histogram("opclass", opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
       save_assist_stats(root("assist"));
     }
   }

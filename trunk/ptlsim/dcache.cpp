@@ -9,8 +9,6 @@
 #include <datastore.h>
 
 
-void print_dcache();
-
 using namespace DataCache;
 
 #if 1
@@ -355,7 +353,7 @@ namespace DataCache {
     W32  initcycle;
     byte mask;
     byte fillL1:1, fillL2:1;
-    W16  pad;
+    byte archreg;
 
     inline LoadFillReq() { }
   
@@ -381,7 +379,6 @@ namespace DataCache {
 
     ostream& print(ostream& os) const {
       os << "  ", "0x", hexstring(data, 64), " @ ", (void*)(Waddr)addr, " -> r", lsi.info.rd;
-      if (lsi.info.commit) os << ", c", lsi.info.cbslot;
       os << ": shift ", lsi.info.sizeshift, ", signext ", lsi.info.signext, ", mask ", bitstring(mask, 8, true);
       return os;
     }
@@ -495,8 +492,6 @@ namespace DataCache {
         // wakeup register and/or commitbuf here
         if (true)
         {
-          if (analyze_in_detail()) logfile << "  Wakeup physical register r", req.lsi.info.rd, endl;
-
           W64 delta = LO32(sim_cycle) - LO32(req.initcycle);
           if (delta >= 65536) {
             // avoid overflow induced erroneous values:
@@ -504,6 +499,7 @@ namespace DataCache {
           } else {
             lfrq_total_latency += delta;
           }
+
           lfrq_wakeups++;
           wakeupcount++;
           if (wakeup_func) wakeup_func(req.lsi, req.addr);
@@ -625,11 +621,14 @@ namespace DataCache {
         mb.dcache |= (!icache);
         // Handle case where icache miss is already in progress but some
         // data needed in dcache is also stored in that line:
+        if (DEBUG) logfile << "Miss buffer hit for address ", (void*)(Waddr)addr, ": returning old slot ", idx, endl;
         return idx;
       }
 
-      if (full())
+      if (full()) {
+        if (DEBUG) logfile << "Miss buffer full while allocating slot for address ", (void*)(Waddr)addr, endl;
         return -1;
+      }
 
       idx = freemap.lsb();
       freemap[idx] = 0;
@@ -639,6 +638,8 @@ namespace DataCache {
       mb.lfrqmap = 0;
       mb.icache = icache;
       mb.dcache = (!icache);
+
+      if (DEBUG) logfile << "mb", idx, ": allocated for address ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
 
       if (hit_in_L2) {
         if (DEBUG) logfile << "mb", idx, ": enter state deliver to L1 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
@@ -698,7 +699,7 @@ namespace DataCache {
         case STATE_IDLE:
           break;
         case STATE_DELIVER_TO_L3: {
-          if (DEBUG) logfile << "mb", i, ": deliver to L3 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
+          if (DEBUG) logfile << "mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L3 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
           mb.cycles--;
           if (!mb.cycles) {
             L3.validate(mb.addr);
@@ -709,7 +710,7 @@ namespace DataCache {
           break;
         }
         case STATE_DELIVER_TO_L2: {
-          if (DEBUG) logfile << "mb", i, ": deliver to L2 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
+          if (DEBUG) logfile << "mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L2 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
           mb.cycles--;
           if (!mb.cycles) {
             if (DEBUG) logfile << "mb", i, ": delivered to L2 (map ", mb.lfrqmap, ")", endl;
@@ -721,7 +722,7 @@ namespace DataCache {
           break;
         }
         case STATE_DELIVER_TO_L1: {
-          if (DEBUG) logfile << "mb", i, ": deliver to L1 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
+          if (DEBUG) logfile << "mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L1 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
           mb.cycles--;
           if (!mb.cycles) {
             if (DEBUG) logfile << "mb", i, ": delivered to L1 switch (map ", mb.lfrqmap, ")", endl;
@@ -786,7 +787,7 @@ namespace DataCache {
   template <int size>
   void LoadFillReqQueue<size>::annul(int lfrqslot) {
     LoadFillReq& req = reqs[lfrqslot];
-    if (analyze_in_detail()) logfile << "  Annul physical register r", req.lsi.info.rd, endl;
+    if (analyze_in_detail()) logfile << "  Annul LFRQ slot ", lfrqslot, endl;
     lfrq_annuls++;
     missbuf.annul_lfrq(lfrqslot);
     changestate(lfrqslot, ready, freemap);
@@ -824,7 +825,6 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
   //bool DEBUG = analyze_in_detail();
   static const bool DEBUG = 0;
 
-  bool SEQUENTIAL = lsi.info.sequential;
   bool SFRAUSED = lsi.info.sfraused;
   int sizeshift = lsi.info.sizeshift;
 
@@ -913,7 +913,7 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
     stoptimer(load_slowpath_timer);
     return -1;
   }
-  
+
   state.ldreg.flags = FLAG_WAIT;
   state.ldreg.rddata = data;
   stoptimer(load_slowpath_timer);
@@ -1138,11 +1138,13 @@ void init_cache() {
   virt_addr_mask = (ctx.use64 ? 0xffffffffffffffffLL : 0x00000000ffffffffLL);
 }
 
-void print_dcache() {
-  logfile << lfrq;
-  logfile << missbuf;
+ostream& dcache_print(ostream& os) {
+  os << "Data Cache Subsystem:", endl;
+  os << lfrq;
+  os << missbuf;
   // logfile << L1; 
   // logfile << L2; 
+  return os;
 }
 
 /*
