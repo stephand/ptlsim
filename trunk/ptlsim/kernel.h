@@ -235,6 +235,16 @@ inline void cpu_frstor(X87State& state) {
   asm volatile("frstor %[state]" : : [state] "m" (*&state));
 }
 
+inline W16 cpu_get_fpcw() {
+  W16 fpcw;
+  asm volatile("fstcw %[fpcw]" : [fpcw] "=m" (fpcw));
+  return fpcw;
+}
+
+inline void cpu_set_fpcw(W16 fpcw) {
+  asm volatile("fldcw %[fpcw]" : : [fpcw] "m" (fpcw));
+}
+
 //
 // Address space management
 //
