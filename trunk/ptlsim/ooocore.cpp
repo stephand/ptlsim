@@ -2161,7 +2161,7 @@ CycleTimer ctdispatch;
 
 W64 dispatch_width_histogram[DISPATCH_WIDTH+1];
 
-static const int DISPATCH_DEADLOCK_COUNTDOWN_CYCLES = 32;
+static const int DISPATCH_DEADLOCK_COUNTDOWN_CYCLES = 64;
 
 int dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
 
@@ -2351,7 +2351,7 @@ enum {
 // is not allowed to proceed.
 //
 
-struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 4> { };
+struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 8> { };
 LoadStoreAliasPredictor lsap;
 
 // This is an internal MSR required to correctly truncate ld/st pointers in 32-bit mode
