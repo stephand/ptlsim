@@ -67,7 +67,7 @@ Matt T.
 <yourst@yourst.com>
 \layout Standard
 \noindent \align center 
-Revision 20060204
+Revision 20060226
 \layout Standard
 \added_space_top vfill \noindent \align center 
 The latest version of PTLsim and this document are always available at:
@@ -3902,12 +3902,12 @@ DataStoreNode& issue = root("issue"); {
 
 
 \size small 
-  DataStoreNode& histogram = issue("times"); {
+  DataStoreNode& timers = issue("times"); {
 \layout LyX-Code
 
 
 \size small 
-    cluster.summable = 1;
+    timers.summable = 1;
 \layout LyX-Code
 
 
@@ -3922,7 +3922,7 @@ DataStoreNode& issue = root("issue"); {
 
 
 \size small 
-      cluster.addfloat(sb, timer_histogram[i]);
+      timers(clusters[i].name).addfloat(sb, timer_histogram[i]);
 \layout LyX-Code
 
 
@@ -3933,6 +3933,12 @@ DataStoreNode& issue = root("issue"); {
 
 \size small 
   }
+\layout LyX-Code
+
+  // issue_width is declared as W64 issue_width_histogram[4+1];
+\layout LyX-Code
+
+  issue.histogram("width", issue_width_histogram, 4+1, 0, 4, 1);
 \layout LyX-Code
 
 
@@ -3989,6 +3995,45 @@ stringbuf
  into a proper node name.
  This is only an example - PTLsim already contains code to save all statistics
  it generates.
+\layout Standard
+
+Histograms can be easily added through the 
+\family typewriter 
+\size small 
+histogram()
+\family default 
+\size default 
+ method shown above.
+ You can specify an array of 
+\family typewriter 
+\size small 
+W64
+\family default 
+\size default 
+ values (64-bit unsigned integers) and the total number of values, along
+ with optional low, high and stride values for the histogram data.
+ More information is contained in 
+\family typewriter 
+\size small 
+datastore.h
+\family default 
+\size default 
+ and 
+\family typewriter 
+\size small 
+datastore.cpp
+\family default 
+\size default 
+.
+ Histograms with text labels for each element can also be created, as demonstrat
+ed in 
+\family typewriter 
+\size small 
+ooocore.cpp
+\family default 
+\size default 
+.
+ 
 \layout Standard
 
 PTLsim will by default call 
@@ -4101,7 +4146,8 @@ ptlcall_capture_stats()
 \family default 
 \size default 
  adds a new statistics data store snapshot at the time it is called.
- 
+ You can pass a string to this function to name your snapshot, but all names
+ must be unique.
 \layout Itemize
 
 
@@ -8385,14 +8431,207 @@ read
 \end_inset 
 
 Speculation and Recovery
-\layout Standard
-
-PTLsim allows speculative execution of two classes of uops which may require
- all uops in program order after and optionally including the mis-speculated
- uop to be annulled before they are committed to the architectural state.
 \layout Section
 
 Misspeculation Cases
+\layout Standard
+
+PTLsim supports three speculative execution recovery mechanisms to handle
+ various types of speculation failures:
+\layout Itemize
+
+
+\series bold 
+Replay
+\series default 
+ is for scheduling and dependency mis-predictions only.
+ Replayed uops remain in the issue queue so replay is very fast but limited
+ in scope.
+ Replay is described extensively in Section 
+\begin_inset LatexCommand \ref{sec:ClusterDispatchScheduleIssue}
+
+\end_inset 
+
+.
+\layout Itemize
+
+
+\series bold 
+Redispatch
+\series default 
+ finds the slice of uops in the ROB dependent on a mis-speculated uop and
+ sends only those dependent uops back to the 
+\emph on 
+ready-to-dispatch
+\emph default 
+ state.
+ It is used for load-store aliasing recovery, value mispredictions and other
+ cases where the fetched uops themselves are still valid, but their outputs
+ are invalid.
+\layout Itemize
+
+
+\series bold 
+Annulment
+\series default 
+ removes any uops in program order after (or optionally including) a given
+ uop.
+ It is used for branch mispredictions and misalignment recovery.
+\layout Section
+
+
+\begin_inset LatexCommand \label{sec:Redispatch}
+
+\end_inset 
+
+Redispatch 
+\layout Subsection
+
+Redispatch Process
+\layout Standard
+
+Many types of mis-speculations do not require refetching a different set
+ of uops; instead, any uops dependent on a mis-speculated uop can simply
+ be recirculated through the pipeline so they can re-execute and produce
+ correct values.
+ This process is known as 
+\emph on 
+redispatch
+\emph default 
+; in the baseline out of order core, it is used to recover from load-store
+ aliasing (Section 
+\begin_inset LatexCommand \ref{sub:AliasCheck}
+
+\end_inset 
+
+).
+\layout Standard
+
+When a mis-speculated ROB is detected, 
+\family typewriter 
+\size small 
+ROB.redispatch_dependents()
+\family default 
+\size default 
+ is called.
+ This function identifies the slice of uops that consumed values (directly
+ or indirectly) from the mis-speculated uop, using dependency bitmaps similar
+ to those used in real processors.
+ 
+\family typewriter 
+\size small 
+ROB.redispatch_dependents(bool inclusive)
+\family default 
+\size default 
+ has an 
+\emph on 
+inclusive
+\emph default 
+ parameter: if false, only the dependent uops are redispatched, not including
+ the mis-speculated uop.
+ This is most useful for value prediction, where the correct value can be
+ directly reinjected into the mis-speculated uop's physical register without
+ re-executing it.
+\layout Standard
+
+In 
+\family typewriter 
+\size small 
+ROB.redispatch()
+\family default 
+\size default 
+, each affected uop is placed back into the 
+\family typewriter 
+\size small 
+rob_ready_to_dispatch state
+\family default 
+\size default 
+, always in program order.
+ This helps to avoid deadlocks, since the redispatched slice is given priority
+ for insertion back into the issue queue.
+ The resources associated with each uop (physical register, LDQ/STQ slot,
+ IQ slot, etc.) are also restored to the state they were in immediately after
+ renaming, so they can be properly recirculated through the pipeline as
+ if the uop never issued.
+ Various other issues must also be handled, such as making sure known store-to-l
+oad aliasing constraints are preserved across the redispatch so as to avoid
+ infinite replay loops, and branch directions must be corrected if a mispredict
+ caused a fetch unit redirection but that mispredict was in fact based on
+ mis-speculated data.
+\layout Subsection
+
+Deadlock Recovery
+\layout Standard
+
+Redispatch can create deadlocks in cases where other unrelated uops occupy
+ all the issue queue slots needed by the redispatched uops to make forward
+ progress, and there is a circular dependency loop (e.g.
+ on loads and stores not known at the time of the redispatch) that creates
+ a chicken-and-egg problem, thus blocking forward progress.
+\layout Standard
+
+To recover from this situation, we detect the case where no uops have been
+ dispatched for 64 cycles, yet the 
+\family typewriter 
+\size small 
+ready_to_dispatch
+\family default 
+\size default 
+ queue still has valid uops.
+ This situation very rarely happens in practice unless there is a true deadlock.
+ To break up the deadlock, ideally we should only need to redispatch all
+ uops occupying issue queue slots or those already waiting for dispatch
+ - all others have produced a result and cannot block the issue queues again.
+ However, this does not always work in pathological cases, and can sometime
+ lead to repeated deadlocks.
+ Since deadlocks are very infrequent, they can be resolved by just flushing
+ the entire pipeline.
+ This has a negligible impact on performance.
+\layout Subsection
+
+Statistical Counters
+\layout Standard
+
+Several statistical counters are maintained in the PTLsim statistics tree
+ to measure redispatch overhead, in the 
+\family typewriter 
+\size small 
+dispatch/redispatch
+\family default 
+\size default 
+ node:
+\layout Itemize
+
+
+\family typewriter 
+\size small 
+deadlock-flushes
+\family default 
+\size default 
+ measures how many times the pipeline must be flushed to resolve a deadlock.
+\layout Itemize
+
+
+\family typewriter 
+\size small 
+trigger-uops
+\family default 
+\size default 
+ measures how many uops triggered redispatching because of a misspeculation.
+ This number does not count towards the statistics below.
+\layout Itemize
+
+
+\family typewriter 
+\size small 
+dependent-uops
+\family default 
+\size default 
+ is a histogram of how many uops depended on each trigger uop, not including
+ the trigger uop itself.
+\layout Section
+
+Annulment
 \layout Subsection
 
 Branch Mispredictions
@@ -8431,31 +8670,12 @@ not
  Instead, we let it writeback and commit as if it were predicted correctly.
 \layout Subsection
 
-Unaligned Loads and Stores and Aliased Stores
-\layout Standard
-
-Loads and stores may also require the annulment of all uops following (and
- this time including) the load or store in program order.
- The conditions under which this process can occur are described in Sections
- 
-\begin_inset LatexCommand \ref{sec:IssuingLoads}
-
-\end_inset 
-
- and 
-\begin_inset LatexCommand \ref{sub:AliasCheck}
-
-\end_inset 
-
-.
-\layout Section
-
 
 \begin_inset LatexCommand \label{sec:SpeculationRecovery}
 
 \end_inset 
 
-Recovery
+Annulment Process
 \layout Standard
 
 In PTLsim, the 
@@ -9117,23 +9337,22 @@ The load queue is then searched to find any loads after the current store
 \emph on 
 aliasing
 \emph default 
-, and is effectively a mis-speculation requiring the annulment of all instructio
-ns after and including the store.
- The annulment is performed in accordance with Section 
-\begin_inset LatexCommand \ref{sec:MisspeculationAnnulment}
+, and is effectively a mis-speculation requiring us to reissue any uops
+ depending on the store.
+ The redispatch method (Section 
+\begin_inset LatexCommand \ref{sec:Redispatch}
 
 \end_inset 
 
-, similar to how uops after a mispredicted branch would be annulled.
- Unlike branches, technically we do not need to re-fetch instructions starting
- at the mis-speculated store, but in the current implementation of the simulator
- this is done for simplicity reasons.
+) is used to re-execute only those uops dependent (either directly or indirectly
+) on the store.
 \layout Standard
 
-Since the annulment process required to correct aliasing violations is expensive
-, it is desirable to predict in advance which loads and stores are likely
- to alias each other such that loads predicted to alias are never issued
- when prior stores in the store queue still have unknown addresses.
+Since the redispatch process required to correct aliasing violations is
+ expensive and may result in infinite loops, it is desirable to predict
+ in advance which loads and stores are likely to alias each other such that
+ loads predicted to alias are never issued when prior stores in the store
+ queue still have unknown addresses.
  This works because in most out of order processors, statistically speaking,
  very few loads alias stores compared to normal loads from the cache.
  When an aliasing mis-speculation occurs, an entry is added to a small fully
@@ -12026,7 +12245,7 @@ Add and Subtract
 
 
 \begin_inset  Tabular
-<lyxtabular version="3" rows="11" columns="3">
+<lyxtabular version="3" rows="9" columns="3">
 <features>
 <column alignment="left" valignment="top" width="0">
 <column alignment="left" valignment="top" width="0">
@@ -12218,85 +12437,7 @@ rd = ra
 \begin_inset Formula $\leftarrow$
 \end_inset 
 
- ra + rb + (rc << S)
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-suba
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb,rc*S
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- ra + rb + (rc << S)
-\end_inset 
-</cell>
-</row>
-<row>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\series bold 
-\size small 
-subs
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family typewriter 
-\size small 
-rd = ra,rb,rc*S
-\end_inset 
-</cell>
-<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
-\begin_inset Text
-
-\layout Standard
-
-
-\family sans 
-rd = ra 
-\begin_inset Formula $\leftarrow$
-\end_inset 
-
- ra + rb + (rc << S)
+ ra - rb + (rc << S)
 \end_inset 
 </cell>
 </row>
@@ -12335,7 +12476,7 @@ rd = ra
 \begin_inset Formula $\leftarrow$
 \end_inset 
 
- (ra + rb) & ((1 << rc) - 1)
+ (ra + rb) & rc
 \end_inset 
 </cell>
 </row>
@@ -12374,7 +12515,7 @@ rd = ra
 \begin_inset Formula $\leftarrow$
 \end_inset 
 
- (ra - rb) & ((1 << rc) - 1)
+ (ra - rb) & rc
 \end_inset 
 </cell>
 </row>
@@ -12487,22 +12628,10 @@ The
 adda
 \family sans 
 \size default 
-, 
+ and 
 \family typewriter 
 \size small 
 adds
-\family sans 
-\size default 
-, 
-\family typewriter 
-\size small 
-suba
-\family sans 
-\size default 
-, 
-\family typewriter 
-\size small 
-subs
 \family sans 
 \size default 
  uops are useful for small shifts and x86 three-operand 
@@ -12529,6 +12658,28 @@ subc
 \family sans 
 \size default 
  uops use only the carry flag field of their rc operand; the value is unused.
+\layout Itemize
+
+
+\family sans 
+The 
+\family typewriter 
+\size small 
+addm
+\family sans 
+\size default 
+ and 
+\family typewriter 
+\size small 
+subm
+\family sans 
+\size default 
+ uops mask the result by the immediate in 
+\emph on 
+rc
+\emph default 
+.
+ They are used in microcode for modular stack arithmetic.
 \layout Standard
 \line_bottom \pagebreak_top 
 
@@ -21492,6 +21643,51 @@ none
 \emph default 
  means that no cluster could accept the uop because all issue queues were
  full.
+\layout Itemize
+
+
+\family sans 
+\series bold 
+redispatch:
+\family default 
+\series default 
+ statistics on the redispatch speculation recovery rmechanism (Section 
+\begin_inset LatexCommand \ref{sec:SpeculationRecovery}
+
+\end_inset 
+
+)
+\begin_deeper 
+\layout Itemize
+
+
+\family sans 
+\series bold 
+deadlock-flushes
+\family default 
+\series default 
+ measures how many times the pipeline must be flushed to resolve a deadlock.
+\layout Itemize
+
+
+\family sans 
+\series bold 
+trigger-uops
+\family default 
+\series default 
+ measures how many uops triggered redispatching because of a mis-speculation.
+ This number does not count towards the statistics below.
+\layout Itemize
+
+
+\family sans 
+\series bold 
+dependent-uops
+\family default 
+\series default 
+ is a histogram of how many uops depended on each trigger uop, not including
+ the trigger uop itself.
+\end_deeper 
 \layout Standard
 
 
