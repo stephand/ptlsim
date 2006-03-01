@@ -4233,6 +4233,49 @@ ptlcalls.h
  header file.
 \layout Section
 
+External Signals and PTLsim
+\layout Standard
+
+PTLsim can be forced to switch between native mode and sequential mode by
+ sending it standard Linux-style signals from the command line.
+ If your program is called 
+\begin_inset Quotes eld
+\end_inset 
+
+myprogram
+\begin_inset Quotes erd
+\end_inset 
+
+, start it under PTLsim and run this command from another terminal:
+\layout LyX-Code
+
+
+\size small 
+killall -XCPU 
+\emph on 
+myprogram
+\layout Standard
+
+This will force PTLsim to switch between native mode and simulation mode,
+ depending on its current mode.
+ It will print a message to the console and the logfile when you do this.
+ The initial mode (native or simulation) is determined by the presence of
+ the 
+\family typewriter 
+\size small 
+-trigger
+\family default 
+\size default 
+ option: with 
+\family typewriter 
+\size small 
+-trigger
+\family default 
+\size default 
+, the program starts in native mode until the trigger point (if any) is
+ reached.
+\layout Section
+
 Notes on Benchmarking Methodology
 \layout Standard
 
