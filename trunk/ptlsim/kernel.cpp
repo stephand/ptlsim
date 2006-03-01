@@ -972,6 +972,8 @@ extern "C" void switch_to_sim_save_context();
 
 extern "C" void switch_to_sim_save_context();
 
+bool running_in_sim_mode = 0;
+
 #ifdef __x86_64__
 struct FarJumpDescriptor {
   W32 offset;
@@ -1158,6 +1160,17 @@ void set_switch_to_sim_breakpoint(void* addr) {
   logfile << endl, "Breakpoint inserted at rip ", addr, endl, flush;
 }
 
+bool remove_switch_to_sim_breakpoint() {
+  if (pending_patched_switch_to_sim_addr) {
+    ctx.commitarf[REG_rip] = (Waddr)pending_patched_switch_to_sim_addr;
+    logfile << endl, "=== Removed thunk patch at rip ", pending_patched_switch_to_sim_addr, " ===", endl, flush;
+    *pending_patched_switch_to_sim_addr = saved_bytes_behind_switch_to_sim_thunk;
+    pending_patched_switch_to_sim_addr = 0;
+    return true;
+  }
+  return false;
+}
+
 extern void switch_to_sim();
 
 extern "C" void switch_to_native_restore_context_lowlevel(const UserContext& ctx, int switch_64_to_32);
@@ -1181,12 +1194,7 @@ void switch_to_native_restore_context() {
 
 // Called by save_context_switch_to_sim_lowlevel
 extern "C" void save_context_switch_to_sim() {
-  if (pending_patched_switch_to_sim_addr) {
-    ctx.commitarf[REG_rip] = (Waddr)pending_patched_switch_to_sim_addr;
-    logfile << endl, "=== Removed thunk patch at rip ", pending_patched_switch_to_sim_addr, " ===", endl, flush;
-    *pending_patched_switch_to_sim_addr = saved_bytes_behind_switch_to_sim_thunk;
-    pending_patched_switch_to_sim_addr = 0;
-  } else {
+  if (!remove_switch_to_sim_breakpoint()) {
     logfile << endl, "=== Trigger request ===", endl, flush;
     // REG_rip set from first word on stack, but REG_rsp needs to be incremented
     ctx.commitarf[REG_rsp] += (ctx.use64) ? 8 : 4;
@@ -2042,12 +2050,14 @@ int ptlsim_inject(int argc, char** argv) {
 // Profiling thread exit callbacks
 //
 
-/*
- * This is called as a signal handler when a native thread exits;
- * it prints profiling information for the user process. The
- * exit callback is automatically turned off before the kernel
- * calls this so we don't get infinite recursion.
- */
+//
+// This is called as a signal handler when a native thread exits;
+// it prints profiling information for the user process. The
+// exit callback is automatically turned off before the kernel
+// calls this so we don't get infinite recursion.
+//
+// This is only supported with the ptlkernel module loaded.
+//
 extern "C" void thread_exit_callback(int sig, siginfo_t *si, void *puc) {
   int exitcode = si->si_code;
 
@@ -2058,6 +2068,56 @@ extern "C" void thread_exit_callback(int sig, siginfo_t *si, void *puc) {
   }
 
   sys_exit(exitcode);
+}
+
+//
+// Respond to external signals like XCPU and others to switch modes
+// or dump statistics.
+//
+extern "C" void external_signal_callback(int sig, siginfo_t* si, void* contextp) {
+  if (logfile) logfile << endl, "=== Thread ", sys_gettid(), " received external signal ", si->si_signo, " in ", ((running_in_sim_mode) ? "simulation" : "native"), " mode ===", endl, endl, flush;
+
+  ucontext_t* context = (ucontext_t*)contextp;
+
+  switch (si->si_signo) {
+  case SIGXCPU: {
+    if (running_in_sim_mode) {
+      // Already in simulator: switch back to native mode
+      if (logfile) logfile << "Switching tid ", sys_gettid(), " to native mode at cycle ", sim_cycle, ", ", total_user_insns_committed, " user commits", endl, flush;
+      if (!ptlsim_quiet) cerr << endl, "//", endl, "// Switching tid ", sys_gettid(), " to native mode at cycle ", sim_cycle, ", ", total_user_insns_committed, " user commits", endl, "//", endl, endl, flush;
+      // Simulator loop will perform the switch on the next iteration when it detects this
+      requested_switch_to_native = 1;
+    } else {
+#ifdef __x86_64__
+      void* rip = (void*)context->uc_mcontext.gregs[REG_RIP];
+#else
+      void* rip = (void*)context->uc_mcontext.gregs[REG_EIP];
+#endif
+      // Remove old breakpoint, if any
+      remove_switch_to_sim_breakpoint();
+      if (logfile) logfile << "Switching tid ", sys_gettid(), " to simulation mode at rip ", rip, endl, flush;
+      if (!ptlsim_quiet) cerr << endl, "//", endl, "// Switching tid ", sys_gettid(), " to simulation mode at rip ", rip, endl, "//", endl, endl, flush;
+      set_switch_to_sim_breakpoint(rip);
+      // Context switch to PTLsim takes place after the sighandler returns
+    }
+    break;
+  }
+  default:
+    if (logfile) logfile << "Warning: unknown signal ", si->si_signo, "; ignoring", endl, flush; break;
+  }
+}
+
+void init_signal_callback() {
+#ifdef __x86_64__
+  // On 64-bit builds, this only works when PTLsim binary and user thread are both 64-bit:
+  if (!ctx.use64) return;
+#endif
+
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_sigaction = external_signal_callback;
+  sa.sa_flags = SA_SIGINFO;
+  assert(sigaction(SIGXCPU, &sa, NULL) == 0);
 }
 
 void init_exit_callback() {

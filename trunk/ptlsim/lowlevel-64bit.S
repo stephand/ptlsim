@@ -25,6 +25,7 @@ ptlsim_preinit_entry:
   # which means argv, argc, etc. will be in 32-bit format and need
   # to be converted before any initialization routines.
   #
+  mov   byte ptr [running_in_sim_mode],1
   mov   %rdi,%rsp            # origrsp
   mov   %rsi,offset _start   # next_init_func
   call  ptlsim_preinit
@@ -79,8 +80,11 @@ get_gs:
 .extern fsreg
 .extern gsreg
 
+.extern running_in_sim_mode
+
 .global save_context_switch_to_sim_lowlevel
 save_context_switch_to_sim_lowlevel:
+  mov      byte ptr [running_in_sim_mode],1      # store must be atomic
   mov      [ctx + 8*REG_rax + 8*0],%rax
   mov      [ctx + 8*REG_rax + 8*1],%rcx
   mov      [ctx + 8*REG_rax + 8*2],%rdx
@@ -256,9 +260,11 @@ switch_to_native_restore_context_lowlevel:
   jmp      [switch_to_native_restore_context_temp_64_or_32_func]
 
 switch_to_native_restore_context_64_to_32:
+  mov byte ptr [running_in_sim_mode],0      # store must be atomic
   ljmp     [switch_to_native_restore_context_temp_64_to_32]
 
 switch_to_native_restore_context_64_to_64:
+  mov byte ptr [running_in_sim_mode],0      # store must be atomic
   jmp      [switch_to_native_restore_context_temp_64_to_64]
 
 

@@ -166,8 +166,8 @@ uopimpl_func_t mapname[4][2] = { \
 #define PRETEXT_NO_FLAGS_IN ""
 #define PRETEXT_ALL_FLAGS_IN "pushw %[rcflags]; popfw;"
 
-make_x86_aluop_all_sizes(add, add, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
-make_x86_aluop_all_sizes(sub, sub, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
+//make_x86_aluop_all_sizes(add, add, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
+//make_x86_aluop_all_sizes(sub, sub, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
 
 make_exp_aluop_all_sizes(mov, (rd = (rb)), 0);
 make_exp_aluop_all_sizes(and, (rd = (ra & rb)), ZAPS);
@@ -264,16 +264,14 @@ struct x86_op_ ## name <W64, genflags> { \
       return ((W64)rahi << 32) + ((W64)ralo); \
   } \
 };
-make_x86_aluop2_chained_64bit(add, add, adc, "");
-make_x86_aluop2_chained_64bit(sub, sub, sbb, "");
 #endif
 
-make_x86_aluop_all_sizes(addc, adc, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
-make_x86_aluop_all_sizes(subc, sbb, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
+make_x86_aluop_all_sizes(add, adc, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
+make_x86_aluop_all_sizes(sub, sbb, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 
 #ifdef EMULATE_64BIT
-make_x86_aluop2_chained_64bit(addc, adc, adc, PRETEXT_ALL_FLAGS_IN);
-make_x86_aluop2_chained_64bit(subc, sbb, sbb, PRETEXT_ALL_FLAGS_IN);
+make_x86_aluop2_chained_64bit(add, adc, adc, PRETEXT_ALL_FLAGS_IN);
+make_x86_aluop2_chained_64bit(sub, sbb, sbb, PRETEXT_ALL_FLAGS_IN);
 #endif
 
 //
@@ -1146,11 +1144,6 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = implmap_addm[size][setflags]; break;
   case OP_subm: 
     func = implmap_subm[size][setflags]; break;
-  case OP_addc: 
-    func = implmap_addc[size][setflags]; break;
-  case OP_subc: 
-    func = implmap_subc[size][setflags]; break;
-
   case OP_sel:
     func = implmap_sel[cond][size]; break;
   case OP_set:

@@ -10,12 +10,260 @@
 #include <stdio.h>
 #include <elf.h>
 #include <asm/unistd.h>
+#include <time.h>
 
 #include <ptlsim.h>
 #include <datastore.h>
 
 
 CycleTimer total_time;
+
+ostream logfile;
+W64 sim_cycle = 0;
+W64 user_insn_commits = 0;
+W64 iterations = 0;
+W64 total_uops_executed = 0;
+W64 total_user_insns_committed = 0;
+
+W64 ptlsim_quiet = 0;
+W64 loglevel = 0;
+char* log_filename = null;
+W64 include_dyn_linker = 1;
+W64 start_at_rip = 0;
+W64 start_at_rip_repeat = 1;
+W64 stop_at_iteration = infinity;
+W64 insns_in_last_basic_block = 65536;
+W64 stop_at_rip = 0;
+W64 stop_at_user_insns = infinity;
+W64 sequential_mode_insns = 0;
+W64 start_log_at_iteration = infinity;
+W64 start_short_log_at_iteration = infinity;
+W64 user_profile_only = 0;
+W64 trigger_mode = 0;
+W64 exit_after_fullsim;
+char* stats_filename = null;
+char* dumpcode_filename = null;
+W64 perfect_cache = 0;
+W64 snapshot_cycles = infinity;
+W64 flush_interval = infinity;
+W64 pause_at_startup = 0;
+W64 overshoot_and_dump = 0;
+W64 dump_at_end = 0;
+
+W64 use_out_of_order_core = 1;
+W64 use_out_of_order_core_dummy;
+
+DataStoreNode* dsroot = null;
+W64 snapshotid;
+
+
+static ConfigurationOption optionlist[] = {
+  {null,                                 OPTION_TYPE_SECTION, 0, "Logging Control", null},
+  {"quiet",                              OPTION_TYPE_BOOL,    0, "Do not print PTLsim system information banner", &ptlsim_quiet},
+  {"logfile",                            OPTION_TYPE_STRING,  0, "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)", &log_filename},
+  {"loglevel",                           OPTION_TYPE_W64,     0, "Log level", &loglevel},
+  {"startlog",                           OPTION_TYPE_W64,     0, "Start logging after iteration <startlog>", &start_log_at_iteration},
+  {"shortlog",                           OPTION_TYPE_W64,     0, "Start summary logging after iteration <shortlog>", &start_short_log_at_iteration},
+
+  {null,                                 OPTION_TYPE_SECTION, 0, "Statistics Database", null},
+  {"stats",                              OPTION_TYPE_STRING,  0, "Statistics data store hierarchy root", &stats_filename},
+  {"snapshot",                           OPTION_TYPE_W64,     0, "Take statistical snapshot and reset every <snapshot> cycles", &snapshot_cycles},
+
+  {null,                                 OPTION_TYPE_SECTION, 0, "Trace Start Point", null},
+  {"startrip",                           OPTION_TYPE_W64,     0, "Start at rip <startrip>", &start_at_rip},
+  {"startrepeat",                        OPTION_TYPE_W64,     0, "Start only after passing <startrip> at least <startrepeat> times", &start_at_rip_repeat},
+  {"excludeld",                          OPTION_TYPE_BOOL,    0, "Exclude dynamic linker execution", &include_dyn_linker},
+  {"trigger",                            OPTION_TYPE_BOOL,    0, "Trigger mode: wait for user process to do simcall before entering PTL mode", &trigger_mode},
+
+  {null,                                 OPTION_TYPE_SECTION, 0, "Trace Stop Point", null},
+  {"stop",                               OPTION_TYPE_W64,     0, "Stop after <stop> iterations", &stop_at_iteration},
+  {"stoprip",                            OPTION_TYPE_W64,     0, "Stop before rip <stoprip> is translated for the first time", &stop_at_rip},
+  {"bbinsns",                            OPTION_TYPE_W64,     0, "In final basic block, only translate <bbinsns> user instructions", &insns_in_last_basic_block},
+  {"stopinsns",                          OPTION_TYPE_W64,     0, "Stop after executing <stopinsns> user instructions", &stop_at_user_insns},
+  {"flushevery",                         OPTION_TYPE_W64,     0, "Flush the pipeline every N committed instructions", &flush_interval},
+
+  {null,                                 OPTION_TYPE_SECTION, 0, "Sequential and Native Control", null},
+  {"seq",                                OPTION_TYPE_W64,     0, "Run in sequential mode for <seq> instructions before switching to out of order", &sequential_mode_insns},
+  {"profonly",                           OPTION_TYPE_BOOL,    0, "Profile user code in native mode only; don't simulate anything", &user_profile_only},
+  {"exitend",                            OPTION_TYPE_BOOL,    0, "Kill the thread after full simulation completes rather than going native", &exit_after_fullsim},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Debugging", null},
+  {"dumpcode",                           OPTION_TYPE_STRING,  0, "Save page of user code at final rip to file <dumpcode>", &dumpcode_filename},
+  {"dump-at-end",                        OPTION_TYPE_BOOL,    0, "Set breakpoint and dump core before first instruction executed on return to native mode", &dump_at_end},
+  {"overshoot-and-dump",                 OPTION_TYPE_BOOL,    0, "Set breakpoint and dump core after first instruction executed on return to native mode", &overshoot_and_dump},
+  {"pause-at-startup",                   OPTION_TYPE_W64,     0, "Pause for N seconds after starting up (to allow debugger to attach)", &pause_at_startup},
+  {"perfect-cache",                      OPTION_TYPE_BOOL,    0, "Perfect cache hit rate", &perfect_cache},
+
+  {"ooo",                                OPTION_TYPE_BOOL,    0, "Use out of order core (always)", &use_out_of_order_core_dummy},
+};
+
+void print_usage(int argc, char* argv[]) {
+  cerr << "Syntax: ptlsim <executable> <arguments...>", endl;
+  cerr << "All other options come from file /home/<username>/.ptlsim/path/to/executable", endl, endl;
+
+  ConfigurationParser(optionlist, lengthof(optionlist)).printusage(cerr);
+}
+
+static char hostname[512] = "localhost";
+static char domainname[512] = "domain";
+
+void print_banner(ostream& os, int argc, char* argv[]) {
+  gethostname(hostname, sizeof(hostname));
+  getdomainname(domainname, sizeof(domainname));
+
+  os << "//  ", endl;
+#ifdef __x86_64__
+  os << "//  PTLsim: Cycle Accurate x86-64 Simulator", endl;
+#else
+  os << "//  PTLsim: Cycle Accurate x86 Simulator (32-bit version)", endl;
+#endif
+  os << "//  Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>", endl;
+  os << "// ", endl;
+  os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
+    stringify(__GNUC__), ".", stringify(__GNUC_MINOR__), endl;
+  os << "//  Running on ", hostname, ".", domainname, " (", (int)math::floor(CycleTimer::gethz() / 1000000.), " MHz)", endl;
+  os << "//  ", endl;
+  os << "//  Arguments: ";
+  foreach (i, argc) {
+    os << argv[i];
+    if (i != (argc-1)) os << ' ';
+  }
+  os << endl;
+  os << "//  Thread ", getpid(), " is running in ", (ctx.use64 ? "64-bit x86-64" : "32-bit x86"), " mode", endl;
+  os << "//  ", endl;
+  os << endl;
+}
+
+void print_banner(int argc, char* argv[]) {
+  print_banner(cerr, argc, argv);
+}
+
+const char* get_full_exec_filename() {
+  static char full_exec_filename[1024];
+  int rc = readlink("/proc/self/exe", full_exec_filename, sizeof(full_exec_filename)-1);
+  assert(inrange(rc, 0, (int)sizeof(full_exec_filename)-1));
+  full_exec_filename[rc] = 0;
+  return full_exec_filename;
+}
+
+time_t ptlsim_build_timestamp;
+
+static stringbuf& format_time(stringbuf& sb, time_t time) {
+  struct tm tm;
+  localtime_r(&time, &tm);
+
+  char timebuf[64];
+  strftime(timebuf, sizeof(timebuf), "%c", &tm);
+  sb << timebuf;
+  return sb;
+}
+
+int init_config(int argc, char** argv) {
+  char confroot[1024] = "";
+  stringbuf sb;
+
+
+  char* homedir = getenv("HOME");
+
+  const char* execname = get_full_exec_filename();
+
+  sb << (homedir ? homedir : "/etc"), "/.ptlsim", execname, ".conf";
+
+  char args[4096];
+  istream is(sb);
+  if (!is) {
+    cerr << "ptlsim: Warning: could not find '", sb, "', using defaults", endl;
+  }
+
+  const char* simname = "ptlsim";
+
+  for (;;) {
+    is >> readline(args, sizeof(args));
+    if (!is) break;
+    char* p = args;
+    while (*p && (*p != '#')) p++;
+    if (*p == '#') *p = 0;
+    if (args[0]) break;
+  }
+
+  is.close();
+
+  char* ptlargs[1024];
+
+  ptlargs[0] = strdup(simname);
+  int ptlargc = 0;
+  char* p = args;
+  while (*p && (ptlargc < (lengthof(ptlargs)-1))) {
+    char* pbase = p;
+    while ((*p != 0) && (*p != ' ')) p++;
+    ptlargc++;
+    ptlargs[ptlargc] = strndup(pbase, p - pbase);
+    if (*p == 0) break;
+    *p++;
+    while ((*p != 0) && (*p == ' ')) p++;
+  }
+
+  ConfigurationParser options(optionlist, lengthof(optionlist));
+  // skip the leading argv[0]; just parse the options:
+  options.parse(ptlargc, ptlargs+1);
+
+  if (log_filename) {
+    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
+    logfile.open(log_filename);
+  }
+
+  if (!ptlsim_quiet) print_banner(cerr, argc, argv);
+  print_banner(logfile, argc, argv);
+
+  //
+  // Fix up parameter defaults:
+  //
+  if ((start_log_at_iteration == infinity) && (loglevel > 0))
+    start_log_at_iteration = 0;
+
+  logfile << options;
+
+  if (stats_filename) {
+    dsroot = new DataStoreNode("root");
+    DataStoreNode& info = (*dsroot)("ptlsim");
+
+    char timestring[64];
+
+    stringbuf sb;
+    sb.reset();
+    info.add("timestamp", format_time(sb, time(null)));
+
+    sb.reset();
+    info.add("build-timestamp", format_time(sb, ptlsim_build_timestamp));
+
+    sb.reset();
+    sb << stringify(BUILDHOST);
+    info.add("build-hostname", sb);
+
+    sb.reset();
+    sb << "gcc-", stringify(__GNUC__), ".", stringify(__GNUC_MINOR__);
+    info.add("build-compiler-version", sb);
+
+    sb.reset();
+    sb << hostname, ".", domainname;
+    info.add("hostname", sb);
+
+
+    info.addfloat("native-mhz", CycleTimer::gethz() / 1000000);
+
+    info.add("executable", execname);
+
+    sb.reset();
+    foreach (i, argc) {
+      sb << argv[i];
+      if (i != (argc-1)) sb << ' ';
+    }
+    info.add("args", sb);
+  }
+
+  snapshotid = 0;
+
+  return 0;
+}
 
 void save_stats() {
   total_time.stop();
@@ -47,7 +295,6 @@ void user_process_terminated(int rc) {
   save_stats();
   logfile << "PTLsim exiting...", endl, flush;
   logfile.close();
-  remove_exit_callback();
   sys_exit(rc);
 }
 
@@ -58,7 +305,6 @@ void show_stats_and_switch_to_native() {
     logfile << endl, "=== Exiting after full simulation on tid ", sys_gettid(), " at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " (", 
       sim_cycle, " cycles, ", total_user_insns_committed, " user commits, ", iterations, " iterations) ===", endl, endl;
     logfile.flush();
-    remove_exit_callback();
     sys_exit(0);
   }
 
@@ -91,7 +337,6 @@ void show_stats_and_switch_to_native() {
   }
 
   logfile.flush();
-  init_exit_callback();
   switch_to_native_restore_context();
 }
 
@@ -150,7 +395,7 @@ int main(int argc, char* argv[]) {
   environ = initenv;
   init_config(argc, argv);
   init_perfctrs();
-  if (ctx.use64) init_exit_callback();
+  init_signal_callback();
 
   if (pause_at_startup) {
     logfile << "ptlsim: Paused for ", pause_at_startup, " seconds; attach debugger to PID ", getpid(), " now...", endl, flush;

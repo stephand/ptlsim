@@ -96,81 +96,78 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // name, opclass, latency, fu
   {"nop",            OPCLASS_LOGIC,         A, 0,           ANYINT|ANYFPU},
   {"mov",            OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU}, // move or merge
-  // Simple ALU operations
+  // Logical
   {"and",            OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
-  {"or",             OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
-  {"xor",            OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
   {"andnot",         OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
-  {"ornot",          OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
+  {"xor",            OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
+  {"or",             OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
   {"nand",           OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
-  {"nor",            OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
+  {"ornot",          OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
   {"eqv",            OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
+  {"nor",            OPCLASS_LOGIC,         A, opAB,        ANYINT|ANYFPU},
+  // Mask, insert or extract bytes
+  {"maskb",          OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // mask rd = ra,rb,[ds,ms,mc], bytes only
+  // Add and subtract
   {"add",            OPCLASS_ADDSUB,        A, opAB,        ANYINT}, // ra + rb
   {"sub",            OPCLASS_ADDSUB,        A, opAB,        ANYINT}, // ra - rb
-  {"adda",           OPCLASS_ADDSUB,        A, opABC,       ANYINT}, // ra + rb + rc
-  {"suba",           OPCLASS_ADDSUB,        A, opABC,       ANYINT}, // ra - rb + rc
+  {"adda",           OPCLASS_ADDSHIFT,      A, opABC,       ANYINT}, // ra + rb + rc
+  {"suba",           OPCLASS_ADDSHIFT,      A, opABC,       ANYINT}, // ra - rb + rc
   {"addm",           OPCLASS_ADDSUB,        A, opABC,       ANYINT}, // lowbits(ra + rb, m)
   {"subm",           OPCLASS_ADDSUB,        A, opABC,       ANYINT}, // lowbits(ra - rb, m)
-  {"addc",           OPCLASS_ADDSUBC,       A, opABC|ccC,   ANYINT},
-  {"subc",           OPCLASS_ADDSUBC,       A, opABC|ccC,   ANYINT},
-  {"sel",            OPCLASS_SELECT,        A, opABC|ccABC, ANYINT}, // rd = falsereg,truereg,condreg
-  {"set",            OPCLASS_SELECT,        A, opABC|ccC,   ANYINT},
-  {"set.sub",        OPCLASS_SELECT,        A, opABC,       ANYINT},
-  {"set.and",        OPCLASS_SELECT,        A, opABC,       ANYINT},
-  {"br",             OPCLASS_COND_BRANCH,   A, opAB|ccAB,   ANYINT}, // branch
-  {"br.sub",         OPCLASS_COND_BRANCH,   A, opAB,        ANYINT}, // compare and branch ("cmp" form: subtract)
-  {"br.and",         OPCLASS_COND_BRANCH,   A, opAB,        ANYINT}, // compare and branch ("test" form: and)
-  {"jmp",            OPCLASS_INDIR_BRANCH,  A, opA,         ANYINT}, // indirect user branch
-  {"jmpp",           OPCLASS_INDIR_BRANCH|OPCLASS_BARRIER,  A, opA, ANYALU|ANYLDU}, // indirect branch within PTL
-  {"bru",            OPCLASS_UNCOND_BRANCH, A, 0,     ANYINT}, // unconditional branch (branch cap)
-  {"brp",            OPCLASS_UNCOND_BRANCH|OPCLASS_BARRIER, A, 0, ANYALU|ANYLDU}, // unconditional branch (PTL only)
-  {"chk",            OPCLASS_CHECK,         A, opAB|ccAB,   ANYINT}, // check condition and rollback if false (uses cond codes); rcimm is exception type
-  {"chk.sub",        OPCLASS_CHECK,         A, opAB,        ANYINT}, // check ("cmp" form: subtract)
-  {"chk.and",        OPCLASS_CHECK,         A, opAB,        ANYINT}, // check ("test" form: and)
-  // User loads and stores
-  {"ld",             OPCLASS_LOAD,          L, opABC,       ANYLDU}, // load zero extended
-  {"ldx",            OPCLASS_LOAD,          L, opABC,       ANYLDU}, // load sign extended
-  {"ld.jmp",         OPCLASS_LOAD|OPCLASS_INDIR_BRANCH, L, opAB, ANYLDU}, // load and indirect branch check
-  {"ld.and",         OPCLASS_LOAD|OPCLASS_LOGIC, 2, opAB,   ANYLDU}, // load and and (for test)
-  {"ld.lm",          OPCLASS_LOAD,          1, opAB,        ANYLDU}, // load from local memory 
-  {"ldx.lm",         OPCLASS_LOAD,          1, opAB,        ANYLDU}, // load from local memory, sign extended
-  {"ld.pre",         OPCLASS_PREFETCH,      1, opAB,        ANYLDU}, // prefetch
-  {"st",             OPCLASS_STORE,         1, opABC,       ANYSTU}, // store
-  {"st.lm",          OPCLASS_STORE,         1, opABC,       ANYSTU}, // store to local memory
-  // Shifts and rotates
-  {"rotl",           OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},  
-  {"rotr",           OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},   
-  {"rotcl",          OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
-  {"rotcr",          OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},  
-  {"shl",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
-  {"shr",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
-  {"sar",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},   
-  // Masking, insert and extract
-  {"mask",           OPCLASS_SHIFTROT,      A, opAB,        ANYALU}, // mask rd = ra,rb,[ds,ms,mc]
-  // Simple shifting (restricted to small immediate)
-  {"shls",           OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // rb imm limited to 0-8
-  {"shrs",           OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // rb imm limited to 0-8
-  {"sars",           OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // rb imm limited to 0-8
-  {"maskb",          OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // mask rd = ra,rb,[ds,ms,mc], bytes only
-  // Endian byte swap
-  {"bswap",          OPCLASS_LOGIC,         A, opAB,        ANYINT},
-  // Flag operations
-  {"collcc",         OPCLASS_FLAGS,         A, opABC|ccABC, ANYINT},
-  {"movccr",         OPCLASS_FLAGS,         A, opA|ccA,     ANYINT},
-  {"movrcc",         OPCLASS_FLAGS,         A, opA,         ANYINT},
+  // Condition code logical ops
   {"andcc",          OPCLASS_FLAGS,         A, opAB|ccAB,   ANYINT},
   {"orcc",           OPCLASS_FLAGS,         A, opAB|ccAB,   ANYINT},
-  {"ornotcc",        OPCLASS_FLAGS,         A, opAB|ccAB,   ANYINT},
   {"xorcc",          OPCLASS_FLAGS,         A, opAB|ccAB,   ANYINT},
-  // Multiplication
-  {"mull",           OPCLASS_MULTIPLY,      4, opAB,        ANYFPU},
-  {"mulh",           OPCLASS_MULTIPLY,      4, opAB,        ANYFPU},
-  {"mulhu",          OPCLASS_MULTIPLY,      4, opAB,        ANYFPU},
+  {"ornotcc",        OPCLASS_FLAGS,         A, opAB|ccAB,   ANYINT},
+  // Condition code movement and merging
+  {"movccr",         OPCLASS_FLAGS,         A, opA|ccA,     ANYINT},
+  {"movrcc",         OPCLASS_FLAGS,         A, opA,         ANYINT},
+  {"collcc",         OPCLASS_FLAGS,         A, opABC|ccABC, ANYINT},
+  // Simple shifting (restricted to small immediate 1..8)
+  {"shls",           OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // rb imm limited to 0-8
+  {"shrs",           OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // rb imm limited to 0-8
+  {"bswap",          OPCLASS_LOGIC,         A, opAB,        ANYINT}, // byte swap rb
+  {"sars",           OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // rb imm limited to 0-8
   // Bit testing
   {"bt",             OPCLASS_LOGIC,         A, opAB,        ANYALU},
   {"bts",            OPCLASS_LOGIC,         A, opAB,        ANYALU},
   {"btr",            OPCLASS_LOGIC,         A, opAB,        ANYALU},
   {"btc",            OPCLASS_LOGIC,         A, opAB,        ANYALU},
+  // Set and select
+  {"set",            OPCLASS_SELECT,        A, opABC|ccC,   ANYINT},
+  {"set.sub",        OPCLASS_SELECT,        A, opABC,       ANYINT},
+  {"set.and",        OPCLASS_SELECT,        A, opABC,       ANYINT},
+  {"sel",            OPCLASS_SELECT,        A, opABC|ccABC, ANYINT}, // rd = falsereg,truereg,condreg
+  // Branches
+  {"br",             OPCLASS_COND_BRANCH,   A, opAB|ccAB,   ANYINT}, // branch
+  {"br.sub",         OPCLASS_COND_BRANCH,   A, opAB,        ANYINT}, // compare and branch ("cmp" form: subtract)
+  {"br.and",         OPCLASS_COND_BRANCH,   A, opAB,        ANYINT}, // compare and branch ("test" form: and)
+  {"jmp",            OPCLASS_INDIR_BRANCH,  A, opA,         ANYINT}, // indirect user branch
+  {"bru",            OPCLASS_UNCOND_BRANCH, A, 0,     ANYINT}, // unconditional branch (branch cap)
+  {"jmpp",           OPCLASS_INDIR_BRANCH|OPCLASS_BARRIER,  A, opA, ANYALU|ANYLDU}, // indirect branch within PTL
+  {"brp",            OPCLASS_UNCOND_BRANCH|OPCLASS_BARRIER, A, 0, ANYALU|ANYLDU}, // unconditional branch (PTL only)
+  // Checks
+  {"chk",            OPCLASS_CHECK,         A, opAB|ccAB,   ANYINT}, // check condition and rollback if false (uses cond codes); rcimm is exception type
+  {"chk.sub",        OPCLASS_CHECK,         A, opAB,        ANYINT}, // check ("cmp" form: subtract)
+  {"chk.and",        OPCLASS_CHECK,         A, opAB,        ANYINT}, // check ("test" form: and)
+  // Loads and stores
+  {"ld",             OPCLASS_LOAD,          L, opABC,       ANYLDU}, // load zero extended
+  {"ldx",            OPCLASS_LOAD,          L, opABC,       ANYLDU}, // load sign extended
+  {"ld.pre",         OPCLASS_PREFETCH,      1, opAB,        ANYLDU}, // prefetch
+  {"st",             OPCLASS_STORE,         1, opABC,       ANYSTU}, // store
+  // Shifts, rotates and complex masking
+  {"shl",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
+  {"shr",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
+  {"mask",           OPCLASS_SHIFTROT,      A, opAB,        ANYALU}, // mask rd = ra,rb,[ds,ms,mc]
+  {"sar",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
+  {"rotl",           OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},  
+  {"rotr",           OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},   
+  {"rotcl",          OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
+  {"rotcr",          OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},  
+  // Multiplication
+  {"mull",           OPCLASS_MULTIPLY,      4, opAB,        ANYFPU},
+  {"mulh",           OPCLASS_MULTIPLY,      4, opAB,        ANYFPU},
+  {"mulhu",          OPCLASS_MULTIPLY,      4, opAB,        ANYFPU},
   // Bit scans
   {"ctz",            OPCLASS_BITSCAN,       3, opB,         ANYFPU},
   {"clz",            OPCLASS_BITSCAN,       3, opB,         ANYFPU},
@@ -326,7 +323,6 @@ stringbuf& operator <<(stringbuf& sb, const TransOp& op) {
   sbname << (fp ? fptype_names[op.size] : size_names[op.size]);
 
   if (isclass(op.opcode, OPCLASS_USECOND)) sbname << ".", cond_code_names[op.cond];
-  if (op.opcode == OP_ldx || op.opcode == OP_ldx_lm) sbname << (char)('0' + (1 << op.extshift));
   if (isload(op.opcode) || isstore(op.opcode)) {
     sbname << ((op.cond == LDST_ALIGN_LO) ? ".low" : (op.cond == LDST_ALIGN_HI) ? ".high" : "");
   } else if (op.opcode == OP_mask) {
@@ -469,7 +465,6 @@ stringbuf& nameof(stringbuf& sbname, const TransOp& uop) {
 
   if (isclass(op, OPCLASS_USECOND))
     sbname << ".", cond_code_names[uop.cond];
-  if (op == OP_ldx || op == OP_ldx_lm) sbname << (char)('0' + (1 << uop.cond));
 
   if (ld|st) {
     sbname << ((uop.cond == LDST_ALIGN_LO) ? ".low" : (uop.cond == LDST_ALIGN_HI) ? ".high" : "");

@@ -26,12 +26,40 @@ void init_uops();
 void init_translate();
 BasicBlock* translate_basic_block(void* rip);
 
-struct TransOpPair {
-  TransOp uops[2];
+static const int MAX_TRANSOP_BUFFER_SIZE = 4;
+
+struct TransOpBuffer {
+  TransOp uops[MAX_TRANSOP_BUFFER_SIZE];
+  uopimpl_func_t synthops[MAX_TRANSOP_BUFFER_SIZE];
   int index;
+  int count;
+
+  bool get(TransOp& uop, uopimpl_func_t& synthop) {
+    if (!count) return false;
+    uop = uops[index];
+    synthop = synthops[index];
+    index++;
+    if (index >= count) { count = 0; index = 0; }
+    return true;
+  }
+
+  void reset() {
+    index = 0;
+    count = 0;
+  }
+
+  int put() {
+    return count++;
+  }
+
+  bool empty() const {
+    return (count == 0);
+  }
+
+  TransOpBuffer() { reset(); }
 };
 
-void split_unaligned(const TransOp& transop, TransOpPair& pair);
+void split_unaligned(const TransOp& transop, TransOpBuffer& buf);
 
 void capture_translate_timers(DataStoreNode& root);
 void capture_translate_stats(DataStoreNode& root);

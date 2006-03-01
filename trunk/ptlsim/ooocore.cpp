@@ -1253,8 +1253,7 @@ void fetch() {
     return;
   }
 
-  TransOpPair unaligned_ldst_pair;
-  unaligned_ldst_pair.index = -1;
+  TransOpBuffer unaligned_ldst_buf;
 
   while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
     if (!fetchq.remaining()) {
@@ -1297,7 +1296,12 @@ void fetch() {
 
     FetchBufferEntry& transop = *fetchq.alloc();
 
-    TransOp& preop = current_basic_block->transops[current_basic_block_transop_index];
+    uopimpl_func_t synthop = null;
+
+    if (!unaligned_ldst_buf.get(transop, synthop)) {
+      transop = current_basic_block->transops[current_basic_block_transop_index];
+      synthop = current_basic_block->synthops[current_basic_block_transop_index];
+    }
 
     //
     // Handle loads and stores marked as unaligned in the basic block cache.
@@ -1306,28 +1310,16 @@ void fetch() {
     // Fetching continues from this buffer instead of the basic block
     // until both uops are forced into the pipeline.
     //
-    if ((unaligned_ldst_pair.index < 0) & preop.unaligned) {
-      if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": split unaligned load or store ", preop, endl;
-      split_unaligned(preop, unaligned_ldst_pair);
-      unaligned_ldst_pair.index = 0;
+    if (transop.unaligned) {
+      if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": split unaligned load or store ", transop, endl;
+      split_unaligned(transop, unaligned_ldst_buf);
+      assert(unaligned_ldst_buf.get(transop, synthop));
     }
 
-    if (unaligned_ldst_pair.index < 0) {
-      transop = preop;
-      transop.origop = &preop;
-    } else {
-      transop = unaligned_ldst_pair.uops[unaligned_ldst_pair.index];
-      transop.origop = null;
-      assert(unaligned_ldst_pair.index <= 1);
-      unaligned_ldst_pair.index++;
-    }
+    transop.origop = &current_basic_block->transops[current_basic_block_transop_index];
+    transop.synthop = synthop;
 
-    transop.synthop = current_basic_block->synthops[current_basic_block_transop_index];
-
-    // Is this the last uop in the pair? If so, reset to start
-    if (unaligned_ldst_pair.index > 1) unaligned_ldst_pair.index = -1;
-
-    current_basic_block_transop_index += (unaligned_ldst_pair.index < 0);
+    current_basic_block_transop_index += (unaligned_ldst_buf.empty());
 
     if (transop.som) {
       bytes_in_current_insn = transop.bytes;
@@ -1441,7 +1433,7 @@ static const byte archdest_can_rename[TRANSREG_COUNT] = {
   1, 1, 1, 1, 1, 1, 1, 0,
   // The following are ONLY used during the translation and renaming process:
   1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 0, 1, 0, 0, 0,
+  1, 1, 1, 1, 1, 1, 1, 1,
 };
 
 byte uop_executable_on_cluster[OP_MAX_OPCODE];
@@ -2705,8 +2697,8 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   bool internal = uop.internal;
   bool signext = (uop.opcode == OP_ldx);
 
-  W64 raddr = ra + rb;
-  if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
+  W64 raddr = (aligntype == LDST_ALIGN_NORMAL) ? (ra + rb) : ra;
+  // if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
   raddr &= virt_addr_mask;
   W64 origaddr = raddr;
   bool annul = 0;
@@ -2857,15 +2849,15 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
 
   if (aligntype == LDST_ALIGN_HI) {
     //
-    // Concatenate the aligned data from a previous ld.lo uop provided in rc
+    // Concatenate the aligned data from a previous ld.lo uop provided in rb
     // with the currently loaded data D as follows:
     //
-    // rc | D
+    // rb | D
     //
     // Example:
     //
     // floor(a) floor(a)+8
-    // ---rc--  --DD---
+    // ---rb--  --DD---
     // 0123456701234567
     //    XXXXXXXX
     //    ^ origaddr
@@ -2882,7 +2874,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
         W64 hi;
       } aligner;
       
-      aligner.lo = rc;
+      aligner.lo = rb;
       aligner.hi = data;
       
       W64 offset = lowbits(origaddr - floor(origaddr, 8), 4);
@@ -2894,7 +2886,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
       // that was already checked for exceptions and forwarding:
       //
       W64 offset = lowbits(origaddr, 3);
-      state.data = loaddata(((byte*)&rc) + offset, sizeshift, signext);
+      state.data = loaddata(((byte*)&rb) + offset, sizeshift, signext);
       state.invalid = 0;
       state.datavalid = 1;
 
@@ -4810,6 +4802,8 @@ int out_of_order_core_toplevel_loop() {
 
   last_commit_at_cycle = sim_cycle;
 
+  requested_switch_to_native = 0;
+
   while ((iterations < stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns)) {
     if ((iterations >= start_log_at_iteration) & (!loglevel)) {
       loglevel = oldloglevel;
@@ -4870,6 +4864,11 @@ int out_of_order_core_toplevel_loop() {
       exiting = !handle_exception();
       if (exiting) break;
     } else if (commitrc == COMMIT_RESULT_STOP) {
+      break;
+    }
+
+    if (requested_switch_to_native) {
+      exiting = 1;
       break;
     }
 

@@ -274,8 +274,8 @@ namespace SequentialCore {
 
     Waddr rip = arf[REG_rip];
 
-    W64 raddr = ra + rb;
-    if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
+    W64 raddr = (aligntype == LDST_ALIGN_NORMAL) ? ra + rb : ra;
+    // if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
     raddr &= virt_addr_mask;
     W64 origaddr = raddr;
     bool annul = 0;
@@ -328,15 +328,15 @@ namespace SequentialCore {
 
     if (aligntype == LDST_ALIGN_HI) {
       //
-      // Concatenate the aligned data from a previous ld.lo uop provided in rc
+      // Concatenate the aligned data from a previous ld.lo uop provided in rb
       // with the currently loaded data D as follows:
       //
-      // rc | D
+      // rb | D
       //
       // Example:
       //
       // floor(a) floor(a)+8
-      // ---rc--  --DD---
+      // ---rb--  --DD---
       // 0123456701234567
       //    XXXXXXXX
       //    ^ origaddr
@@ -349,7 +349,7 @@ namespace SequentialCore {
           W64 hi;
         } aligner;
       
-        aligner.lo = rc;
+        aligner.lo = rb;
         aligner.hi = data;
       
         W64 offset = lowbits(origaddr - floor(origaddr, 8), 4);
@@ -361,7 +361,7 @@ namespace SequentialCore {
         // that was already checked for exceptions and forwarding:
         //
         W64 offset = lowbits(origaddr, 3);
-        state.data = loaddata(((byte*)&rc) + offset, sizeshift, signext);
+        state.data = loaddata(((byte*)&rb) + offset, sizeshift, signext);
         state.invalid = 0;
         state.datavalid = 1;
 
@@ -531,8 +531,8 @@ namespace SequentialCore {
 
     if (logable(1)) logfile << endl, "Sequentially executing basic block ", bb, " (rip ", (void*)(Waddr)bb->rip, ", ", bb->count, " uops), insn limit ", insnlimit, endl, flush;
 
-    TransOpPair unaligned_ldst_pair;
-    unaligned_ldst_pair.index = -1;
+    TransOpBuffer unaligned_ldst_buf;
+    unaligned_ldst_buf.index = -1;
 
     int uopindex = 0;
     int current_uop_in_macro_op = 0;
@@ -548,20 +548,20 @@ namespace SequentialCore {
         return SEQEXEC_INVALIDRIP;
       }
 
-      TransOp uop = bb->transops[uopindex];
+      TransOp uop;
+      uopimpl_func_t synthop = null;
 
-      if ((unaligned_ldst_pair.index < 0) & uop.unaligned) {
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": split unaligned load or store ", uop, endl;
-        split_unaligned(uop, unaligned_ldst_pair);
-        unaligned_ldst_pair.index = 0;
+      if (!unaligned_ldst_buf.get(uop, synthop)) {
+        uop = bb->transops[uopindex];
+        synthop = bb->synthops[uopindex];
       }
 
-      if (unaligned_ldst_pair.index < 0) {
-        assert(uopindex < bb->count);
-      } else {
-        uop = unaligned_ldst_pair.uops[unaligned_ldst_pair.index];
-        assert(unaligned_ldst_pair.index <= 1);
-        unaligned_ldst_pair.index++;
+      assert(uopindex < bb->count);
+
+      if (uop.unaligned) {
+        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": split unaligned load or store ", uop, endl;
+        split_unaligned(uop, unaligned_ldst_buf);
+        assert(unaligned_ldst_buf.get(uop, synthop));
       }
   
       if (uop.som) {
@@ -594,8 +594,6 @@ namespace SequentialCore {
       bool st = isstore(uop.opcode);
       bool br = isbranch(uop.opcode);
 
-      uopimpl_func_t synthop = bb->synthops[uopindex];
-      
       SFR sfr;
       
       bool refetch = 0;
@@ -620,6 +618,7 @@ namespace SequentialCore {
       } else if (br) {
         state.brreg.riptaken = uop.riptaken;
         state.brreg.ripseq = uop.ripseq;
+        assert((void*)synthop);
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags); 
 
         if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.fastcheck((void*)(Waddr)state.reg.rddata, asp.execmap))) {
@@ -635,6 +634,7 @@ namespace SequentialCore {
           logfile << endl;
         }
       } else {
+        assert((void*)synthop);
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags);
         if (state.reg.rdflags & FLAG_INV) ctx.exception = state.reg.rddata;
         
@@ -685,16 +685,13 @@ namespace SequentialCore {
 
       if (uop.eom) arf[REG_rip] = (uop.rd == REG_rip) ? state.reg.rddata : (arf[REG_rip] + bytes_in_current_insn);
 
-      // Is this the last uop in the pair? If so, reset to start
-      if (unaligned_ldst_pair.index > 1) unaligned_ldst_pair.index = -1;
-
       seq_total_user_insns_committed += uop.eom;
       total_user_insns_committed += uop.eom;
       user_insns += uop.eom;
 
       current_uuid++;
       // Don't advance on cracked loads/stores:
-      uopindex += (unaligned_ldst_pair.index < 0);
+      uopindex += unaligned_ldst_buf.empty();
       current_uop_in_macro_op++;
       iterations++;
       sim_cycle++;
@@ -721,6 +718,8 @@ namespace SequentialCore {
     ctseq.start();
 
     W64 last_printed_status_at_cycle = 0;
+
+    requested_switch_to_native = 0;
 
     while ((iterations < stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns_limit)) {
       if ((iterations >= start_log_at_iteration) & (!loglevel)) {
@@ -776,6 +775,8 @@ namespace SequentialCore {
       default:
         assert(false);
       }
+
+      if (requested_switch_to_native) exiting = 1;
 
       if (exiting) break;
     }

@@ -50,6 +50,7 @@ inside_sim_escape_code_template_32bit_end:
 
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
+  mov   byte ptr [running_in_sim_mode],1
   mov   %eax,%esp       # origrsp
   push  offset _start   # next_init_func
   push  %eax
@@ -108,8 +109,11 @@ get_gs:
 .extern fsreg
 .extern gsreg
 
+.extern running_in_sim_mode
+
 .global save_context_switch_to_sim_lowlevel
 save_context_switch_to_sim_lowlevel:
+  mov      byte ptr [running_in_sim_mode],1      # store must be atomic
   mov      [ctx + 8*REG_rax + 8*0],%eax
   mov      [ctx + 8*REG_rax + 8*1],%ecx
   mov      [ctx + 8*REG_rax + 8*2],%edx
@@ -213,7 +217,7 @@ switch_to_native_restore_context_lowlevel:
   # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
 # mov      %rip,[%edi + 8*REG_rip]      # (do later)
 # mov      %rflags,[%edi + 8*REG_flags] # (already done)
-# fldsw    [%edi + 8*REG_mxcsr + 4]     # Restore FP status word     ++MTY FIXME there is a fstsw but no corresponding fldsw
+# fldsw    [%edi + 8*REG_mxcsr + 4]     # Restore FP status word
 #  fldcw    [%edi + 8*REG_mxcsr + 6]     # Restore FP control word
   ldmxcsr  [%edi + 8*REG_mxcsr]         # Restore SSE flags
   # (No need to restore %tr0, %tr1, %tr2, %zero
@@ -238,6 +242,7 @@ switch_to_native_restore_context_lowlevel:
 
   mov      %edi,[%edi + 8*REG_rdi]      # Restore %rdi
 
+  mov      byte ptr [running_in_sim_mode],0      # store must be atomic
   jmp      [switch_to_native_restore_context_temp_32_to_32]
 
 #endif

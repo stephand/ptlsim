@@ -352,7 +352,6 @@ extern struct FunctionalUnit FU[FU_COUNT];
 #define OPCLASS_SELECT                  ((1 << 4) | OPCLASS_USESFLAGS | OPCLASS_USESRC)
 #define OPCLASS_COMPARE                 (1 << 5)
 #define OPCLASS_COND_BRANCH             ((1 << 6) | OPCLASS_USESFLAGS)
-#define OPCLASS_CONDITIONAL             (OPCLASS_SELECT|OPCLASS_COMPARE|OPCLASS_COND_BRANCH)
 
 #define OPCLASS_INDIR_BRANCH            (1 << 7)
 #define OPCLASS_UNCOND_BRANCH           (1 << 8)
@@ -371,6 +370,8 @@ extern struct FunctionalUnit FU[FU_COUNT];
 #define OPCLASS_BITSCAN                 (1 << 16)
 #define OPCLASS_FLAGS                   (1 << 17)
 #define OPCLASS_CHECK                   (1 << 18)
+
+#define OPCLASS_CONDITIONAL             (OPCLASS_SELECT|OPCLASS_COND_BRANCH|OPCLASS_CHECK)
 
 #define OPCLASS_FP_ALU                  (1 << 19)
 #define OPCLASS_FP_DIVSQRT              (1 << 20)
@@ -394,81 +395,83 @@ extern const char* opclass_names[OPCLASS_COUNT];
 enum {
   OP_nop,
   OP_mov,
-
+  // Logical
   OP_and,
-  OP_or,
-  OP_xor,
   OP_andnot,
-  OP_ornot,
+  OP_xor,
+  OP_or,
   OP_nand,
-  OP_nor,
+  OP_ornot,
   OP_eqv,
+  OP_nor,
+  // Mask, insert or extract bytes
+  OP_maskb,
+  // Add and subtract
   OP_add,
   OP_sub,
   OP_adda,
   OP_suba,
   OP_addm,
   OP_subm,
-  OP_addc,
-  OP_subc,
-  OP_sel,
-  OP_set,
-  OP_set_sub,
-  OP_set_and,
-  OP_br,
-  OP_br_sub,
-  OP_br_and,
-  OP_jmp,
-  OP_jmpp,
-  OP_bru,
-  OP_brp,
-  OP_chk,
-  OP_chk_sub,
-  OP_chk_and,
-
-  OP_ld,
-  OP_ldx,
-  OP_ld_jmp,
-  OP_ld_and,
-  OP_ld_lm,
-  OP_ldx_lm,
-  OP_ld_pre,
-  OP_st,
-  OP_st_lm,
-
-  OP_rotl,
-  OP_rotr,
-  OP_rotcl,
-  OP_rotcr,
-  OP_shl,
-  OP_shr,
-  OP_sar,
-  OP_mask,
-
-  OP_shls,
-  OP_shrs,
-  OP_sars,
-  OP_maskb,
-
-  OP_bswap,
-
-  OP_collcc,
-  OP_movccr,
-  OP_movrcc,
+  // Condition code logical ops
   OP_andcc,
   OP_orcc,
-  OP_ornotcc,
   OP_xorcc,
-  OP_mull,
-  OP_mulh,
-  OP_mulhu,
+  OP_ornotcc,
+  // Condition code movement and merging
+  OP_movccr,
+  OP_movrcc,
+  OP_collcc,
+  // Simple shifting (restricted to small immediate 1..8)
+  OP_shls,
+  OP_shrs,
+  OP_bswap,
+  OP_sars,
+  // Bit testing
   OP_bt,
   OP_bts,
   OP_btr,
   OP_btc,
+  // Set and select
+  OP_set,
+  OP_set_sub,
+  OP_set_and,
+  OP_sel,
+  // Branches
+  OP_br,
+  OP_br_sub,
+  OP_br_and,
+  OP_jmp,
+  OP_bru,
+  OP_jmpp,
+  OP_brp,
+  // Checks
+  OP_chk,
+  OP_chk_sub,
+  OP_chk_and,
+  // Loads and stores
+  OP_ld,
+  OP_ldx,
+  OP_ld_pre,
+  OP_st,
+  // Shifts, rotates and complex masking
+  OP_shl,
+  OP_shr,
+  OP_mask,
+  OP_sar,
+  OP_rotl,
+  OP_rotr,
+  OP_rotcl,
+  OP_rotcr,
+  // Multiplication
+  OP_mull,
+  OP_mulh,
+  OP_mulhu,
+  // Bit scans
   OP_ctz,
   OP_clz,
   OP_ctpop,
+  // Floating point
   OP_addf,
   OP_subf,
   OP_mulf,
@@ -508,10 +511,11 @@ enum {
 struct OpcodeInfo {
   const char* name;
   W32 opclass;
-  W16 latency;
-  W16 flagops;
+  W8  latency;
+  W8  flagops;
   W16 fu;
 };
+
 
 extern const OpcodeInfo opinfo[OP_MAX_OPCODE];
 
@@ -524,6 +528,23 @@ inline bool iscondbranch(int opcode) { return isclass(opcode, OPCLASS_COND_BRANC
 inline bool isbranch(int opcode) { return isclass(opcode, OPCLASS_BRANCH); }
 inline bool isbarrier(int opcode) { return isclass(opcode, OPCLASS_BARRIER); }
 inline const char* nameof(int opcode) { return (opcode < OP_MAX_OPCODE) ? opinfo[opcode].name : "INVALID"; }
+
+union MaskControlInfo {
+  struct { W32 ms:6, mc:6, ds:6; } info;
+  W32 data;
+
+  MaskControlInfo() { }
+
+  MaskControlInfo(W32 data) { this->data = data; }
+
+  MaskControlInfo(int ms, int mc, int ds) {
+    this->info.ms = ms;
+    this->info.mc = mc;
+    this->info.ds = ds;
+  }
+
+  operator W32() const { return data; }
+};
 
 // Mask uop control
 static inline W32 make_mask_control_info(int ms, int mc, int ds) {
@@ -583,6 +604,10 @@ struct TransOp: public TransOpBase {
   TransOp() { }
 
   TransOp(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0) {
+    init(opcode, rd, ra, rb, rc, size, rbimm, rcimm, setflags, memid);
+  }
+
+  void init(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0)  {
     this->opcode = opcode;
     this->rd = rd; 
     this->ra = ra;

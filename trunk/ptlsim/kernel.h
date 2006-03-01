@@ -171,13 +171,19 @@ int ptlsim_inject(int argc, char* argv[]);
 //
 // Performance counters
 //
-extern void init_perfctrs();
-extern void start_perfctrs();
-extern void stop_perfctrs();
-extern void print_perfctrs(ostream& os);
-extern void flush_cpu_caches();
-extern void init_exit_callback();
-extern void remove_exit_callback();
+void init_perfctrs();
+void start_perfctrs();
+void stop_perfctrs();
+void print_perfctrs(ostream& os);
+void flush_cpu_caches();
+
+//
+// Signal callbacks
+//
+void init_signal_callback();
+void remove_signal_callback();
+// Set whenever PTLsim is running inside some simulator loop
+extern bool running_in_sim_mode;
 
 //
 // x87 structures

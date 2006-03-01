@@ -397,7 +397,7 @@ namespace superstl {
 
     void open(const char* filename, bool append = false) {
       assert(!fd);
-      fd = fopen(filename, (append) ? "a" : "w");
+      fd = fopen(filename, (append) ? "a+" : "w+");
     }
 
     void open(FILE* f) {

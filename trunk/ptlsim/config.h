@@ -54,6 +54,8 @@ static const W64 infinity = limits<W64s>::max;
 static const W64 MAX_CYCLE = infinity;
 
 extern ostream logfile;
+
+extern W64 ptlsim_quiet;
 extern W64 sim_cycle;
 extern W64 user_insn_commits;
 extern W64 iterations;
