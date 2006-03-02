@@ -45,7 +45,28 @@ void debug_assist_call(const char* name) {
 }
 
 void assist_invalid_opcode() {
-  // This is handled specially elsewhere
+  // This only gets called when an invalid opcode actually commits
+  stringbuf sb;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_sr0];
+  byte* p = (byte*)(Waddr)ctx.commitarf[REG_rip];
+
+  sb << "InvalidOpcode detected at fault rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " @ ", total_user_insns_committed, 
+    " user commits (", sim_cycle, " cycles): genuine user exception (InvalidOpcode); aborting";
+  logfile << sb, endl, flush;
+  cerr << sb, endl, flush;
+
+  sb.reset();
+  if (asp.check(p, PROT_READ) & asp.check(p + 256, PROT_READ)) {
+    sb << "Address ", p, " is valid; dumping invalid opcode bytes to dumpcode.dat...", endl;
+    logfile << sb, flush;
+    cerr << sb, flush;
+    odstream("dumpcode.dat").write(p, 256);
+  } else {
+    sb << "Address ", p, " is invalid: not dumping invalid opcode bytes", endl;
+    logfile << sb, flush;
+    cerr << sb, flush;
+  }
+
   assert(false);
 }
 
@@ -4803,10 +4824,6 @@ BasicBlock* translate_one_basic_block(void* rip) {
     logfile << "=====================================================================", endl;
     logfile << *bb, endl;
     logfile << "End of basic block: rip ", (void*)(Waddr)trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;
-  }
-
-  if ((W64)rip == 0x50218b) {
-    logfile << *bb;
   }
 
   translate_timer.stop();
