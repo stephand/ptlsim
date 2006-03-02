@@ -207,13 +207,13 @@ DataStoreNode::DataStoreNode(const char* name, const W64s* values, int count, bo
 }
 
 DataStoreNode& DataStoreNode::histogram(const char* key, const W64* value, int count, W64s histomin, W64s histomax, W64s histostride) {
-  DataStoreNode* ds = new DataStoreNode(key, (W64s*)value, count);
-  ds->histogramarray = 1;
-  ds->histomin = histomin;
-  ds->histomax = histomax;
-  ds->histostride = histostride;
+  DataStoreNode& ds = add(key, (W64s*)value, count);
+  ds.histogramarray = 1;
+  ds.histomin = histomin;
+  ds.histomax = histomax;
+  ds.histostride = histostride;
 
-  return add(ds);
+  return ds;
 }
 
 DataStoreNode& DataStoreNode::operator =(W64s data) {
@@ -367,12 +367,12 @@ double DataStoreNode::percent_of_toplevel() const {
 }
 
 DataStoreNode& DataStoreNode::histogram(const char* key, const char** names, const W64* values, int count) {
-  DataStoreNode* ds = new DataStoreNode(key);
-  ds->summable = 1;
+  DataStoreNode& ds = add(key);
+  ds.summable = 1;
   foreach (i, count) {
-    ds->add(names[i], values[i]);
+    ds.add(names[i], values[i]);
   }
-  return *ds;
+  return ds;
 }
 
 static inline int digits(W64 v) {

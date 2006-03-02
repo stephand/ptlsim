@@ -843,6 +843,8 @@ namespace TranslateX86 {
     8,  9,  8,  9, 12, 13, 12, 13,  8,  9,  8,  9, 12, 13, 12, 13,
   };
 
+  static const byte sse_float_datatype_to_ptl_datatype[4] = {DATATYPE_FLOAT, DATATYPE_VEC_FLOAT, DATATYPE_DOUBLE, DATATYPE_VEC_DOUBLE};
+
   W64 warned_about_x87 = 0;
 
   void check_warned_about_x87() {
@@ -956,8 +958,8 @@ namespace TranslateX86 {
     void decode_prefixes();
     void immediate(int rdreg, int sizeshift, W64s imm, bool issigned = true);
     int bias_by_segreg(int basereg);
-    void operand_load(int destreg, const DecodedOperand& memref, int loadop = OP_ld, int cachelevel = 0);
-    void result_store(int srcreg, int tempreg, const DecodedOperand& memref);
+    void operand_load(int destreg, const DecodedOperand& memref, int loadop = OP_ld, int datatype = 0, int cachelevel = 0);
+    void result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype = 0);
     void alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
                                         bool flagsonly = false, bool isnegop = false, bool ra_rb_imm_form = false, W64s ra_rb_imm_form_rbimm = 0);
 
@@ -1310,7 +1312,7 @@ namespace TranslateX86 {
     return basereg;
   }
 
-  void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int cachelevel) {
+  void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel) {
     int basereg = arch_pseudo_reg_to_arch_reg[memref.mem.basereg];
     int indexreg = arch_pseudo_reg_to_arch_reg[memref.mem.indexreg];
     // ld rd = ra,rb,rc
@@ -1322,18 +1324,21 @@ namespace TranslateX86 {
       // [rip + imm32]: index always is zero and scale is 1:
       basereg = bias_by_segreg(REG_zero);
       TransOp ld(opcode, destreg, basereg, REG_imm, REG_zero, memref.mem.size, (Waddr)rip + memref.mem.offset);
+      ld.datatype = datatype;
       ld.cachelevel = cachelevel;
       this << ld;
     } else if ((memref.mem.offset == 0) && (memref.mem.scale == 0)) {
       // [ra + rb]
       basereg = bias_by_segreg(basereg);
       TransOp ld(opcode, destreg, basereg, indexreg, REG_zero, memref.mem.size);
+      ld.datatype = datatype;
       ld.cachelevel = cachelevel;
       this << ld;
     } else if (indexreg == REG_zero) {
       // [ra + imm32]
       basereg = bias_by_segreg(basereg);
       TransOp ld(opcode, destreg, basereg, REG_imm, REG_zero, memref.mem.size, memref.mem.offset);
+      ld.datatype = datatype;
       ld.cachelevel = cachelevel;
       this << ld;
     } else {
@@ -1343,12 +1348,13 @@ namespace TranslateX86 {
       addop.extshift = memref.mem.scale;
       this << addop;
       TransOp ld(opcode, destreg, destreg, REG_zero, REG_zero, memref.mem.size);
+      ld.datatype = datatype;
       ld.cachelevel = cachelevel;
       this << ld;
     }
   }
 
-  void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& memref) {
+  void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype) {
     int basereg = arch_pseudo_reg_to_arch_reg[memref.mem.basereg];
     int indexreg = arch_pseudo_reg_to_arch_reg[memref.mem.indexreg];
 
@@ -1357,29 +1363,29 @@ namespace TranslateX86 {
     if ((memref.mem.offset == 0) && (indexreg == REG_zero)) {
       // [ra]
       basereg = bias_by_segreg(basereg);
-      this << TransOp(OP_st, REG_mem, basereg, REG_zero, srcreg, memref.mem.size);
+      TransOp st(OP_st, REG_mem, basereg, REG_zero, srcreg, memref.mem.size); st.datatype = datatype; this << st;
     } else if (basereg == REG_rip) {
       // [rip + imm32]: index always is zero and scale is 1:
       // Assume we're addressing more than +/- 127 bytes from rip, since this is almost always the case
       assert(indexreg == REG_zero);
       // We need the long immediate form here anyway since stores don't accept an offset
       assert((prefixes & (PFX_FS|PFX_GS)) == 0);
-      this << TransOp(OP_st, REG_mem, REG_zero, REG_imm, srcreg, memref.mem.size, (Waddr)rip + memref.mem.offset);
+      TransOp st(OP_st, REG_mem, REG_zero, REG_imm, srcreg, memref.mem.size, (Waddr)rip + memref.mem.offset); st.datatype = datatype; this << st;
     } else if ((memref.mem.offset == 0) && (memref.mem.scale == 0)) {
       // [ra + rb]
       basereg = bias_by_segreg(basereg);
-      this << TransOp(OP_st, REG_mem, basereg, indexreg, srcreg, memref.mem.size);
+      TransOp st(OP_st, REG_mem, basereg, indexreg, srcreg, memref.mem.size); st.datatype = datatype; this << st;
     } else if (indexreg == REG_zero) {
       // [ra + imm32]
       basereg = bias_by_segreg(basereg);
-      this << TransOp(OP_st, REG_mem, basereg, REG_imm, srcreg, memref.mem.size, memref.mem.offset);
+      TransOp st(OP_st, REG_mem, basereg, REG_imm, srcreg, memref.mem.size, memref.mem.offset); st.datatype = datatype; this << st;
     } else {
       // [ra + rb*scale + imm32]
       basereg = bias_by_segreg(basereg);
       TransOp addop(OP_adda, tempreg, basereg, REG_imm, indexreg, 3, memref.mem.offset);
       addop.extshift = memref.mem.scale;
       this << addop;
-      this << TransOp(OP_st, REG_mem, tempreg, REG_zero, srcreg, memref.mem.size);
+      TransOp st(OP_st, REG_mem, tempreg, REG_zero, srcreg, memref.mem.size); st.datatype = datatype; this << st;
     }
   }
 
@@ -2720,7 +2726,7 @@ namespace TranslateX86 {
       if (!memform) {
         TransOp ldprb(OP_ld, REG_temp1, REG_temp2, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldprb.internal = 1; this << ldprb;
       } else {
-        operand_load(REG_temp1, ra, OP_ldx);
+        operand_load(REG_temp1, ra, OP_ldx, (d8form) ? DATATYPE_DOUBLE : DATATYPE_INT);
         if (d8form) this << TransOp(OP_cvtf_s2d_lo, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
         if (deform) this << TransOp(OP_cvtf_q2d, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
       }
@@ -2738,7 +2744,7 @@ namespace TranslateX86 {
       int ra = ((dcform|deform) & (!memform)) ? x87_dcde_translate_ra[x87op] : x87_d8da_translate_ra[x87op];
       int rb = ((dcform|deform) & (!memform)) ? x87_dcde_translate_rb[x87op] : x87_d8da_translate_rb[x87op];
       if (logable(1)) logfile << ripstart, ": op ", (void*)(Waddr)op, ", x87op ", x87op, ", ra ", arch_reg_names[ra], ", rb ", arch_reg_names[rb], endl;
-      this << TransOp(translated_opcode, REG_temp0, ra, rb, REG_zero, 2);
+      TransOp uop(translated_opcode, REG_temp0, ra, rb, REG_zero, 2); uop.datatype = DATATYPE_DOUBLE; this << uop;
 
       if (translated_opcode == OP_cmpccf) {
         TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_cmpccf_to_x87); ldpxlate.internal = 1; this << ldpxlate;
@@ -2794,12 +2800,12 @@ namespace TranslateX86 {
       } else {
         // load from memory
         // ldd          t0 = [mem]
-        // fcvt.s2d.lo  t0 = t0
+        // cvtf.s2d.lo  t0 = t0
         // st.lm.p      [FPREGS + fptos],t0
         // subm         fptos = fptos,8,0x3f
         DECODE(eform, ra, d_mode);
         CheckInvalid();
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_FLOAT);
         this << TransOp(OP_cvtf_s2d_lo, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
         this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
@@ -2832,7 +2838,7 @@ namespace TranslateX86 {
         // subm         fptos = fptos,8,0x3f
         DECODE(eform, ra, q_mode);
         CheckInvalid();
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_DOUBLE);
         this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
         this << TransOp(OP_bts, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
@@ -2849,7 +2855,7 @@ namespace TranslateX86 {
         CheckInvalid();
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
         this << TransOp(OP_cvtf_d2q, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x651) ? 3 : 2);
-        result_store(REG_temp0, REG_temp1, rd);
+        result_store(REG_temp0, REG_temp1, rd, DATATYPE_DOUBLE);
         this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
         this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // pop: adjust top of stack
       }
@@ -2871,7 +2877,7 @@ namespace TranslateX86 {
         CheckInvalid();
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs); ldp.internal = 1; this << ldp;
         this << TransOp(OP_cvtf_d2s_ins, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
-        result_store(REG_temp0, REG_temp1, rd);
+        result_store(REG_temp0, REG_temp1, rd, DATATYPE_FLOAT);
 
         if (bit(op, 0)) {
           this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
@@ -2906,7 +2912,7 @@ namespace TranslateX86 {
         TransOp ldp(OP_ld, REG_temp0, REG_fptos, REG_imm, REG_zero, 3, (Waddr)&fpregs);
         ldp.internal = 1;
         this << ldp;
-        result_store(REG_temp0, REG_temp1, rd);
+        result_store(REG_temp0, REG_temp1, rd, DATATYPE_DOUBLE);
 
         if (bit(op, 0)) {
           this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); // pop: adjust tag word
@@ -3286,7 +3292,7 @@ namespace TranslateX86 {
           // bts          fptags = fptags,fptos
           DECODE(eform, ra, q_mode);
           CheckInvalid();
-          operand_load(REG_temp0, ra, OP_ld, 1);
+          operand_load(REG_temp0, ra, OP_ld);
           this << TransOp(OP_cvtf_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
           this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
           TransOp stp(OP_st, REG_mem, REG_fptos, REG_imm, REG_temp0, 3, (Waddr)&fpregs); stp.internal = 1; this << stp;
@@ -4026,9 +4032,9 @@ namespace TranslateX86 {
 
       if (ra.type == OPTYPE_MEM) {
         rareg = REG_temp0;
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_VEC_128BIT);
         ra.mem.offset += 8;
-        operand_load(REG_temp1, ra, OP_ld, 1);
+        operand_load(REG_temp1, ra, OP_ld, DATATYPE_VEC_128BIT);
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
@@ -4138,16 +4144,17 @@ namespace TranslateX86 {
       static const byte opcode_to_uop[16] = {OP_nop, OP_sqrtf, OP_rsqrtf, OP_rcpf, OP_and, OP_andnot, OP_or, OP_xor, OP_addf, OP_mulf, OP_nop, OP_nop, OP_subf, OP_minf, OP_divf, OP_maxf};
 
       int uop = (lowbits(op, 8) == 0xc2) ? OP_cmpf : opcode_to_uop[lowbits(op, 4)];
+      int datatype = sse_float_datatype_to_ptl_datatype[sizetype];
 
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
         rareg = REG_temp0;
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, datatype);
         if (packed) {
           ra.mem.offset += 8;
-          operand_load(REG_temp1, ra, OP_ld, 1);
+          operand_load(REG_temp1, ra, OP_ld, datatype);
         }
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -4155,11 +4162,13 @@ namespace TranslateX86 {
 
       TransOp lowop(uop, rdreg+0, rdreg+0, rareg+0, REG_zero, isclass(uop, OPCLASS_LOGIC) ? 3 : sizetype);
       lowop.cond = imm.imm.imm;
+      lowop.datatype = datatype;
       this << lowop;
 
       if (packed) {
         TransOp highop(uop, rdreg+1, rdreg+1, rareg+1, REG_zero, isclass(uop, OPCLASS_LOGIC) ? 3 : sizetype);
         highop.cond = imm.imm.imm;
+        highop.datatype = datatype;
         this << highop;
       }
       break;
@@ -4174,13 +4183,15 @@ namespace TranslateX86 {
 
       if (ra.type == OPTYPE_MEM) {
         ra.mem.size = (rex.mode64) ? 3 : 2;
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp((rex.mode64) ? OP_cvtf_q2s_ins : OP_cvtf_i2s_ins, rdreg, rdreg, rareg, REG_zero, 3);
+      TransOp uop((rex.mode64) ? OP_cvtf_q2s_ins : OP_cvtf_i2s_ins, rdreg, rdreg, rareg, REG_zero, 3);
+      uop.datatype = DATATYPE_FLOAT;
+      this << uop;
       break;
     }
 
@@ -4193,13 +4204,15 @@ namespace TranslateX86 {
 
       if (ra.type == OPTYPE_MEM) {
         ra.mem.size = (rex.mode64) ? 3 : 2;
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp((rex.mode64) ? OP_cvtf_q2d : OP_cvtf_i2d_lo, rdreg, REG_zero, rareg, REG_zero, 3);
+      TransOp uop((rex.mode64) ? OP_cvtf_q2d : OP_cvtf_i2d_lo, rdreg, REG_zero, rareg, REG_zero, 3);
+      uop.datatype = DATATYPE_DOUBLE;
+      this << uop;
       break;
     }
 
@@ -4213,14 +4226,14 @@ namespace TranslateX86 {
 
       if (ra.type == OPTYPE_MEM) {
         ra.mem.size = (rex.mode64) ? 3 : 2;
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp(OP_cvtf_i2d_lo, rdreg+0, REG_zero, rareg, REG_zero, 3);
-      this << TransOp(OP_cvtf_i2d_hi, rdreg+1, REG_zero, rareg, REG_zero, 3);
+      TransOp uoplo(OP_cvtf_i2d_lo, rdreg+0, REG_zero, rareg, REG_zero, 3); uoplo.datatype = DATATYPE_VEC_DOUBLE; this << uoplo;
+      TransOp uophi(OP_cvtf_i2d_hi, rdreg+1, REG_zero, rareg, REG_zero, 3); uophi.datatype = DATATYPE_VEC_DOUBLE; this << uophi;
       break;
     }
 
@@ -4232,16 +4245,16 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld);
         ra.mem.offset += 8;
-        operand_load(REG_temp1, ra, OP_ld, 1);
+        operand_load(REG_temp1, ra, OP_ld);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp(OP_cvtf_i2s_p, rdreg+0, REG_zero, rareg+0, REG_zero, 3);
-      this << TransOp(OP_cvtf_i2s_p, rdreg+1, REG_zero, rareg+1, REG_zero, 3);
+      TransOp uoplo(OP_cvtf_i2s_p, rdreg+0, REG_zero, rareg+0, REG_zero, 3); uoplo.datatype = DATATYPE_VEC_FLOAT; this << uoplo;
+      TransOp uophi(OP_cvtf_i2s_p, rdreg+1, REG_zero, rareg+1, REG_zero, 3); uophi.datatype = DATATYPE_VEC_FLOAT; this << uophi;
       break;
     }
 
@@ -4254,9 +4267,9 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_VEC_DOUBLE);
         ra.mem.offset += 8;
-        operand_load(REG_temp1, ra, OP_ld, 1);
+        operand_load(REG_temp1, ra, OP_ld, DATATYPE_VEC_DOUBLE);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -4277,15 +4290,15 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_VEC_DOUBLE);
         ra.mem.offset += 8;
-        operand_load(REG_temp1, ra, OP_ld, 1);
+        operand_load(REG_temp1, ra, OP_ld, DATATYPE_VEC_DOUBLE);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
-
-      this << TransOp(OP_cvtf_d2s_p, rdreg+0, rareg+1, rareg+0, REG_zero, 3);
+      
+      TransOp uop(OP_cvtf_d2s_p, rdreg+0, rareg+1, rareg+0, REG_zero, 3); uop.datatype = DATATYPE_VEC_FLOAT; this << uop;
       this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3);
       break;
     }
@@ -4298,15 +4311,15 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld);
         ra.mem.offset += 8;
-        operand_load(REG_temp1, ra, OP_ld, 1);
+        operand_load(REG_temp1, ra, OP_ld);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp(OP_cvtf_i2s_p, rdreg+0, REG_zero, rareg+0, REG_zero, 3);
+      TransOp uop(OP_cvtf_i2s_p, rdreg+0, REG_zero, rareg+0, REG_zero, 3); uop.datatype = DATATYPE_VEC_FLOAT; this << uop;
       this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3);
       break;
     }
@@ -4320,9 +4333,9 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_VEC_FLOAT);
         ra.mem.offset += 8;
-        operand_load(REG_temp1, ra, OP_ld, 1);
+        operand_load(REG_temp1, ra, OP_ld, DATATYPE_VEC_FLOAT);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -4344,7 +4357,7 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_DOUBLE);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -4363,7 +4376,7 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_FLOAT);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -4381,13 +4394,13 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_FLOAT);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp(OP_cvtf_s2d_lo, rdreg, REG_zero, rareg, REG_zero, 3);
+      TransOp uop(OP_cvtf_s2d_lo, rdreg, REG_zero, rareg, REG_zero, 3); uop.datatype = DATATYPE_DOUBLE; this << uop;
       break;
     }
 
@@ -4399,16 +4412,16 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_FLOAT);
         rareg = REG_temp0;
         ra.mem.offset += 8;
-        operand_load(REG_temp1, ra, OP_ld, 1);
+        operand_load(REG_temp1, ra, OP_ld, DATATYPE_FLOAT);
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp(OP_cvtf_s2d_lo, rdreg+0, REG_zero, rareg, REG_zero, 3);
-      this << TransOp(OP_cvtf_s2d_hi, rdreg+1, REG_zero, rareg, REG_zero, 3);
+      TransOp uoplo(OP_cvtf_s2d_lo, rdreg+0, REG_zero, rareg, REG_zero, 3); uoplo.datatype = DATATYPE_VEC_DOUBLE; this << uoplo;
+      TransOp uophi(OP_cvtf_s2d_hi, rdreg+1, REG_zero, rareg, REG_zero, 3); uophi.datatype = DATATYPE_VEC_DOUBLE; this << uophi;
       break;
     }
 
@@ -4420,13 +4433,13 @@ namespace TranslateX86 {
       int rareg;
 
       if (ra.type == OPTYPE_MEM) {
-        operand_load(REG_temp0, ra, OP_ld, 1);
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_DOUBLE);
         rareg = REG_temp0;
       } else {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp(OP_cvtf_d2s_ins, rdreg, rdreg, rareg, REG_zero, 3);
+      TransOp uop(OP_cvtf_d2s_ins, rdreg, rdreg, rareg, REG_zero, 3); uop.datatype = DATATYPE_FLOAT; this << uop;
       break;
     }
 
@@ -4438,18 +4451,18 @@ namespace TranslateX86 {
       DECODE(eform, ra, x_mode);
       CheckInvalid();
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (ra.type == OPTYPE_MEM) {
         // Load
         // This is still idempotent since if the second one was unaligned, the first one must be too
-        operand_load(rdreg+0, ra, OP_ld, 1);
+        operand_load(rdreg+0, ra, OP_ld, datatype);
         ra.mem.offset += 8;
-        operand_load(rdreg+1, ra, OP_ld, 1);
+        operand_load(rdreg+1, ra, OP_ld, datatype);
       } else {
         // Move
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-        this << TransOp(OP_mov, rdreg+0, REG_zero, rareg+0, REG_zero, 3);
-        this << TransOp(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3);
+        TransOp uoplo(OP_mov, rdreg+0, REG_zero, rareg+0, REG_zero, 3); uoplo.datatype = datatype; this << uoplo;
+        TransOp uophi(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3); uophi.datatype = datatype; this << uophi;
       }
       break;
     }
@@ -4462,17 +4475,18 @@ namespace TranslateX86 {
       DECODE(gform, ra, x_mode);
       CheckInvalid();
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (rd.type == OPTYPE_MEM) {
         // Store
         // This is still idempotent since if the second one was unaligned, the first one must be too
-        result_store(rareg+0, REG_temp0, rd);
+        result_store(rareg+0, REG_temp0, rd, datatype);
         rd.mem.offset += 8;
-        result_store(rareg+1, REG_temp1, rd);
+        result_store(rareg+1, REG_temp1, rd, datatype);
       } else {
         // Move
         int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-        this << TransOp(OP_mov, rdreg+0, REG_zero, rareg+0, REG_zero, 3);
-        this << TransOp(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3);
+        TransOp uoplo(OP_mov, rdreg+0, REG_zero, rareg+0, REG_zero, 3); uoplo.datatype = datatype; this << uoplo;
+        TransOp uophi(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3); uophi.datatype = datatype; this << uophi;
       }
       break;
     };
@@ -4482,19 +4496,22 @@ namespace TranslateX86 {
       DECODE(gform, rd, x_mode);
       DECODE(eform, ra, x_mode);
       CheckInvalid();
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       bool isdouble = ((op >> 8) == 0x4);
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
       if (ra.type == OPTYPE_MEM) {
         // Load
         ra.mem.size = (isdouble) ? 3 : 2;
-        operand_load(rdreg+0, ra, OP_ld, 1);
-        this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3); // zero high 64 bits
+        operand_load(rdreg+0, ra, OP_ld, datatype);
+        TransOp uop(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3); uop.datatype = datatype; this << uop; // zero high 64 bits
       } else {
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
         // Strange semantics: iff the source operand is a register, insert into low 32 bits only; leave high 32 bits and bits 64-127 alone
-        if (isdouble)
-          this << TransOp(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3);
-        else this << TransOp(OP_maskb, rdreg, rdreg, rareg, REG_imm, 3, 0, MaskControlInfo(0, 32, 0));
+        if (isdouble) {
+          TransOp uop(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3); uop.datatype = datatype; this << uop;
+        } else {
+          TransOp uop(OP_maskb, rdreg, rdreg, rareg, REG_imm, 3, 0, MaskControlInfo(0, 32, 0)); uop.datatype = datatype; this << uop;
+        }
       }
       break;
     }
@@ -4504,19 +4521,22 @@ namespace TranslateX86 {
       DECODE(eform, rd, x_mode);
       DECODE(gform, ra, x_mode);
       CheckInvalid();
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       bool isdouble = ((op >> 8) == 0x4);
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       if (rd.type == OPTYPE_MEM) {
         // Store
         rd.mem.size = (isdouble) ? 3 : 2;
-        result_store(rareg, REG_temp0, rd);
+        result_store(rareg, REG_temp0, rd, datatype);
       } else {
         // Register to register
         int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
         // Strange semantics: iff the source operand is a register, insert into low 32 bits only; leave high 32 bits and bits 64-127 alone
-        if (isdouble)
-          this << TransOp(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3);
-        else this << TransOp(OP_maskb, rdreg, rdreg, rareg, REG_imm, 3, 0, MaskControlInfo(0, 32, 0));
+        if (isdouble) {
+          TransOp uop(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3); uop.datatype = datatype; this << uop;
+        } else {
+          TransOp uop(OP_maskb, rdreg, rdreg, rareg, REG_imm, 3, 0, MaskControlInfo(0, 32, 0)); uop.datatype = datatype; this << uop;
+        }
       }
       break;
     }
@@ -4569,17 +4589,20 @@ namespace TranslateX86 {
       DECODE(eform, ra, x_mode);
       CheckInvalid();
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (ra.type == OPTYPE_MEM) {
         // movhpd/movhps/movlpd/movlps
-        operand_load(rdreg + ((lowbits(op, 8) == 0x16) ? 1 : 0), ra, OP_ld, 1);
+        operand_load(rdreg + ((lowbits(op, 8) == 0x16) ? 1 : 0), ra, OP_ld, datatype);
       } else {
         // movlhps/movhlps
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
         switch (op) {
-        case 0x312: // movhlps
-          this << TransOp(OP_mov, rdreg, REG_zero, rareg+1, REG_zero, 3); break;
-        case 0x316: // movlhps
-          this << TransOp(OP_mov, rdreg+1, REG_zero, rareg, REG_zero, 3); break;
+        case 0x312: { // movhlps
+          TransOp uop(OP_mov, rdreg, REG_zero, rareg+1, REG_zero, 3); uop.datatype = datatype; this << uop; break;
+        }
+        case 0x316: { // movlhps
+          TransOp uop(OP_mov, rdreg+1, REG_zero, rareg, REG_zero, 3); uop.datatype = datatype; this << uop; break;
+        }
         }
       }
       break;
@@ -4592,9 +4615,10 @@ namespace TranslateX86 {
       DECODE(eform, rd, x_mode);
       DECODE(gform, ra, x_mode);
       CheckInvalid();
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       if (rd.type != OPTYPE_MEM) MakeInvalid();
-      result_store(rareg + ((lowbits(op, 8) == 0x17) ? 1 : 0), REG_temp0, rd);
+      result_store(rareg + ((lowbits(op, 8) == 0x17) ? 1 : 0), REG_temp0, rd, datatype);
       break;
     }
 
@@ -4612,23 +4636,27 @@ namespace TranslateX86 {
       DECODE(eform, ra, x_mode);
       CheckInvalid();
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (ra.type == OPTYPE_MEM) {
         switch (op) {
         case 0x514: // unpcklpd
-          operand_load(rdreg+1, ra, OP_ld, 1); break;
-        case 0x515: // unpckhpd
-          this << TransOp(OP_mov, rdreg+0, REG_zero, rdreg+1, REG_zero, 3);
+          operand_load(rdreg+1, ra, OP_ld, datatype); break;
+        case 0x515: { // unpckhpd
+          TransOp uop(OP_mov, rdreg+0, REG_zero, rdreg+1, REG_zero, 3); uop.datatype = datatype; this << uop;
           ra.mem.offset += 8;
-          operand_load(rdreg+1, ra, OP_ld, 1); break;
+          operand_load(rdreg+1, ra, OP_ld, datatype); break;
+        }
         }
       } else {
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
         switch (op) {
-        case 0x514: // unpcklpd
-          this << TransOp(OP_mov, rdreg+1, REG_zero, rareg+0, REG_zero, 3); break;
-        case 0x515: // unpckhpd
-          this << TransOp(OP_mov, rdreg+0, REG_zero, rdreg+1, REG_zero, 3);
-          this << TransOp(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3); break;
+        case 0x514: { // unpcklpd
+          TransOp uoplo(OP_mov, rdreg+1, REG_zero, rareg+0, REG_zero, 3); uoplo.datatype = datatype; this << uoplo; break;
+        }
+        case 0x515: { // unpckhpd
+          TransOp uoplo(OP_mov, rdreg+0, REG_zero, rdreg+1, REG_zero, 3); uoplo.datatype = datatype; this << uoplo; 
+          TransOp uophi(OP_mov, rdreg+1, REG_zero, rareg+1, REG_zero, 3); uophi.datatype = datatype; this << uophi; break;
+        }
         }
       }
       break;
@@ -4656,9 +4684,10 @@ namespace TranslateX86 {
       DECODE(eform, ra, v_mode);
       CheckInvalid();
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (ra.type == OPTYPE_MEM) {
         // Load
-        operand_load(rdreg+0, ra, OP_ld, 1);
+        operand_load(rdreg+0, ra, OP_ld, datatype);
         this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3); // zero high 64 bits
       } else {
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -4674,8 +4703,9 @@ namespace TranslateX86 {
       DECODE(gform, ra, x_mode);
       CheckInvalid();
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (rd.type == OPTYPE_MEM) {
-        result_store(rareg, REG_temp0, rd);
+        result_store(rareg, REG_temp0, rd, datatype);
       } else {
         int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
         int rdshift = reginfo[rd.reg.reg].sizeshift;
@@ -4689,9 +4719,10 @@ namespace TranslateX86 {
       DECODE(eform, ra, x_mode);
       CheckInvalid();
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (ra.type == OPTYPE_MEM) {
         // Load
-        operand_load(rdreg+0, ra, OP_ld, 1);
+        operand_load(rdreg+0, ra, OP_ld, datatype);
         this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3); // zero high 64 bits
       } else {
         // Move from xmm to xmm
@@ -4707,8 +4738,9 @@ namespace TranslateX86 {
       DECODE(gform, ra, x_mode);
       CheckInvalid();
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
       if (rd.type == OPTYPE_MEM) {
-        result_store(rareg, REG_temp0, rd);
+        result_store(rareg, REG_temp0, rd, datatype);
       } else {
         int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
         this << TransOp(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3);

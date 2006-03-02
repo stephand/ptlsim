@@ -2370,6 +2370,8 @@ CycleTimer ctstore;
 int loads_in_this_cycle = 0;
 W32 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
 
+W64 store_datatype_histogram[DATATYPE_COUNT];
+
 int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc, bool rcready) {
   int sizeshift = uop.size;
   int aligntype = uop.cond;
@@ -2656,6 +2658,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
 
   store_forward_from_zero += (sfra == null);
   store_forward_from_sfr += (sfra != null);
+  store_datatype_histogram[uop.datatype]++;
 
   if (logable(1)) {
     logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
@@ -2687,6 +2690,8 @@ static inline W64 loaddata(void* target, int SIZESHIFT, bool SIGNEXT) {
 }
 
 CycleTimer ctload;
+
+W64 load_datatype_histogram[DATATYPE_COUNT];
 
 int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc) {
   //bool DEBUG = analyze_in_detail();
@@ -2913,6 +2918,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   load_forward_from_cache += (sfra == null);
   load_forward_from_sfr += ((sfra != null) & covered);
   load_forward_from_sfr_and_cache += ((sfra != null) & (!covered));
+  load_datatype_histogram[uop.datatype]++;
 
   //
   // NOTE: Technically the data is valid right now for simulation purposes
@@ -4613,6 +4619,11 @@ void ooo_capture_stats(DataStoreNode& root) {
       }
     }
 
+    DataStoreNode& datatype = issue("datatype"); {
+      datatype.histogram("load", datatype_names, load_datatype_histogram, DATATYPE_COUNT);
+      datatype.histogram("store", datatype_names, store_datatype_histogram, DATATYPE_COUNT);
+    }
+
     DataStoreNode& cluster = issue("width"); {
       foreach (i, MAX_CLUSTERS) {
         cluster.histogram(clusters[i].name, issue_width_histogram[i], MAX_ISSUE_WIDTH+1);
@@ -4706,7 +4717,6 @@ void ooo_capture_stats(DataStoreNode& root) {
   save_assist_stats(root("assist"));
 
   dcache_save_stats(root("dcache"));
-
 }
 
 void ooo_capture_stats(const char* snapshotname) {

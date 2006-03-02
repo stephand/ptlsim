@@ -263,6 +263,15 @@ const char* arch_reg_names[TRANSREG_COUNT] = {
   "zf", "cf", "of", "imm", "mem", "tr8", "tr9", "tr10",
 };
 
+const char* datatype_names[DATATYPE_COUNT] = {
+  "int", "float", "vec-float",
+  "double", "vec-double", 
+  "vec-8bit", "vec-16bit", 
+  "vec-32bit", "vec-64bit", 
+  "vec-128bit"
+};
+
+extern const char* datatype_names[DATATYPE_COUNT];
 /*
  * Convert a condition code (as in jump, setcc, cmovcc, etc) to
  * the one or two architectural registers last updated with the

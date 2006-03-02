@@ -590,9 +590,19 @@ extern const W16 setflags_to_x86_flags[1<<3];
 // Structures
 //
 
+// This is for profiling purposes only, since all loads and stores are uniform except for their sizes:
+enum { 
+  DATATYPE_INT, DATATYPE_FLOAT, DATATYPE_VEC_FLOAT, 
+  DATATYPE_DOUBLE, DATATYPE_VEC_DOUBLE, 
+  DATATYPE_VEC_8BIT, DATATYPE_VEC_16BIT, 
+  DATATYPE_VEC_32BIT, DATATYPE_VEC_64BIT, 
+  DATATYPE_VEC_128BIT, DATATYPE_COUNT
+};
+extern const char* datatype_names[DATATYPE_COUNT];
+
 struct TransOpBase {
   W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, rbimmsz:3, rcimmsz:3, has_riptaken:1, has_ripseq:1;
-  W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, unaligned:1, index:8;
+  W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, datatype:4, unaligned:1, index:8;
 };
 
 struct TransOp: public TransOpBase {
@@ -632,6 +642,7 @@ struct TransOp: public TransOpBase {
     this->nouserflags = 0;
     this->extshift = 0;
     this->cachelevel = 0;
+    this->datatype = 0;
     this->unaligned = 0;
     this->index = 0;
   }
