@@ -4194,6 +4194,36 @@ namespace TranslateX86 {
       break;
     }
 
+    case 0x57c: // haddps
+    case 0x57d: { // hsubpd
+      DECODE(gform, rd, x_mode);
+      DECODE(eform, ra, x_mode);
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg;
+
+      if (ra.type == OPTYPE_MEM) {
+        rareg = REG_temp0;
+        operand_load(REG_temp0, ra, OP_ld, DATATYPE_VEC_DOUBLE);
+        ra.mem.offset += 8;
+        operand_load(REG_temp1, ra, OP_ld, DATATYPE_VEC_DOUBLE);
+      } else {
+        rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      }
+
+      int uop = (op == 0x57d) ? OP_subf : OP_addf;
+      TransOp lowop(uop, rdreg+0, rdreg+0, rdreg+1, REG_zero, 3);
+      lowop.datatype = DATATYPE_VEC_DOUBLE;
+      this << lowop;
+
+      TransOp highop(uop, rdreg+1, rareg+1, rareg+1, REG_zero, 3);
+      highop.datatype = DATATYPE_VEC_DOUBLE;
+      this << highop;
+
+      break;
+    }
+
     case 0x22a: { // cvtsi2ss with W32 or W64 source
       DECODE(gform, rd, x_mode);
       DECODE(eform, ra, v_mode);
