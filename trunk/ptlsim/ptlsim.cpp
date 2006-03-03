@@ -373,7 +373,6 @@ void switch_to_sim() {
 
   logfile << "Switching to native: returning to rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
 
-  disable_ptlsim_call_gate();
   show_stats_and_switch_to_native();
 }
 
@@ -423,7 +422,6 @@ int main(int argc, char* argv[]) {
   }
 
   if (!trigger_mode) start_perfctrs();
-  if (!trigger_mode) disable_ptlsim_call_gate();
 
   // Context switch into virtual machine:
   switch_to_native_restore_context();
