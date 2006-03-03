@@ -92,8 +92,19 @@ void assist_sysenter() {
   handle_syscall_32bit(SYSCALL_SEMANTICS_SYSENTER);
 }
 
-static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
+//
+// For compatibility reasons, we now cheat and pretend to be a Pentium 4 Northwood CPU here.
+// Intel's C++ compiler insists on running on a genuine Intel CPU or it intentionally runs
+// incorrect or sub-optimal code. Intel has been harshly criticized for this anti-competitive 
+// practice. If you want to report the original PTLsim CPUID, uncomment the lines below.
+//
+static const char cpuid_vendor[12+1] = "GenuineIntel";
 static const char cpuid_description[48+1] = "PTLsim 4.0 Cycle Accurate x86-64 Simulator Model";
+
+//
+// static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
+// static const char cpuid_description[48+1] = "PTLsim 4.0 Cycle Accurate x86-64 Simulator Model";
+//
 
 void assist_cpuid() {
   debug_assist_call("cpuid");
@@ -114,7 +125,16 @@ void assist_cpuid() {
     rcx = vendor[2];
     break;
   }
-
+  case 1: {
+    // Model and capability information
+    // PTLsim pretends to be a standard Pentium 4 Northwood processor;
+    // these values are taken from such a chip (by running cpuid)
+    rax = 0x00000f29; // model
+    rbx = 0x0002080b; // other info
+    rcx = 0x00004400; // Intel-specific features (no SSE3 bit set)
+    rdx = 0xbfebfbff; // features
+    break;
+  }
   case 0x80000000: {
     // Max avail extended function spec and vendor ID:
     W32 eax, ebx, ecx, edx;
