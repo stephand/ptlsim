@@ -1,0 +1,2 @@
+#!/bin/sh
+exec runbench-cluster gzip vpr gcc mcf crafty eon bzip2 twolf perlbmk parser gap vortex wupwise swim mgrid applu mesa art equake apsi sixtrack ammp fma3d lucas facerec

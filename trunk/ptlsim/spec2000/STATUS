@@ -1,0 +1,38 @@
+Status of SPEC 2000 Benchmarks:
+
+SPECint2k:
+- gzip      OK
+- vpr       OK
+- gcc       OK
+- mcf       OK
+- crafty    OK
+- parser    OK
+- eon       OK
+- perlbmk   OK
+- gap       OK
+- vortex    OK
+- bzip2     OK
+- twolf     OK
+
+SPECfp2k:
+- wupwise   OK
+- swim      OK
+- mgrid     OK
+- applu     OK
+- mesa      OK
+- galgel    Does not compile with gfortran-4.0.2 (uses strange syntax)
+- art       OK
+- equake    OK
+- facerec   OK
+- ammp      OK
+- lucas     OK
+- fma3d     OK
+- sixtrack  OK
+- apsi      OK
+
+Licensing:
+
+GPL: gzip gcc gap
+BSD: bzip2
+MIT: mesa
+Pub: lucas (public domain)

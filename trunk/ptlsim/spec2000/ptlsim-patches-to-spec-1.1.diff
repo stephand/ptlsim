@@ -1,0 +1,721 @@
+diff -ur specref/ammp/eval.c modified/ammp/eval.c
+--- specref/ammp/eval.c	2001-10-09 19:03:08.000000000 -0400
++++ modified/ammp/eval.c	2006-01-23 21:53:44.000000000 -0500
+@@ -738,6 +738,10 @@
+ 	}
+ 	if( strcmp( &token[0][0], "tpac") == 0)
+ 	{
++
++    // Instrumented for PTLsim
++    ptlcall_switch_to_sim();
++
+ 	tpac( forces,nused, itemp[1],ftemp[2],ftemp[3]);
+ 	goto DONE;
+ 	}
+diff -ur specref/applu/applu.f modified/applu/applu.f
+--- specref/applu/applu.f	2001-10-09 19:01:34.000000000 -0400
++++ modified/applu/applu.f	2006-01-23 21:55:24.000000000 -0500
+@@ -297,6 +297,9 @@
+ c***set the initial values for dependent variables
+ c
+       call setiv
++c     // Instrumented for PTLsim
++      CALL ptlcall_switch_to_sim
++
+ c
+ c***compute the forcing term based on prescribed exact solution
+ c
+diff -ur specref/apsi/apsi.f modified/apsi/apsi.f
+--- specref/apsi/apsi.f	2001-10-09 19:03:59.000000000 -0400
++++ modified/apsi/apsi.f	2006-01-23 21:57:22.000000000 -0500
+@@ -339,6 +339,10 @@
+          READ(5,*) NGSTEP
+       ENDIF
+  160  CONTINUE
++
++C     // Instrumented for PTLsim
++      CALL ptlcall_switch_to_sim
++
+ C
+ C     CHECK FOR A CRUDE STABILITY SATISFACTION AND HEAT CONSTANTS
+ C
+diff -ur specref/art/scanner.c modified/art/scanner.c
+--- specref/art/scanner.c	2001-10-09 19:02:11.000000000 -0400
++++ modified/art/scanner.c	2006-01-23 21:59:29.000000000 -0500
+@@ -1152,6 +1152,9 @@
+ 
+    loadimage(scanfile);
+ 
++   // Instrumented for PTLsim
++   ptlcall_switch_to_sim();
++
+    /* Differentiate between loading pretrained network (load_weights)
+     * and training.  Currently, loading a pretrained network
+     * supports only 1 object.  If we train, we can learn to
+diff -ur specref/bzip2/spec.c modified/bzip2/spec.c
+--- specref/bzip2/spec.c	2001-10-09 19:07:55.000000000 -0400
++++ modified/bzip2/spec.c	2006-01-23 22:03:17.000000000 -0500
+@@ -302,6 +302,8 @@
+ #endif
+ 
+     spec_initbufs();
++    // Instrumented for PTLsim:
++    ptlcall_switch_to_sim();
+ 
+     for (level=7; level <= 9; level += 2) {
+ 	debug_time();
+diff -ur specref/crafty/chess.h modified/crafty/chess.h
+--- specref/crafty/chess.h	2001-10-09 19:05:32.000000000 -0400
++++ modified/crafty/chess.h	2006-01-23 22:05:43.000000000 -0500
+@@ -93,6 +93,13 @@
+ #  define UNIX                 /* system is unix-based                      */
+ #  define LINUX
+ #endif
++#if defined(LINUX_X86_64)
++#  define LONG_HAS_64BITS     /* the data type "long [int]" is represented in 64 bits either as the compiler's default option or by an appropriate switch(e.g. -Klp64)  */
++#  undef  HAS_LONGLONG         /* the C compilation system supports the data-type "long long"(which is an extension to ANSI C) and represents data of this type with 64 bits  */
++#  define LITTLE_ENDIAN_ARCH   /* machine stores bytes in "PC" order         */
++#  define UNIX                 /* system is unix-based                       */
++#  define LINUX                /* system is unix-based                       */
++#endif
+ #if defined(MIPS)
+ #  undef  LONG_HAS_64BITS      /* the data type "long [int]" is represented in 64 bits either as the compiler's default option or by an appropriate switch(e.g. -Klp64)  */
+ #  define HAS_LONGLONG         /* the C compilation system supports the data-type "long long"(which is an extension to ANSI C) and represents data of this type with 64 bits  */
+diff -ur specref/crafty/main.c modified/crafty/main.c
+--- specref/crafty/main.c	2001-10-09 19:05:33.000000000 -0400
++++ modified/crafty/main.c	2006-01-23 22:07:20.000000000 -0500
+@@ -2019,6 +2019,9 @@
+ |                                                          |
+  ----------------------------------------------------------
+ */
++  // Instrumented for PTLsim:
++  ptlcall_switch_to_sim();
++
+   while (1) {
+     presult=0;
+     do {
+diff -ur specref/eon/eon.cc modified/eon/eon.cc
+--- specref/eon/eon.cc	2001-10-09 19:05:40.000000000 -0400
++++ modified/eon/eon.cc	2006-01-23 22:09:02.000000000 -0500
+@@ -138,6 +138,9 @@
+     int ns = renderer.nSamples[renderer.nLevels()-1];
+     cerr << "calculating " << width << " by " << height <<
+             " image with " << ns*ns << " samples\n";
++    // Instrumented for PTLsim:
++    ptlcall_switch_to_sim();
++
+ 	if (strcmp(argv[5], "xyz") == 0) {
+ 		sl.Resize(width,height);
+ 		count = 0;
+diff -ur specref/eon/ggFrame2.cc modified/eon/ggFrame2.cc
+--- specref/eon/ggFrame2.cc	2001-10-09 19:05:43.000000000 -0400
++++ modified/eon/ggFrame2.cc	2004-06-29 23:19:02.000000000 -0400
+@@ -53,6 +53,12 @@
+     return (f1.origin() == f2.origin() && f1.basis() == f2.basis());
+ }
+ 
++#if defined(SPEC_STDCPP)
++#define SPEC_SETSTATE(x,y) (x).setstate((y));
++#else
++#define SPEC_SETSTATE(x,y)
++#endif
++
+ //
+ // Input operator
+ //
+@@ -61,7 +67,24 @@
+         ggPoint2 input_p;
+         ggONB2   input_onb2;
+ 
+-        is >> "(" >> input_p >> "," >> input_onb2 >> ")";
++        char c;
++        is >> c;
++        if (c != '(') {
++          SPEC_SETSTATE(is,ios::failbit)
++            return is;
++        }
++        is >> input_p;
++        is >> c;
++        if (c != ',') {
++          SPEC_SETSTATE(is,ios::failbit)
++            return is;
++        }
++        is >> input_onb2;
++        is >> c;
++        if (c != ')') {
++          SPEC_SETSTATE(is,ios::failbit)
++            return is;
++        }
+ 
+         t.Set( input_p, input_onb2 );
+ 
+diff -ur specref/eon/ggFrame3.cc modified/eon/ggFrame3.cc
+--- specref/eon/ggFrame3.cc	2001-10-09 19:05:43.000000000 -0400
++++ modified/eon/ggFrame3.cc	2004-06-29 23:21:25.000000000 -0400
+@@ -52,6 +52,12 @@
+     return (f1.origin() == f2.origin() && f1.basis() == f2.basis());
+ }
+ 
++#if defined(SPEC_STDCPP)
++#define SPEC_SETSTATE(x,y) (x).setstate((y));
++#else
++#define SPEC_SETSTATE(x,y)
++#endif
++
+ //
+ // Input operator
+ //
+@@ -60,7 +66,25 @@
+ 	ggPoint3 input_p;
+ 	ggONB3   input_onb3;
+ 
+-	is >> "(" >> input_p >> "," >> input_onb3 >> ")";
++  char c;
++
++  is >> c;
++  if (c != '(') {
++    SPEC_SETSTATE(is,ios::failbit)
++    return is;
++  }
++  is >> input_p;
++  is >> c;
++  if (c != ',') {
++    SPEC_SETSTATE(is,ios::failbit)
++    return is;
++  }
++  is >> input_onb3;
++  is >> c;
++  if (c != ')') {
++    SPEC_SETSTATE(is,ios::failbit)
++    return is;
++  }
+ 
+ 	t.Set( input_p, input_onb3 );
+ 
+diff -ur specref/equake/quake.c modified/equake/quake.c
+--- specref/equake/quake.c	2001-10-09 19:04:09.000000000 -0400
++++ modified/equake/quake.c	2006-01-23 22:13:04.000000000 -0500
+@@ -238,6 +238,9 @@
+       nodekind[i] = 1;
+   }
+ 
++  // Instrumented for PTLsim:
++  ptlcall_switch_to_sim();
++ 
+ /* Search for the node closest to the point source (hypocenter) and */
+ /*        for the node closest to the epicenter */
+ 
+diff -ur specref/facerec/FaceRec.f90 modified/facerec/FaceRec.f90
+--- specref/facerec/FaceRec.f90	2001-10-09 19:02:53.000000000 -0400
++++ modified/facerec/FaceRec.f90	2006-01-23 22:14:05.000000000 -0500
+@@ -67,6 +67,8 @@
+ !
+ 	Print *
+ 	Print *, 'Generating graphs for album entries'
++! Instrumented for PTLsim:
++  CALL ptlcall_switch_to_sim
+ 	Call GenerateGraphs (Params, Prototype, Graphs)
+ 	NodeCount = SIZE (Prototype, DIM = 3)
+ 	Scale = Params%Image%UpSample
+diff -ur specref/fma3d/fma1.f90 modified/fma3d/fma1.f90
+--- specref/fma3d/fma1.f90	2001-10-09 19:03:24.000000000 -0400
++++ modified/fma3d/fma1.f90	2006-01-23 22:14:52.000000000 -0500
+@@ -647,6 +647,8 @@
+ !!
+ !! Integrate forward in time to obtain transient dynamic response.
+ !!
++!!    Instrumented for PTLsim:
++      CALL ptlcall_switch_to_sim
+       CALL SOLVE
+ !!
+ !! Report timing results.
+diff -ur specref/gap/agcollec.h modified/gap/agcollec.h
+--- specref/gap/agcollec.h	2001-10-09 19:06:54.000000000 -0400
++++ modified/gap/agcollec.h	2005-04-09 20:07:40.000000000 -0400
+@@ -35,6 +35,9 @@
+ *H  initial revision under RCS
+ */
+ 
++#ifdef SPEC_CPU2000_P64
++#define long __int64
++#endif /* SPEC_CPU2000_P64 */
+ 
+ /*--------------------------------------------------------------------------\
+ |                         Compilation control flags                         |
+diff -ur specref/gap/aggroup.h modified/gap/aggroup.h
+--- specref/gap/aggroup.h	2001-10-09 19:06:54.000000000 -0400
++++ modified/gap/aggroup.h	2005-04-09 20:08:03.000000000 -0400
+@@ -18,6 +18,9 @@
+ *H  Initial release under RCS.
+ */
+ 
++#ifdef SPEC_CPU2000_P64
++#define long __int64
++#endif /* SPEC_CPU2000_P64 */
+ 
+ /****************************************************************************
+ **
+diff -ur specref/gap/blister.c modified/gap/blister.c
+--- specref/gap/blister.c	2001-10-09 19:06:55.000000000 -0400
++++ modified/gap/blister.c	2005-04-09 20:13:19.000000000 -0400
+@@ -551,13 +551,13 @@
+         ptBlist = (unsigned long *)(PTR(hdBlist)+1);
+         if ( ptBlist[start/BIPEB] >> (start%BIPEB) != 0 ) {
+             i = start/BIPEB;
+-            for ( j=start%BIPEB; j<BIPEB && (ptBlist[i]&(1L<<j))==0; j++ )
++            for ( j=start%BIPEB; j<BIPEB && (ptBlist[i]&((size_t)1L<<j))==0; j++ )
+                 ;
+         }
+         else {
+             for ( i=start/BIPEB+1; i<(len-1)/BIPEB && ptBlist[i]==0; i++ )
+                 ;
+-            for ( j=0; j<BIPEB && (ptBlist[i]&(1L<<j))==0; j++ )
++            for ( j=0; j<BIPEB && (ptBlist[i]&((size_t)1L<<j))==0; j++ )
+                 ;
+         }
+         k = (BIPEB*i+j+1 <= len ? BIPEB*i+j+1 : 0);
+@@ -568,13 +568,13 @@
+         ptBlist = (unsigned long *)(PTR(hdBlist)+1);
+         if ( ~ptBlist[start/BIPEB] >> (start%BIPEB) != 0 ) {
+             i = start/BIPEB;
+-            for ( j=start%BIPEB; j<BIPEB && (~ptBlist[i]&(1L<<j))==0; j++ )
++            for ( j=start%BIPEB; j<BIPEB && (~ptBlist[i]&((size_t)1L<<j))==0; j++ )
+                 ;
+         }
+         else {
+             for ( i=start/BIPEB+1; i<(len-1)/BIPEB && ~ptBlist[i]==0; i++ )
+                 ;
+-            for ( j=0; j<BIPEB && (~ptBlist[i]&(1L<<j))==0; j++ )
++            for ( j=0; j<BIPEB && (~ptBlist[i]&((size_t)1L<<j))==0; j++ )
+                 ;
+         }
+         k = (BIPEB*i+j+1 <= len ? BIPEB*i+j+1 : 0);
+@@ -845,11 +845,11 @@
+ 
+         /* set the corresponding entries to 'true'                         */
+         for ( k = i; k <= j && (k-1)%BIPEB != 0; k++ )
+-            ptBlist[(k-1)/BIPEB] |= (1L << (k-1)%BIPEB);
++            ptBlist[(k-1)/BIPEB] |= ((size_t)1L << (k-1)%BIPEB);
+         for ( ; k+BIPEB <= j; k += BIPEB )
+             ptBlist[(k-1)/BIPEB] = ~0L;
+         for ( ; k <= j; k++ )
+-            ptBlist[(k-1)/BIPEB] |= (1L << (k-1)%BIPEB);
++            ptBlist[(k-1)/BIPEB] |= ((size_t)1L << (k-1)%BIPEB);
+ 
+     }
+ 
+@@ -874,14 +874,14 @@
+                 if ( TYPE( ptSub[l] ) == T_INT ) {
+                     t = HD_TO_INT( ptSub[l] ) - s + 1;
+                     if ( 0 < t && t <= lnList )
+-                        ptBlist[(t-1)/BIPEB] |= (1L << (t-1)%BIPEB);
++                        ptBlist[(t-1)/BIPEB] |= ((size_t)1L << (t-1)%BIPEB);
+                 }
+ 
+                 /* otherwise it may be a record, let 'PosRange' handle it  */
+                 else {
+                     k = PosRange( hdList, ptSub[l], 0L );
+                     if ( k != 0 )
+-                        ptBlist[(k-1)/BIPEB] |= (1L << (k-1)%BIPEB);
++                        ptBlist[(k-1)/BIPEB] |= ((size_t)1L << (k-1)%BIPEB);
+                 }
+ 
+             }
+@@ -924,7 +924,7 @@
+                     if ( k <= lnList
+                       && EQ( PTR(hdList)[k], PTR(hdSub)[l] ) == HdTrue )
+                         ((unsigned long *)(PTR(hdBlist)+1))[(k-1)/BIPEB]
+-                            |= (1L << (k-1)%BIPEB);
++                            |= ((size_t)1L << (k-1)%BIPEB);
+                 }
+             }
+ 
+diff -ur specref/gap/blister.h modified/gap/blister.h
+--- specref/gap/blister.h	2001-10-09 19:06:55.000000000 -0400
++++ modified/gap/blister.h	2005-04-09 20:14:12.000000000 -0400
+@@ -56,6 +56,9 @@
+ *H
+ */
+ 
++#ifdef SPEC_CPU2000_P64
++#define long __int64
++#endif /* SPEC_CPU2000_P64 */
+ 
+ /****************************************************************************
+ **
+diff -ur specref/gap/coding.h modified/gap/coding.h
+--- specref/gap/coding.h	2001-10-09 19:06:55.000000000 -0400
++++ modified/gap/coding.h	2005-04-09 20:15:55.000000000 -0400
+@@ -12,7 +12,6 @@
+ *H
+ */
+ 
+-
+ /****************************************************************************
+ **
+ *F  RootPrimePower(<q>) . . . . . . return the smallest root of a prime power
+diff -ur specref/gap/gap.c modified/gap/gap.c
+--- specref/gap/gap.c	2001-10-09 19:06:57.000000000 -0400
++++ modified/gap/gap.c	2006-01-23 22:15:58.000000000 -0500
+@@ -181,6 +181,9 @@
+     /* set the environment to return in case of an error                   */
+     setjmp( ErrRet );
+ 
++    // Instrumented for PTLsim:
++    ptlcall_switch_to_sim();
++
+     /* repeat the read-eval-print cycle until end of input                 */
+     while ( Symbol != S_EOF ) {
+ 
+diff -ur specref/gap/string.c modified/gap/string.c
+--- specref/gap/string.c	2001-10-09 19:07:00.000000000 -0400
++++ modified/gap/string.c	2005-04-09 20:17:35.000000000 -0400
+@@ -755,7 +755,7 @@
+ 
+     /* make all the character constants once and for all                   */
+     for ( i = 0; i < 256; i++ ) {
+-        HdChars[i] = NewBag( T_CHAR, 1L );
++        HdChars[i] = NewBag( T_CHAR, (size_t)1L );
+         *(unsigned char*)PTR(HdChars[i]) = (unsigned char)i;
+     }
+ 
+diff -ur specref/gap/vecffe.c modified/gap/vecffe.c
+--- specref/gap/vecffe.c	2001-10-09 19:07:01.000000000 -0400
++++ modified/gap/vecffe.c	2005-04-09 20:18:20.000000000 -0400
+@@ -2623,7 +2623,7 @@
+     /* <p> = 0 means that <p> is the identity matrix                       */
+     if ( TYPE(hdR) == T_INT && 1 < HD_TO_INT(hdR) ) {
+         hdP = 0;
+-        k = 1L << 31;
++        k = (size_t)1L << 31;
+         e = HD_TO_INT(hdR);
+         while ( 1 < k ) {
+             hdP = (hdP == 0 ? hdP : ProdListScl( hdP, hdP ));
+@@ -2639,7 +2639,7 @@
+     if ( TYPE(hdR) != T_INT ) {
+         hdP = 0;
+         for ( i = SIZE(hdR)/sizeof(TypDigit); 0 < i; i-- ) {
+-            k = 1L << (8*sizeof(TypDigit));
++            k = (size_t)1L << (8*sizeof(TypDigit));
+             e = ((TypDigit*) PTR(hdR))[i-1];
+             while ( 1 < k ) {
+                 hdP = (hdP == 0 ? hdP : ProdListScl( hdP, hdP ));
+diff -ur specref/gap/vector.c modified/gap/vector.c
+--- specref/gap/vector.c	2001-10-09 19:07:02.000000000 -0400
++++ modified/gap/vector.c	2005-04-09 20:18:50.000000000 -0400
+@@ -1576,7 +1576,7 @@
+     /* <p> = 0 means that <p> is the identity matrix                       */
+     if ( TYPE(hdR) == T_INT && 1 < HD_TO_INT(hdR) ) {
+         hdP = 0;
+-        k = 1L << 31;
++        k = (size_t)1L << 31;
+         e = HD_TO_INT(hdR);
+         while ( 1 < k ) {
+             hdP = (hdP == 0 ? hdP : ProdListScl( hdP, hdP ));
+@@ -1592,7 +1592,7 @@
+     if ( TYPE(hdR) != T_INT ) {
+         hdP = 0;
+         for ( i = SIZE(hdR)/sizeof(TypDigit); 0 < i; i-- ) {
+-            k = 1L << (8*sizeof(TypDigit));
++            k = (size_t)1L << (8*sizeof(TypDigit));
+             e = ((TypDigit*) PTR(hdR))[i-1];
+             while ( 1 < k ) {
+                 hdP = (hdP == 0 ? hdP : ProdListScl( hdP, hdP ));
+Only in modified/gcc: integrate.reduced.i
+diff -ur specref/gcc/toplev.c modified/gcc/toplev.c
+--- specref/gcc/toplev.c	2001-10-09 19:05:21.000000000 -0400
++++ modified/gcc/toplev.c	2006-01-23 22:17:39.000000000 -0500
+@@ -2210,6 +2210,9 @@
+     TIMEVAR (symout_time, dwarfout_init (asm_out_file, main_input_filename));
+ #endif
+ 
++  // Instrumented for PTLsim:
++  ptlcall_switch_to_sim();
++
+   /* Initialize yet another pass.  */
+ 
+   if (!output_bytecode)
+diff -ur specref/gzip/deflate.c modified/gzip/deflate.c
+--- specref/gzip/deflate.c	2001-10-09 19:04:34.000000000 -0400
++++ modified/gzip/deflate.c	2006-01-23 22:24:47.000000000 -0500
+@@ -672,6 +672,9 @@
+     extern long isize;        /* byte length of input file, for debug only */
+ #endif
+ 
++    // Instrumented for PTLsim:
++    ptlcall_switch_to_sim();
++
+     if (compr_level <= 3) return deflate_fast(); /* optimized for speed */
+ 
+     /* Process the input block. */
+@@ -762,5 +765,8 @@
+     }
+     if (match_available) ct_tally (0, window[strstart-1]);
+ 
++    // Instrumented for PTLsim (optional):
++    // ptlcall_switch_to_native();
++
+     return FLUSH_BLOCK(1); /* eof */
+ }
+diff -ur specref/gzip/gzip.c modified/gzip/gzip.c
+--- specref/gzip/gzip.c	2001-10-09 19:04:34.000000000 -0400
++++ modified/gzip/gzip.c	2006-01-23 22:23:27.000000000 -0500
+@@ -211,7 +211,7 @@
+ int ascii = 0;        /* convert end-of-lines to local OS conventions */
+ int to_stdout = 0;    /* output to stdout (-c) */
+ int decompress = 0;   /* decompress (-d) */
+-int force = 0;        /* don't ask questions, compress links (-f) */
++int force = 1;        /* don't ask questions, compress links (-f) */
+ int no_name = -1;     /* don't save or restore the original file name */
+ int no_time = -1;     /* don't save or restore the original file time */
+ int recursive = 0;    /* recurse through directories (-r) */
+@@ -1647,12 +1647,14 @@
+     chown(ofname, ifstat->st_uid, ifstat->st_gid);  /* Copy ownership */
+ #endif
+     remove_ofname = 0;
++#if 0 // Always keep files
+     /* It's now safe to remove the input file: */
+     (void) chmod(ifname, 0777);
+     if (unlink(ifname)) {
+ 	WARN((stderr, "%s: ", progname));
+ 	if (!quiet) perror(ifname);
+     }
++#endif
+ }
+ 
+ #ifndef NO_DIR
+Only in modified/gzip: input.source.smaller
+diff -ur specref/lucas/lucas_distrib_spec.f90 modified/lucas/lucas_distrib_spec.f90
+--- specref/lucas/lucas_distrib_spec.f90	2001-10-09 19:03:12.000000000 -0400
++++ modified/lucas/lucas_distrib_spec.f90	2006-01-23 22:25:36.000000000 -0500
+@@ -234,6 +234,8 @@
+ !...initialize residual...
+ 
+         a=0; a(0,0)=4
++!       Instrumented for PTLsim:
++        CALL ptlcall_switch_to_sim
+ 
+ !...here's the big one - the series of squaring steps
+         call mers_mod_square(a,base,baseinv,base_index,wt,n,pad,ilo,ihi,p,ofile,diagnose)
+diff -ur specref/mcf/mcf.c modified/mcf/mcf.c
+--- specref/mcf/mcf.c	2001-10-09 19:05:28.000000000 -0400
++++ modified/mcf/mcf.c	2006-01-23 22:26:46.000000000 -0500
+@@ -121,6 +121,9 @@
+ 
+ 
+     primal_start_artificial( &net );
++    // Instrumented for PTLsim:
++    ptlcall_switch_to_sim();
++
+     global_opt( );
+ 
+     /*
+diff -ur specref/mesa/mesa4.c modified/mesa/mesa4.c
+--- specref/mesa/mesa4.c	2001-10-09 19:01:57.000000000 -0400
++++ modified/mesa/mesa4.c	2006-01-23 22:28:47.000000000 -0500
+@@ -232,6 +232,8 @@
+ 	* obvious, I should have done it before.
+ 	*
+ 	*/
++   // Instrumented for PTLsim:
++   ptlcall_switch_to_sim();
+ 
+    Yrot = -5.0F*(float)(frames-1);								/* wwlk */
+    
+Only in modified/mesa: mesa.ref.reduced.in
+diff -ur specref/mgrid/mgrid.f modified/mgrid/mgrid.f
+--- specref/mgrid/mgrid.f	2001-10-09 19:01:31.000000000 -0400
++++ modified/mgrid/mgrid.f	2006-01-23 22:30:18.000000000 -0500
+@@ -65,6 +65,9 @@
+ C
+       CALL SETUP(LMI,IR,MM)
+       XX = 314159265.D0
++C     Instrumented for PTLsim:
++      CALL ptlcall_switch_to_sim
++
+       DO 1000 MTIME=1,NTIMES
+       CALL ZERO3(U, U0,N,N,N)
+       CALL ZRAN3(XX,V,N,N,N)
+diff -ur specref/parser/main.c modified/parser/main.c
+--- specref/parser/main.c	2001-10-09 19:08:15.000000000 -0400
++++ modified/parser/main.c	2006-01-23 22:30:52.000000000 -0500
+@@ -1839,6 +1839,8 @@
+     if (batch) {
+ 	printf("Processing sentences in batch mode\n");
+ 	printf("\n");
++  // Instrumented for PTLsim:
++  ptlcall_switch_to_sim();
+ 	batch_process();
+     } else {
+ 	printf("Type your sentence and press Return ");
+Only in modified/perlbmk: lib
+diff -ur specref/perlbmk/pp_sys.c modified/perlbmk/pp_sys.c
+--- specref/perlbmk/pp_sys.c	2001-10-09 19:06:33.000000000 -0400
++++ modified/perlbmk/pp_sys.c	2005-04-09 17:44:30.000000000 -0400
+@@ -16,6 +16,9 @@
+ 
+ #include "EXTERN.h"
+ #include "perl.h"
++#if ((__GLIBC__ == 2 && __GLIBC_MINOR__ >= 2) || __GLIBC__ > 2) || defined(SPEC_CPU2000_NEED_TIME_H)
++#include <time.h>
++#endif
+ 
+ /* XXX If this causes problems, set i_unistd=undef in the hint file.  */
+ #ifdef I_UNISTD
+diff -ur specref/perlbmk/spec_config.h modified/perlbmk/spec_config.h
+--- specref/perlbmk/spec_config.h	2001-10-09 19:06:35.000000000 -0400
++++ modified/perlbmk/spec_config.h	2006-01-23 22:31:40.000000000 -0500
+@@ -105,11 +105,10 @@
+ * 
+ *****************************************************************************
+ */
+-
++#include <sys/types.h>
+ /* Cloyce's list of things to watch:
+  Pid_t
+ */
+-#define SPEC_CPU2000
+ #define PROTOTYPES 1      /* Everyone should be using them */
+ #undef PERL_OBJECT
+ 
+@@ -592,7 +591,10 @@
+  *	This symbol, if defined, indicates that the fgetpos routine is
+  *	available to get the file position indicator, similar to ftell().
+  */
+-#undef HAS_FGETPOS
++//#undef HAS_FGETPOS
++#if defined(SPEC_CPU2000_GLIBC22)
++#define HAS_FGETPOS
++#endif
+ 
+ /* FLEXFILENAMES:
+  *	This symbol, if defined, indicates that the system supports filenames
+@@ -618,7 +620,10 @@
+  *	This symbol, if defined, indicates that the fsetpos routine is
+  *	available to set the file position indicator, similar to fseek().
+  */
+-#undef HAS_FSETPOS
++/*#undef HAS_FSETPOS*/
++#if defined(SPEC_CPU2000_GLIBC22)
++#define HAS_FSETPOS
++#endif
+ 
+ /* I_SYS_MOUNT:
+  *	This symbol, if defined, indicates to the C program that it should
+diff -ur specref/perlbmk/unix_perlmain.c modified/perlbmk/unix_perlmain.c
+--- specref/perlbmk/unix_perlmain.c	2001-10-09 19:06:36.000000000 -0400
++++ modified/perlbmk/unix_perlmain.c	2006-01-23 22:32:32.000000000 -0500
+@@ -47,6 +47,9 @@
+     }
+ 
+     exitstatus = perl_parse( my_perl, xs_init, argc, argv, (char **) NULL );
++
++    // Instrumented for PTLsim:
++    ptlcall_switch_to_sim();
+     if (!exitstatus) {
+ 	exitstatus = perl_run( my_perl );
+     }
+diff -ur specref/sixtrack/thin6d.f modified/sixtrack/thin6d.f
+--- specref/sixtrack/thin6d.f	2001-10-09 19:03:51.000000000 -0400
++++ modified/sixtrack/thin6d.f	2006-01-23 22:33:58.000000000 -0500
+@@ -164,6 +164,10 @@
+ C    &syerf(npart),qerf(npart),herf(npart),xherf(npart),yherf(npart),
+ C    &xlerf(npart),tnerf(npart),ncerf(npart),nuerf(npart)
+       save
++
++c     Instrumented for PTLsim:
++      call ptlcall_switch_to_sim
++
+       c5m4=5.0d-4
+       nthinerr=0
+       do 660 n=1,numl
+diff -ur specref/swim/swim.f modified/swim/swim.f
+--- specref/swim/swim.f	2001-10-09 19:01:28.000000000 -0400
++++ modified/swim/swim.f	2006-01-23 22:35:05.000000000 -0500
+@@ -78,6 +78,9 @@
+ 
+ C  6/22/95 for SPEC: JWR: Initialization of TIME
+ 
++c     Instrumented for PTLsim:
++      CALL ptlcall_switch_to_sim
++
+       TIME = 0
+       NCYCLE = 0
+    90 NCYCLE = NCYCLE + 1
+diff -ur specref/twolf/main.c modified/twolf/main.c
+--- specref/twolf/main.c	2001-10-09 19:08:04.000000000 -0400
++++ modified/twolf/main.c	2006-01-23 22:35:38.000000000 -0500
+@@ -169,6 +169,9 @@
+ fprintf( fpo , "CURRENT PLACEMENT: %d\n" , penalty ) ;
+ fflush( fpo ) ;
+ 
++// Instrumented for PTLsim:
++  ptlcall_switch_to_sim();
++
+ if( !costonly ) {
+     Tzero = 0.1 ;
+     desired_accept = (double *) safe_malloc( 117 * sizeof(double) ) ;
+diff -ur specref/vortex/bmt0.c modified/vortex/bmt0.c
+--- specref/vortex/bmt0.c	2001-10-09 19:07:22.000000000 -0400
++++ modified/vortex/bmt0.c	2006-01-23 22:37:09.000000000 -0500
+@@ -522,6 +522,8 @@
+                           Parms,           McStatPtr))
+    {
+ /*    Access the KingDom from  Command Line Mode                           */
++     // Instrumented for PTLsim:
++     ptlcall_switch_to_sim();
+       BMT_Test           (Edb_DbName,      Edb_DbFileName,
+                           Drw_DbName,      Drw_DbFileName,
+                           Emp_DbName,      Emp_DbFileName,
+diff -ur specref/vortex/domain.c modified/vortex/domain.c
+--- specref/vortex/domain.c	2001-10-09 19:07:23.000000000 -0400
++++ modified/vortex/domain.c	2006-01-04 21:57:06.000000000 -0500
+@@ -1256,7 +1256,9 @@
+    StackTrack ("Domain");
+ 
+    fclose     (OutFilePtr);
++   OutFilePtr  = NULL;
+    fclose     (MsgFilePtr);
++   MsgFilePtr  = NULL;
+ 
+    if (SWAP)
+       Mem_CloseXmemFile ();
+diff -ur specref/vortex/typedefs.h modified/vortex/typedefs.h
+--- specref/vortex/typedefs.h	2001-10-09 19:07:32.000000000 -0400
++++ modified/vortex/typedefs.h	2005-12-30 20:45:35.000000000 -0500
+@@ -45,7 +45,8 @@
+  
+ typedef  unsigned char    bytetype;
+ typedef  bytetype         ByteType;
+-typedef  ByteType         byte;
++// ptlcalls.h already defines this:
++//typedef  ByteType         byte;
+ typedef  ByteType         ByteArray[];
+ 
+ #ifdef TWOBYTE_BOOL
+diff -ur specref/vpr/main.c modified/vpr/main.c
+--- specref/vpr/main.c	2001-10-09 19:04:46.000000000 -0400
++++ modified/vpr/main.c	2006-01-23 22:39:27.000000000 -0500
+@@ -175,6 +175,9 @@
+    
+  fflush (stdout);
+ 
++ // Instrumented for PTLsim
++ ptlcall_switch_to_sim();
++
+  place_and_route (operation, placer_opts, place_file, net_file, arch_file,
+     route_file, full_stats, verify_binary_search, annealing_sched, router_opts,
+     det_routing_arch, segment_inf, timing_inf);
+diff -ur specref/wupwise/wupwise.f modified/wupwise/wupwise.f
+--- specref/wupwise/wupwise.f	2001-10-09 19:01:24.000000000 -0400
++++ modified/wupwise/wupwise.f	2006-01-23 22:42:23.000000000 -0500
+@@ -102,6 +102,9 @@
+ 
+       CALL PHINIT(N1/2,N2,N3,N4,SOURCE,IX,IY,IZ,IT,IC,ID,SEED,PHI)
+ 
++c     Instrumented for PTLsim:
++      CALL ptlcall_switch_to_sim
++
+ c     %---------------%
+ c     | INITIAL GUESS |
+ c     %---------------%

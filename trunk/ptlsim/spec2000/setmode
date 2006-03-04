@@ -1,0 +1,20 @@
+#!/bin/sh
+
+case $1 in
+  32bit)
+    make use32 >& /dev/null
+    echo All benchmarks configured as 32-bit code
+    ;;
+  64bit)
+    make use64 >& /dev/null
+    echo All benchmarks configured as 64-bit code
+    ;;
+  none)
+    make usenone >& /dev/null
+    echo All benchmarks are unconfigured now
+    ;;
+  *)
+    echo Syntax is setmode [32bit|64bit|none]
+    ;;
+esac
+

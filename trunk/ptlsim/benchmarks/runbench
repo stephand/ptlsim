@@ -1,4 +1,0 @@
-#!/bin/sh
-for f in $@; do
-  nice time make -C $f run >& $f/run.log
-done

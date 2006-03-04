@@ -1,0 +1,76 @@
+#!/usr/bin/perl -w
+#
+# Distributed cluster execution helper
+# by Matt T. Yourst <yourst@yourst.com>
+#
+use IO::Handle;
+autoflush STDOUT 1;
+
+$basedir=$ENV{"PWD"};
+@benchmarks = @ARGV;
+
+@machines = ("tidalwave", "typhoon", "tsunami", "tornado");
+$threads_per_machine = 2;
+
+$thread_count = @machines * $threads_per_machine;
+
+$benchcount = @benchmarks;
+$machinecount = @machines;
+print("\nrunbench-cluster: Running $benchcount benchmarks on $machinecount nodes with $threads_per_machine threads per node...\n\n");
+
+@threads = ();
+$tid = 0;
+
+foreach $benchmark (@benchmarks) { 
+  push @{$threads[$tid % $thread_count]}, $benchmark;
+  $tid = ($tid + 1) % $thread_count;
+}
+
+@pids = ();
+
+@thread_machines = ();
+@thread_cpus = ();
+
+for ($tid = 0; $tid < @threads; $tid++) {
+  # Default load balancing policy favoring even balance
+  $machineid = $tid % @machines;
+  $cpu = ($tid / @machines) % $threads_per_machine;
+  # Alternate load balancing policy favoring fewer machines
+  # $machineid = ($tid / $threads_per_machine) % @machines;
+  # $cpu = ($tid % $threads_per_machine);
+
+  $machine = $machines[$machineid];
+
+  $thread_machines[$tid] = $machine;
+  $thread_cpus[$tid] = $cpu;
+
+  print("  Thread $tid on $machine cpu $cpu: ");
+  @benchlist = @{$threads[$tid]};
+  foreach $bench (@benchlist) {
+    print(" [$bench]");
+  }
+
+  $pid = fork();
+
+  if (!$pid) {
+    exec("ssh", "-q", "-oStrictHostKeyChecking=no", "-oForwardX11=no", $machine, "$basedir/runbench-local", "$basedir", @benchlist);
+    exit 0;
+  }
+
+  $pids[$tid] = $pid;
+
+  print(" => PID $pid\n");
+}
+
+print("\nWaiting on $thread_count threads:\n\n");
+
+for ($tid = 0; $tid < @threads; $tid++) {
+  $machine = $thread_machines[$tid];
+  $cpu = $thread_cpus[$tid];
+  $pid = $pids[$tid];
+  print("  Thread $tid (pid $pid) on $machine cpu $cpu...");
+  $pid = waitpid($pid, 0);
+  print("OK (pid $pid), result $?\n");
+}
+
+printf("\nDone!\n\n");

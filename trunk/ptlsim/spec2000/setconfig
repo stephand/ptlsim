@@ -1,0 +1,19 @@
+#!/bin/sh
+echo "Configuring all benchmarks with options $@"
+
+# Fix NFS pathname issues on cluster
+mkdir -p ~/.ptlsim/net
+if ! [ -a ~/.ptlsim/net/caps.cs.binghamton.edu ]; then
+  ln -sf .. ~/.ptlsim/net/caps.cs.binghamton.edu
+fi
+
+if ! [ -a ~/.ptlsim/net/caps ]; then
+  ln -sf caps.cs.binghamton.edu ~/.ptlsim/net/caps
+fi
+
+for f in gzip vpr gcc mcf crafty eon bzip2 twolf perlbmk parser gap vortex wupwise swim mgrid applu mesa art equake apsi sixtrack ammp fma3d lucas facerec; do
+  echo "  $f"
+  mkdir -p ~/.ptlsim/$PWD/$f
+  echo $@ > ~/.ptlsim/$PWD/$f/$f-32bit.conf
+  echo $@ > ~/.ptlsim/$PWD/$f/$f-64bit.conf
+done;
