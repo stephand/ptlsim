@@ -4598,6 +4598,95 @@ namespace TranslateX86 {
         0x5xx   0x66  OPpd
       */
 
+    case 0x5c5: { // pextrw
+      DECODE(gform, rd, w_mode);
+      DECODE(eform, ra, x_mode);
+      DecodedOperand imm;
+      DECODE(iform, imm, b_mode);
+      CheckInvalid();
+
+      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+
+      int which = bit(imm.imm.imm, 2);
+      int shift = lowbits(imm.imm.imm, 3) * 16;
+      this << TransOp(OP_maskb, rdreg, REG_zero, rareg + which, REG_imm, 3, 0, MaskControlInfo(0, 16, lowbits(shift, 6)));
+      break;
+    }
+
+    case 0x5c4: { // pinsrw
+      DECODE(gform, rd, x_mode);
+      DECODE(eform, ra, w_mode);
+      DecodedOperand imm;
+      DECODE(iform, imm, b_mode);
+      CheckInvalid();
+
+      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+
+      int which = bit(imm.imm.imm, 2);
+      int shift = lowbits(imm.imm.imm, 3) * 16;
+
+      this << TransOp(OP_maskb, rdreg + which, rdreg + which, rareg, REG_imm, 3, 0, MaskControlInfo(64 - shift, 16, 64 - lowbits(shift, 6)));
+      break;
+    }
+  
+    case 0x570: // pshufd
+    case 0x3c6: { // shufps
+      DECODE(gform, rd, x_mode);
+      DECODE(eform, ra, x_mode);
+      DecodedOperand imm;
+      DECODE(iform, imm, b_mode);
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg;
+
+      if (ra.type == OPTYPE_MEM) {
+        rareg = REG_temp0;
+        operand_load(rareg+0, ra, OP_ld, (op == 0x570) ? DATATYPE_VEC_32BIT : DATATYPE_VEC_FLOAT);
+        ra.mem.offset += 8;
+        operand_load(rareg+1, ra, OP_ld, (op == 0x570) ? DATATYPE_VEC_32BIT : DATATYPE_VEC_FLOAT);
+      } else {
+        int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      }
+
+      bool mix = (op == 0x3c6); // both rd and ra are used as sources for shufps
+
+      int base0 = bits(imm.imm.imm, 0*2, 2) * 4;
+      int base1 = bits(imm.imm.imm, 1*2, 2) * 4;
+      int base2 = bits(imm.imm.imm, 2*2, 2) * 4;
+      int base3 = bits(imm.imm.imm, 1*2, 2) * 4;
+
+      this << TransOp(OP_permb, rdreg+0, ((mix) ? rdreg+0 : rareg+0), ((mix) ? rdreg+1 : rareg+1), REG_imm, 3, 0, PermbControlInfo(base0+0, base0+1, base0+2, base0+3, base1+0, base1+1, base1+2, base1+3));
+      this << TransOp(OP_permb, rdreg+1, ((mix) ? rareg+0 : rareg+0), ((mix) ? rareg+1 : rareg+1), REG_imm, 3, 0, PermbControlInfo(base2+0, base2+1, base2+2, base2+3, base3+0, base3+1, base3+2, base3+3));
+      break;
+    }
+
+    case 0x5c6: { // shufpd
+      DECODE(gform, rd, x_mode);
+      DECODE(eform, ra, x_mode);
+      DecodedOperand imm;
+      DECODE(iform, imm, b_mode);
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg;
+
+      if (ra.type == OPTYPE_MEM) {
+        rareg = REG_temp0;
+        operand_load(rareg+0, ra, OP_ld, DATATYPE_VEC_DOUBLE);
+        ra.mem.offset += 8;
+        operand_load(rareg+1, ra, OP_ld, DATATYPE_VEC_DOUBLE);
+      } else {
+        int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      }
+
+      this << TransOp(OP_mov, rdreg+0, REG_zero, rdreg + bit(imm.imm.imm, 0), REG_imm, 3);
+      this << TransOp(OP_mov, rdreg+1, REG_zero, rareg + bit(imm.imm.imm, 1), REG_imm, 3);
+      break;
+    }
+
     case 0x32f: // comiss
     case 0x32e: // ucomiss
     case 0x52f: // comisd

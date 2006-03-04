@@ -172,6 +172,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"ctz",            OPCLASS_BITSCAN,       3, opB,         ANYFPU},
   {"clz",            OPCLASS_BITSCAN,       3, opB,         ANYFPU},
   {"ctpop",          OPCLASS_BITSCAN,       3, opB,         ANYFPU},  
+  {"permb",          OPCLASS_SHIFTROT,      4, opABC,       ANYFPU}, // from fpa port
   // Floating point
   // uop.size bits have following meaning:
   // 00 = single precision, scalar (preserve high 32 bits of ra)

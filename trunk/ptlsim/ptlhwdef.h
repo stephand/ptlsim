@@ -471,6 +471,7 @@ enum {
   OP_ctz,
   OP_clz,
   OP_ctpop,
+  OP_permb,
   // Floating point
   OP_addf,
   OP_subf,
@@ -541,6 +542,28 @@ union MaskControlInfo {
     this->info.ms = ms;
     this->info.mc = mc;
     this->info.ds = ds;
+  }
+
+  operator W32() const { return data; }
+};
+
+union PermbControlInfo {
+  struct { W32 b0:4, b1:4, b2:4, b3:4, b4:4, b5:4, b6:4, b7:4; } info;
+  W32 data;
+
+  PermbControlInfo() { }
+
+  PermbControlInfo(W32 data) { this->data = data; }
+
+  PermbControlInfo(int b0, int b1, int b2, int b3, int b4, int b5, int b6, int b7) {
+    info.b0 = b0;
+    info.b1 = b1;
+    info.b2 = b2;
+    info.b3 = b3;
+    info.b4 = b4;
+    info.b5 = b5;
+    info.b6 = b6;
+    info.b7 = b7;
   }
 
   operator W32() const { return data; }

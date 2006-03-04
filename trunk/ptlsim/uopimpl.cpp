@@ -295,7 +295,8 @@ inline void aluop3s(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 
   func<T, genflags> f;
   T rt = f(ra, rb, rc << rcshift, raflags, rbflags, rcflags, cf, of);
   state.reg.rddata = x86_merge<T>(ra, rt);
-  state.reg.rdflags = (of << 11) | cf | ((genflags & SETFLAG_ZF) ? x86_genflags<T>(rt) : 0);
+  // Do not generate of or cf for the 3-ops:
+  state.reg.rdflags = x86_genflags<T>(rt);
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), 0, rcshift);
 }
 
@@ -545,6 +546,40 @@ uopimpl_func_t implmap_maskb[4][3] = {
   {&exp_op_mask<OP_maskb, W32, 0, 0>, &exp_op_mask<OP_maskb, W32, 1, 0>, &exp_op_mask<OP_maskb, W32, 0, 1>},
   {&exp_op_mask<OP_maskb, W64, 0, 0>, &exp_op_mask<OP_maskb, W64, 1, 0>, &exp_op_mask<OP_maskb, W64, 0, 1>}
 };
+
+//
+// Permute bytes
+//
+// Technically this is a generalization of maskb, and maskb can be transformed
+// into permb in the pipeline, at the cost of additional muxing logic.
+//
+void uop_impl_permb(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  union vec128 {
+    struct { W64 lo, hi; } w64;
+    struct { byte b[16]; } bytes;
+  };
+
+  union vec64 {
+    struct { W64 data; } w64;
+    struct { byte b[8]; } bytes;
+  };
+
+  vec128 ab;
+  vec64 d;
+
+  ab.w64.lo = ra;
+  ab.w64.hi = rb;
+
+  foreach (i, 8) {
+    int which = bits(rc, i*4, 4);
+    d.bytes.b[i] = ab.bytes.b[which];
+  }
+
+  state.reg.rddata = d.w64.data;
+  state.reg.rdflags = x86_genflags<W64>(d.w64.data);
+
+  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_permb, 0);
+}
 
 //
 // Multiplies
@@ -1111,6 +1146,7 @@ make_fp_convop_allrounds(cvtf_d2s_p, cvtpd2ps, cvtpd2ps);
 
 uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal) {
   uopimpl_func_t func = null;
+
   switch (op) {
   case OP_nop:
     func = uop_impl_nop; break;
@@ -1238,6 +1274,8 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = implmap_ctz[size][setflags]; break;
   case OP_clz: 
     func = implmap_clz[size][setflags]; break;
+  case OP_permb:
+    func = uop_impl_permb; break;
 
   case OP_addf:
     func = implmap_addf[size]; break;
