@@ -506,17 +506,17 @@ struct ReorderBufferEntry: public selfqueuelink {
   W16s idx;
   W16s cycles_left; // execution latency counter, decremented every cycle when executing
   W16s forward_cycle; // forwarding cycle after completion
-  W8s cluster;
+  W16s lfrqslot;
+  W16s iqslot;
+  W16  executable_on_cluster_mask;
+  W8s  cluster;
   byte fu;
-  W8s lfrqslot;
   byte consumer_count;
-  W8s  iqslot;
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
   byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1;
 #else
   byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1;
 #endif
-  W16 executable_on_cluster_mask;
 
   int index() const { return idx; }
 
