@@ -520,8 +520,6 @@ namespace SequentialCore {
 
   int execute_sequential(BasicBlock* bb, W64 insnlimit) {
     arf[REG_rip] = bb->rip;
-
-    Waddr rip = arf[REG_rip];
     
     //
     // Fetch
@@ -542,8 +540,8 @@ namespace SequentialCore {
     seq_total_basic_blocks++;
 
     while ((uopindex < bb->count) & (user_insns < insnlimit)) {
-      if (!asp.fastcheck((byte*)rip, asp.execmap)) {
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": bogus RIP", endl;
+      if (!asp.fastcheck((byte*)arf[REG_rip], asp.execmap)) {
+        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": bogus RIP", endl;
         ctx.exception = EXCEPTION_PageFaultOnExec;
         return SEQEXEC_INVALIDRIP;
       }
@@ -559,7 +557,7 @@ namespace SequentialCore {
       assert(uopindex < bb->count);
 
       if (uop.unaligned) {
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": split unaligned load or store ", uop, endl;
+        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": split unaligned load or store ", uop, endl;
         split_unaligned(uop, unaligned_ldst_buf);
         assert(unaligned_ldst_buf.get(uop, synthop));
       }
@@ -609,7 +607,7 @@ namespace SequentialCore {
           return SEQEXEC_EXCEPTION;
         } else if (status == ISSUE_REFETCH) {
           if (logable(1)) {
-            logfile << intstring(current_uuid, 20), " algnfx", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), " ", 
+            logfile << intstring(current_uuid, 20), " algnfx", " rip ", (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), " ", 
               uop, ": set unaligned bit for uop index ", uopindex, " at iteration ", iterations, endl;
           }
           bb->transops[uopindex].unaligned = 1;
@@ -622,14 +620,14 @@ namespace SequentialCore {
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags); 
 
         if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.fastcheck((void*)(Waddr)state.reg.rddata, asp.execmap))) {
-          if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": bogus RIP at branch target", endl;
+          if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": bogus RIP at branch target", endl;
           ctx.exception = EXCEPTION_PageFaultOnExec;
           return SEQEXEC_INVALIDRIP;
         }
         
         if (logable(1)) {
           stringbuf rdstr; print_value_and_flags(rdstr, state.reg.rddata, state.reg.rdflags);
-          logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)rip, ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
+          logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
           if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
           logfile << endl;
         }
@@ -640,7 +638,7 @@ namespace SequentialCore {
         
         if (logable(1)) {
           stringbuf rdstr; print_value_and_flags(rdstr, state.reg.rddata, state.reg.rdflags);
-          logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)rip, ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
+          logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
           if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
           logfile << endl;
         }

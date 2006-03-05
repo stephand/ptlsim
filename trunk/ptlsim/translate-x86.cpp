@@ -114,7 +114,7 @@ void assist_cpuid() {
   W64& rdx = ctx.commitarf[REG_rdx];
 
   W32 func = rax;
-  logfile << "assist_cpuid: func 0x", hexstring(func, 32), ":", endl;
+  logfile << "assist_cpuid: func 0x", hexstring(func, 32), " called from ", (void*)(Waddr)ctx.commitarf[REG_sr0], ":", endl;
   switch (func) {
   case 0: {
     // Max avail function spec and vendor ID:
@@ -180,6 +180,15 @@ void assist_cpuid() {
   }
 }
 
+//
+// Full hidden EFLAGS/RFLAGS state
+// pushf and popf require this
+//
+W32 internal_flags_bits = 0;
+
+//
+// PTL calls
+//
 extern void assist_ptlcall();
 
 //
@@ -2175,12 +2184,18 @@ namespace TranslateX86 {
       int sizeshift = (sizeflag & DFLAG) ? ((ctx.use64) ? 3 : 2) : 1;
       int size = (1 << sizeshift);
 
-      if (!last_flags_update_was_atomic) 
+      if (last_flags_update_was_atomic) {
+        this << TransOp(OP_movccr, REG_temp0, REG_zf, REG_zero, REG_zero, 3);
+      } else {
         this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
-      this << TransOp(OP_movccr, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
-      //++MTY TODO This also needs to be merged with all the non-dynamic flags (IF,DF,etc.)
+        this << TransOp(OP_movccr, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
+      }
+
+      TransOp ldp(OP_ld, REG_temp1, REG_zero, REG_imm, REG_zero, 2, (Waddr)&internal_flags_bits); ldp.internal = 1; this << ldp;
+      this << TransOp(OP_or, REG_temp1, REG_temp1, REG_temp0, REG_zero, 2); // merge in standard flags
+
       this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
-      this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_temp0, sizeshift);
+      this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_temp1, sizeshift);
 
       break;
     }
@@ -2191,7 +2206,9 @@ namespace TranslateX86 {
 
       this << TransOp(OP_ld, REG_temp0, REG_rsp, REG_zero, REG_zero, sizeshift);
       this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
-      //++MTY TODO This also needs to be merged with all the non-dynamic flags (IF,DF,etc.)
+      // Update internal flags too (only update non-standard flags in internal_flags_bits):
+      this << TransOp(OP_and, REG_temp1, REG_temp0, REG_imm, REG_zero, 2, ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
+      TransOp stp(OP_st, REG_mem, REG_zero, REG_imm, REG_temp1, 2, (Waddr)&internal_flags_bits); stp.internal = 1; this << stp;
       this << TransOp(OP_movrcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
 
       break;
