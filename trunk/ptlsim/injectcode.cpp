@@ -19,6 +19,9 @@
 #ifdef __x86_64__
 
 #define __syscall "syscall"
+#ifndef __syscall_clobber
+#define __syscall_clobber "r11","rcx","memory"
+#endif
 
 #define declare_syscall0(sysid,type,name) static inline type name(void) { long __res; asm volatile \
   (__syscall : "=a" (__res) : "0" (sysid) : __syscall_clobber ); __syscall_return(type,__res); }
