@@ -4909,11 +4909,13 @@ namespace TranslateX86 {
       // fxsave fxrstor ldmxcsr stmxcsr (inv) lfence mfence sfence
       switch (modrm.reg) {
       case 2: { // ldmxcsr
+        DECODE(eform, rd, d_mode);
         //++MTY TODO
         this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
         break;
       }
       case 3: { // stmxcsr
+        DECODE(eform, rd, d_mode);
         //++MTY TODO
         this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
         break;
