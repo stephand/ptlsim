@@ -935,7 +935,7 @@ void fpu_state_to_ptlsim_state() {
 
   // x86 FSAVE state is in order of stack rather than physical registers:
   foreach (i, 8) {
-    fpregs[lowbits(x87state.sw.fields.tos + i, 3)] = x87_fp_80bit_to_64bit(x87state.stack[i]);
+    fpregs[lowbits(x87state.sw.fields.tos + i, 3)] = x87_fp_80bit_to_64bit(&x87state.stack[i]);
   }
 }
 
@@ -955,7 +955,7 @@ void ptlsim_state_to_fpu_state() {
 
   // Prepare actual registers
   foreach (i, 8) {
-    x87_fp_64bit_to_80bit(x87state.stack[i], fpregs[lowbits(tos + i, 3)]);
+    x87_fp_64bit_to_80bit(&x87state.stack[i], fpregs[lowbits(tos + i, 3)]);
   }
 
   ctx.commitarf[REG_fpsw] = x87state.sw.data;

@@ -406,7 +406,7 @@ void assist_x87_fld80() {
   // Push on stack
   W64& tos = ctx.commitarf[REG_fptos];
   tos = (tos - 8) & FP_STACK_MASK;
-  fpregs[tos >> 3] = x87_fp_80bit_to_64bit(*addr);
+  fpregs[tos >> 3] = x87_fp_80bit_to_64bit(addr);
   setbit(ctx.commitarf[REG_fptags], tos);
 }
 
@@ -423,7 +423,7 @@ void assist_x87_fstp80() {
 
   // Store and pop from stack
   W64& tos = ctx.commitarf[REG_fptos];
-  x87_fp_64bit_to_80bit(*addr, fpregs[tos >> 3]);
+  x87_fp_64bit_to_80bit(addr, fpregs[tos >> 3]);
   clearbit(ctx.commitarf[REG_fptags], tos);
   tos = (tos + 8) & FP_STACK_MASK;
 }
