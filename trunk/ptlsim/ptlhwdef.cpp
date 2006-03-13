@@ -349,8 +349,10 @@ stringbuf& operator <<(stringbuf& sb, const TransOp& op) {
   sb << arch_reg_names[op.ra];
   if (op.rb == REG_imm) { sb << ",", op.rbimm; } else  { sb << ",", arch_reg_names[op.rb]; }
   if (ld|st) sb << "]";
-  if (op.opcode == OP_mask) {
-    sb << ",[ms=", bits(op.rcimm, 0, 6), " mc=", bits(op.rcimm, 6, 6), " ds=", bits(op.rcimm, 12, 6), "]";
+  if ((op.opcode == OP_mask) | (op.opcode == OP_maskb)) {
+    MaskControlInfo mci(op.rcimm);
+    int sh = (op.opcode == OP_maskb) ? 3 : 0;
+    sb << ",[ms=", (mci.info.ms >> sh), " mc=", (mci.info.mc >> sh), " ds=", (mci.info.ds >> sh), "]";
   } else {
     if (op.rc != REG_zero) { if (op.rc == REG_imm) sb << ",", op.rcimm; else sb << ",", arch_reg_names[op.rc]; }
   }
@@ -463,6 +465,8 @@ char* regname(int r) {
 stringbuf& nameof(stringbuf& sbname, const TransOp& uop) {
   static const char* size_names[4] = {"b", "w", "d", ""};
   static const char* fptype_names[4] = {"ss", "ps", "sd", "pd"};
+  static const char* mask_exttype[4] = {"", "zxt", "sxt", "???"};
+
   int op = uop.opcode;
 
   bool ld = isload(op);
@@ -471,7 +475,9 @@ stringbuf& nameof(stringbuf& sbname, const TransOp& uop) {
 
   sbname << nameof(op);
 
-  sbname << (fp ? fptype_names[uop.size] : size_names[uop.size]);
+  if ((op != OP_maskb) & (op != OP_mask))
+    sbname << (fp ? fptype_names[uop.size] : size_names[uop.size]);
+  else sbname << ".", mask_exttype[uop.cond];
 
   if (isclass(op, OPCLASS_USECOND))
     sbname << ".", cond_code_names[uop.cond];

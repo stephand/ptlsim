@@ -1773,7 +1773,7 @@ namespace TranslateX86 {
       int sizeshift = reginfo[ra.reg.reg].sizeshift;
       int r = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
 
-      this << TransOp(OP_add, r, r, REG_imm, REG_zero, sizeshift, bit(op, 3) ? -1 : +1, 0, SETFLAG_ZF|SETFLAG_OF); // save old rdreg
+      this << TransOp(bit(op, 3) ? OP_sub : OP_add, r, r, REG_imm, REG_zero, sizeshift, +1, 0, SETFLAG_ZF|SETFLAG_OF); // save old rdreg
       break;
       break;
     }
@@ -2064,11 +2064,17 @@ namespace TranslateX86 {
       if (basereg == REG_rip) {
         // rip-relative addressing:
         this << TransOp(OP_mov, destreg, (sizeshift >= 2) ? REG_zero : destreg, REG_imm, REG_zero, sizeshift, (Waddr)rip + ra.mem.offset);
+      } else if ((ra.mem.offset == 0) && (ra.mem.scale == 0)) {
+        // [ra + rb]
+        this << TransOp(OP_add, destreg, basereg, indexreg, REG_zero, sizeshift);
+      } else if (indexreg == REG_zero) {
+        // [ra + imm32]
+        this << TransOp(OP_add, destreg, basereg, REG_imm, REG_zero, sizeshift, ra.mem.offset);
       } else {
-        TransOp addop(OP_adda, (sizeshift >= 2) ? destreg : REG_temp0, basereg, REG_imm, indexreg, sizeshift, ra.mem.offset);
+        // [ra + rb*scale + imm32]
+        TransOp addop(OP_adda, destreg, basereg, REG_imm, indexreg, sizeshift, ra.mem.offset);
         addop.extshift = ra.mem.scale;
         this << addop;
-        if (sizeshift < 2) this << TransOp(OP_mov, destreg, destreg, REG_temp0, REG_zero, sizeshift); break;
       }
       break;
     }
@@ -3577,8 +3583,8 @@ namespace TranslateX86 {
       DECODE(eform, rd, b_mode);
       CheckInvalid();
       ra.type = OPTYPE_IMM;
-      ra.imm.imm = (bit(modrm.reg, 0)) ? -1 : +1;
-      alu_reg_or_mem(OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
+      ra.imm.imm = +1;
+      alu_reg_or_mem((bit(modrm.reg, 0)) ? OP_sub : OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
       break;
     }
 
@@ -3591,8 +3597,8 @@ namespace TranslateX86 {
         DECODE(eform, rd, v_mode);
         CheckInvalid();
         ra.type = OPTYPE_IMM;
-        ra.imm.imm = (bit(modrm.reg, 0)) ? -1 : +1;
-        alu_reg_or_mem(OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
+        ra.imm.imm = +1;
+        alu_reg_or_mem((bit(modrm.reg, 0)) ? OP_sub : OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
         break;
       }
       case 2:
@@ -4614,6 +4620,41 @@ namespace TranslateX86 {
         0x4xx   0xf2  OPsd
         0x5xx   0x66  OPpd
       */
+    case 0x5d3: { // psrlq xmm|mem
+      //++MTY TODO According to the SSE2 spec, the count is NOT masked;
+      // any counts >= 64 result in the register being cleared.
+      DECODE(gform, rd, x_mode);
+      DECODE(eform, ra, x_mode);
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg;
+
+      if (ra.type == OPTYPE_MEM) {
+        rareg = REG_temp0;
+        operand_load(rareg+0, ra, OP_ld, DATATYPE_VEC_64BIT);
+        ra.mem.offset += 8;
+        operand_load(rareg+1, ra, OP_ld, DATATYPE_VEC_64BIT);
+      } else {
+        int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      }
+
+      this << TransOp(OP_shr, rdreg+0, rdreg+0, rareg, REG_zero, 3);
+      this << TransOp(OP_shr, rdreg+1, rdreg+1, rareg, REG_zero, 3);
+      break;
+    }
+
+    case 0x573: { // psrlq imm8
+      DECODE(gform, rd, x_mode);
+      DECODE(iform, ra, b_mode);
+      CheckInvalid();
+
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+
+      this << TransOp(OP_shr, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, ra.imm.imm);
+      this << TransOp(OP_shr, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, ra.imm.imm);
+      break;
+    }
 
     case 0x5c5: { // pextrw
       DECODE(gform, rd, w_mode);
