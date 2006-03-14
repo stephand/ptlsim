@@ -4089,6 +4089,13 @@ namespace TranslateX86 {
       break;
     }
 
+      /*
+        0x2xx   0xf3  OPpd
+        0x3xx   none  OPps
+        0x4xx   0xf2  OPsd
+        0x5xx   0x66  OPpd
+      */
+
       //
       // SSE Arithmetic
       //
@@ -4519,7 +4526,9 @@ namespace TranslateX86 {
     case 0x328: // movaps load 
     case 0x528: // movapd load
     case 0x310: // movups load
-    case 0x510: { // movupd load
+    case 0x510: // movupd load
+    case 0x56f: // movdqa load
+    case 0x26f: { // movdqu load
       DECODE(gform, rd, x_mode);
       DECODE(eform, ra, x_mode);
       CheckInvalid();
@@ -4543,7 +4552,9 @@ namespace TranslateX86 {
     case 0x329: // movaps store
     case 0x529: // movapd store
     case 0x311: // movups store
-    case 0x511: { // movupd store
+    case 0x511: // movupd store
+    case 0x57f: // movdqa store
+    case 0x27f: { // movdqu store
       DECODE(eform, rd, x_mode);
       DECODE(gform, ra, x_mode);
       CheckInvalid();
