@@ -4631,7 +4631,8 @@ namespace TranslateX86 {
         0x4xx   0xf2  OPsd
         0x5xx   0x66  OPpd
       */
-    case 0x5d3: { // psrlq xmm|mem
+    case 0x5d3: // psrlq xmm|mem
+    case 0x5f3: { // psllq xmm|mem
       //++MTY TODO According to the SSE2 spec, the count is NOT masked;
       // any counts >= 64 result in the register being cleared.
       DECODE(gform, rd, x_mode);
@@ -4650,20 +4651,27 @@ namespace TranslateX86 {
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      this << TransOp(OP_shr, rdreg+0, rdreg+0, rareg, REG_zero, 3);
-      this << TransOp(OP_shr, rdreg+1, rdreg+1, rareg, REG_zero, 3);
+      int opcode = (op == 0x5d3) ? OP_shr : OP_shl;
+
+      this << TransOp(opcode, rdreg+0, rdreg+0, rareg, REG_zero, 3);
+      this << TransOp(opcode, rdreg+1, rdreg+1, rareg, REG_zero, 3);
       break;
     }
 
-    case 0x573: { // psrlq imm8
+    case 0x573: // psrlq|psllq imm8
       DECODE(gform, rd, x_mode);
       DECODE(iform, ra, b_mode);
       CheckInvalid();
 
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
 
-      this << TransOp(OP_shr, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, ra.imm.imm);
-      this << TransOp(OP_shr, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, ra.imm.imm);
+      static const int modrm_reg_to_opcode[8] = {OP_nop, OP_nop, OP_shr, OP_nop, OP_nop, OP_nop, OP_shl, OP_nop};
+
+      int opcode = modrm_reg_to_opcode[modrm.reg];
+      if (opcode == OP_nop) MakeInvalid();
+
+      this << TransOp(opcode, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, ra.imm.imm);
+      this << TransOp(opcode, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, ra.imm.imm);
       break;
     }
 
