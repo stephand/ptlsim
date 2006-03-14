@@ -4658,7 +4658,7 @@ namespace TranslateX86 {
       break;
     }
 
-    case 0x573: // psrlq|psllq imm8
+    case 0x573: { // psrlq|psllq imm8
       DECODE(gform, rd, x_mode);
       DECODE(iform, ra, b_mode);
       CheckInvalid();
