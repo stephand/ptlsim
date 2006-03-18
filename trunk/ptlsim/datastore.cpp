@@ -745,13 +745,13 @@ odstream& DataStoreNode::write(odstream& os) const {
   case DS_NODE_TYPE_STRING: {
     if (count == 1) {
       int len = strlen(value.s);
-      assert(len < 256);     
+      assert(len < 65536);     
       os << (W16)len;
       os.write(value.s, len+1);
     } else {
       foreach (i, count) {
         int len = strlen(values[i].s);
-        assert(len < 256);
+        assert(len < 65536);
         os << (W16)len;
         os.write(values[i].s, len+1);
       }
