@@ -607,7 +607,7 @@ DataStoreNode::DataStoreNode(idstream& is) {
   read(is);
 }
 
-#define DSN_MAGIC_VER_1 0x314e5344 // 'DSN1'
+#define DSN_MAGIC_VER_1 0x324c5450 // 'PTL2'
 
 bool DataStoreNode::read(idstream& is) {
   DataStoreNodeHeader h;
@@ -618,7 +618,7 @@ bool DataStoreNode::read(idstream& is) {
   assert(is);
 
   if (h.magic != DSN_MAGIC_VER_1) {
-    cerr << "DataStoreNode::read(): ERROR: stream does not have proper DSN version 1 header (0x", 
+    cerr << "DataStoreNode::read(): ERROR: stream does not have proper DSN version 2 header (0x", 
       hexstring(h.magic, 32), ") at offset ", ftell(is), endl, flush;
     return false;
   }
@@ -668,14 +668,14 @@ bool DataStoreNode::read(idstream& is) {
   }
   case DS_NODE_TYPE_STRING: {
     if (count == 1) {
-      byte len;
+      W16 len;
       is >> len;
       value.s = new char[len+1];
       is.read((char*)value.s, len+1);
     } else {
       values = new DataType[count];
       foreach (i, count) {
-        byte len;
+        W16 len;
         is >> len;
         values[i].s = new char[len+1];
         is.read((char*)values[i].s, len+1);
@@ -746,13 +746,13 @@ odstream& DataStoreNode::write(odstream& os) const {
     if (count == 1) {
       int len = strlen(value.s);
       assert(len < 256);     
-      os << (byte)len;
+      os << (W16)len;
       os.write(value.s, len+1);
     } else {
       foreach (i, count) {
         int len = strlen(values[i].s);
         assert(len < 256);
-        os << (byte)len;
+        os << (W16)len;
         os.write(values[i].s, len+1);
       }
     }
