@@ -787,8 +787,8 @@ namespace TranslateX86 {
     /* 30 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 3f */
     /* 40 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 4f */
     /* 50 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 5f */
-    /* 60 */ 1,1,1,1,1,1,1,1,0,0,0,0,0,1,1,1, /* 6f */
-    /* 70 */ 1,0,0,0,1,1,1,0,0,0,0,0,1,1,1,1, /* 7f */
+    /* 60 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 6f */
+    /* 70 */ 1,1,1,1,1,1,1,0,0,0,0,0,1,1,1,1, /* 7f */
     /* 80 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 8f */
     /* 90 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 9f */
     /* a0 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* af */
@@ -1718,6 +1718,7 @@ namespace TranslateX86 {
         op |= 0x100;
       }
     }
+
 
     // SSE uses 0x66 prefix for an opcode extension:
     if (!uses_sse && (prefixes & PFX_DATA)) {
@@ -4632,7 +4633,9 @@ namespace TranslateX86 {
         0x5xx   0x66  OPpd
       */
     case 0x5d3: // psrlq xmm|mem
-    case 0x5f3: { // psllq xmm|mem
+    case 0x5f3: // psllq xmm|mem
+    case 0x5d4: // paddq xmm|mem
+    case 0x5fb: { // psubq xmm|mem
       //++MTY TODO According to the SSE2 spec, the count is NOT masked;
       // any counts >= 64 result in the register being cleared.
       DECODE(gform, rd, x_mode);
@@ -4648,13 +4651,23 @@ namespace TranslateX86 {
         ra.mem.offset += 8;
         operand_load(rareg+1, ra, OP_ld, DATATYPE_VEC_64BIT);
       } else {
-        int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+        rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       }
 
-      int opcode = (op == 0x5d3) ? OP_shr : OP_shl;
+      int opcode;
+      switch (op) {
+      case 0x5d3: opcode = OP_shr; break;
+      case 0x5f3: opcode = OP_shl; break;
+      case 0x5d4: opcode = OP_add; break;
+      case 0x5fb: opcode = OP_sub; break;
+      default: opcode = OP_nop; break;
+      }
 
+      if (opcode == OP_nop) MakeInvalid();
+
+      int add_to_second_reg = ((opcode == OP_shr) | (opcode == OP_shl)) ? 0 : 1;
       this << TransOp(opcode, rdreg+0, rdreg+0, rareg, REG_zero, 3);
-      this << TransOp(opcode, rdreg+1, rdreg+1, rareg, REG_zero, 3);
+      this << TransOp(opcode, rdreg+1, rdreg+1, rareg + add_to_second_reg, REG_zero, 3);
       break;
     }
 
