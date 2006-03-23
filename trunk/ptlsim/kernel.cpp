@@ -2260,6 +2260,7 @@ extern time_t ptlsim_build_timestamp;
 // then captures any user process arguments, environment and auxv, possibly
 // converting between 64-bit and 32-bit formats.
 //
+extern byte ptlsim_preinit_entry;
 
 extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   //

@@ -555,7 +555,7 @@ union PermbControlInfo {
 
   PermbControlInfo(W32 data) { this->data = data; }
 
-  PermbControlInfo(int b0, int b1, int b2, int b3, int b4, int b5, int b6, int b7) {
+  PermbControlInfo(int b7, int b6, int b5, int b4, int b3, int b2, int b1, int b0) {
     info.b0 = b0;
     info.b1 = b1;
     info.b2 = b2;

@@ -4748,8 +4748,9 @@ namespace TranslateX86 {
       int base2 = bits(imm.imm.imm, 2*2, 2) * 4;
       int base3 = bits(imm.imm.imm, 1*2, 2) * 4;
 
-      this << TransOp(OP_permb, rdreg+0, ((mix) ? rdreg+0 : rareg+0), ((mix) ? rdreg+1 : rareg+1), REG_imm, 3, 0, PermbControlInfo(base0+0, base0+1, base0+2, base0+3, base1+0, base1+1, base1+2, base1+3));
-      this << TransOp(OP_permb, rdreg+1, ((mix) ? rareg+0 : rareg+0), ((mix) ? rareg+1 : rareg+1), REG_imm, 3, 0, PermbControlInfo(base2+0, base2+1, base2+2, base2+3, base3+0, base3+1, base3+2, base3+3));
+      this << TransOp(OP_permb, rdreg+0, ((mix) ? rdreg+0 : rareg+0), ((mix) ? rdreg+1 : rareg+1), REG_imm, 3, 0, PermbControlInfo(base1+3, base1+2, base1+1, base1+0, base0+3, base0+2, base0+1, base0+0));
+      this << TransOp(OP_permb, rdreg+1, ((mix) ? rareg+0 : rareg+0), ((mix) ? rareg+1 : rareg+1), REG_imm, 3, 0, PermbControlInfo(base3+3, base3+2, base3+1, base3+0, base2+3, base2+2, base2+1, base2+0));
+
       break;
     }
 
@@ -4891,6 +4892,45 @@ namespace TranslateX86 {
       break;
     }
 
+    case 0x314: // unpcklps
+    case 0x315: { // unpckhps
+      DECODE(gform, rd, x_mode);
+      DECODE(eform, ra, x_mode);
+      CheckInvalid();
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
+      int rareg;
+      if (ra.type == OPTYPE_MEM) {
+        rareg = REG_temp0;
+        operand_load(rareg+0, ra, OP_ld, datatype);
+        ra.mem.offset += 8;
+        operand_load(rareg+1, ra, OP_ld, datatype);
+      } else {
+        rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      }
+
+      switch (op) {
+      case 0x314: { // unpcklps:
+        TransOp uophi(OP_permb, rdreg+1, rareg+0, rdreg+0, REG_imm, 3, 0, PermbControlInfo(7, 6, 5, 4, 15, 14, 13, 12)); // rd+1 (d3, d2) = a1 d1
+        uophi.datatype = DATATYPE_VEC_FLOAT; this << uophi;
+        TransOp uoplo(OP_permb, rdreg+0, rareg+0, rdreg+0, REG_imm, 3, 0, PermbControlInfo(3, 2, 1, 0, 11, 10, 9, 8)); // rd+0 = (d1, d0) a0 d0
+        uoplo.datatype = DATATYPE_VEC_FLOAT; this << uoplo;
+        break;
+      }
+      case 0x315: { // unpckhps:
+        TransOp uoplo(OP_permb, rdreg+0, rareg+1, rdreg+1, REG_imm, 3, 0, PermbControlInfo(3, 2, 1, 0, 11, 10, 9, 8)); // rd+0 (d1, d0) = a2 d2
+        uoplo.datatype = DATATYPE_VEC_FLOAT; this << uoplo;
+        TransOp uophi(OP_permb, rdreg+1, rareg+1, rdreg+1, REG_imm, 3, 0, PermbControlInfo(7, 6, 5, 4, 15, 14, 13, 12)); // rd+1 (d3, d2) = a3 d3
+        uophi.datatype = DATATYPE_VEC_FLOAT; this << uophi;
+        break;
+      }
+      default:
+        MakeInvalid();
+      }
+
+      break;
+    }
+
     case 0x1c3: {
       // movnti
       DECODE(eform, rd, v_mode);
@@ -5011,8 +5051,7 @@ namespace TranslateX86 {
       end_of_block = 1;
       break;
     }
-      //case 0x314: // unpcklps
-      //case 0x315: // unpckhps
+
     default: {
       MakeInvalid();
       break;
