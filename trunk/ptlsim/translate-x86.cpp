@@ -428,6 +428,32 @@ void assist_x87_fstp80() {
   tos = (tos + 8) & FP_STACK_MASK;
 }
 
+void assist_ldmxcsr() {
+  //
+  // LDMXCSR needs to flush the pipeline since future FP instructions will
+  // depend on its value and can't be issued out of order w.r.t the mxcsr.
+  //
+  W32 mxcsr = (W32)ctx.commitarf[REG_sr2];
+
+  // Top bit of mxcsr archreg doubles as direction flag and other misc flags: preserve it
+  ctx.commitarf[REG_mxcsr] = (ctx.commitarf[REG_mxcsr] & 0xffffffff00000000ULL) | mxcsr;
+
+  // We can't have exceptions going on inside PTLsim: virtualize this feature in uopimpl code
+  // Everything else will be used by real SSE insns inside uopimpls. 
+  mxcsr |= MXCSR_EXCEPTION_DISABLE_MASK;
+  x86_set_mxcsr(mxcsr);
+
+  // logfile << "Set mxcsr from rip ", (void*)(Waddr)ctx.commitarf[REG_sr0], " at cycle ", sim_cycle, " commits ", 
+  //   total_user_insns_committed, ": new value 0x", hexstring(LO32(ctx.commitarf[REG_mxcsr]), 32), endl;
+
+  //
+  // Technically all FP uops should update the sticky exception bits in the mxcsr
+  // if marked as such (i.e. non-x87). Presently we don't do this, so hopefully
+  // no code checks for exception conditions in this manner. Otherwise each FP
+  // uopimpl would need to update a speculative version of the mxcsr.
+  //
+}
+
 enum {
   ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
   ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
@@ -435,7 +461,7 @@ enum {
   ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS,
   ASSIST_X87_FXAM, ASSIST_X87_F2XM1, ASSIST_X87_FYL2X, ASSIST_X87_FPTAN,
   ASSIST_X87_FPATAN, ASSIST_X87_FXTRACT, ASSIST_X87_FPREM1,
-  ASSIST_FLD80, ASSIST_FSTP80,
+  ASSIST_FLD80, ASSIST_FSTP80, ASSIST_LDMXCSR,
   ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
   ASSIST_INVALID_OPCODE, ASSIST_PTLCALL,
   ASSIST_COUNT,
@@ -448,7 +474,7 @@ assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_x87_frndint, assist_x87_fscale, assist_x87_fsin, assist_x87_fcos,
   assist_x87_fxam, assist_x87_f2xm1, assist_x87_fyl2x, assist_x87_fptan,
   assist_x87_fpatan, assist_x87_fxtract, assist_x87_fprem1,
-  assist_x87_fld80, assist_x87_fstp80,
+  assist_x87_fld80, assist_x87_fstp80, assist_ldmxcsr,
   assist_int, assist_syscall, assist_sysenter, assist_cpuid,
   assist_invalid_opcode, assist_ptlcall,
 };
@@ -460,7 +486,7 @@ const char* assist_names[ASSIST_COUNT] = {
   "x87_frndint", "x87_fscale", "x87_fsin", "x87_fcos",
   "x87_fxam", "x87_f2xm1", "x87_fyl2x", "x87_fptan",
   "x87_fpatan", "x87_fxtract", "x87_fprem1",
-  "x87_fld80", "x87_fstp80",
+  "x87_fld80", "x87_fstp80",  "ldmxcsr",
   "int", "syscall", "sysenter", "cpuid",
   "invopcode", "ptlcall",
 };
@@ -5022,14 +5048,21 @@ namespace TranslateX86 {
       // fxsave fxrstor ldmxcsr stmxcsr (inv) lfence mfence sfence
       switch (modrm.reg) {
       case 2: { // ldmxcsr
-        DECODE(eform, rd, d_mode);
-        //++MTY TODO
-        this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
+        DECODE(eform, ra, d_mode);
+        ra.type = OPTYPE_REG;
+        ra.reg.reg = 0; // get the requested mxcsr into sr2
+        move_reg_or_mem(ra, rd, REG_sr2);
+        //
+        // LDMXCSR needs to flush the pipeline since future FP instructions will
+        // depend on its value and can't be issued out of order w.r.t the mxcsr.
+        //
+        microcode_assist(ASSIST_LDMXCSR, ripstart, rip);
+        end_of_block = 1;
         break;
       }
       case 3: { // stmxcsr
         DECODE(eform, rd, d_mode);
-        //++MTY TODO
+        result_store(REG_mxcsr, REG_temp0, rd);
         this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
         break;
       }

@@ -290,7 +290,11 @@ void save_stats() {
 
 }
 
+// FP control mxcsr for PTLsim internal code:
+W32 ptlsim_mxcsr;
+
 void user_process_terminated(int rc) {
+  x86_set_mxcsr(MXCSR_DEFAULT);
   logfile << "user_process_terminated(rc = ", rc, "): initiating shutdown at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits...", endl, flush;
   save_stats();
   logfile << "PTLsim exiting...", endl, flush;
@@ -299,6 +303,7 @@ void user_process_terminated(int rc) {
 }
 
 void show_stats_and_switch_to_native() {
+  x86_set_mxcsr(MXCSR_DEFAULT);
   save_stats();
 
   if (exit_after_fullsim) {
@@ -348,6 +353,12 @@ void switch_to_sim() {
   logfile << ctx.commitarf;
 
   bool done = false;
+
+  //
+  // Swap the FP control registers to the user process version, so FP uopimpls
+  // can use the real rounding control bits.
+  //
+  x86_set_mxcsr(ctx.commitarf[REG_mxcsr] | MXCSR_EXCEPTION_DISABLE_MASK);
 
   if (sequential_mode_insns)
     done = sequential_core_toplevel_loop();

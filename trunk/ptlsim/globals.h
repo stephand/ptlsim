@@ -245,8 +245,12 @@ inline vec8w x86_sse_dupw(const W16 b) {
   return v;
 }
 
-inline void x86_ldmxcsr(W32 value) { asm volatile("ldmxcsr %[value]" : : [value] "m" (value)); }
-inline W32 x86_stmxcsr() { W32 value; asm volatile("stmxcsr %[value]" : [value] "=m" (value)); return value; }
+inline void x86_set_mxcsr(W32 value) { asm volatile("ldmxcsr %[value]" : : [value] "m" (value)); }
+inline W32 x86_get_mxcsr() { W32 value; asm volatile("stmxcsr %[value]" : [value] "=m" (value)); return value; }
+struct MXCSR { W32 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, daz:1, im:1, dm:1, zm:1, om:1, um:1, pm:1, rc:2, fz:1; };
+enum { MXCSR_ROUND_NEAREST, MXCSR_ROUND_DOWN, MXCSR_ROUND_UP, MXCSR_ROUND_TOWARDS_ZERO };
+#define MXCSR_EXCEPTION_DISABLE_MASK 0x1f80 // OR this into mxcsr to disable all exceptions
+#define MXCSR_DEFAULT 0x1f80 // default settings (no exceptions, defaults for rounding and denormals)
 
 inline W32 x86_bsf32(W32 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 inline W64 x86_bsf64(W64 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }

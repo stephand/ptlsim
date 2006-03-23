@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert

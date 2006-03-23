@@ -563,7 +563,7 @@ void uop_impl_permb(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 
     struct { W64 data; } w64;
     struct { byte b[8]; } bytes;
   };
-
+  
   vec128 ab;
   vec64 d;
 

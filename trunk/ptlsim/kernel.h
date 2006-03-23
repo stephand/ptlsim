@@ -249,6 +249,7 @@ inline void cpu_set_fpcw(W16 fpcw) {
   asm volatile("fldcw %[fpcw]" : : [fpcw] "m" (fpcw));
 }
 
+
 //
 // Address space management
 //

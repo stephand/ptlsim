@@ -2293,7 +2293,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   ctx.use64 = (ptlsim_ehdr->e_machine == EM_X86_64);
   cpu_fsave(x87state);
   fpu_state_to_ptlsim_state();
-  ctx.commitarf[REG_mxcsr] = x86_stmxcsr();
+  ctx.commitarf[REG_mxcsr] = x86_get_mxcsr();
 
   fsbase = get_fs_base();
   gsbase = get_gs_base();
