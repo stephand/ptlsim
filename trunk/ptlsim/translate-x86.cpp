@@ -454,6 +454,92 @@ void assist_ldmxcsr() {
   //
 }
 
+//
+// See pages 353-354 of AMD Manual Volume 2 (System Programming) for details:
+//
+struct X87RegPadded {
+  X87Reg reg;
+  byte pad[6];
+} packedstruct;
+
+struct XMMReg {
+  W64 lo, hi;
+};
+
+struct FXSAVEStruct {
+  X87ControlWord cw;
+  X87StatusWord sw;
+  W16 tw;
+  W16 fop;
+  union {
+    struct {
+      W32 eip;
+      W16 cs;
+      W16 reserved1;
+      W32 dp;
+      W16 ds;
+      W16 reserved2;
+    } use32;
+    struct { 
+      W64 rip;
+      W64 rdp;
+    } use64;
+  };
+  W32 mxcsr;
+  W32 mxcsr_mask;
+  X87RegPadded fpregs[8];
+  XMMReg xmmregs[8];
+} packedstruct;
+
+void assist_fxsave() {
+  // Virtual address is in sr2
+  byte* addr = (byte*)(Waddr)ctx.commitarf[REG_sr2];
+
+  bool valid = asp.check(addr, PROT_READ) & asp.check(addr + sizeof(FXSAVEStruct), PROT_READ);
+
+  if (!valid) {
+    logfile << "assist_fxsave_32bit: invalid store address ", addr, endl, flush;
+    ctx.exception = EXCEPTION_PageFaultOnWrite;
+    handle_invalid_memory_in_assist(addr);
+  }
+
+  FXSAVEStruct& state = *(FXSAVEStruct*)addr;
+
+  // x87state.cw already filled and assumed not to be modified
+  // clear everything but 4 FP status flag bits (c3/c2/c1/c0):
+  state.sw.data = ctx.commitarf[REG_fpsw] & ((0x7 << 8) | (1 << 14));
+  int tos = ctx.commitarf[REG_fptos] >> 3;
+  assert(inrange(tos, 0, 7));
+  state.sw.fields.tos = tos;
+  state.tw = 0;
+
+  // Prepare tag word (special format for FXSAVE)
+  foreach (i, 8) state.tw |= (bit(ctx.commitarf[REG_fptags], i*8) << i);
+
+  // Prepare actual registers
+  foreach (i, 8) x87_fp_64bit_to_80bit(&state.fpregs[i].reg, fpregs[lowbits(tos + i, 3)]);
+
+  state.fop = 0;
+
+  if (ctx.use64) {
+    state.use64.rip = 0;
+    state.use64.rdp = 0;
+  } else {
+    state.use32.eip = 0;
+    state.use32.cs = 0;
+    state.use32.dp = 0;
+    state.use32.ds = 0;
+  }
+
+  state.mxcsr = ctx.commitarf[REG_mxcsr];
+  state.mxcsr_mask = 0x0000ffff; // all MXCSR features supported
+
+  foreach (i, (ctx.use64) ? 16 : 8) {
+    state.xmmregs[i].lo = ctx.commitarf[REG_xmml0 + i*2];
+    state.xmmregs[i].hi = ctx.commitarf[REG_xmmh0 + i*2];
+  }
+}
+
 enum {
   ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
   ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
@@ -461,7 +547,7 @@ enum {
   ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS,
   ASSIST_X87_FXAM, ASSIST_X87_F2XM1, ASSIST_X87_FYL2X, ASSIST_X87_FPTAN,
   ASSIST_X87_FPATAN, ASSIST_X87_FXTRACT, ASSIST_X87_FPREM1,
-  ASSIST_FLD80, ASSIST_FSTP80, ASSIST_LDMXCSR,
+  ASSIST_FLD80, ASSIST_FSTP80, ASSIST_LDMXCSR, ASSIST_FXSAVE,
   ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
   ASSIST_INVALID_OPCODE, ASSIST_PTLCALL,
   ASSIST_COUNT,
@@ -474,7 +560,7 @@ assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_x87_frndint, assist_x87_fscale, assist_x87_fsin, assist_x87_fcos,
   assist_x87_fxam, assist_x87_f2xm1, assist_x87_fyl2x, assist_x87_fptan,
   assist_x87_fpatan, assist_x87_fxtract, assist_x87_fprem1,
-  assist_x87_fld80, assist_x87_fstp80, assist_ldmxcsr,
+  assist_x87_fld80, assist_x87_fstp80, assist_ldmxcsr, assist_fxsave,
   assist_int, assist_syscall, assist_sysenter, assist_cpuid,
   assist_invalid_opcode, assist_ptlcall,
 };
@@ -486,7 +572,7 @@ const char* assist_names[ASSIST_COUNT] = {
   "x87_frndint", "x87_fscale", "x87_fsin", "x87_fcos",
   "x87_fxam", "x87_f2xm1", "x87_fyl2x", "x87_fptan",
   "x87_fpatan", "x87_fxtract", "x87_fprem1",
-  "x87_fld80", "x87_fstp80",  "ldmxcsr",
+  "x87_fld80", "x87_fstp80",  "ldmxcsr", "fxsave",
   "int", "syscall", "sysenter", "cpuid",
   "invopcode", "ptlcall",
 };
@@ -5047,6 +5133,22 @@ namespace TranslateX86 {
     case 0x1ae: {
       // fxsave fxrstor ldmxcsr stmxcsr (inv) lfence mfence sfence
       switch (modrm.reg) {
+      case 0: { // fxsave
+        DECODE(eform, ra, q_mode);
+        CheckInvalid();
+
+        // Get effective address into sr2
+        int basereg = arch_pseudo_reg_to_arch_reg[ra.mem.basereg];
+        int indexreg = arch_pseudo_reg_to_arch_reg[ra.mem.indexreg];
+        basereg = bias_by_segreg(basereg);
+        TransOp addop(OP_adda, REG_sr2, basereg, REG_imm, indexreg, (ctx.use64) ? 3 : 2, ra.mem.offset);
+        addop.extshift = ra.mem.scale;
+        this << addop;
+
+        microcode_assist(ASSIST_FXSAVE, ripstart, rip);
+        end_of_block = 1;
+        break;
+      }
       case 2: { // ldmxcsr
         DECODE(eform, ra, d_mode);
         ra.type = OPTYPE_REG;
