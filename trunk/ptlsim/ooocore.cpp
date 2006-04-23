@@ -1522,7 +1522,7 @@ void rename() {
       break;
     }
 
-    if (st && (stores_in_flight >= LDQ_SIZE)) {
+    if (st && (stores_in_flight >= STQ_SIZE)) {
       if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename stq full", endl;
       frontend_status_stq_full++;
       break;
