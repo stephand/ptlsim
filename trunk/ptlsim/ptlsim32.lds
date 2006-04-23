@@ -3,14 +3,10 @@
 OUTPUT_FORMAT("elf32-i386", "elf32-i386",
 	      "elf32-i386")
 OUTPUT_ARCH(i386)
-ENTRY(_start)
+ENTRY(ptlsim_preinit_entry)
 SEARCH_DIR("/usr/i386-suse-linux/lib"); SEARCH_DIR("/usr/lib64"); SEARCH_DIR("/usr/local/lib"); SEARCH_DIR("/lib"); SEARCH_DIR("/usr/lib");
-
-/* Do we need any of these for elf?
-   __DYNAMIC = 0;    */
 SECTIONS
 {
-  /* Read-only sections, merged into text segment: */
   PROVIDE (__executable_start = 0x000070000000); . = 0x000070000000 + SIZEOF_HEADERS;
 
   .interp         : { *(.interp) }
@@ -105,19 +101,19 @@ SECTIONS
        wildcard.  The wildcard also means that it
        doesn't matter which directory crtbegin.o
        is in.  */
-    KEEP (*crtbegin*.o(.ctors))
+    KEEP (*linkstart*.o(.ctors))
     /* We don't want to include the .ctor section from
        from the crtend.o file until after the sorted ctors.
        The .ctor section from the crtend file contains the
        end of ctors marker and it must be last */
-    KEEP (*(EXCLUDE_FILE (*crtend*.o ) .ctors))
+    KEEP (*(EXCLUDE_FILE (*linkend*.o ) .ctors))
     KEEP (*(SORT(.ctors.*)))
     KEEP (*(.ctors))
   }
   .dtors          :
   {
-    KEEP (*crtbegin*.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend*.o ) .dtors))
+    KEEP (*linkstart*.o(.dtors))
+    KEEP (*(EXCLUDE_FILE (*linkend*.o ) .dtors))
     KEEP (*(SORT(.dtors.*)))
     KEEP (*(.dtors))
   }

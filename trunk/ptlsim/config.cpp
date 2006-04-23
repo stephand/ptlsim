@@ -7,7 +7,6 @@
 
 #include <ptlsim.h>
 #include <datastore.h>
-#include <time.h>
 
 ostream& ConfigurationParser::printusage(ostream& os) const {
   os << "Options are:", endl;
@@ -92,7 +91,7 @@ int ConfigurationParser::parse(int argc, char* argv[]) {
                 multiplier = 1000000000000LL; c = 0; break;
               }
             }
-            W64 v = (isinf) ? infinity : strtoll(p, &endp, 0);
+            W64 v = (isinf) ? infinity : strtoull(p, &endp, 0);
             if ((!isinf) && (endp[0] != 0)) {
               cerr << "Warning: invalid value '", p, "' for option ", argv[i-1], "; ignoring", endl;
             }

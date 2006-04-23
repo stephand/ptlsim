@@ -25,21 +25,25 @@ CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16 -fno-
 CFLAGS32BIT = 
 endif
 
+BASEOBJS = superstl.o config.o mathlib.o syscalls.o
+STDOBJS = glibc.o
+
 ifdef __x86_64__
-COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o lowlevel-64bit.o lowlevel-32bit.o uopimpl.o dcache.o config.o datastore.o injectcode-32bit.o injectcode-64bit.o
+# IMPORTANT: linkstart.o and linkend.o must be at opposite ends of the list to set up constructor tables properly:
+COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o ptlhwdef.o translate-x86.o uopimpl.o dcache.o datastore.o injectcode-32bit.o injectcode-64bit.o $(BASEOBJS) klibc.o linkend.o
 else
 # 32-bit PTLsim32 only:
-COMMONOBJS = ptlsim.o kernel.o superstl.o ptlhwdef.o translate-x86.o lowlevel-32bit.o uopimpl.o dcache.o config.o datastore.o injectcode-32bit.o
+COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o ptlhwdef.o translate-x86.o uopimpl.o dcache.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o linkend.o
 endif
 
 OOOOBJS = ooocore.o seqcore.o branchpred.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h loader.h
+COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h
 OOOINCLUDES = branchpred.h ooohwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
-COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp lowlevel-64bit.S lowlevel-32bit.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c genoffsets.cpp cpuid.cpp ptlstats.cpp
+COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp
 OOOCPPFILES = ooocore.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
@@ -62,15 +66,11 @@ CFLAGS += -D__PTLSIM_OOO_ONLY__
 all: ptlsim ptlstats ptlcalls.o ptlcalls-32bit.o cpuid
 	@echo "Compiled successfully..."
 
-genoffsets: genoffsets.o superstl.o
-	$(CC) -g -O2 genoffsets.o superstl.o -o genoffsets
+cpuid: cpuid.o $(BASEOBJS) $(STDOBJS)
+	g++ -O2 cpuid.o $(BASEOBJS) $(STDOBJS) -o cpuid
 
-cpuid: cpuid.o
-	$(CC) -O2 cpuid.o superstl.o -o cpuid
-
-# Compile this fast:
-ptlstats.o: ptlstats.cpp globals.h superstl.h ptlhwdef.h ptlsim.h config.h
-	$(CC) $(CFLAGS) -I. -O1 -g -fomit-frame-pointer -fno-exceptions -fno-rtti -c ptlstats.cpp
+ptlstats: ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) Makefile
+	g++ -g -O2 ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) -o ptlstats
 
 ifdef __x86_64__
 injectcode-64bit.o: injectcode.cpp
@@ -91,17 +91,11 @@ ptlcalls-32bit.o: ptlcalls.c
 
 ifdef __x86_64__
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
-	$(CC) -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim.lds -Wl,-e,ptlsim_preinit_entry
+	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`
 else
 ptlsim: $(OBJFILES) Makefile ptlsim32.lds
-	$(CC) -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static -Wl,--allow-multiple-definition -Wl,-T,ptlsim32.lds -Wl,-e,ptlsim_preinit_entry
+	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim32.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`
 endif
-
-ptlsim.objdump: ptlsim Makefile
-	objdump -Crtd --no-show-raw-insn ptlsim | convert-disasm-x86 > ptlsim.objdump
-
-ptlstats: ptlstats.o ptlhwdef.o superstl.o datastore.o config.o Makefile
-	$(CC) -g -O2 ptlstats.o ptlhwdef.o superstl.o datastore.o config.o -o ptlstats
 
 BASEADDR = 0
 
@@ -123,7 +117,7 @@ test.dat-32bit.S: test.dat Makefile
 	$(CC) $(CFLAGS) $(INCFLAGS) -c $<
 
 clean:
-	rm -fv ptlsim ptlstats cpuid genoffsets *.o core core.[0-9]* .depend *.gch
+	rm -fv ptlsim ptlstats cpuid *.o core core.[0-9]* .depend *.gch
 
 OBJFILES = $(COMMONOBJS) $(PT2XOBJS) $(OOOOBJS)
 INCLUDEFILES = $(COMMONINCLUDES) $(PT2XINCLUDES) $(OOOINCLUDES)
@@ -144,7 +138,6 @@ distfiles: $(DISTFILES)
 	@echo $(DISTFILES)
 
 .depend:
-	touch simsynth-offsets.h
 	$(CC) $(CFLAGS) $(INCFLAGS) -MM $(CPPFILES) $(ASMFILES) > .depend
 
 -include .depend

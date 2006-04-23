@@ -13,74 +13,6 @@
 #include <ptlhwdef.h>
 #include <elf.h>
 
-#ifdef __x86_64__
-
-#undef __syscall_return
-#define __syscall_return(type, res) return (type)(res);
-#define __syscall_clobber "r11","rcx","memory" 
-#define __syscall "syscall"
-
-#define declare_syscall0(sysid,type,name) type name(void) { long __res; asm volatile \
-  (__syscall : "=a" (__res) : "0" (sysid) : __syscall_clobber ); __syscall_return(type,__res); }
-
-#define declare_syscall1(sysid,type,name,type1,arg1) type name(type1 arg1) { long __res; asm volatile \
-  (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)) : __syscall_clobber ); __syscall_return(type,__res); }
-
-#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) type name(type1 arg1,type2 arg2) { long __res; asm volatile \
-  (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)) : __syscall_clobber ); __syscall_return(type,__res); }
-
-#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) type name(type1 arg1,type2 arg2,type3 arg3) { \
-  long __res; asm volatile (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), "d" ((long)(arg3)) : \
-  __syscall_clobber); __syscall_return(type,__res); }
-
-#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
-  type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) { \
-  long __res; asm volatile ("movq %5,%%r10 ;" __syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), \
-  "d" ((long)(arg3)),"g" ((long)(arg4)) : __syscall_clobber,"r10" ); __syscall_return(type,__res); }
-
-#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5) \
-  type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) { long __res; asm volatile ("movq %5,%%r10 ; movq %6,%%r8 ; " __syscall \
-  : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), "d" ((long)(arg3)),"g" ((long)(arg4)),"g" ((long)(arg5)) : \
-  __syscall_clobber,"r8","r10"); __syscall_return(type,__res); }
-
-#define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5,type6,arg6) \
-  type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { long __res; asm volatile \
-  ("movq %5,%%r10 ; movq %6,%%r8 ; movq %7,%%r9 ; " __syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), \
-   "d" ((long)(arg3)), "g" ((long)(arg4)), "g" ((long)(arg5)), "g" ((long)(arg6)) : __syscall_clobber,"r8","r10","r9" ); __syscall_return(type,__res); }
-
-#else
-
-#undef __syscall_return
-#define __syscall_return(type, res) return (type)(res);
-
-#define declare_syscall0(sysid,type,name) type name(void) { long __res; asm volatile ("int $0x80" \
-  : "=a" (__res) : "0" (sysid)); __syscall_return(type,__res); }
-
-#define declare_syscall1(sysid,type,name,type1,arg1) type name(type1 arg1) { long __res; \
-  asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1))); __syscall_return(type,__res); }
-
-#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) type name(type1 arg1,type2 arg2) { \
-  long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2))); __syscall_return(type,__res); }
-
-#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) type name(type1 arg1,type2 arg2,type3 arg3) { \
-  long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3))); __syscall_return(type,__res); }
-
-#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
-  { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4))); \
-  __syscall_return(type,__res); }
-
-#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5) type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
-  { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5))); \
-  __syscall_return(type,__res); }
-
-#define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5,type6,arg6) \
-  type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
-  long __res; asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; pop %%ebp" : "=a" (__res) \
-	: "i" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5)), \
-  "0" ((long)(arg6))); __syscall_return(type,__res); }
-
-#endif
-
 //
 // Thread local storage
 //
@@ -97,13 +29,6 @@ extern ThreadState basetls;
 static inline ThreadState* getcurrent() {
   return &basetls;
 }
-
-pid_t sys_gettid();
-W64 arch_prctl(int code, void* addr);
-void sys_exit(int code);
-void* sys_brk(void* newbrk);
-ssize_t sys_write(int fd, const void* buf, size_t count);
-W64 sys_ptrace(int request, pid_t pid, W64 addr, W64 data);
 
 void early_printk(const char* text);
 
@@ -166,7 +91,7 @@ void set_switch_to_sim_breakpoint(void* addr);
 void enable_ptlsim_call_gate();
 void disable_ptlsim_call_gate();
 
-int ptlsim_inject(int argc, char* argv[]);
+int ptlsim_inject(int argc, const char** argv);
 
 //
 // Performance counters
@@ -349,7 +274,7 @@ public:
   int getattr(void* start);
   int mprotect(void* start, Waddr length, int prot);
   int munmap(void* start, Waddr length);
-  void* mmap(void* start, Waddr length, int prot, int flags, int fd, off_t offset);
+  void* mmap(void* start, Waddr length, int prot, int flags, int fd, W64 offset);
   void* mremap(void* start, Waddr oldsize, Waddr newsize, int flags);
   void* setbrk(void* targetbrk);
 

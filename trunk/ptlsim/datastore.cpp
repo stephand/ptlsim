@@ -5,11 +5,6 @@
 //
 
 #include <globals.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <string.h>
-#include <dirent.h>
 #include <datastore.h>
 
 using namespace superstl;
@@ -162,7 +157,7 @@ DataStoreNode* DataStoreNode::searchpath(const char* path) const {
 
   char* p = pbase;
 
-  p = strtok(p, "/");
+  p = strsep(&p, "/");
   while (p) {
     DataStoreNode* dsn = ds->search(p);
     if (!dsn) {
@@ -170,7 +165,7 @@ DataStoreNode* DataStoreNode::searchpath(const char* path) const {
       return null;
     }
     ds = dsn;
-    p = strtok(null, "/");
+    p = strsep(null, "/");
   }
 
   delete pbase;
@@ -230,7 +225,7 @@ DataStoreNode::operator W64s() const {
   case DS_NODE_TYPE_FLOAT:
     return (W64s)getdata().f; break;
   case DS_NODE_TYPE_STRING:
-    return atoll(getdata().s); break;
+    return strtoll(getdata().s, (char**)null, 10); break;
   case DS_NODE_TYPE_NULL:
     return 0;
   }
@@ -619,7 +614,7 @@ bool DataStoreNode::read(idstream& is) {
 
   if (h.magic != DSN_MAGIC_VER_1) {
     cerr << "DataStoreNode::read(): ERROR: stream does not have proper DSN version 2 header (0x", 
-      hexstring(h.magic, 32), ") at offset ", ftell(is), endl, flush;
+      hexstring(h.magic, 32), ") at offset ", is.where(), endl, flush;
     return false;
   }
 

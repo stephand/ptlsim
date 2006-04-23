@@ -1,26 +1,12 @@
-/* -*- c-mode -*- */
+/* -*- c++ -*- */
 /* Default linker script, for normal executables */
 OUTPUT_FORMAT("elf64-x86-64", "elf64-x86-64",
 	      "elf64-x86-64")
 OUTPUT_ARCH(i386:x86-64)
-ENTRY(_start)
+ENTRY(ptlsim_preinit_entry)
 SEARCH_DIR("/usr/x86_64-suse-linux/lib64"); SEARCH_DIR("/usr/local/lib64"); SEARCH_DIR("/lib64"); SEARCH_DIR("/usr/lib64"); SEARCH_DIR("/usr/x86_64-suse-linux/lib"); SEARCH_DIR("/usr/lib64"); SEARCH_DIR("/usr/local/lib"); SEARCH_DIR("/lib"); SEARCH_DIR("/usr/lib");
-/* Do we need any of these for elf?
-   __DYNAMIC = 0;    */
 SECTIONS
 {
-  /* 
-   * Start PTL code and data space at zero base: this avoids disturbing any
-   * x86-64 user programs and still lets us use imm32 addresses. Note that the
-   * total ptlsim code size MUST be < 4 MB so we don't intersect the 0x400000
-   * default x86-64 base address. We may have to use strip to reduce the size.
-   * We can use munmap(0, 4096) to restore the null-page-is-zero functionality,
-   * since that page just contained the ELF headers used during startup.
-   */ 
-  /* See here for details: http://sources.redhat.com/ml/binutils/2004-06/msg00200.html */
-
-  /* PROVIDE (__executable_start = 0x000000001000); . = 0x000000001000 + SIZEOF_HEADERS; */
-  /* PROVIDE (__executable_start = 0x7fff00000000); . = 0x7fff00000000 + SIZEOF_HEADERS; */
   PROVIDE (__executable_start = 0x000070000000); . = 0x000070000000 + SIZEOF_HEADERS;
 
   .interp         : { *(.interp) }
@@ -114,19 +100,19 @@ SECTIONS
        wildcard.  The wildcard also means that it
        doesn't matter which directory crtbegin.o
        is in.  */
-    KEEP (*crtbegin*.o(.ctors))
+    KEEP (*linkstart*.o(.ctors))
     /* We don't want to include the .ctor section from
        from the crtend.o file until after the sorted ctors.
        The .ctor section from the crtend file contains the
        end of ctors marker and it must be last */
-    KEEP (*(EXCLUDE_FILE (*crtend*.o ) .ctors))
+    KEEP (*(EXCLUDE_FILE (*linkend*.o ) .ctors))
     KEEP (*(SORT(.ctors.*)))
     KEEP (*(.ctors))
   }
   .dtors          :
   {
-    KEEP (*crtbegin*.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend*.o ) .dtors))
+    KEEP (*linkstart*.o(.dtors))
+    KEEP (*(EXCLUDE_FILE (*linkend*.o ) .dtors))
     KEEP (*(SORT(.dtors.*)))
     KEEP (*(.dtors))
   }

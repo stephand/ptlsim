@@ -540,7 +540,7 @@ namespace SequentialCore {
     seq_total_basic_blocks++;
 
     while ((uopindex < bb->count) & (user_insns < insnlimit)) {
-      if (!asp.fastcheck((byte*)arf[REG_rip], asp.execmap)) {
+      if (!asp.fastcheck((byte*)(Waddr)arf[REG_rip], asp.execmap)) {
         if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": bogus RIP", endl;
         ctx.exception = EXCEPTION_PageFaultOnExec;
         return SEQEXEC_INVALIDRIP;

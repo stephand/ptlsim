@@ -395,11 +395,11 @@ public:
 };
 
 static inline double logscale(double x) {
-  return math::log(1 + (x*graph_logk)) / math::log(1 + graph_logk);
+  return log(1 + (x*graph_logk)) / log(1 + graph_logk);
 }
 
 static inline double invlogscale(double x) {
-  return (math::exp(x*math::log(1 + graph_logk)) - 1) / graph_logk;
+  return (exp(x*log(1 + graph_logk)) - 1) / graph_logk;
 }
 
 const RGBA graph_background(225, 207, 255);

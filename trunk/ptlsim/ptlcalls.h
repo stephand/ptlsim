@@ -8,10 +8,13 @@
 #ifndef __PTLCALLS_H__
 #define __PTLCALLS_H__
 
+#ifndef __INSIDE_PTLSIM__
 #include <unistd.h>
 #include <sys/mman.h>
 #include <stdio.h>
 #include <errno.h>
+#define sys_munlock munlock
+#endif
 
 typedef unsigned char byte;
 typedef unsigned short W16;
@@ -50,7 +53,7 @@ static inline W64 ptlcall(W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W6
      * it isn't, it returns -ENOMEM.
      */
 
-    int rc = munlock(thunk, 4096);
+    int rc = sys_munlock(thunk, 4096);
     running_under_ptlsim = (rc == 0);
 
     if (running_under_ptlsim && (thunk->magic != PTLSIM_THUNK_MAGIC))

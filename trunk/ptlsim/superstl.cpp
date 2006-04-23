@@ -8,80 +8,81 @@
 //
 
 #include <globals.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <string.h>
-#include <dirent.h>
+#include <superstl.h>
+
+//
+// System calls
+//
 
 namespace superstl {
-
   //
-  // class CycleTimer:
+  // odstream
   //
-  double CycleTimer::gethz() {
-    //
-    // Parse the Linux /proc/cpuinfo metafile to find
-    // the first CPU's clock speed.
-    //
-    // NOTE! Processors that do dynamic frequency
-    // scaling and report the current frequency in
-    // /proc/cpuinfo (versus the nominal peak frequency)
-    // will break this. The AMD K7 and K8 architectures
-    // fall into this category. Therefore, we try to read
-    // the cpuinfo_max_freq key from sysfs and if present
-    // we use this value instead.
-    //
-    if (hz)
-      return hz;
-
-    istream cpufreqis("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
-    if (cpufreqis) {
-      char s[256];
-      cpufreqis >> readline(s, sizeof(s));      
-
-      double khz;
-      int n = sscanf(s, "%lf", &khz);
-      if (n == 1) {
-        CycleTimer::hz = khz * 1000.0;
-        return hz;
-      }
-    }
-
-    istream is("/proc/cpuinfo");
-
-    double hz = 1.0;
-
-    if (!is) {
-      cerr << "CycleTimer::gethz(): warning: cannot open /proc/cpuinfo. Is this a Linux machine?", endl;
-      return hz;
-    }
-
-    while (is) {
-      char s[256];
-      is >> readline(s, sizeof(s));
-      int n = sscanf(s, "cpu MHz : %lf", &hz);
-      if (n == 1) {
-        hz *= 1000000.0;
-        //cout << "CycleTimer::gethz(): core frequency is ", hz, " hz", endl;
-        CycleTimer::hz = hz;
-        return hz;
-      }
-    }
-
-    return hz;
+  bool odstream::open(const char* filename, bool append, int bufsize) {
+    if (fd >= 0) close();
+    fd = sys_open(filename, O_RDWR | O_CREAT | ((append) ? O_APPEND : O_TRUNC), 0644);
+    if (fd < 0) return false;
+    setbuf(bufsize);
+    return true;
   }
 
-  double CycleTimer::hz = 0;
+  int odstream::setbuf(int bufsize) {
+    this->bufsize = bufsize;
+    if (!bufsize) return 0;
+    tail = 0;
+    buf = new byte[bufsize];
+    if (buf) bufsize = 0;
+    return bufsize;
+  }
 
-  ostream& operator <<(ostream& os, const CycleTimer& ct) {
-    double seconds = ((double)ct.total / ct.gethz());
-    os << "CycleTimer ", padstring(ct.title, -16), " ", intstring(ct.total, 16), " cycles, ", 
-      floatstring(seconds, 9, 3), " seconds, ", 
-      floatstring((float)ct.total / (float)ct.iterations, 18, 1), " cycles/iter, ", 
-      floatstring((float)ct.iterations / (float)seconds, 18, 1), " iters/second";
+  bool odstream::open(int fd, int bufsize) {
+    if (this->fd >= 0) close();
+    this->fd = fd;
+    setbuf(bufsize);
+    return ok();
+  }
 
-    return os;
+  void odstream::close() {
+    if (fd < 0) return;
+    flush();
+    if (buf) delete[] buf;
+    buf = null;
+    tail = 0;
+    sys_close(fd);
+    fd = -1;
+  }
+
+  int odstream::write(const void* data, int count) {
+    if (!ok()) return 0;
+    if (!buf) return sys_write(fd, buf, count);
+
+    byte* p = (byte*)data;
+
+    int total = 0;
+
+    while (count) {
+      int n = min(bufsize - tail, count);
+      memcpy(buf + tail, p, n);
+      tail += n;
+      assert(inrange(tail, 0, bufsize));
+      count -= n;
+      total += n;
+      p += n;
+      if (!n) {
+        // buffer full
+        assert(sys_write(fd, buf, tail) == tail);
+        tail = 0;
+      }
+    }
+
+    return total;
+  }
+
+  void odstream::flush() {
+    if (buf) {
+      if (tail) assert(sys_write(fd, buf, tail) == tail);
+      tail = 0;
+    }
   }
 
   //
@@ -214,8 +215,7 @@ namespace superstl {
 
   stringbuf& operator <<(stringbuf& os, const intstring& is) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "%lld", is.value);
-    int len = strlen(buf);
+    int len = format_integer(buf, sizeof(buf), is.value);
     bool leftalign = (is.width < 0);
     int width = (is.width) ? abs(is.width) : len;
 
@@ -242,11 +242,7 @@ namespace superstl {
 
   stringbuf& operator <<(stringbuf& os, const floatstring& fs) {
     char buf[128];
-    char format[64];
-    snprintf(format, sizeof(format), "%%.%df", fs.precision);
-    snprintf(buf, sizeof(buf), format, fs.value);
-
-    int len = strlen(buf);
+    int len = format_float(buf, sizeof(buf), fs.value, fs.precision);
     bool leftalign = (fs.width < 0);
     int width = (fs.width) ? abs(fs.width) : len;
 
@@ -364,38 +360,259 @@ namespace superstl {
   //
   // Input streams
   //
-  istream& operator >>(istream& is, char* v) {
-    int n = fscanf(is.fd, is.strformat, v); 
-    if (is.ok) is.ok = (n == 1); 
-    return is;
+
+  bool idstream::open(const char* filename, int bufsize) {
+    if (fd >= 0) close();
+    fd = sys_open(filename, O_RDONLY, 0);
+    error = (fd < 0);
+    if (!ok()) return false;
+    setbuf(bufsize);
+    return true;
   }
 
-  istream& operator >>(istream& is, const readline& v) {
-    if (!is) {
-      v.buf[0] = 0;
-      return is;
+  bool idstream::open(int fd, int bufsize) {
+    if (fd >= 0) close();
+    this->fd = fd;
+    error = (fd < 0);
+    if (!ok()) return false;
+    setbuf(bufsize);
+    return true;
+  }
+
+  int idstream::setbuf(int bufsize) {
+    if (buf) {
+      assert(this->bufsize > 0);
+      delete[] buf;
     }
-    char* p = fgets(v.buf, v.len, is.fd);
-    if (p) {
-      p = &v.buf[strlen(v.buf)-1];
-      while (((*p == '\n') || (*p == '\r')) && (p >= v.buf)) { *p-- = '\0'; }
-      if (is.ok) is.ok = true;
+
+    this->bufsize = bufsize;
+
+    buf = null;
+    if (!bufsize) {
+      return 0;
+    }
+
+    int bufbits = msbindex(bufsize) + 1;
+    bufsize = (1 << bufbits);
+    bufmask = bitmask(bufbits-1);
+
+    buf = new byte[bufsize];
+    head = 0;
+    tail = 0;
+    bufused = 0;
+
+    return bufsize;
+  }
+
+  int idstream::fillbuf() {
+    // For debugging only:
+    // cerr << "fillbuf fd ", fd, " (head ", head, ", tail ", tail, ", bufused ", bufused, ", bufsize ", bufsize, ", bufmask ", bufmask, ")", endl, flush;
+
+    if (eos) return 0;
+
+    if (bufused >= (bufsize/2)) return 1;
+
+    if (head < tail) {
+      // ....|||||||.....
+      //     h      t
+      // 0123456789abcdef
+      int lobytes = head;
+      int hibytes = bufsize - tail;
+
+      int hin = sys_read(fd, &buf[tail], hibytes);
+      if ((hibytes > 0) & (hin == 0)) eos = 1; // end of stream?
+
+      tail = addmod(tail, hin);
+      bufused += hin;
+
+      if (hin == hibytes) {
+        // do low part
+        int lon = sys_read(fd, &buf[0], lobytes);
+        if ((lobytes > 0) & (lon == 0)) eos = 1; // end of stream?
+        tail = addmod(tail, lon);
+        bufused += lon;
+      }
+    } else if (head > tail) {
+      // ||||.......|||||
+      //     t      h
+      // 0123456789abcdef
+
+      int bytes = (head - tail);
+      int n = sys_read(fd, &buf[tail], bytes);
+      if ((bytes > 0) & (n == 0)) eos = 1; // end of stream?
+      tail = addmod(tail, n);
+      bufused += n;
     } else {
-      is.ok = false;
-      v.buf[0] = '\0';
+      // (head == tail):
+      if (bufused) {
+        // no action - buffer is full
+        assert(bufused == bufsize);
+      } else {
+        assert(bufused == 0);
+        // buffer empty
+        int bytes = bufsize;
+        int n = sys_read(fd, &buf[tail], bytes);
+        if ((bytes > 0) & (n == 0)) eos = 1; // end of stream?
+        head = 0;
+        tail = addmod(head, n);
+        bufused = n;
+      }
     }
-    return is; 
+
+    assert(inrange(head, 0, bufsize-1));
+    assert(inrange(tail, 0, bufsize-1));
+    assert(inrange(bufused, 0, bufsize));
+
+    return 1;
   }
 
-  unsigned long long idstream::size() const {
-    int f = fileno(fd);
-    unsigned long long pos = lseek64(f, 0, SEEK_END);
-    lseek64(f, 0, SEEK_SET);
-    return pos;
+  int idstream::unread(int bytes) {
+    assert(bytes <= bufused);
+    head = addmod(head, -bytes);
+    bufused += bytes;
+    assert(inrange(bufused, 0, bufsize));
+    assert(inrange(head, 0, bufsize-1));
+    assert(inrange(tail, 0, bufsize-1));
+    return bytes;
+  }
+
+  int idstream::readbuf(byte* dest, int count) {
+    assert(count <= bufsize);
+    int n;
+    if (head < tail) {
+      // ....|||||||.....
+      //     h      t
+      // 0123456789abcdef
+      n = min(bufused, count);
+      memcpy(dest, &buf[head], n);
+      head = addmod(head, n);
+      bufused -= n;
+    } else if (head >= tail) {
+      // ||||.......|||||
+      //     t      h
+      // 0123456789abcdef
+      n = min(bufsize - head, count);
+      memcpy(dest, &buf[head], n);
+      head = addmod(head, n);
+      bufused -= n;
+    }
+    assert(inrange(bufused, 0, bufsize));
+    return n;
+  }
+
+  bool idstream::getc(char& c) {
+    if (!buf) return (sys_read(fd, &c, 1) == 1);
+
+    fillbuf();
+    if (!bufused) {
+      assert(eos);
+      error = 1;
+      return false;
+    }
+
+    c = buf[head];
+    head = addmod(head, 1);
+    bufused--;
+    return true;
+  }
+
+  int idstream::read(void* dest, int count) {
+    if (!buf) return sys_read(fd, dest, count);
+
+    byte* p = (byte*)dest;
+    // Fill the buffer from the tail until the head
+    int r = 0;
+    while (count) {
+      fillbuf();
+      int n = readbuf(p, min(count, bufsize));
+      if (!n) {
+        // end of stream
+        error = 1;
+        return r;
+      }
+
+      r += n;
+      p += n;
+      count -= n;
+    }
+
+    return r;
+  }
+
+  void idstream::close() {
+    if (fd >= 0) sys_close(fd);
+    if (buf) {
+      delete[] buf;
+      buf = null;
+    }
+    fd = -1;
+    head = 0;
+    tail = 0;
+    bufused = 0;
+    bufmask = 0;
+    eos = 0;
+    error = 0;
+  }
+
+  int idstream::readline(char* v, int len) {
+    if (!len) return 0;
+
+    if (!ok()) {
+      v[0] = 0;
+      return 0;
+    }
+
+    foreach (i, len-1) {
+      char c;
+      bool ok = getc(c);
+
+      if ((!ok) | (c == '\n') | (c == '\r')) {
+        v[i] = 0;
+        return i;
+      }
+
+      v[i] = c;
+    }
+
+    v[len-1] = 0;
+    return len-1;
+  }
+
+  int idstream::readline(stringbuf& sb) {
+    if (!ok()) return 0;
+
+    for (;;) {
+      char c;
+      bool ok = getc(c);
+
+      if ((!ok) | (c == '\n') | (c == '\r')) return sb.size();
+
+      sb << c;
+    }
+
+    return sb.size();
+  }
+
+  W64 idstream::seek(W64 pos, int whence) {
+    bufused = 0;
+    head = 0;
+    tail = 0;
+    return sys_seek(fd, pos, whence);
+  }
+
+  W64 idstream::where() const {
+    return sys_seek(fd, 0, SEEK_CUR);
+  }
+
+  W64 idstream::size() const {
+    W64 oldpos = where();
+    W64 s = sys_seek(fd, 0, SEEK_END);
+    sys_seek(fd, oldpos, SEEK_SET);
+    return s;
   }
 
   void* idstream::mmap(long long size) {
-    void* p = ::mmap(NULL, size, PROT_READ, MAP_PRIVATE | MAP_NORESERVE, filehandle(), 0);
+    void* p = sys_mmap(NULL, size, PROT_READ, MAP_PRIVATE | MAP_NORESERVE, filehandle(), 0);
 #ifdef __x86_64__
     if ((W64s)p == -1LL) return null;
 #else
@@ -421,15 +638,187 @@ namespace superstl {
   }
 
   //
+  // class CycleTimer:
+  //
+  double CycleTimer::gethz() {
+    //
+    // Parse the Linux /proc/cpuinfo metafile to find
+    // the first CPU's clock speed.
+    //
+    // NOTE! Processors that do dynamic frequency
+    // scaling and report the current frequency in
+    // /proc/cpuinfo (versus the nominal peak frequency)
+    // will break this. The AMD K7 and K8 architectures
+    // fall into this category. Therefore, we try to read
+    // the cpuinfo_max_freq key from sysfs and if present
+    // we use this value instead.
+    //
+    if (hz)
+      return hz;
+
+    istream cpufreqis("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
+    if (cpufreqis) {
+      char s[256];
+      cpufreqis >> readline(s, sizeof(s));      
+
+      int khz;
+      int n = sscanf(s, "%d", &khz);
+
+      if (n == 1) {
+        CycleTimer::hz = khz * 1000.0;
+        return hz;
+      }
+    }
+
+    istream is("/proc/cpuinfo");
+
+    double hz = 1.0;
+
+    if (!is) {
+      cerr << "CycleTimer::gethz(): warning: cannot open /proc/cpuinfo. Is this a Linux machine?", endl;
+      return hz;
+    }
+
+    while (is) {
+      char s[256];
+      is >> readline(s, sizeof(s));
+
+      int mhz;
+      int n = sscanf(s, "cpu MHz : %d", &mhz);
+      if (n == 1) {
+        hz = mhz * 1000000;
+        //cout << "CycleTimer::gethz(): core frequency is ", hz, " hz", endl;
+        CycleTimer::hz = hz;
+        return hz;
+      }
+    }
+
+    return hz;
+  }
+
+  double CycleTimer::hz = 0;
+
+  ostream& operator <<(ostream& os, const CycleTimer& ct) {
+    double seconds = ((double)ct.total / ct.gethz());
+    os << "CycleTimer ", padstring(ct.title, -16), " ", intstring(ct.total, 16), " cycles, ", 
+      floatstring(seconds, 9, 3), " seconds, ", 
+      floatstring((float)ct.total / (float)ct.iterations, 18, 1), " cycles/iter, ", 
+      floatstring((float)ct.iterations / (float)seconds, 18, 1), " iters/second";
+
+    return os;
+  }
+
+  //
   // Global streams:
   //
 
-  istream cin(cin);
-  ostream cout(stdout);
-  ostream cerr(stderr);
-}
+  istream cin(0);
+  ostream cout(1);
+  ostream cerr(2);
+};
 
 using namespace superstl;
+
+char* format_number(char* buf, char* end, W64 num, int base, int size, int precision, int type) {
+	char c,sign,tmp[66];
+	const char *digits;
+	static const char small_digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+	static const char large_digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+	int i;
+
+	digits = (type & FMT_LARGE) ? large_digits : small_digits;
+	if (type & FMT_LEFT)
+		type &= ~FMT_ZEROPAD;
+	if (base < 2 || base > 36)
+		return NULL;
+	c = (type & FMT_ZEROPAD) ? '0' : ' ';
+	sign = 0;
+	if (type & FMT_SIGN) {
+		if ((signed long long) num < 0) {
+			sign = '-';
+			num = - (signed long long) num;
+			size--;
+		} else if (type & FMT_PLUS) {
+			sign = '+';
+			size--;
+		} else if (type & FMT_SPACE) {
+			sign = ' ';
+			size--;
+		}
+	}
+	if (type & FMT_SPECIAL) {
+		if (base == 16)
+			size -= 2;
+		else if (base == 8)
+			size--;
+	}
+	i = 0;
+	if (num == 0)
+		tmp[i++]='0';
+	else while (num != 0)
+		tmp[i++] = digits[do_div(num,base)];
+	if (i > precision)
+		precision = i;
+	size -= precision;
+	if (!(type&(FMT_ZEROPAD+FMT_LEFT))) {
+		while(size-->0) {
+			if (buf <= end)
+				*buf = ' ';
+			++buf;
+		}
+	}
+	if (sign) {
+		if (buf <= end)
+			*buf = sign;
+		++buf;
+	}
+	if (type & FMT_SPECIAL) {
+		if (base==8) {
+			if (buf <= end)
+				*buf = '0';
+			++buf;
+		} else if (base==16) {
+			if (buf <= end)
+				*buf = '0';
+			++buf;
+			if (buf <= end)
+				*buf = digits[33];
+			++buf;
+		}
+	}
+	if (!(type & FMT_LEFT)) {
+		while (size-- > 0) {
+			if (buf <= end)
+				*buf = c;
+			++buf;
+		}
+	}
+	while (i < precision--) {
+		if (buf <= end)
+			*buf = '0';
+		++buf;
+	}
+	while (i-- > 0) {
+		if (buf <= end)
+			*buf = tmp[i];
+		++buf;
+	}
+	while (size-- > 0) {
+		if (buf <= end)
+			*buf = ' ';
+		++buf;
+	}
+	return buf;
+}
+
+int format_integer(char* buf, int bufsize, W64s v, int size, int flags, int base, int precision) {
+  if (size < 0) size = bufsize-1;
+  if ((v < 0) & (base == 10)) flags ^= FMT_SIGN;
+  char* end = format_number(buf, buf + bufsize - 2, v, base, min(bufsize-1, size), precision, flags);
+  // null terminate
+  *end = 0;
+  return (end - buf);
+}
 
 const unsigned char popcountlut8bit[] = {
   0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,

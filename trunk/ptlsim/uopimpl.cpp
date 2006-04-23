@@ -8,6 +8,7 @@
 #include <globals.h>
 #include <ptlsim.h>
 
+
 // No operation
 inline void capture_uop_context(const IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags, int opcode, int size, int cond = 0, int extshift = 0, W64 riptaken = 0, W64 ripseq = 0) { }
 

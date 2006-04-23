@@ -6,11 +6,7 @@
 //
 
 #include <globals.h>
-
-#include <stdio.h>
 #include <elf.h>
-#include <asm/unistd.h>
-#include <time.h>
 
 #include <ptlsim.h>
 #include <datastore.h>
@@ -96,19 +92,17 @@ static ConfigurationOption optionlist[] = {
   {"ooo",                                OPTION_TYPE_BOOL,    0, "Use out of order core (always)", &use_out_of_order_core_dummy},
 };
 
-void print_usage(int argc, char* argv[]) {
+void print_usage(int argc, const char** argv) {
   cerr << "Syntax: ptlsim <executable> <arguments...>", endl;
   cerr << "All other options come from file /home/<username>/.ptlsim/path/to/executable", endl, endl;
 
   ConfigurationParser(optionlist, lengthof(optionlist)).printusage(cerr);
 }
 
-static char hostname[512] = "localhost";
-static char domainname[512] = "domain";
+utsname hostinfo;
 
-void print_banner(ostream& os, int argc, char* argv[]) {
-  gethostname(hostname, sizeof(hostname));
-  getdomainname(domainname, sizeof(domainname));
+void print_banner(ostream& os, int argc, const char** argv) {
+  sys_uname(&hostinfo);
 
   os << "//  ", endl;
 #ifdef __x86_64__
@@ -120,7 +114,7 @@ void print_banner(ostream& os, int argc, char* argv[]) {
   os << "// ", endl;
   os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
     stringify(__GNUC__), ".", stringify(__GNUC_MINOR__), endl;
-  os << "//  Running on ", hostname, ".", domainname, " (", (int)math::floor(CycleTimer::gethz() / 1000000.), " MHz)", endl;
+  os << "//  Running on ", hostinfo.nodename, ".", hostinfo.domainname, " (", (int)math::floor(CycleTimer::gethz() / 1000000.), " MHz)", endl;
   os << "//  ", endl;
   os << "//  Arguments: ";
   foreach (i, argc) {
@@ -128,18 +122,19 @@ void print_banner(ostream& os, int argc, char* argv[]) {
     if (i != (argc-1)) os << ' ';
   }
   os << endl;
-  os << "//  Thread ", getpid(), " is running in ", (ctx.use64 ? "64-bit x86-64" : "32-bit x86"), " mode", endl;
+  os << "//  Thread ", sys_getpid(), " is running in ", (ctx.use64 ? "64-bit x86-64" : "32-bit x86"), " mode", endl;
   os << "//  ", endl;
   os << endl;
+  os << flush;
 }
 
-void print_banner(int argc, char* argv[]) {
+void print_banner(int argc, const char** argv) {
   print_banner(cerr, argc, argv);
 }
 
 const char* get_full_exec_filename() {
   static char full_exec_filename[1024];
-  int rc = readlink("/proc/self/exe", full_exec_filename, sizeof(full_exec_filename)-1);
+  int rc = sys_readlink("/proc/self/exe", full_exec_filename, sizeof(full_exec_filename)-1);
   assert(inrange(rc, 0, (int)sizeof(full_exec_filename)-1));
   full_exec_filename[rc] = 0;
   return full_exec_filename;
@@ -147,17 +142,7 @@ const char* get_full_exec_filename() {
 
 time_t ptlsim_build_timestamp;
 
-static stringbuf& format_time(stringbuf& sb, time_t time) {
-  struct tm tm;
-  localtime_r(&time, &tm);
-
-  char timebuf[64];
-  strftime(timebuf, sizeof(timebuf), "%c", &tm);
-  sb << timebuf;
-  return sb;
-}
-
-int init_config(int argc, char** argv) {
+int init_config(int argc, const char** argv) {
   char confroot[1024] = "";
   stringbuf sb;
 
@@ -230,10 +215,10 @@ int init_config(int argc, char** argv) {
 
     stringbuf sb;
     sb.reset();
-    info.add("timestamp", format_time(sb, time(null)));
+    info.add("timestamp", sys_time(null));
 
     sb.reset();
-    info.add("build-timestamp", format_time(sb, ptlsim_build_timestamp));
+    info.add("build-timestamp", ptlsim_build_timestamp);
 
     sb.reset();
     sb << stringify(BUILDHOST);
@@ -244,7 +229,7 @@ int init_config(int argc, char** argv) {
     info.add("build-compiler-version", sb);
 
     sb.reset();
-    sb << hostname, ".", domainname;
+    sb << hostinfo.nodename, ".", hostinfo.domainname;
     info.add("hostname", sb);
 
 
@@ -335,7 +320,7 @@ void show_stats_and_switch_to_native() {
     if (overshoot_and_dump) logfile << "- Execute one x86 insn of ", bytes, " bytes at rip ", (void*)rip, endl;
     logfile << "- Breakpoint and dump core at rip ", (void*)ripafter, endl, endl, flush;
 
-    int rc = mprotect((void*)floor(ripafter, PAGE_SIZE), PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
+    int rc = sys_mprotect((void*)floor(ripafter, PAGE_SIZE), PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
     assert(!rc);
 
     *((byte*)ripafter) = 0xfb; // x86 invalid opcode
@@ -387,9 +372,7 @@ void switch_to_sim() {
   show_stats_and_switch_to_native();
 }
 
-extern char** initenv;
-
-int main(int argc, char* argv[]) {
+int main(int argc, const char** argv) {
   if (!inside_ptlsim) {
     int rc = 0;
     if (argc < 2) {
@@ -398,19 +381,20 @@ int main(int argc, char* argv[]) {
     } else {
       rc = ptlsim_inject(argc, argv);
     }
+    cout.flush();
+    cerr.flush();
     sys_exit(rc);
   }
 
   total_time.start();
-  environ = initenv;
   init_config(argc, argv);
   init_perfctrs();
   init_signal_callback();
 
   if (pause_at_startup) {
-    logfile << "ptlsim: Paused for ", pause_at_startup, " seconds; attach debugger to PID ", getpid(), " now...", endl, flush;
-    cerr << "ptlsim: Paused for ", pause_at_startup, " seconds; attach debugger to PID ", getpid(), " now...", endl, flush;
-    sleep(pause_at_startup);
+    logfile << "ptlsim: Paused for ", pause_at_startup, " seconds; attach debugger to PID ", sys_getpid(), " now...", endl, flush;
+    cerr << "ptlsim: Paused for ", pause_at_startup, " seconds; attach debugger to PID ", sys_getpid(), " now...", endl, flush;
+    sys_nanosleep((W64)pause_at_startup * 1000000000);
     cerr << "ptlsim: Continuing...", endl, flush;
     logfile << "ptlsim: Continuing...", endl, flush;
   }

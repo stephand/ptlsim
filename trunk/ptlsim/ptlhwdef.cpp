@@ -108,8 +108,8 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // Mask, insert or extract bytes
   {"maskb",          OPCLASS_SIMPLE_SHIFT,  A, opAB,        ANYINT}, // mask rd = ra,rb,[ds,ms,mc], bytes only
   // Add and subtract
-  {"add",            OPCLASS_ADDSUB,        A, opAB,        ANYINT}, // ra + rb
-  {"sub",            OPCLASS_ADDSUB,        A, opAB,        ANYINT}, // ra - rb
+  {"add",            OPCLASS_ADDSUB,        A, opABC|ccC,   ANYINT}, // ra + rb
+  {"sub",            OPCLASS_ADDSUB,        A, opABC|ccC,   ANYINT}, // ra - rb
   {"adda",           OPCLASS_ADDSHIFT,      A, opABC,       ANYINT}, // ra + rb + rc
   {"suba",           OPCLASS_ADDSHIFT,      A, opABC,       ANYINT}, // ra - rb + rc
   {"addm",           OPCLASS_ADDSUB,        A, opABC,       ANYINT}, // lowbits(ra + rb, m)

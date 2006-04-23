@@ -7,7 +7,6 @@
 #include <globals.h>
 #include <superstl.h>
 #include <ptlcalls.h>
-#include <math.h>
 #include <logic.h>
 
 //

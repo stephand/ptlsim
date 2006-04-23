@@ -7,7 +7,6 @@
 
 #include <globals.h>
 #include <ptlsim.h>
-#include <math.h>
 #include <datastore.h>
 
 Hashtable<W64, BasicBlock*, 16384> bbcache;
@@ -99,7 +98,7 @@ void assist_sysenter() {
 // practice. If you want to report the original PTLsim CPUID, uncomment the lines below.
 //
 static const char cpuid_vendor[12+1] = "GenuineIntel";
-static const char cpuid_description[48+1] = "PTLsim 4.0 Cycle Accurate x86-64 Simulator Model";
+static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
 
 //
 // static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
@@ -1099,6 +1098,7 @@ namespace TranslateX86 {
     void decode_prefixes();
     void immediate(int rdreg, int sizeshift, W64s imm, bool issigned = true);
     int bias_by_segreg(int basereg);
+    void address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype = DATATYPE_INT, int cachelevel = 0);
     void operand_load(int destreg, const DecodedOperand& memref, int loadop = OP_ld, int datatype = 0, int cachelevel = 0);
     void result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype = 0);
     void alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
@@ -1453,7 +1453,10 @@ namespace TranslateX86 {
     return basereg;
   }
 
-  void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel) {
+  void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel) {
+    bool memop = isload(opcode) | isstore(opcode) | (opcode == OP_ld_pre);
+    int imm_bits = (memop) ? 32 : 64;
+
     int basereg = arch_pseudo_reg_to_arch_reg[memref.mem.basereg];
     int indexreg = arch_pseudo_reg_to_arch_reg[memref.mem.indexreg];
     // ld rd = ra,rb,rc
@@ -1461,73 +1464,104 @@ namespace TranslateX86 {
     // rb = offset or imm8
     // rc = reg to merge low bytes with
 
+    //
+    // Encoding rules for loads:
+    //
+    // Loads have only one addressing mode: basereg + immN, where
+    // N is a small number of bits. The immediate is shifted left
+    // by ld.size to allow for a greater range, assuming the immN
+    // is always a multiple of the load data size. If immN is not
+    // properly aligned, or it exceeds the field width, it cannot
+    // be represented in the load and must be encoded outside as
+    // a separate move immediate uop.
+    //
+    // Note that the rbimm field in the load uop is not actually
+    // modified; this is for simulation purposes only, since real
+    // microprocessors do not have unlimited immediate lengths.
+    //
+
+    bool imm_is_not_encodable =
+      (lowbits(memref.mem.offset, memref.mem.size) != 0) |
+      (!inrange(memref.mem.offset >> memref.mem.size, (W64s)(-1LL << (imm_bits-1)), (W64s)(1LL << (imm_bits-1))-1));
+
+    W64s offset = memref.mem.offset;
+
     if (basereg == REG_rip) {
-      // [rip + imm32]: index always is zero and scale is 1:
-      basereg = bias_by_segreg(REG_zero);
-      TransOp ld(opcode, destreg, basereg, REG_imm, REG_zero, memref.mem.size, (Waddr)rip + memref.mem.offset);
-      ld.datatype = datatype;
-      ld.cachelevel = cachelevel;
-      this << ld;
-    } else if ((memref.mem.offset == 0) && (memref.mem.scale == 0)) {
-      // [ra + rb]
-      basereg = bias_by_segreg(basereg);
-      TransOp ld(opcode, destreg, basereg, indexreg, REG_zero, memref.mem.size);
-      ld.datatype = datatype;
-      ld.cachelevel = cachelevel;
-      this << ld;
+      // [rip + imm32]: index always is zero and scale is 1
+      // This mode is only possible in x86-64 code
+      basereg = REG_zero;
+      if (memop) basereg = bias_by_segreg(basereg);
+
+      int tempreg = (memop) ? REG_temp8 : destreg;
+
+      this << TransOp(OP_add, tempreg, basereg, REG_imm, REG_zero, 3, (Waddr)rip + offset);
+
+      if (memop) {
+        TransOp ld(opcode, destreg, tempreg, REG_zero, srcreg, memref.mem.size);
+        ld.datatype = datatype;
+        ld.cachelevel = cachelevel;
+        this << ld;
+      }
     } else if (indexreg == REG_zero) {
-      // [ra + imm32]
-      basereg = bias_by_segreg(basereg);
-      TransOp ld(opcode, destreg, basereg, REG_imm, REG_zero, memref.mem.size, memref.mem.offset);
-      ld.datatype = datatype;
-      ld.cachelevel = cachelevel;
-      this << ld;
+      // [ra + imm32] or [ra]
+      if (memop) basereg = bias_by_segreg(basereg);
+      if (imm_is_not_encodable) {
+        this << TransOp(OP_add, REG_temp8, basereg, REG_imm, REG_zero, 3, offset);
+        basereg = REG_temp8;
+        offset = 0;
+      }
+
+      TransOp ldst(opcode, destreg, basereg, REG_imm, srcreg, memref.mem.size, offset);
+      ldst.datatype = datatype;
+      ldst.cachelevel = cachelevel;
+      this << ldst;
+    } else if (offset == 0) {
+      // [ra + rb*scale] or [rb*scale]
+      if (memop) basereg = bias_by_segreg(basereg);
+
+      int tempreg = (memop) ? REG_temp8 : destreg;
+
+      if (memref.mem.scale) {
+        TransOp addop(OP_adda, tempreg, basereg, REG_zero, indexreg, (memop) ? 3 : memref.mem.size);
+        addop.extshift = memref.mem.scale;
+        this << addop;
+      } else {
+        this << TransOp(OP_add, tempreg, basereg, indexreg, REG_zero, (memop) ? 3 : memref.mem.size);
+      }
+
+      if (memop) {
+        // No need for this when we're only doing address generation:
+        TransOp ldst(opcode, destreg, tempreg, REG_zero, srcreg, memref.mem.size);
+        ldst.datatype = datatype;
+        ldst.cachelevel = cachelevel;
+        this << ldst;
+      }
     } else {
-      // [ra + rb*scale + imm32]
-      basereg = bias_by_segreg(basereg);
-      TransOp addop(OP_adda, destreg, basereg, REG_imm, indexreg, 3, memref.mem.offset);
+      // [ra + imm32 + rb*scale]
+      if (memop) basereg = bias_by_segreg(basereg);
+
+      if (imm_is_not_encodable) {
+        this << TransOp(OP_add, REG_temp8, basereg, REG_imm, REG_zero, 3, offset);
+        basereg = REG_temp8;
+        offset = 0;
+      }
+
+      TransOp addop(OP_adda, REG_temp8, basereg, REG_zero, indexreg, 3);
       addop.extshift = memref.mem.scale;
       this << addop;
-      TransOp ld(opcode, destreg, destreg, REG_zero, REG_zero, memref.mem.size);
-      ld.datatype = datatype;
-      ld.cachelevel = cachelevel;
-      this << ld;
+      TransOp ldst(opcode, destreg, REG_temp8, REG_imm, srcreg, memref.mem.size, offset);
+      ldst.datatype = datatype;
+      ldst.cachelevel = cachelevel;
+      this << ldst;
     }
   }
 
+  void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel) {
+    address_generate_and_load_or_store(destreg, REG_zero, memref, opcode, datatype, cachelevel);
+  }
+
   void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype) {
-    int basereg = arch_pseudo_reg_to_arch_reg[memref.mem.basereg];
-    int indexreg = arch_pseudo_reg_to_arch_reg[memref.mem.indexreg];
-
-    int addrsize = (ctx.use64) ? 3 : 2;
-
-    if ((memref.mem.offset == 0) && (indexreg == REG_zero)) {
-      // [ra]
-      basereg = bias_by_segreg(basereg);
-      TransOp st(OP_st, REG_mem, basereg, REG_zero, srcreg, memref.mem.size); st.datatype = datatype; this << st;
-    } else if (basereg == REG_rip) {
-      // [rip + imm32]: index always is zero and scale is 1:
-      // Assume we're addressing more than +/- 127 bytes from rip, since this is almost always the case
-      assert(indexreg == REG_zero);
-      // We need the long immediate form here anyway since stores don't accept an offset
-      assert((prefixes & (PFX_FS|PFX_GS)) == 0);
-      TransOp st(OP_st, REG_mem, REG_zero, REG_imm, srcreg, memref.mem.size, (Waddr)rip + memref.mem.offset); st.datatype = datatype; this << st;
-    } else if ((memref.mem.offset == 0) && (memref.mem.scale == 0)) {
-      // [ra + rb]
-      basereg = bias_by_segreg(basereg);
-      TransOp st(OP_st, REG_mem, basereg, indexreg, srcreg, memref.mem.size); st.datatype = datatype; this << st;
-    } else if (indexreg == REG_zero) {
-      // [ra + imm32]
-      basereg = bias_by_segreg(basereg);
-      TransOp st(OP_st, REG_mem, basereg, REG_imm, srcreg, memref.mem.size, memref.mem.offset); st.datatype = datatype; this << st;
-    } else {
-      // [ra + rb*scale + imm32]
-      basereg = bias_by_segreg(basereg);
-      TransOp addop(OP_adda, tempreg, basereg, REG_imm, indexreg, 3, memref.mem.offset);
-      addop.extshift = memref.mem.scale;
-      this << addop;
-      TransOp st(OP_st, REG_mem, tempreg, REG_zero, srcreg, memref.mem.size); st.datatype = datatype; this << st;
-    }
+    address_generate_and_load_or_store(REG_mem, srcreg, memref, OP_st, datatype);
   }
 
   void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
@@ -2171,24 +2205,10 @@ namespace TranslateX86 {
       CheckInvalid();
       int destreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
       int sizeshift = reginfo[rd.reg.reg].sizeshift;
-      int basereg = arch_pseudo_reg_to_arch_reg[ra.mem.basereg];
-      int indexreg = arch_pseudo_reg_to_arch_reg[ra.mem.indexreg];
 
-      if (basereg == REG_rip) {
-        // rip-relative addressing:
-        this << TransOp(OP_mov, destreg, (sizeshift >= 2) ? REG_zero : destreg, REG_imm, REG_zero, sizeshift, (Waddr)rip + ra.mem.offset);
-      } else if ((ra.mem.offset == 0) && (ra.mem.scale == 0)) {
-        // [ra + rb]
-        this << TransOp(OP_add, destreg, basereg, indexreg, REG_zero, sizeshift);
-      } else if (indexreg == REG_zero) {
-        // [ra + imm32]
-        this << TransOp(OP_add, destreg, basereg, REG_imm, REG_zero, sizeshift, ra.mem.offset);
-      } else {
-        // [ra + rb*scale + imm32]
-        TransOp addop(OP_adda, destreg, basereg, REG_imm, indexreg, sizeshift, ra.mem.offset);
-        addop.extshift = ra.mem.scale;
-        this << addop;
-      }
+      ra.mem.size = sizeshift;
+
+      address_generate_and_load_or_store(destreg, REG_zero, ra, OP_add);
       break;
     }
     case 0x8e: {

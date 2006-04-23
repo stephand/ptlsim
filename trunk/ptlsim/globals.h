@@ -9,6 +9,10 @@
 #ifndef _GLOBALS_H
 #define _GLOBALS_H
 
+extern "C" {
+#include <sys/ptrace.h>
+}
+
 //
 // We include these first just to make sure abs/fabs/min/max
 // get defined before we try to redefine them to our own
@@ -24,6 +28,7 @@ typedef signed short W16s;
 typedef unsigned char byte;
 typedef unsigned char W8;
 typedef signed char W8s;
+#define NULL 0
 #define null NULL
 
 #ifdef __x86_64__
@@ -34,21 +39,23 @@ typedef W32 Waddr;
 
 #ifdef __cplusplus
 
-namespace math {
 #include <math.h>
 #include <float.h>
-};
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <assert.h>
-#include <malloc.h>
-#include <errno.h>
-#include <limits.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/user.h>
+//
+// Asserts
+//
+#if defined __cplusplus
+#  define __ASSERT_VOID_CAST static_cast<void>
+#else
+#  define __ASSERT_VOID_CAST (void)
+#endif
+
+extern "C" void __assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) __attribute__ ((__noreturn__));
+
+#define __CONCAT(x,y)	x ## y
+#define __STRING(x)	#x
+#define assert(expr) (__ASSERT_VOID_CAST ((expr) ? 0 : (__assert_fail (__STRING(expr), __FILE__, __LINE__, __PRETTY_FUNCTION__), 0)))
 
 #define nan NAN
 #define inf INFINITY
@@ -74,7 +81,15 @@ MakeLimits(unsigned long, 0, 0xffffffff);
 
 // Typecasts in bizarre ways required for binary form access
 union W32orFloat { W32 w; float f; };
-union W64orDouble { W64 w; double d; };
+union W64orDouble {
+  W64 w;
+  double d;
+  struct { W32 lo; W32s hi; } hilo;
+  struct { W64 mantissa:52, exponent:11, negative:1; } ieee;
+  // This format makes it easier to see if a NaN is a signalling NaN.
+  struct { W64 mantissa:51, qnan:1, exponent:11, negative:1; } ieeenan;
+};
+
 static inline const float W32toFloat(W32 x) { union W32orFloat c; c.w = x; return c.f; }
 static inline const W32 FloatToW32(float x) { union W32orFloat c; c.f = x; return c.w; }
 static inline const double W64toDouble(W64 x) { union W64orDouble c; c.w = x; return c.d; }
@@ -110,6 +125,106 @@ static inline W16s signext16(W16s x, const int i) { return (x << (16-i)) >> (16-
 static inline W64s bitsext64(W64s x, const int i, const int l) { return signext64(bits(x, i, l), l); }
 static inline W32s bitsext32(W32s x, const int i, const int l) { return signext32(bits(x, i, l), l); }
 static inline W16s bitsext16(W16s x, const int i, const int l) { return signext16(bits(x, i, l), l); }
+
+typedef byte v16qi __attribute__ ((vector_size(16)));
+typedef v16qi vec16b;
+typedef W16 v8hi __attribute__ ((vector_size(16)));
+typedef v8hi vec8w;
+typedef float v4sf __attribute__ ((vector_size(16)));
+typedef v4sf vec4f;
+typedef float v2df __attribute__ ((vector_size(16)));
+typedef v2df vec2d;
+
+inline vec16b x86_sse_pcmpeqb(vec16b a, vec16b b) { asm("pcmpeqb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec16b x86_sse_psubusb(vec16b a, vec16b b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec16b x86_sse_paddusb(vec16b a, vec16b b) { asm("paddusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec16b x86_sse_pandb(vec16b a, vec16b b) { asm("pand %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_pcmpeqw(vec8w a, vec8w b) { asm("pcmpeqw %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_psubusw(vec8w a, vec8w b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_paddusw(vec8w a, vec8w b) { asm("paddsub %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec8w x86_sse_pandw(vec8w a, vec8w b) { asm("pand %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+inline vec16b x86_sse_packsswb(vec8w a, vec8w b) { asm("packsswb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return (vec16b)a; }
+inline W32 x86_sse_pmovmskb(vec16b vec) { W32 mask; asm("pmovmskb %[vec],%[mask]" : [mask] "=r" (mask) : [vec] "x" (vec)); return mask; }
+inline W32 x86_sse_pmovmskw(vec8w vec) { return x86_sse_pmovmskb(x86_sse_packsswb(vec, vec)) & 0xff; }
+
+inline vec16b x86_sse_ldvbu(const vec16b* m) { vec16b rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
+inline void x86_sse_stvbu(vec16b* m, const vec16b ra) { asm("movdqu %[ra],%[m]" : [m] "=xm" (*m) : [ra] "x" (ra) : "memory"); }
+inline vec8w x86_sse_ldvwu(const vec8w* m) { vec8w rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
+inline void x86_sse_stvwu(vec8w* m, const vec8w ra) { asm("movdqu %[ra],%[m]" : [m] "=xm" (*m) : [ra] "x" (ra) : "memory"); }
+
+// If lddqu is available (SSE3: Athlon 64 (some cores, like X2), Pentium 4 Prescott), use that instead. It may be faster. 
+
+extern const byte byte_to_vec16b[256][16];
+
+inline vec16b x86_sse_dupb(const byte b) {
+  return *((vec16b*)&byte_to_vec16b[b]);
+}
+
+inline vec8w x86_sse_dupw(const W16 b) {
+  W32 w = (b << 16) | b;
+  vec8w v;
+  W32* wp = (W32*)&v;
+  wp[0] = w; wp[1] = w; wp[2] = w; wp[3] = w;
+  return v;
+}
+
+inline void x86_set_mxcsr(W32 value) { asm volatile("ldmxcsr %[value]" : : [value] "m" (value)); }
+inline W32 x86_get_mxcsr() { W32 value; asm volatile("stmxcsr %[value]" : [value] "=m" (value)); return value; }
+union MXCSR {
+  struct { W32 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, daz:1, im:1, dm:1, zm:1, om:1, um:1, pm:1, rc:2, fz:1; } fields;
+  W32 data;
+
+  MXCSR(W32 v) { data = v; }
+  operator W32() const { return data; }
+};
+enum { MXCSR_ROUND_NEAREST, MXCSR_ROUND_DOWN, MXCSR_ROUND_UP, MXCSR_ROUND_TOWARDS_ZERO };
+#define MXCSR_EXCEPTION_DISABLE_MASK 0x1f80 // OR this into mxcsr to disable all exceptions
+#define MXCSR_DEFAULT 0x1f80 // default settings (no exceptions, defaults for rounding and denormals)
+
+inline W32 x86_bsf32(W32 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W64 x86_bsf64(W64 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W32 x86_bsr32(W32 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W64 x86_bsr64(W64 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W64 x86_bts64(W64 r, W64 b) { asm("bts %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W64 x86_btr64(W64 r, W64 b) { asm("btr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W64 x86_btc64(W64 r, W64 b) { asm("btc %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline void prefetch(const void* x) { asm volatile("prefetcht0 (%0)" : : "r" (x)); }
+
+inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
+	asm("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "0" (op));
+}
+
+template <int n> struct lg { static const int value = 1 + lg<n/2>::value; };
+template <> struct lg<1> { static const int value = 0; };
+#define log2(v) (lg<(v)>::value)
+
+template <int n> struct lg10 { static const int value = 1 + lg10<n/10>::value; };
+template <> struct lg10<1> { static const int value = 0; };
+template <> struct lg10<0> { static const int value = 0; };
+#define log10(v) (lg10<(v)>::value)
+
+extern "C" {
+#include <unistd.h>
+#include <sys/types.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+
+#include <sys/mman.h>
+#include <sys/utsname.h>
+#include <sys/ptrace.h>
+#include <sys/signal.h>
+#include <sys/resource.h>
+#include <sys/user.h>
+};
+
+#include <stdarg.h>
+
+#include <mathlib.h>
+#include <klibc.h>
 
 // e.g., head (a, b, c) => a
 // e.g., if list = (a, b, c), head list => a
@@ -159,7 +274,7 @@ template <typename T> void swap(T& a, T& b) { T t = a;  a = b; b = t; }
 template <typename T>
 inline void arraycopy(T* dest, const T* source, int count) { memcpy(dest, source, count * sizeof(T)); }
 
-static inline float randfloat() { return ((float)rand() / RAND_MAX); }
+// static inline float randfloat() { return ((float)rand() / RAND_MAX); }
 
 static inline bool aligned(W64 address, int size) {
   return ((address & (W64)(size-1)) == 0);
@@ -203,67 +318,6 @@ static inline int popcount64(W64 x) {
   return popcount(LO32(x)) + popcount(HI32(x));
 }
 
-typedef byte v16qi __attribute__ ((vector_size(16)));
-typedef v16qi vec16b;
-typedef W16 v8hi __attribute__ ((vector_size(16)));
-typedef v8hi vec8w;
-typedef float v4sf __attribute__ ((vector_size(16)));
-typedef v4sf vec4f;
-typedef float v2df __attribute__ ((vector_size(16)));
-typedef v2df vec2d;
-
-inline vec16b x86_sse_pcmpeqb(vec16b a, vec16b b) { asm("pcmpeqb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec16b x86_sse_psubusb(vec16b a, vec16b b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec16b x86_sse_paddusb(vec16b a, vec16b b) { asm("paddusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec16b x86_sse_pandb(vec16b a, vec16b b) { asm("pand %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec8w x86_sse_pcmpeqw(vec8w a, vec8w b) { asm("pcmpeqw %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec8w x86_sse_psubusw(vec8w a, vec8w b) { asm("psubusb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec8w x86_sse_paddusw(vec8w a, vec8w b) { asm("paddsub %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec8w x86_sse_pandw(vec8w a, vec8w b) { asm("pand %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
-inline vec16b x86_sse_packsswb(vec8w a, vec8w b) { asm("packsswb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return (vec16b)a; }
-inline W32 x86_sse_pmovmskb(vec16b vec) { W32 mask; asm("pmovmskb %[vec],%[mask]" : [mask] "=r" (mask) : [vec] "x" (vec)); return mask; }
-inline W32 x86_sse_pmovmskw(vec8w vec) { return x86_sse_pmovmskb(x86_sse_packsswb(vec, vec)) & 0xff; }
-
-inline vec16b x86_sse_ldvbu(const vec16b* m) { vec16b rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
-inline void x86_sse_stvbu(vec16b* m, const vec16b ra) { asm("movdqu %[ra],%[m]" : [m] "=xm" (*m) : [ra] "x" (ra) : "memory"); }
-inline vec8w x86_sse_ldvwu(const vec8w* m) { vec8w rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
-inline void x86_sse_stvwu(vec8w* m, const vec8w ra) { asm("movdqu %[ra],%[m]" : [m] "=xm" (*m) : [ra] "x" (ra) : "memory"); }
-
-// If lddqu is available (SSE3: Athlon 64 (some cores, like X2), Pentium 4 Prescott), use that instead. It may be faster. 
-
-extern const byte byte_to_vec16b[256][16];
-
-inline vec16b x86_sse_dupb(const byte b) {
-  return *((vec16b*)&byte_to_vec16b[b]);
-}
-
-inline vec8w x86_sse_dupw(const W16 b) {
-  W32 w = (b << 16) | b;
-  vec8w v;
-  W32* wp = (W32*)&v;
-  wp[0] = w; wp[1] = w; wp[2] = w; wp[3] = w;
-  return v;
-}
-
-inline void x86_set_mxcsr(W32 value) { asm volatile("ldmxcsr %[value]" : : [value] "m" (value)); }
-inline W32 x86_get_mxcsr() { W32 value; asm volatile("stmxcsr %[value]" : [value] "=m" (value)); return value; }
-struct MXCSR { W32 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, daz:1, im:1, dm:1, zm:1, om:1, um:1, pm:1, rc:2, fz:1; };
-enum { MXCSR_ROUND_NEAREST, MXCSR_ROUND_DOWN, MXCSR_ROUND_UP, MXCSR_ROUND_TOWARDS_ZERO };
-#define MXCSR_EXCEPTION_DISABLE_MASK 0x1f80 // OR this into mxcsr to disable all exceptions
-#define MXCSR_DEFAULT 0x1f80 // default settings (no exceptions, defaults for rounding and denormals)
-
-inline W32 x86_bsf32(W32 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_bsf64(W64 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W32 x86_bsr32(W32 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_bsr64(W64 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_bts64(W64 r, W64 b) { asm("bts %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_btr64(W64 r, W64 b) { asm("btr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_btc64(W64 r, W64 b) { asm("btc %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline void prefetch(const void* x) { asm volatile("prefetcht0 (%0)" : : "r" (x)); }
-
-inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
-	asm("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "0" (op));
-}
 
 extern const W64 expand_8bit_to_64bit_lut[256];
 
@@ -435,15 +489,6 @@ inline bool modulo_ranges_intersect(int a0, int a1, int b0, int b1, int size) {
 
   return lut[idx];
 }
-
-template <int n> struct lg { static const int value = 1 + lg<n/2>::value; };
-template <> struct lg<1> { static const int value = 0; };
-#define log2(v) (lg<(v)>::value)
-
-template <int n> struct lg10 { static const int value = 1 + lg10<n/10>::value; };
-template <> struct lg10<1> { static const int value = 0; };
-template <> struct lg10<0> { static const int value = 0; };
-#define log10(v) (lg10<(v)>::value)
 
 //
 // Express bitstring constant as octal but convert

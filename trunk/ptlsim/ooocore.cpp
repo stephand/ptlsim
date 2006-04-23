@@ -6,9 +6,7 @@
 //
 
 #include <globals.h>
-#include <stdio.h>
 #include <elf.h>
-#include <asm/unistd.h>
 #include <ptlsim.h>
 #include <branchpred.h>
 #include <datastore.h>

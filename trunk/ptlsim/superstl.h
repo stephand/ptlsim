@@ -14,122 +14,18 @@
 #ifndef _SUPERSTL_H
 #define _SUPERSTL_H
 
-#include <unistd.h>
+//
+// Formatting
+//
+#define FMT_ZEROPAD 1 /* pad with zero */
+#define FMT_SIGN    2 /* unsigned/signed long */
+#define FMT_PLUS    4 /* show plus */
+#define FMT_SPACE   8 /* space if plus */
+#define FMT_LEFT	  16 /* left justified */
+#define FMT_SPECIAL	32 /* 0x */
+#define FMT_LARGE	  64 /* use 'ABCDEF' instead of 'abcdef' */
 
 namespace superstl {
-
-  //
-  // ostream class
-  //
-  static const char endl[] = "\n";
-  static class iosflush { } flush;
-
-  class ostream {
-  public:
-    inline ostream() { fd = NULL; }
-
-    void open(const char* filename, bool append = false) {
-      assert(!fd);
-      fd = fopen(filename, (append) ? "a" : "w");
-    }
-
-    void open(FILE* f) {
-      assert(!fd);
-      fd = f;
-    }
-
-    void close() {
-      if (fd) fclose(fd);
-      fd = NULL;
-    }
-
-    ~ostream() {
-      close();
-    }
-
-    ostream(const char* filename, bool append = false) {
-      fd = null;
-      open(filename, append);
-    }
-
-    ostream(FILE* f) {
-      fd = null;
-      open(f);
-    }
-
-    int write(const void* buf, int count) {
-      if (!fd) return 0;
-      int n = fwrite(buf, 1, count, fd);
-      return n;
-    }
-
-    operator FILE*() const {
-      return fd;
-    }
-
-    operator bool() const {
-      return ok();
-    }
-
-    bool ok() const {
-      return (fd != NULL);
-    }
-
-    int filehandle() const {
-      return fileno(fd);
-    }
-
-    void flush() const {
-      fflush(fd);
-    }
-
-  public:
-    FILE* fd;
-  };
-  
-  //
-  // Manipulators
-  //      
-  inline ostream& operator <<(ostream& os, const iosflush& v) {
-    if (os.ok()) fflush(os.fd);
-    return os;
-  }
-  
-  //
-  // Inserters
-  //
-  
-#define DefineInserter(T, format, expr) inline ostream& operator <<(ostream& os, const T v) { if (os.ok()) fprintf(os.fd, format, expr); return os; }
-  DefineInserter(char*, "%s", v);
-  DefineInserter(char, "%c", v);
-  DefineInserter(signed short, "%hd", v);
-  DefineInserter(signed int, "%d", v);
-  DefineInserter(signed long, "%ld", v);
-  DefineInserter(signed long long, "%lld", v);
-  DefineInserter(unsigned short, "%hu", v);
-  DefineInserter(unsigned int, "%u", v);
-  DefineInserter(unsigned long, "%lu", v);
-  DefineInserter(unsigned long long, "%llu", v);
-
-  DefineInserter(float, "%f", v);
-  DefineInserter(double, "%f", v);
-  DefineInserter(bool, "%s", (v) ? "true" : "false");
-#undef DefineInserter
-
-  template <class T>
-  inline ostream& operator <<(ostream& os, const T* v) {
-    if (os.ok()) fprintf(os.fd, "%p", (void*)v);
-    return os;
-  }
-
-  //
-  // A much more intuitive syntax than STL provides:
-  //
-  template <class T>
-  inline ostream& operator ,(ostream& os, const T& v) {
-    return os << v;
-  }
-
   //
   // String buffer
   //
@@ -164,6 +60,8 @@ namespace superstl {
 
     void reserve(int extra);
 
+    int size() const { return p - buf; }
+
   public:
     char smallbuf[stringbuf_smallbufsize];
     char* buf;
@@ -177,23 +75,31 @@ namespace superstl {
   stringbuf& operator <<(stringbuf& os, const char* v);
   stringbuf& operator <<(stringbuf& os, const char v);
 
-#define DefineInserter(T, format) \
+#define DefineIntegerInserter(T, signedtype) \
   inline stringbuf& operator <<(stringbuf& os, const T v) { \
     char buf[128]; \
-    snprintf(buf, sizeof(buf), format, v); \
+    format_integer(buf, sizeof(buf), ((signedtype) ? (W64s)v : (W64)v)); \
     return os << buf; \
   }
 
-  DefineInserter(signed short, "%hd");
-  DefineInserter(signed int, "%d");
-  DefineInserter(signed long, "%ld");
-  DefineInserter(signed long long, "%lld");
-  DefineInserter(unsigned short, "%hu");
-  DefineInserter(unsigned int, "%u");
-  DefineInserter(unsigned long, "%lu");
-  DefineInserter(unsigned long long, "%llu");
-  DefineInserter(float, "%f");
-  DefineInserter(double, "%f");
+  DefineIntegerInserter(signed short, 1);
+  DefineIntegerInserter(signed int, 0);
+  DefineIntegerInserter(signed long, 0);
+  DefineIntegerInserter(signed long long, 0);
+  DefineIntegerInserter(unsigned short, 0);
+  DefineIntegerInserter(unsigned int, 0);
+  DefineIntegerInserter(unsigned long, 0);
+  DefineIntegerInserter(unsigned long long, 0);
+
+#define DefineFloatInserter(T, digits) \
+  inline stringbuf& operator <<(stringbuf& os, const T v) { \
+    char buf[128]; \
+    format_float(buf, sizeof(buf), v, digits); \
+    return os << buf; \
+  }
+
+  DefineFloatInserter(float, 6);
+  DefineFloatInserter(double, 16);
 
   inline stringbuf& operator <<(stringbuf& os, const bool v) {
     return os << (int)v;
@@ -218,12 +124,13 @@ namespace superstl {
     // just warn the user to be careful if they try this.
     //
     abort();
+    return os;
   }
 
   template <class T>
   inline stringbuf& operator <<(stringbuf& os, const T* v) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "%p", v);
+    format_integer(buf, sizeof(buf), (W64)(Waddr)v, 0, FMT_SPECIAL, 16);
     return os << buf;
   }
 
@@ -232,6 +139,127 @@ namespace superstl {
   //
   template <class T>
   inline stringbuf& operator ,(stringbuf& os, const T& v) {
+    return os << v;
+  }
+
+  //
+  // ostream class
+  //
+  static const char endl[] = "\n";
+  static class iosflush { } flush;
+
+#define OSTREAM_BUF_SIZE 256
+
+  class odstream {
+  protected:
+    int fd;
+    byte* buf;
+    int bufsize;
+    int tail;
+  public:
+    odstream() { fd = -1; buf = null; bufsize = 0; tail = 0; }
+
+    bool open(const char* filename, bool append = false, int bufsize = 4096);
+
+    bool open(int fd, int bufsize = 4096);
+
+    void close();
+
+    int setbuf(int bufsize);
+
+    ~odstream() {
+      close();
+    }
+
+    odstream(int fd) {
+      this->fd = -1;
+      open(fd);
+    }
+
+    odstream(const char* filename, bool append = false, int bufsize = 4096) {
+      this->fd = -1;
+      open(filename, append, bufsize);
+    }
+
+    int write(const void* buf, int count);
+
+    operator bool() const {
+      return ok();
+    }
+
+    bool ok() const {
+      return (fd >= 0);
+    }
+
+    int filehandle() const {
+      return fd;
+    }
+
+    void flush();
+  };
+  
+  //
+  // Manipulators
+  //      
+  inline odstream& operator <<(odstream& os, const iosflush& v) {
+    os.flush();
+    return os;
+  }
+
+  template <typename T>
+  inline odstream& operator <<(odstream& os, const T& v) {
+    os.write(&v, sizeof(T));
+    return os;
+  }
+
+  template <typename T>
+  inline odstream& operator ,(odstream& os, const T& v) {
+    return os << v;
+  }
+
+  class ostream: public odstream {
+  public:
+    ostream(): odstream() { }
+
+    ostream(int fd): odstream(fd) { }
+
+    ostream(const char* filename, bool append = false): odstream(filename, append) { }
+  };
+  
+  //
+  // Inserters
+  //
+
+  template <typename T>
+  inline ostream& operator <<(ostream& os, const T& v) {
+    stringbuf sb;
+    sb << v;
+    os.write((char*)sb, sb.size());
+    return os;
+  }
+
+  template <>
+  inline ostream& operator <<(ostream& os, const iosflush& v) {
+    os.flush();
+    return os;
+  }
+
+  template <>
+  inline ostream& operator <<(ostream& os, const char& v) {
+    os.write(&v, sizeof(char));
+    return os;
+  }
+
+  inline ostream& operator <<(ostream& os, const char* v) {
+    os.write(v, strlen(v));
+    return os;
+  }
+
+  template <>
+  inline ostream& operator <<(ostream& os, const stringbuf& v) { stringbuf sb; sb << (char*)v; os.write((char*)sb, sb.size()); return os; }
+
+  template <class T>
+  inline ostream& operator ,(ostream& os, const T& v) {
     return os << v;
   }
 
@@ -388,156 +416,91 @@ namespace superstl {
   int stringsubst(stringbuf& sb, const char* pattern, const char* find, const char* replace);
   int stringsubst(stringbuf& sb, const char* pattern, const char* find[], const char* replace[], int substcount);
 
-  //
-  // Output stream for raw data
-  //
-  class odstream {
-  public:
-    inline odstream() { fd = NULL; }
-
-    void open(const char* filename, bool append = false) {
-      assert(!fd);
-      fd = fopen(filename, (append) ? "a+" : "w+");
-    }
-
-    void open(FILE* f) {
-      assert(!fd);
-      fd = f;
-    }
-
-    ~odstream() {
-      close();
-    }
-
-    void close() {
-      if (fd) fclose(fd);
-      fd = NULL;
-    }
-
-    odstream(const char* filename, bool append = false) {
-      fd = null;
-      open(filename, append);
-    }
-
-    odstream(FILE* f) {
-      open(f);
-    }
-
-    int write(const void* buf, int count) {
-      if (!fd) return 0;
-      int n = fwrite(buf, 1, count, fd);
-      return n;
-    }
-
-    operator FILE*() {
-      return fd;
-    }
-
-    operator bool() {
-      return ok();
-    }
-
-    bool ok() {
-      return (fd != NULL);
-    }
-
-    int filehandle() {
-      return fileno(fd);
-    }
-
-    void flush() {
-      fflush(fd);
-    }
-
-  public:
-    FILE* fd;
-  };
-
-  template <typename T>
-  inline odstream& operator <<(odstream& os, const T& v) {
-    os.write(&v, sizeof(T));
-    return os;
-  }
-
-  //
-  // A much more intuitive syntax than STL provides:
-  //
-  template <typename T>
-  inline odstream& operator ,(odstream& os, const T& v) {
-    return os << v;
-  }
+  class readline;
 
   //
   // istream class
   //
-  class istream {
+  class idstream {
+  protected:
+    int fd;
+    int error;
+    int eos;
+    int head;
+    int tail;
+    int bufsize;
+    int bufused;
+    W32 bufmask;
+    byte* buf;
+
+    int fillbuf();
+    int readbuf(byte* dest, int bytes);
+    int unread(int bytes);
+
+    inline int addmod(int a, int b) { return ((a + b) & bufmask); }
+
+    inline void reset() { fd = -1; error = 0; eos = 0; head = 0; tail = 0; buf = null; bufused = 0; bufsize = 0; bufmask = 0; }
+
   public:
-    istream() {
-      fd = null;
-    }
+    idstream() { reset(); }
 
-    bool open(const char* filename) {
-      assert(!fd);
-      fd = fopen(filename, "r");
-      ok = (fd != NULL);
-      setwidth(0);
-      return ok;
-    }
+    bool open(const char* filename, int bufsize = 4096);
 
-    istream(const char* filename) {
-      fd = null;
+    bool open(int fd, int bufsize = 4096);
+
+    int setbuf(int bufsize);
+
+    idstream(const char* filename) {
+      reset();
       open(filename);
     }
 
-    istream(FILE* f) {
-      assert(!fd);
-      fd = f;
-      ok = (fd != NULL);
-      setwidth(0);
+    idstream(int fd) {
+      reset();
+      open(fd);
     }
     
-    void close() {
-      if (fd) fclose(fd);
-      fd = null;
-    }
+    void close();
 
-    ~istream() {
+    ~idstream() {
       close();
     }
 
-    void reset() { ok = true; }
-    operator bool() { return ok; }
+    bool ok() const { return (!error); }
+    operator bool() { return ok(); }
 
-    void setwidth(int maxwidth) {
-      snprintf(strformat, sizeof(strformat), "%%%ds", maxwidth);
-    }
+    int read(void* data, int count);
 
-    inline char* readln() {
-      char* v = NULL;
-      int n = fscanf(fd, "%as\n", &v);
-      ok = (n == 1);
-      return (ok) ? v : NULL;
-    }
+    int filehandle() const { return fd; }
 
-    int read(void* buf, int count) {
-      int n = fread(buf, 1, count, fd);
-      ok = (n == count);
-      return n;
-    }
+    int readline(char* v, int len);
+    int readline(stringbuf& sb);
 
-    operator FILE*() {
-      return fd;
-    }
+    bool getc(char& c);
 
-    int filehandle() {
-      return fileno(fd);
-    }
+    W64 seek(W64 pos, int whence = SEEK_SET);
+    W64 where() const;
+    W64 size() const;
 
+    void* mmap(long long size);
+  };
+
+  template <typename T>
+  inline idstream& operator >>(idstream& is, T& v) { 
+    is.read(&v, sizeof(T)); 
+    return is; 
+  }
+
+  template <typename T>
+  inline idstream& operator ,(idstream& is, T& v) {
+    return is >> v;
+  }
+
+  class istream: public idstream {
   public:
-    FILE* fd;
-    bool ok;
-
-    char strformat[16];
+    istream(): idstream() { }
+    istream(const char* filename): idstream(filename) { }
+    istream(int fd): idstream(fd) { }
   };
 
   class readline { 
@@ -547,119 +510,16 @@ namespace superstl {
     size_t len;
   };
 
-  /*
-  template <int size>
-  class readline { 
-  public:
-    readline(char (&)[size]): buf(p), len(size) { }
-    char* buf;
-    size_t len;
-  };
-  */
+  //inline istream& operator ,(istream& is, const readline& v) { return is >> v; }
 
-#define DefineExtractor(T, format) inline istream& operator >>(istream& is, T& v) { int n = fscanf(is.fd, format, &v); if (is.ok) is.ok = (n == 1); return is; }
-  DefineExtractor(char, "%c");
-  DefineExtractor(signed short, "%hd");
-  DefineExtractor(signed int, "%d");
-  DefineExtractor(signed long, "%d");
-  DefineExtractor(unsigned short, "%hd");
-  DefineExtractor(unsigned int, "%d");
-  DefineExtractor(unsigned long, "%d");
-
-  DefineExtractor(float, "%f");
-  DefineExtractor(double, "%lf");
-#undef DefineExtractor
-
-  istream& operator >>(istream& is, char* v);
-  istream& operator >>(istream& is, const readline& v);
-
-  inline istream& operator ,(istream& is, const readline& v) { return is >> v; }
-
-  //
-  // A much more intuitive syntax than STL provides:
-  //
-  template <class T>
-  inline istream& operator ,(istream& is, T& v) {
-    return is >> v;
+  inline istream& operator >>(istream& is, const readline& v) {
+    is.readline(v.buf, v.len);
+    return is;
   }
 
-  //
-  // idstream class (binary data stream)
-  //
-  class idstream {
-  public:
-    idstream() {
-      fd = NULL;
-    }
-
-    idstream(const char* filename) {
-      fd = null;
-      open(filename);
-    }
-
-    idstream(FILE* f) { 
-      fd = null;
-      assert(!fd);
-      fd = f;
-      ok = (fd != NULL);
-    }
-
-    ~idstream() {
-      if (fd) fclose(fd);
-      fd = NULL;
-    }
-
-    int open(const char* filename) {
-      fd = null;
-      assert(!fd);
-      fd = fopen(filename, "r");
-      ok = (fd != NULL);
-      return ok;
-    }
-
-    void close() {
-      if (fd) fclose(fd);
-      fd = NULL;
-    }
-
-    int read(void* v, int size) {
-      int n = fread(v, 1, size, fd);
-      ok = (n == size);
-      return n;
-    }
-
-    void reset() { ok = true; }
-    operator bool() { return ok; }
-
-    unsigned long long size() const;
-
-    operator FILE*() {
-      return fd;
-    }
-
-    int filehandle() {
-      return fileno(fd);
-    }
-
-    void* mmap(long long size);
-
-  public:
-    FILE* fd;
-    bool ok;
-  };
-
-  template <typename T>
-  inline idstream& operator >>(idstream& is, T& v) { 
-    is.read(&v, sizeof(T)); 
-    return is; 
-  }
-
-  //
-  // A much more intuitive syntax than STL provides:
-  //
-  template <typename T>
-  inline idstream& operator ,(idstream& is, T& v) {
-    return is >> v;
+  inline istream& operator >>(istream& is, stringbuf& sb) {
+    is.readline(sb);
+    return is;
   }
 
   //
@@ -726,29 +586,29 @@ namespace superstl {
     static const int length = size;
     T data[size];
 
-    void reset() { sp = size; }
+    void reset() { sp = 0; }
 
     stack() { reset(); }
 
     const T& operator [](int i) const { 
 #ifdef CHECK_BOUNDS
-      assert((sp + i) < size);
+      assert(((sp-1) - i) >= 0);
 #endif
-      return data[sp + i]; 
+      return data[(sp-1) - i]; 
     }
 
     T& operator [](int i) { 
 #ifdef CHECK_BOUNDS
-      assert((sp + i) < size);
+      assert(((sp-1) - i) >= 0);
 #endif
-      return data[sp + i]; 
+      return data[(sp-1) - i]; 
     }
 
     T& push() {
-      T& v = data[--sp];
 #ifdef CHECK_BOUNDS
-      assert(sp >= 0);
+      assert(sp < size);
 #endif
+      T& v = data[sp++];
       return v;
     }
 
@@ -759,17 +619,23 @@ namespace superstl {
     }
 
     T& pop() {
-      T& v = data[sp++];
 #ifdef CHECK_BOUNDS
-      assert(sp <= size);
+      assert(sp > 0);
 #endif
+      T& v = data[--sp];
       return v;
     } 
 
-    int count() const { return size - sp; }
+    int count() const { return sp; }
     bool empty() const { return (count() == 0); }
     bool full() const { return (count() == size); }
   };
+
+  template <typename T, int size>
+  inline ostream& operator <<(ostream& os, const stack<T, size>& st) {
+    foreach (i, st.count()) { os << ((i) ? " " : ""), st[i]; }
+    return os;
+  }
 
   template <typename T, int size>
   inline ostream& operator <<(ostream& os, const array<T, size>& v) {
@@ -821,6 +687,7 @@ namespace superstl {
     inline bool empty() const { return (size == 0); }
     inline void clear() { resize(0); }
     inline int size() const { return length; }
+    inline int count() const { return size(); }
     
     void push(const T& obj) {
       T& pushed = push();
@@ -937,14 +804,14 @@ namespace superstl {
 
       int realsize = ceil(size * sizeof(T), PAGE_SIZE);
       
-      base = (T*)mmap(NULL, realsize + 2*PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, 0, 0);
+      base = (T*)sys_mmap(NULL, realsize + 2*PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, 0, 0);
       assert(base != MAP_FAILED);
 
       base = (T*)((char*)base + PAGE_SIZE);
       endp = (T*)((char*)base + realsize);
 
-      assert(mprotect(((char*)base) - PAGE_SIZE, PAGE_SIZE, PROT_NONE) == 0);
-      assert(mprotect((char*)endp, PAGE_SIZE, PROT_NONE) == 0);
+      assert(sys_mprotect(((char*)base) - PAGE_SIZE, PAGE_SIZE, PROT_NONE) == 0);
+      assert(sys_mprotect((char*)endp, PAGE_SIZE, PROT_NONE) == 0);
       data = base;
     }
 
@@ -1437,18 +1304,17 @@ namespace superstl {
       return get(key);
     }
 
-    T add(const K key, const T& value) { 
+    T* add(const K key, const T& value) { 
       Entry* entry = findentry(key);
       if (entry) {
-        T oldvalue = entry->value;
         entry->value = value;
-        return oldvalue;
+        return &entry->value;
       }
 
       entry = new Entry(key, value);
       entry->link.addto(sets[lowbits(KM::hash(key), log2(setcount))]);
       count++;
-      return 0;
+      return &entry->value;
     }
 
     T remove(const K key) {

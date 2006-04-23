@@ -5,81 +5,12 @@
 // Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
 //
 
+#define INLINED_SYSCALLS
+
 #include <globals.h>
 #include <loader.h>
-#include <asm/unistd.h>
 #include <elf.h>
-#include <signal.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-
-#undef __syscall_return
-#define __syscall_return(type, res) return (type)(res);
-
-#ifdef __x86_64__
-
-#define __syscall "syscall"
-#ifndef __syscall_clobber
-#define __syscall_clobber "r11","rcx","memory"
-#endif
-
-#define declare_syscall0(sysid,type,name) static inline type name(void) { long __res; asm volatile \
-  (__syscall : "=a" (__res) : "0" (sysid) : __syscall_clobber ); __syscall_return(type,__res); }
-
-#define declare_syscall1(sysid,type,name,type1,arg1) static inline type name(type1 arg1) { long __res; asm volatile \
-  (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)) : __syscall_clobber ); __syscall_return(type,__res); }
-
-#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) static inline type name(type1 arg1,type2 arg2) { long __res; asm volatile \
-  (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)) : __syscall_clobber ); __syscall_return(type,__res); }
-
-#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) static inline type name(type1 arg1,type2 arg2,type3 arg3) { \
-  long __res; asm volatile (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), "d" ((long)(arg3)) : \
-  __syscall_clobber); __syscall_return(type,__res); }
-
-#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
-  static inline type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) { \
-  long __res; asm volatile ("movq %5,%%r10 ;" __syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), \
-  "d" ((long)(arg3)),"g" ((long)(arg4)) : __syscall_clobber,"r10" ); __syscall_return(type,__res); }
-
-#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5) \
-  static inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) { long __res; asm volatile ("movq %5,%%r10 ; movq %6,%%r8 ; " __syscall \
-  : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), "d" ((long)(arg3)),"g" ((long)(arg4)),"g" ((long)(arg5)) : \
-  __syscall_clobber,"r8","r10"); __syscall_return(type,__res); }
-
-#define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5,type6,arg6) \
-  static inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { long __res; asm volatile \
-  ("movq %5,%%r10 ; movq %6,%%r8 ; movq %7,%%r9 ; " __syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), \
-   "d" ((long)(arg3)), "g" ((long)(arg4)), "g" ((long)(arg5)), "g" ((long)(arg6)) : __syscall_clobber,"r8","r10","r9" ); __syscall_return(type,__res); }
-
-#else // 32-bit
-
-#define declare_syscall0(sysid,type,name) static inline type name(void) { long __res; asm volatile ("int $0x80" \
-  : "=a" (__res) : "0" (sysid)); __syscall_return(type,__res); }
-
-#define declare_syscall1(sysid,type,name,type1,arg1) static inline type name(type1 arg1) { long __res; \
-  asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1))); __syscall_return(type,__res); }
-
-#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) static inline type name(type1 arg1,type2 arg2) { \
-  long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2))); __syscall_return(type,__res); }
-
-#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) static inline type name(type1 arg1,type2 arg2,type3 arg3) { \
-  long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3))); __syscall_return(type,__res); }
-
-#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) static inline type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
-  { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4))); \
-  __syscall_return(type,__res); }
-
-#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5) static inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
-  { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5))); \
-  __syscall_return(type,__res); }
-
-#define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5,type6,arg6) \
-  static inline type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
-  long __res; asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; pop %%ebp" : "=a" (__res) \
-	: "i" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5)), \
-  "0" ((long)(arg6))); __syscall_return(type,__res); }
-
-#endif // 32-bit
+#include <syscalls.h>
 
 #ifdef PTLSIM_FORCE_32BIT_ONLY
 // Building PTLsim32 only:
@@ -102,13 +33,12 @@ static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
   desc.offset = LO32((Waddr)code);
   desc.seg = (use64) ? 0x33 : 0x23;
 
-  asm volatile(
 #ifdef __x86_64__
-               "lea %[desc],%%rax\n"
+  asm volatile("lea %[desc],%%rax\n"
                "mov %[stack],%%rsp\n"
                "ljmp *(%%rax)\n" : : [desc] "m" (desc), [stack] "m" (stack));
 #else
-               "lea %[desc],%%eax\n"
+  asm volatile("lea %[desc],%%eax\n"
                "mov %[stack],%%esp\n"
                "ljmp *(%%eax)\n" : : [desc] "m" (desc), [stack] "m" (stack));
 #endif
@@ -116,28 +46,25 @@ static inline void switch_stack_and_jump(void* code, void* stack, bool use64) {
 
 #endif // ! PTLSIM_FORCE_32BIT_ONLY
 
-declare_syscall0(__NR_pause, void, sys_pause);
-
-declare_syscall2(__NR_munmap, int, sys_munmap, void*, start, size_t, length);
-declare_syscall2(__NR_fstat, int, sys_fstat, int, fd, struct stat*, buf);
-
-declare_syscall3(__NR_write, ssize_t, sys_write, int, fd, const void*, buf, size_t, count);
-declare_syscall3(__NR_lseek, off_t, sys_lseek, int, fd, off_t, offset, int, whence);
-declare_syscall3(__NR_open, int, sys_open, const char*, filename, int, flags, mode_t, mode);
-declare_syscall3(__NR_mprotect, int, sys_mprotect, const void*, addr, size_t, len, int, prot);
-
+declare_syscall0(__NR_pause, void, syscall_pause);
+declare_syscall2(__NR_munmap, int, syscall_munmap, void*, start, size_t, length);
+declare_syscall2(__NR_fstat, int, syscall_fstat, int, fd, struct stat*, buf);
+declare_syscall3(__NR_write, ssize_t, syscall_write, int, fd, const void*, buf, size_t, count);
+declare_syscall3(__NR_lseek, unsigned long, syscall_lseek, int, fd, unsigned long, offset, int, whence);
+declare_syscall3(__NR_open, int, syscall_open, const char*, filename, int, flags, int, mode);
+declare_syscall3(__NR_mprotect, int, syscall_mprotect, const void*, addr, size_t, len, int, prot);
+declare_syscall1(__NR_exit, void, syscall_exit, int, status);
+declare_syscall1(__NR_close, void, syscall_close, int, status);
+  
 #ifdef __x86_64__
-declare_syscall6(__NR_mmap, void*, sys_mmap, void*, start, size_t, length, int, prot, int, flags, int, fd, off_t, offset);
+declare_syscall6(__NR_mmap, void*, syscall_mmap, void*, start, size_t, length, int, prot, int, flags, int, fd, unsigned long, offset);
 #else // 32-bit
 // We use mmap2() instead of the historical mmap() because mmap2() has a nice calling convention:
-declare_syscall6(__NR_mmap2, void*, sys_mmap2, void*, start, size_t, length, int, prot, int, flags, int, fd, off_t, pgoff);
-static inline void* sys_mmap(void* start, size_t length, int prot, int flags, int fd, off_t offset) {
-  return sys_mmap2(start, length, prot, flags, fd, offset >> log2(PAGE_SIZE));
+declare_syscall6(__NR_mmap2, void*, syscall_mmap2, void*, start, size_t, length, int, prot, int, flags, int, fd, unsigned long, pgoff);
+void* syscall_mmap(void* start, size_t length, int prot, int flags, int fd, unsigned long offset) {
+  return syscall_mmap2(start, length, prot, flags, fd, offset >> log2(PAGE_SIZE));
 }
 #endif
-
-declare_syscall1(__NR_exit, void, sys_exit, int, status);
-declare_syscall1(__NR_close, void, sys_close, int, status);
 
 #ifdef __x86_64__
 #define ptlsim_loader_thunk_name ptlsim_loader_thunk_64bit
@@ -170,8 +97,8 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
 
     info->initialize = 0;
 
-    byte* p = (byte*)sys_mmap(loader_temp_code, PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
-    if (p != loader_temp_code) sys_exit(240);
+    byte* p = (byte*)syscall_mmap(loader_temp_code, PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
+    if (p != loader_temp_code) syscall_exit(240);
 
     byte* loader_at_entry = (byte*)(Waddr)info->origrip;
 
@@ -185,19 +112,19 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
 
   byte* loader_at_entry = (byte*)(Waddr)info->origrip;
 
-  int rc = sys_mprotect(floorptr(loader_at_entry, PAGE_SIZE), 2*PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
-  if (rc) sys_exit(249);
+  int rc = syscall_mprotect(floorptr(loader_at_entry, PAGE_SIZE), 2*PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
+  if (rc) syscall_exit(249);
 
   foreach (i, LOADER_THUNK_SIZE) loader_at_entry[i] = info->saved_thunk[i];
 
-  int fd = sys_open(info->ptlsim_filename, O_RDONLY, 0);
-  if (fd < 0) sys_exit(250);
+  int fd = syscall_open(info->ptlsim_filename, O_RDONLY, 0);
+  if (fd < 0) syscall_exit(250);
 
   struct stat sd;
-  rc = sys_fstat(fd, &sd);
-  if (rc < 0) sys_exit(251);
+  rc = syscall_fstat(fd, &sd);
+  if (rc < 0) syscall_exit(251);
 
-  void* temp = (void*)sys_mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, fd, 0);
+  void* temp = (void*)syscall_mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, fd, 0);
 
   PTLsim_Elf_Ehdr* ehdr = (PTLsim_Elf_Ehdr*)temp;
   PTLsim_Elf_Phdr* phdr = (PTLsim_Elf_Phdr*)(((byte*)ehdr) + ehdr->e_phoff);
@@ -211,8 +138,8 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
     phdr_offset = floor(phdr->p_offset, PAGE_SIZE);
     phdr_memsz = phdr->p_memsz + (phdr->p_vaddr % PAGE_SIZE);
 
-    byte* baseaddr = (byte*)sys_mmap((void*)(Waddr)phdr_vaddr, ceil(phdr_filesz, PAGE_SIZE), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED, fd, phdr_offset);
-    if ((Waddr)baseaddr != phdr_vaddr) { sys_exit(253); }
+    byte* baseaddr = (byte*)syscall_mmap((void*)(Waddr)phdr_vaddr, ceil(phdr_filesz, PAGE_SIZE), PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_FIXED, fd, phdr_offset);
+    if ((Waddr)baseaddr != phdr_vaddr) { syscall_exit(253); }
 
     phdr++;
   }
@@ -227,9 +154,9 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
   byte* endp = (byte*)(Waddr)ceil(phdr_vaddr + phdr_memsz, PAGE_SIZE);
 
   // Map zero pages for remainder of segment
-  byte* bssaddr = (byte*)sys_mmap(bssp, endp - bssp, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
+  byte* bssaddr = (byte*)syscall_mmap(bssp, endp - bssp, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0);
 
-  if (bssaddr != bssp) sys_exit(254);
+  if (bssaddr != bssp) syscall_exit(254);
 
   // ELF header can now be accessed at base of PTLsim image:
   ehdr = (PTLsim_Elf_Ehdr*)(Waddr)image_base;
@@ -249,8 +176,8 @@ void ptlsim_loader_thunk_name(LoaderInfo* info) {
   ehdr->e_type = ET_PTLSIM;
   // Update the PTLsim version
   ehdr->e_version = sd.st_mtime;
-  sys_munmap(temp, PAGE_SIZE);
-  sys_close(fd);
+  syscall_munmap(temp, PAGE_SIZE);
+  syscall_close(fd);
 
   switch_stack_and_jump(func, (void*)(Waddr)info->origrsp, true);
 }

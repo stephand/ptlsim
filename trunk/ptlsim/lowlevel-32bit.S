@@ -43,7 +43,6 @@ inside_sim_escape_code_template_32bit_end:
 #include <ptlhwdef.h>
 
 .extern ptlsim_init
-.extern _start
 
 .extern stack_min_addr
 .extern inside_ptlsim
@@ -52,10 +51,21 @@ inside_sim_escape_code_template_32bit_end:
 ptlsim_preinit_entry:
   mov   byte ptr [running_in_sim_mode],1
   mov   %eax,%esp       # origrsp
-  push  offset _start   # next_init_func
+  push  offset main     # next_init_func
   push  %eax
   call  ptlsim_preinit
   add   %esp,8
+  test  byte ptr [inside_ptlsim],1
+  jnz   1f
+
+  # All args (argc, argv) already on stack on x86-32:
+  mov   %eax,[%esp]          # argc
+  lea   %ebx,[%esp+4]        # argv
+  push  %ebx
+  push  %eax
+  call  main                 #
+  int3                       # (main never returns)
+1:
 
   mov   %ebp,%eax            # save new PTL private stack pointer
 
@@ -76,7 +86,11 @@ ptlsim_preinit_entry:
   jae   1b
 
   mov   %esp,%ebp            # update to new stack pointer
-  jmp   _start
+  mov   %eax,[%esp]          # argc
+  lea   %ebx,[%esp+4]        # argv
+  push  %ebx
+  push  %eax
+  call  main
 
 .global get_fs
 get_fs:

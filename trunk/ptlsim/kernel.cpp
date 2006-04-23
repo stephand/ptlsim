@@ -5,26 +5,15 @@
 // Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
 //
 
-#include <stdlib.h>
-#include <sys/mman.h>
-#include <string.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <asm/unistd.h>
-#include <linux/unistd.h>
-#include <fcntl.h>
+#include <globals.h>
+#include <superstl.h>
+
 #include <elf.h>
-#include <signal.h>
 #include <asm/ldt.h>
-#include <sys/ptrace.h>
 #include <asm/ptrace.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <sys/resource.h>
 
 #ifdef __x86_64__
 #include <asm/prctl.h>
-#include <sys/prctl.h>
 #endif
 
 //
@@ -59,20 +48,10 @@ extern "C" {
 #include <ptlsim.h>
 #include <config.h>
 #include <kernel.h>
-#include <ptlcalls.h>
 #include <loader.h>
 
-#ifdef __x86_64__
-declare_syscall2(__NR_arch_prctl, W64, arch_prctl, int, code, void*, addr);
-#endif
-
-declare_syscall0(__NR_gettid, pid_t, sys_gettid);
-declare_syscall0(__NR_fork, pid_t, sys_fork);
-declare_syscall1(__NR_exit, void, sys_exit, int, code);
-declare_syscall1(__NR_brk, void*, sys_brk, void*, p);
-declare_syscall3(__NR_write, ssize_t, sys_write, int, fd, const void*, buf, size_t, count);
-declare_syscall3(__NR_execve, int, sys_execve, char*, filename, char**, argv, char**, envp);
-declare_syscall4(__NR_ptrace, W64, sys_ptrace, int, request, pid_t, pid, W64, addr, W64, data);
+#define __INSIDE_PTLSIM__
+#include <ptlcalls.h>
 
 static inline W64 do_syscall_64bit(W64 syscallid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5, W64 arg6) {
   W64 rc;
@@ -112,13 +91,13 @@ static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 
 
 Waddr get_fs_base() {
   Waddr fsbase;
-  assert(arch_prctl(ARCH_GET_FS, &fsbase) == 0);
+  assert(sys_arch_prctl(ARCH_GET_FS, &fsbase) == 0);
   return fsbase;
 }
 
 Waddr get_gs_base() {
   W64 gsbase;
-  assert(arch_prctl(ARCH_GET_GS, &gsbase) == 0);
+  assert(sys_arch_prctl(ARCH_GET_GS, &gsbase) == 0);
   return gsbase;
 }
 
@@ -137,14 +116,11 @@ static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 
   return rc;
 }
 
-declare_syscall1(__NR_get_thread_area, int, sys_get_thread_area, void*, udesc);
-declare_syscall1(__NR_set_thread_area, int, sys_set_thread_area, void*, udesc);
-
 Waddr get_fs_base() {
   user_desc_32bit ud;
   memset(&ud, 0, sizeof(ud));
   ud.entry_number = get_fs() >> 3;
-  int rc = sys_get_thread_area(&ud);
+  int rc = sys_get_thread_area((user_desc*)&ud);
   return (rc) ? 0 : ud.base_addr;
 }
 
@@ -152,7 +128,7 @@ Waddr get_gs_base() {
   user_desc_32bit ud;
   memset(&ud, 0, sizeof(ud));
   ud.entry_number = get_gs() >> 3;
-  int rc = sys_get_thread_area(&ud);
+  int rc = sys_get_thread_area((user_desc*)&ud);
   return (rc) ? 0 : ud.base_addr;
 }
 
@@ -171,27 +147,21 @@ Waddr get_gs_base() {
 #define __NR_32bit_set_thread_area 243
 #define __NR_32bit_rt_sigaction 174
 
+#define __NR_64bit_mmap 9
+#define __NR_64bit_munmap 11
+#define __NR_64bit_mprotect 10
+#define __NR_64bit_brk 12
+#define __NR_64bit_mremap 25
+#define __NR_64bit_arch_prctl 158
+#define __NR_64bit_exit 60
+#define __NR_64bit_exit_group	231
+#define __NR_64bit_rt_sigaction 13
+
 void early_printk(const char* text) {
   sys_write(2, text, strlen(text));
 }
 
 // Avoid c++ scoping problems:
-
-void* sys_mmap(void* start, W64 length, int prot, int flags, int fd, off_t offset) {
-  return mmap(start, length, prot, flags, fd, offset);
-}
-
-int sys_munmap(void* start, W64 length) {
-  return munmap((void*)start, length);
-}
-
-int sys_mprotect(void* start, W64 length, int prot) {
-  return mprotect(start, length, prot);
-}
-
-int sys_madvise(void* start, W64 length, int action) {
-  return madvise(start, length, action);
-}
 
 // Makes it easy to identify which segments PTLsim owns versus the user address space:
 bool inside_ptlsim = false;
@@ -456,18 +426,20 @@ extern "C" void* realloc(void* ptr, size_t size) {
 
 void dump_ooo_state();
 
-extern "C" void __assert_fail (__const char *__assertion, __const char *__file, unsigned int __line, __const char *__function) {
-  fprintf(stderr, "\nAssert %s failed in %s:%d (%s) at simcycle %lld iters %lld commits %lld\n\n", __assertion, __file, __line, __function, sim_cycle, iterations, total_user_insns_committed);
-  fflush(stderr);
+extern "C" void __assert_fail (const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
+  stringbuf sb;
+  sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") at ", sim_cycle, " cycles, ", iterations, " iterations, ", total_user_insns_committed, " user commits", endl;
+
+  cerr << sb, flush;
+
   if (logfile) {
-    fprintf(logfile, "\nAssert %s failed in %s:%d (%s) at simcycle %lld iters %lld commits %lld\n\n", __assertion, __file, __line, __function, sim_cycle, iterations, total_user_insns_committed);
+    logfile << sb, flush;
     if (use_out_of_order_core) {
 #ifdef __x86_64__
       dump_ooo_state();
 #endif
     }
 
-    logfile.flush();
     logfile.close();
   }
   abort();
@@ -560,8 +532,15 @@ void AddressSpace::reset() {
 }
 
 void AddressSpace::setattr(void* start, Waddr length, int prot) {
-  logfile << "setattr: region ", start, " to ", (void*)((char*)start + length), " (", length >> 10, " KB) has user-visible attributes ",
-    ((prot & PROT_READ) ? 'r' : '-'), ((prot & PROT_WRITE) ? 'w' : '-'), ((prot & PROT_EXEC) ? 'x' : '-'), endl;
+  //
+  // Check first if it's been assigned a non-stdin (> 0) filehandle,
+  // since this may get called from ptlsim_preinit_entry before streams
+  // have been set up.
+  //
+  if (logfile.filehandle() > 0) {
+    logfile << "setattr: region ", start, " to ", (void*)((char*)start + length), " (", length >> 10, " KB) has user-visible attributes ",
+      ((prot & PROT_READ) ? 'r' : '-'), ((prot & PROT_WRITE) ? 'w' : '-'), ((prot & PROT_EXEC) ? 'x' : '-'), endl;
+  }
 
   if (prot & PROT_READ)
     allow_read(start, length);
@@ -591,7 +570,7 @@ int AddressSpace::getattr(void* addr) {
  
 int AddressSpace::mprotect(void* start, Waddr length, int prot) {
   length = ceil(length, PAGE_SIZE);
-  int rc = ::mprotect(start, length, prot);
+  int rc = sys_mprotect(start, length, prot);
   if (rc) return rc;
   setattr(start, length, prot);
   return 0;
@@ -599,17 +578,16 @@ int AddressSpace::mprotect(void* start, Waddr length, int prot) {
 
 int AddressSpace::munmap(void* start, Waddr length) {
   length = ceil(length, PAGE_SIZE);
-  int rc = ::munmap(start, length);
-  sys_errno = errno;
+  int rc = sys_munmap(start, length);
   if (rc) return rc;
   setattr(start, length, PROT_NONE);
   return 0;
 }
 
-void* AddressSpace::mmap(void* start, Waddr length, int prot, int flags, int fd, off_t offset) {
+void* AddressSpace::mmap(void* start, Waddr length, int prot, int flags, int fd, W64 offset) {
   // Guarantee enough room will be available post-alignment:
   length = ceil(length, PAGE_SIZE);
-  start = ::mmap(start, length, prot, flags, fd, offset);
+  start = sys_mmap(start, length, prot, flags, fd, offset);
   if (mmap_invalid(start)) return start;
   setattr(start, length, prot);
   return start;
@@ -618,7 +596,7 @@ void* AddressSpace::mmap(void* start, Waddr length, int prot, int flags, int fd,
 void* AddressSpace::mremap(void* start, Waddr oldlength, Waddr newlength, int flags) {
   int oldattr = getattr(start);
 
-  void* p = ::mremap(start, oldlength, newlength, flags);
+  void* p = sys_mremap(start, oldlength, newlength, flags);
   if (mmap_invalid(p)) return p;
 
   setattr(start, oldlength, 0);
@@ -718,11 +696,11 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
   char* mapdata = (char*)ptl_alloc_private_pages(MAX_PROC_MAPS_SIZE);
   int mapsize = 0;
 
-  int fd = open("/proc/self/maps", O_RDONLY);
+  int fd = sys_open("/proc/self/maps", O_RDONLY, 0);
   assert(fd >= 0);
 
   for (;;) {
-    int rc = read(fd, mapdata + mapsize, MAX_PROC_MAPS_SIZE-PAGE_SIZE);
+    int rc = sys_read(fd, mapdata + mapsize, MAX_PROC_MAPS_SIZE-PAGE_SIZE);
     if (rc <= 0) break;
     mapsize += rc;
     assert(inrange(mapsize, 0, (int)(MAX_PROC_MAPS_SIZE-PAGE_SIZE)));
@@ -756,14 +734,15 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
     byte* start = null;
     byte* stop = null;
     char rperm, wperm, xperm, private_or_shared;
-    byte* offset = null;
-    int devmajor;
-    int devminor;
-    unsigned long inode;
+    W64 offset = 0;
+    int devmajor = 0;
+    int devminor = 0;
+    W64 inode = 0;
 
-    int n = sscanf(s, "%p-%p %c%c%c%c %p %x:%x %ld", &start, &stop, &rperm, &wperm, &xperm, &private_or_shared, &offset, &devmajor, &devminor, &inode);
+    int n = sscanf(s, "%lx-%lx %c%c%c%c %llx %x:%x %lld", &start, &stop, &rperm, &wperm, &xperm, &private_or_shared, &offset, &devmajor, &devminor, &inode);
+
     if (n != 10) {
-      cout << "Warning: /proc/self/maps not in proper format", endl, flush;
+      cout << "Warning: /proc/self/maps not in proper format (n = ", n, ")", endl, flush;
       assert(false);
       break;
     }
@@ -819,7 +798,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
   }
 
   ptl_free_private_pages(mapdata, MAX_PROC_MAPS_SIZE);
-  close(fd);
+  sys_close(fd);
   return map - startmap;
 }
 
@@ -909,15 +888,6 @@ void AddressSpace::resync_with_process_maps() {
 AddressSpace asp;
 
 W64 ldt_seg_base_cache[LDT_SIZE];
-
-void flush_cpu_caches() {
-  char flushdata[] = "1\n";
-  // wbinvd is privileged so we need to go through the PTLsim kernel module:
-  int fd = open("/proc/ptlsim/flushcache", O_WRONLY);
-  if (fd < 0) return;
-  assert(write(fd, flushdata, sizeof(flushdata)) == sizeof(flushdata));
-  close(fd);
-}
 
 // Saved and restored by asm code:
 X87State x87state;
@@ -1152,7 +1122,7 @@ void set_switch_to_sim_breakpoint(void* addr) {
   SwitchToSimThunkCode* thunk = (SwitchToSimThunkCode*)addr;
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
 
-  mprotect(floorptr(addr, PAGE_SIZE), 2*PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
+  sys_mprotect(floorptr(addr, PAGE_SIZE), 2*PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
   saved_bytes_behind_switch_to_sim_thunk = *thunk;
   thunk->indirjump(thunkpage->call_code_addr);
   pending_patched_switch_to_sim_addr = thunk;
@@ -1216,16 +1186,9 @@ extern "C" void save_context_switch_to_sim() {
 
   if (user_profile_only) {
     logfile << endl, "=== Trigger reached during profile mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": starting counters ===", endl, endl, flush;
-    flush_cpu_caches();
     start_perfctrs();
     switch_to_native_restore_context();
   }
-
-  //
-  // Revoke user signal handlers: we don't want them messing with PTLsim
-  // since it makes debugging significantly more difficult
-  // 
-  assert(signal(SIGTRAP, SIG_DFL) != SIG_ERR);
 
   switch_to_sim();
 }
@@ -1255,30 +1218,30 @@ void handle_syscall_64bit() {
   W64 arg6 = ctx.commitarf[REG_r9];
 
   if (DEBUG) 
-    logfile << "handle_syscall (#", syscallid, " ", ((syscallid < lengthof(syscall_names_64bit)) ? syscall_names_64bit[syscallid] : "???"), 
+    logfile << "handle_syscall -> (#", syscallid, " ", ((syscallid < lengthof(syscall_names_64bit)) ? syscall_names_64bit[syscallid] : "???"), 
       ") from ", (void*)ctx.commitarf[REG_rcx], " args ", " (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
       (void*)arg5, ", ", (void*)arg6, ") at iteration ", iterations, endl, flush;
 
   switch (syscallid) {
-  case __NR_mmap:
+  case __NR_64bit_mmap:
     ctx.commitarf[REG_rax] = (W64)asp.mmap((void*)arg1, arg2, arg3, arg4, arg5, arg6);
     break;
-  case __NR_munmap:
+  case __NR_64bit_munmap:
     ctx.commitarf[REG_rax] = asp.munmap((void*)arg1, arg2);
     break;
-  case __NR_mprotect:
+  case __NR_64bit_mprotect:
     ctx.commitarf[REG_rax] = asp.mprotect((void*)arg1, arg2, arg3);
     break;
-  case __NR_brk:
+  case __NR_64bit_brk:
     ctx.commitarf[REG_rax] = (W64)asp.setbrk((void*)arg1);
     break;
-  case __NR_mremap: {
+  case __NR_64bit_mremap: {
     ctx.commitarf[REG_rax] = (W64)asp.mremap((void*)arg1, arg2, arg3, arg4);
     break;
   }
-  case __NR_arch_prctl: {
+  case __NR_64bit_arch_prctl: {
     // We need to trap this so we can virtualize ARCH_SET_FS and ARCH_SET_GS:
-    ctx.commitarf[REG_rax] = arch_prctl(arg1, (void*)arg2);
+    ctx.commitarf[REG_rax] = sys_arch_prctl(arg1, (void*)arg2);
     switch (arg1) {
     case ARCH_SET_FS:
       logfile << "arch_prctl: set FS base to ", (void*)arg2, endl;
@@ -1289,15 +1252,15 @@ void handle_syscall_64bit() {
     }
     break;
   }
-  case __NR_exit: {
+  case __NR_64bit_exit: {
     logfile << "handle_syscall at iteration ", iterations, ": exit(): exiting with arg ", (W64s)arg1, "...", endl, flush;
     user_process_terminated((int)arg1);
   }
-  case __NR_exit_group: {
+  case __NR_64bit_exit_group: {
     logfile << "handle_syscall at iteration ", iterations, ": exit_group(): exiting with arg ", (W64s)arg1, "...", endl, flush;
     user_process_terminated((int)arg1);
   }
-  case __NR_rt_sigaction: {
+  case __NR_64bit_rt_sigaction: {
     // This is only so we receive SIGSEGV on our own:
 #if 1
     logfile << "handle_syscall: signal(", arg1, ", ", (void*)arg2, ")", endl, flush;
@@ -1681,7 +1644,6 @@ void copy_from_process_memory(int pid, void* target, const void* source, int siz
 
   foreach (i, ceil(size, 8) / sizeof(W64)) {
     W64 rc = sys_ptrace(PTRACE_PEEKDATA, pid, (W64)srcp++, (W64)destp++);
-    if (errno != 0) { cerr << "ERROR copying to target ", target, ": ", strerror(errno), endl, flush; assert(false); }
   }
 }
 
@@ -1746,10 +1708,10 @@ int is_elf_64bit(const char* filename) {
   return (h.class3264 == ELFCLASS64);
 }
 
-int ptlsim_inject(int argc, char** argv) {
+int ptlsim_inject(int argc, const char** argv) {
   static const bool DEBUG = 0;
 
-  char* filename = argv[1];
+  const char* filename = argv[1];
 
   int x86_64_mode = is_elf_64bit(filename);
 
@@ -1766,26 +1728,26 @@ int ptlsim_inject(int argc, char** argv) {
     if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
-    int rc = sys_execve(filename, argv+1, environ);
+    int rc = sys_execve(filename, (const char**)argv+1, (const char**)environ);
 
     if (rc < 0) {
-      cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, " (error: ", strerror(errno), ")", endl, flush;
+      cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, endl, flush;
       sys_exit(2);
     }
     assert(false);
   }
 
   if (pid < 0) {
-    cerr << "ptlsim[", sys_gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
+    cerr << "ptlsim[", sys_gettid(), "]: fork() failed with rc ", pid, endl, flush;
     sys_exit(0);
   }
 
   if (DEBUG) cerr << "ptlsim: waiting for child pid ", pid, "...", endl, flush;
 
   int status;
-  int rc = waitpid(pid, &status, 0);
+  int rc = sys_wait4(pid, &status, 0, NULL);
   if (rc != pid) {
-    cerr << "ptlsim: waitpid returned ", rc, " (vs expected pid ", pid, "); failed with error ", strerror(errno), endl;
+    cerr << "ptlsim: waitpid returned ", rc, " (vs expected pid ", pid, ")", endl, flush;
     sys_exit(3);
   }
 
@@ -1793,7 +1755,7 @@ int ptlsim_inject(int argc, char** argv) {
   assert(WIFSTOPPED(status));
 
   struct user_regs_struct regs;
-  assert(sys_ptrace(PTRACE_GETREGS, pid, 0, (W64)&regs) == 0);
+  assert(sys_ptrace(PTRACE_GETREGS, pid, 0, (Waddr)&regs) == 0);
 
   LoaderInfo info;
   info.initialize = 1;
@@ -1848,12 +1810,12 @@ int ptlsim_inject(int argc, char** argv) {
 
   if (DEBUG) cerr << "ptlsim: restarting child pid ", pid, " at ", (void*)regs.rip, "...", endl, flush;
 
-  rc = ptrace(PTRACE_DETACH, pid, 0, 0);
+  rc = sys_ptrace(PTRACE_DETACH, pid, 0, 0);
   if (rc) {
-    cerr << "ptlsim: detach returned ", rc, ", error code ", strerror(errno), endl, flush;
+    cerr << "ptlsim: detach returned ", rc, endl, flush;
     sys_exit(4);
   }
-  rc = waitpid(pid, &status, 0);
+  rc = sys_wait4(pid, &status, 0, NULL);
 
   // (child done)
   status = WEXITSTATUS(status);
@@ -1869,7 +1831,6 @@ void copy_from_process_memory(int pid, void* target, const void* source, int siz
 
   foreach (i, ceil(size, 4) / sizeof(W32)) {
     W64 rc = sys_ptrace(PTRACE_PEEKDATA, pid, (W32)srcp++, (W32)destp++);
-    if (errno != 0) { cerr << "ERROR copying to target ", target, ": ", strerror(errno), endl, flush; assert(false); }
   }
 }
 
@@ -1937,13 +1898,15 @@ int is_elf_valid(const char* filename) {
   return 1;
 }
 
-int ptlsim_inject(int argc, char** argv) {
+int ptlsim_inject(int argc, const char** argv) {
   static const bool DEBUG = 0;
+  int status;
+  int rc;
 
-  char* filename = argv[1];
+  const char* filename = argv[1];
 
   if (!is_elf_valid(filename)) {
-    cerr << "ptlsim: cannot open ", filename, endl;
+    cerr << "ptlsim: cannot open ", filename, endl, flush;
     sys_exit(1);
   }
 
@@ -1955,26 +1918,25 @@ int ptlsim_inject(int argc, char** argv) {
     if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
-    int rc = sys_execve(filename, argv+1, environ);
+    int rc = sys_execve(filename, (const char**)argv+1, (const char**)environ);
 
     if (rc < 0) {
-      cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, " (error: ", strerror(errno), ")", endl, flush;
+      cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, ": rc = ", rc, endl, flush;
       sys_exit(2);
     }
     assert(false);
   }
 
   if (pid < 0) {
-    cerr << "ptlsim[", sys_gettid(), "]: fork() failed with rc ", pid, " errno ", strerror(errno), endl, flush;
+    cerr << "ptlsim[", sys_gettid(), "]: fork() failed with rc ", pid, ": rc = ", pid, endl, flush;
     sys_exit(0);
   }
 
   if (DEBUG) cerr << "ptlsim: waiting for child pid ", pid, "...", endl, flush;
 
-  int status;
-  int rc = waitpid(pid, &status, 0);
+  rc = sys_wait4(pid, &status, 0, NULL);
   if (rc != pid) {
-    cerr << "ptlsim: waitpid returned ", rc, " (vs expected pid ", pid, "); failed with error ", strerror(errno), endl;
+    cerr << "ptlsim: waitpid returned ", rc, " (vs expected pid ", pid, "); rc = ", rc, endl, flush;
     sys_exit(3);
   }
 
@@ -1983,6 +1945,12 @@ int ptlsim_inject(int argc, char** argv) {
 
   struct user_regs_struct regs;
   assert(sys_ptrace(PTRACE_GETREGS, pid, 0, (Waddr)&regs) == 0);
+  if (DEBUG) {
+    cerr << "  ebx ", hexstring(regs.ebx, 32), "  ecx ", hexstring(regs.ecx, 32), "  edx ", hexstring(regs.edx, 32), "  esi ", hexstring(regs.esi, 32), endl;
+    cerr << "  edi ", hexstring(regs.edi, 32), "  ebp ", hexstring(regs.ebp, 32), "  eax ", hexstring(regs.eax, 32), "  esp ", hexstring(regs.esp, 32), endl;
+    cerr << "  eip ", hexstring(regs.eip, 32), "  org ", hexstring(regs.orig_eax, 32), endl;
+    //cerr << "  cs ", hexstring(regs.cs, 16), "  ss ", hexstring(regs.ss, 16), "  ds ", hexstring(regs.ds, 16), endl;
+  }
 
   LoaderInfo info;
   info.initialize = 1;
@@ -2031,12 +1999,12 @@ int ptlsim_inject(int argc, char** argv) {
 
   if (DEBUG) cerr << "ptlsim: restarting child pid ", pid, " at ", (void*)regs.eip, "...", endl, flush;
 
-  rc = ptrace(PTRACE_DETACH, pid, 0, 0);
+  rc = sys_ptrace(PTRACE_DETACH, pid, 0, 0);
   if (rc) {
-    cerr << "ptlsim: detach returned ", rc, ", error code ", strerror(errno), endl, flush;
+    cerr << "ptlsim: detach returned ", rc, ", error code ", rc, endl, flush;
     sys_exit(4);
   }
-  rc = waitpid(pid, &status, 0);
+  rc = sys_wait4(pid, &status, 0, NULL);
 
   // (child done)
   status = WEXITSTATUS(status);
@@ -2049,26 +2017,6 @@ int ptlsim_inject(int argc, char** argv) {
 //
 // Profiling thread exit callbacks
 //
-
-//
-// This is called as a signal handler when a native thread exits;
-// it prints profiling information for the user process. The
-// exit callback is automatically turned off before the kernel
-// calls this so we don't get infinite recursion.
-//
-// This is only supported with the ptlkernel module loaded.
-//
-extern "C" void thread_exit_callback(int sig, siginfo_t *si, void *puc) {
-  int exitcode = si->si_code;
-
-  if (logfile) {
-    logfile << endl, "=== Thread ", sys_gettid(), " exited with status ", exitcode, " ===", endl, endl;
-    print_perfctrs(logfile);
-    logfile.close();
-  }
-
-  sys_exit(exitcode);
-}
 
 //
 // Respond to external signals like XCPU and others to switch modes
@@ -2113,30 +2061,14 @@ void init_signal_callback() {
   if (!ctx.use64) return;
 #endif
 
+  //cerr << "sizeof(sigset_t) == ", sizeof(sigset_t), endl, flush;
+
+  //assert(sizeof(sigset_t) == (_NSIG / 8));
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = external_signal_callback;
   sa.sa_flags = SA_SIGINFO;
-  assert(sigaction(SIGXCPU, &sa, NULL) == 0);
-}
-
-void init_exit_callback() {
-  // Presently the exit callback only works in x86-64 mode because it uses signals:
-  if (!ctx.use64) return;
-#ifdef __x86_64__
-  struct sigaction sa;
-  memset(&sa, 0, sizeof sa);
-  sa.sa_sigaction = thread_exit_callback;
-  sa.sa_flags = SA_SIGINFO;
-  assert(sigaction(SIGXCPU, &sa, NULL) == 0);
-  arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)1);
-#endif
-}
-
-void remove_exit_callback() {
-#ifdef __x86_64__
-  arch_prctl(ARCH_ENABLE_EXIT_HOOK, (void*)0);
-#endif
+  assert(sys_rt_sigaction(SIGXCPU, &sa, NULL, sizeof(W64)) == 0);
 }
 
 //
@@ -2165,7 +2097,6 @@ native_auxv_t* find_auxv_entry(int type) {
 template <typename ptrsize_t, typename auxv_t>
 int get_stack_reqs_for_args_env_auxv(const byte* origargv) {
   // go back to argc before argv
-  origargv -= sizeof(ptrsize_t);
   ptrsize_t* p = (ptrsize_t*)origargv;
 
   int argc = *p++;
@@ -2183,10 +2114,6 @@ int get_stack_reqs_for_args_env_auxv(const byte* origargv) {
   int auxvc = 0;
   while (auxv->a_type != AT_NULL) { auxv++; auxvc++; }
 
-  stringbuf sb;
-  // sb << "Stack reqs: ", argc, " args, ", envc, " envs, ", auxvc, " auxvs", endl;
-  write(2, (char*)sb, strlen(sb));
-
   return ((1 + argc + 1 + envc + 1) * sizeof(char**)) + ((auxvc + 1) * sizeof(native_auxv_t));
 }
 
@@ -2198,24 +2125,39 @@ struct Elf32_auxv_32bit {
   } a_un;
 };
 
-char** initenv;
+void printenv(char** pp) {
+  stringbuf sb; sb << "Environment @ ", pp, ":", endl; early_printk(sb);
+  while (*pp) {
+    stringbuf sb; sb << "  [", *pp, "]", endl; early_printk(sb);
+    pp++;
+  }
+}
+
+template <typename ptrsize_t>
+char** find_environ(const byte* origargcv) {
+  char** p = (char**)origargcv;
+  int argc = *((int*)p);
+  p++; // skip int argc
+  p += argc;
+  // skip over null after args
+  p++;
+
+  return p;
+}
 
 template <typename ptrsize_t, typename auxv_t>
 byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
   char** dest = (char**)destptr;
 
-  origargv -= sizeof(ptrsize_t);
   ptrsize_t* p = (ptrsize_t*)origargv;
 
   Waddr argc = *p++;
   *dest++ = (char*)argc;
 
-  foreach (i, argc+1) *dest++ = (char*)(Waddr)(*p++);
+  foreach (i, argc) *dest++ = (char*)(Waddr)(*p++);
 
   // skip over null at end of args
   *dest++ = 0; p++;
-
-  initenv = (char**)dest;
 
   while (*p) *dest++ = (char*)(Waddr)(*p++);
 
@@ -2276,11 +2218,14 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 #endif
 
   inside_ptlsim = (ptlsim_ehdr->e_type == ET_PTLSIM);
+
   ptlsim_build_timestamp = (time_t)ptlsim_ehdr->e_version;
 
   if (!inside_ptlsim) {
     // We're still a normal process - don't do anything special
     stack_min_addr = (Waddr)origrsp;
+    environ = find_environ<Waddr>((const byte*)origrsp);
+    call_global_constuctors();
     return origrsp;
   }
 
@@ -2308,7 +2253,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   Waddr user_stack_size;
 
   struct rlimit rlimit;
-  assert(getrlimit(RLIMIT_STACK, &rlimit) == 0);
+  assert(sys_getrlimit(RLIMIT_STACK, &rlimit) == 0);
   user_stack_size = rlimit.rlim_cur;
 
   // Round up a little so we don't over-run it when we fault in the stack:
@@ -2327,9 +2272,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   setup_sim_thunk_page();
 
 #ifdef __x86_64__
-  const byte* argv = (ctx.use64)
-    ? (const byte*)(((W64*)origrsp)+1)
-    : (const byte*)(((W32*)origrsp)+1);
+  const byte* argv = (const byte*)origrsp;
 
   int bytes = (ctx.use64)
     ? get_stack_reqs_for_args_env_auxv<W64, Elf64_auxv_t>(argv)
@@ -2342,8 +2285,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
     ? copy_args_env_auxv<W64, Elf64_auxv_t>(sp, argv)
     : copy_args_env_auxv<W32, Elf32_auxv_32bit>(sp, argv);
 #else
-
-  const byte* argv = (const byte*)(((W32*)origrsp)+1);
+  const byte* argv = (const byte*)origrsp;
 
   int bytes = get_stack_reqs_for_args_env_auxv<W32, Elf32_auxv_32bit>(argv);
 
@@ -2353,6 +2295,10 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   byte* endp = copy_args_env_auxv<W32, Elf32_auxv_32bit>(sp, argv);
 #endif
   assert(endp == tls->stack);
+
+  environ = find_environ<Waddr>(sp);
+
+  call_global_constuctors();
 
   return sp;
 }
