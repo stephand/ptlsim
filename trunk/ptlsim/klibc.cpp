@@ -2017,6 +2017,8 @@ char* getenv(const char* name) {
 extern "C" void __cxa_atexit(void (*arg1)(void*), void* arg2, void* arg3) { }
 void* __dso_handle = (void*)&__dso_handle;
 
+extern "C" int atexit(void (*function)(void)) { return 0; }
+
 void* operator new(size_t sz) {
   return malloc(sz);
 }
