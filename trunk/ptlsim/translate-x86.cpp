@@ -1639,7 +1639,7 @@ namespace TranslateX86 {
       int srcreg = (isimm) ? REG_imm : arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       operand_load(REG_temp0, rd);
 
-      int sizeshift = (isimm) ? rd.mem.size : reginfo[ra.reg.reg].sizeshift;
+      int sizeshift = rd.mem.size;
       bool rahigh = (isimm) ? 0 : reginfo[ra.reg.reg].hibyte;
 
       if (rahigh) { this << TransOp(OP_maskb, REG_temp2, REG_zero, srcreg, REG_imm, 3, 0, MaskControlInfo(0, 8, 8)); srcreg = REG_temp2; }
