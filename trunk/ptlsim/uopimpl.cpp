@@ -422,6 +422,10 @@ make_x86_shiftop_all_sizes(shl, shl, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 make_x86_shiftop_all_sizes(shr, shr, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 make_x86_shiftop_all_sizes(sar, sar, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 
+make_x86_shiftop_all_sizes(shls, shl, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
+make_x86_shiftop_all_sizes(shrs, shr, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
+make_x86_shiftop_all_sizes(sars, sar, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
+
 make_x86_shiftop_all_sizes(rotl, rol, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 make_x86_shiftop_all_sizes(rotr, ror, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
 make_x86_shiftop_all_sizes(rotcl, rcl, ZAPS|CF|OF, PRETEXT_ALL_FLAGS_IN);
@@ -1232,11 +1236,11 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = implmap_mask[size][cond]; break;
 
   case OP_shls: 
-    func = implmap_shl[size][setflags]; break;
+    func = implmap_shls[size][setflags]; break;
   case OP_shrs: 
-    func = implmap_shr[size][setflags]; break;
+    func = implmap_shrs[size][setflags]; break;
   case OP_sars:
-    func = implmap_sar[size][setflags]; break;
+    func = implmap_sars[size][setflags]; break;
   case OP_maskb:
     func = implmap_maskb[size][cond]; break;
 

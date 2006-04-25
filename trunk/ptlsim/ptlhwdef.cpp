@@ -304,7 +304,10 @@ const CondCodeToFlagRegs cond_code_to_flag_regs[16] = {
 };
 
 const char* cond_code_names[16] = { "o", "no", "c", "nc", "e", "ne", "be", "nbe", "s", "ns", "p", "np", "l", "nl", "le", "nle" };
-const char* x86_flag_names[FLAG_COUNT] = {"c", "X", "p", "W", "a", "?", "z", "s", "t", "i", "d", "o", "iopl0", "iopl1", "nt", "rf", "vm", "ac", "vif", "vip", "id"};
+const char* x86_flag_names[32] = {
+  "c", "X", "p", "W", "a", "?", "z", "s", "t", "i", "d", "o", "iopl0", "iopl1", "nt", "0",
+  "rf", "vm", "ac", "vif", "vip", "id", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31"
+};
 
 const char* setflag_names[SETFLAG_COUNT] = {"z", "c", "o"};
 const W16 setflags_to_x86_flags[1<<3] = {

@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-#define ENABLE_CHECKS
-#define ENABLE_LOGGING
+//#define ENABLE_CHECKS
+//#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -694,6 +694,11 @@ namespace SequentialCore {
       iterations++;
       sim_cycle++;
       seq_total_cycles++;
+
+      if (logable(1)) {
+        logfile << "Core State after exec:", endl;
+        logfile << ctx.commitarf;
+      }
     }
 
     return (barrier) ? SEQEXEC_BARRIER : (insnlimit < bb->user_insn_count) ? SEQEXEC_EARLY_EXIT : SEQEXEC_OK;

@@ -606,7 +606,7 @@ enum {
 };
 
 extern const char* setflag_names[SETFLAG_COUNT];
-extern const char* x86_flag_names[FLAG_COUNT];
+extern const char* x86_flag_names[32];
 extern const W16 setflags_to_x86_flags[1<<3];
 
 //
@@ -729,7 +729,7 @@ struct flagstring {
 };
 
 static inline ostream& operator <<(ostream& os, const flagstring& bs) {
-  for (int i = 11; i >= 0; i--) {
+  for (int i = 31; i >= 0; i--) {
     if (bit(bs.bits, i)) os << x86_flag_names[i];
   }
 
@@ -737,7 +737,7 @@ static inline ostream& operator <<(ostream& os, const flagstring& bs) {
 }
 
 static inline stringbuf& operator <<(stringbuf& sb, const flagstring& bs) {
-  for (int i = 11; i >= 0; i--) {
+  for (int i = 31; i >= 0; i--) {
     if (bit(bs.bits, i)) sb << x86_flag_names[i];
   }
 

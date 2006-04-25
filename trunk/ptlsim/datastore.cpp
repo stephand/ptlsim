@@ -152,23 +152,27 @@ DataStoreNode* DataStoreNode::search(const char* key) const {
 }
 
 DataStoreNode* DataStoreNode::searchpath(const char* path) const {
-  char* pbase = strdup(path);
+  dynarray<char*> tokens;
+
+  if (path[0] == '/') path++;
+
+  char* pbase = tokens.tokenize(path, "/");
+
   const DataStoreNode* ds = this;
 
-  char* p = pbase;
-
-  p = strsep(&p, "/");
-  while (p) {
+  foreach (i, tokens.count()) {
+    char* p = tokens[i];
     DataStoreNode* dsn = ds->search(p);
+
     if (!dsn) {
       delete pbase;
       return null;
     }
     ds = dsn;
-    p = strsep(null, "/");
   }
 
   delete pbase;
+
   return (DataStoreNode*)ds;
 }
 
