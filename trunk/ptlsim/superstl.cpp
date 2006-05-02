@@ -686,7 +686,7 @@ namespace superstl {
       int mhz;
       int n = sscanf(s, "cpu MHz : %d", &mhz);
       if (n == 1) {
-        hz = mhz * 1000000;
+        hz = (W64)mhz * 1000000.0;
         //cout << "CycleTimer::gethz(): core frequency is ", hz, " hz", endl;
         CycleTimer::hz = hz;
         return hz;
