@@ -2254,7 +2254,12 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 
   struct rlimit rlimit;
   assert(sys_getrlimit(RLIMIT_STACK, &rlimit) == 0);
-  user_stack_size = rlimit.rlim_cur;
+  //
+  // If the stack is unlimited, enforce a maximum of 128 MB.
+  // Some kernels give us an insanely large value here, but
+  // since we must pre-zero the stack, it has to be smaller:
+  //
+  user_stack_size = min((W64)rlimit.rlim_cur, (W64)128*1024*1024);
 
   // Round up a little so we don't over-run it when we fault in the stack:
   stack_min_addr = floor(stack_max_addr - user_stack_size, PAGE_SIZE) + 65536;
