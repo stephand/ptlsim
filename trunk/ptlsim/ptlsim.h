@@ -68,6 +68,8 @@ int out_of_order_core_toplevel_loop();
 int sequential_core_toplevel_loop();
 int execute_sequential(BasicBlock* bb);
 
+void backup_and_reopen_logfile();
+
 enum {
   SEQEXEC_OK = 0,
   SEQEXEC_EARLY_EXIT,

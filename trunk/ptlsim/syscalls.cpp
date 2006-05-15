@@ -54,6 +54,8 @@ declare_syscall3(__NR_open, int, sys_open, const char*, pathname, int, flags, in
 declare_syscall1(__NR_close, int, sys_close, int, fd);
 declare_syscall3(__NR_read, ssize_t, sys_read, int, fd, void*, buf, size_t, count);
 declare_syscall3(__NR_write, ssize_t, sys_write, int, fd, const void*, buf, size_t, count);
+declare_syscall1(__NR_unlink, int, sys_unlink, const char*, pathname);
+declare_syscall2(__NR_rename, int, sys_rename, const char*, oldpath, const char*, newpath);
 
 declare_syscall1(__NR_exit, void, sys_exit, int, code);
 declare_syscall1(__NR_brk, void*, sys_brk, void*, p);

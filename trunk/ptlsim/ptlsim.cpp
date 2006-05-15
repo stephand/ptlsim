@@ -142,6 +142,17 @@ const char* get_full_exec_filename() {
 
 time_t ptlsim_build_timestamp;
 
+void backup_and_reopen_logfile() {
+  if (log_filename) {
+    if (logfile) logfile.close();
+    stringbuf oldname;
+    oldname << log_filename, ".backup";
+    sys_unlink(oldname);
+    sys_rename(log_filename, oldname);
+    logfile.open(log_filename);
+  }
+}
+
 int init_config(int argc, const char** argv) {
   char confroot[1024] = "";
   stringbuf sb;
@@ -193,7 +204,7 @@ int init_config(int argc, const char** argv) {
 
   if (log_filename) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    logfile.open(log_filename);
+    backup_and_reopen_logfile();
   }
 
   if (!ptlsim_quiet) print_banner(cerr, argc, argv);

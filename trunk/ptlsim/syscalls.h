@@ -18,6 +18,8 @@ extern "C" {
   ssize_t sys_write(int fd, const void* buf, size_t count);
   ssize_t sys_fdatasync(int fd);
   W64 sys_seek(int fd, W64 offset, unsigned int origin);
+  int sys_unlink(const char* pathname);
+  int sys_rename(const char* oldpath, const char* newpath);
   
   void* sys_mmap(void* start, size_t length, int prot, int flags, int fd, W64 offset);
   int sys_munmap(void * start, size_t length);
