@@ -146,6 +146,7 @@ Waddr get_gs_base() {
 #define __NR_32bit_mremap 163
 #define __NR_32bit_set_thread_area 243
 #define __NR_32bit_rt_sigaction 174
+#define __NR_32bit_alarm 27
 
 #define __NR_64bit_mmap 9
 #define __NR_64bit_munmap 11
@@ -156,6 +157,7 @@ Waddr get_gs_base() {
 #define __NR_64bit_exit 60
 #define __NR_64bit_exit_group	231
 #define __NR_64bit_rt_sigaction 13
+#define __NR_64bit_alarm 37
 
 void early_printk(const char* text) {
   sys_write(2, text, strlen(text));
@@ -476,11 +478,9 @@ void AddressSpace::make_accessible(void* p, Waddr size, spat_t top) {
   Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
   Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
   Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
-  assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
-#if 0
-  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " accessible for ", 
+  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " (size ", size, ") accessible for ", 
     ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"), endl, flush;
-#endif
+  assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
   for (W64 i = firstpage; i <= lastpage; i++) { setbit(pageid_to_map_byte(top, i), lowbits(i, 3)); }
 }
 
@@ -488,11 +488,9 @@ void AddressSpace::make_inaccessible(void* p, Waddr size, spat_t top) {
   Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
   Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
   Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
-  assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
-#if 0
-  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " inaccessible for ", 
+  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " (size ", size, ") inaccessible for ", 
     ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"), endl, flush;
-#endif
+  assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
   for (Waddr i = firstpage; i <= lastpage; i++) { clearbit(pageid_to_map_byte(top, i), lowbits(i, 3)); }
 }
 
@@ -613,15 +611,28 @@ void* AddressSpace::setbrk(void* reqbrk) {
     return brk;
   }
 
+  // Remove old brk
+  setattr(brkbase, oldsize, PROT_NONE);
+
   logfile << "setbrk(", reqbrk, "): old range ", brkbase, "-", brk, " (", oldsize, " bytes); new range ", brkbase, "-", reqbrk, " (delta ", ((Waddr)reqbrk - (Waddr)brk), ", size ", ((Waddr)reqbrk - (Waddr)brkbase), ")", endl;
 
-  setattr(brkbase, oldsize, PROT_NONE);
   void* newbrk = sys_brk(reqbrk);
-  Waddr newsize = (Waddr)newbrk - (Waddr)brkbase;
-  brk = newbrk;
-  logfile << "setbrk(", reqbrk, "): new range ", brkbase, "-", newbrk, " (size ", newsize, ")", endl, flush;
 
-  setattr(brkbase, newsize, PROT_READ|PROT_WRITE|PROT_EXEC);
+  if (newbrk < brkbase) {
+    // Contracting memory
+    Waddr clearsize = (Waddr)brkbase - (Waddr)newbrk;
+    logfile << "setbrk(", reqbrk, "): contracting: new range ", newbrk, "-", brkbase, " (clearsize ", clearsize, ")", endl, flush;
+    brk = newbrk;
+    brkbase = newbrk;
+    setattr(brkbase, clearsize, PROT_NONE);
+  } else {
+    // Expanding memory
+    Waddr newsize = (Waddr)newbrk - (Waddr)brkbase;
+    logfile << "setbrk(", reqbrk, "): expanding: new range ", brkbase, "-", newbrk, " (size ", newsize, ")", endl, flush;
+    brk = newbrk;
+    setattr(brkbase, newsize, PROT_READ|PROT_WRITE|PROT_EXEC);
+  }
+
   return newbrk;
 }
 
@@ -1223,6 +1234,25 @@ void handle_syscall_64bit() {
       (void*)arg5, ", ", (void*)arg6, ") at iteration ", iterations, endl, flush;
 
   switch (syscallid) {
+    /*
+#if 0
+    // Make deterministic
+  case __NR_open: {
+    const char* p = (const char*)(Waddr)arg1;
+    static const char* devzero = "/dev/zero";
+    cerr << "Patching sys_open for /dev/urandom", endl;
+    if (strequal(p, "/dev/urandom")) {
+      arg1 = (W64)(Waddr)&devzero;
+    }
+    ctx.commitarf[REG_rax] = do_syscall_64bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
+    break;
+  }
+  case __NR_time: {
+    ctx.commitarf[REG_rax] = 0;
+    break;
+  }
+#endif
+    */
   case __NR_64bit_mmap:
     ctx.commitarf[REG_rax] = (W64)asp.mmap((void*)arg1, arg2, arg3, arg4, arg5, arg6);
     break;
@@ -1264,6 +1294,17 @@ void handle_syscall_64bit() {
     // This is only so we receive SIGSEGV on our own:
 #if 1
     logfile << "handle_syscall: signal(", arg1, ", ", (void*)arg2, ")", endl, flush;
+    ctx.commitarf[REG_rax] = 0;
+#else
+    ctx.commitarf[REG_rax] = do_syscall_64bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
+#endif
+    break;
+  }
+  case __NR_64bit_alarm: {
+    // Do not allow SIGALRM (we cannot handle it properly inside PTLsim and the timing is wrong anyway)
+    // NOTE: This may break some programs!
+#if 1
+    logfile << "handle_syscall: alarm(", arg1, ")", endl, flush;
     ctx.commitarf[REG_rax] = 0;
 #else
     ctx.commitarf[REG_rax] = do_syscall_64bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
@@ -1459,6 +1500,17 @@ void handle_syscall_32bit(int semantics) {
     ctx.commitarf[REG_rax] = 0;
 #else
     ctx.commitarf[REG_rax] = do_syscall_32bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
+#endif
+    break;
+  }
+  case __NR_32bit_alarm: {
+    // Do not allow SIGALRM (we cannot handle it properly inside PTLsim and the timing is wrong anyway)
+    // NOTE: This may break some programs!
+#if 1
+    logfile << "handle_syscall: alarm(", arg1, ")", endl, flush;
+    ctx.commitarf[REG_rax] = 0;
+#else
+    ctx.commitarf[REG_rax] = do_syscall_64bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
 #endif
     break;
   }
@@ -1716,7 +1768,7 @@ int ptlsim_inject(int argc, const char** argv) {
   int x86_64_mode = is_elf_64bit(filename);
 
   if (x86_64_mode < 0) {
-    cerr << "ptlsim: cannot open ", filename, endl;
+    cerr << "ptlsim: cannot open ", filename, endl, flush;
     sys_exit(1);
   }
 

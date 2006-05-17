@@ -12,7 +12,7 @@ endif
 
 CC = g++
 SVNREV=`svn info | grep "Last Changed Rev" | cut -d " " -f4`
-SVNDATE=`svn info | grep "Last Changed Date" | cut -d " " -f4-`
+SVNDATE=`svn info | grep "Last Changed Date" | cut -d " " -f4`
 INCFLAGS = -I. -DBUILDHOST="`hostname -f`" -DSVNREV="$(SVNREV)" -DSVNDATE="$(SVNDATE)"
 
 ifdef __x86_64__
