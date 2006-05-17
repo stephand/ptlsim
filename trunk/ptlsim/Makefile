@@ -11,7 +11,9 @@ __x86_64__=1
 endif
 
 CC = g++
-INCFLAGS = -I. -DBUILDHOST="`hostname -f`"
+SVNREV=`svn info | grep "Last Changed Rev" | cut -d " " -f4`
+SVNDATE=`svn info | grep "Last Changed Date" | cut -d " " -f4-`
+INCFLAGS = -I. -DBUILDHOST="`hostname -f`" -DSVNREV="$(SVNREV)" -DSVNDATE="$(SVNDATE)"
 
 ifdef __x86_64__
 CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type -minline-all-stringops

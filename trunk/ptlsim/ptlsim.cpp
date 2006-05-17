@@ -112,6 +112,7 @@ void print_banner(ostream& os, int argc, const char** argv) {
 #endif
   os << "//  Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>", endl;
   os << "// ", endl;
+  os << "//  Revision ", stringify(SVNREV), " (", stringify(SVNDATE), ")", endl;
   os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
     stringify(__GNUC__), ".", stringify(__GNUC_MINOR__), endl;
   os << "//  Running on ", hostinfo.nodename, ".", hostinfo.domainname, " (", (int)math::floor(CycleTimer::gethz() / 1000000.), " MHz)", endl;
@@ -227,6 +228,9 @@ int init_config(int argc, const char** argv) {
     stringbuf sb;
     sb.reset();
     info.add("timestamp", sys_time(null));
+
+    info.add("svn-revision", stringify(SVNREV));
+    info.add("svn-timestamp", stringify(SVNDATE));
 
     sb.reset();
     info.add("build-timestamp", ptlsim_build_timestamp);
