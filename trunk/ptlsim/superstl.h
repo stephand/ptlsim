@@ -902,7 +902,7 @@ namespace superstl {
   };
 
   template <typename T>
-  CRC32& operator <<(CRC32& crc, const T& t) {
+  inline CRC32& operator <<(CRC32& crc, const T& t) {
     crc.update((byte*)&t, sizeof(T));
     return crc;
   }

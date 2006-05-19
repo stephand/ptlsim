@@ -1387,3 +1387,6 @@ uopimpl_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, boo
 void init_uops() {
   gen_mask_uop_masks();
 }
+
+void shutdown_uops() {
+}

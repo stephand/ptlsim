@@ -103,7 +103,7 @@ template <typename T> static inline T min(const T& a, const T& b) { typeof (a) _
 template <typename T> static inline T max(const T& a, const T& b) { typeof (a) _a = a; typeof (b) _b = b; return _a > _b ? _a : _b; }
 template <typename T> static inline T clipto(const T& v, const T& minv, const T& maxv) { return min(max(v, minv), maxv); }
 template <typename T> static inline bool inrange(const T& v, const T& minv, const T& maxv) { typeof (v) _v = v; return ((_v >= minv) & (_v <= maxv)); }
-template <typename T> static inline T abs(T x) { typeof (x) _x = x; return (_x < 0) ? -_x : _x; }
+// template <typename T> static inline T abs(T x) { typeof (x) _x = x; return (_x < 0) ? -_x : _x; } // (built-in for gcc)
 
 #define sqr(x) ((x)*(x))
 #define cube(x) ((x)*(x)*(x))

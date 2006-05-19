@@ -805,7 +805,7 @@ public:
     get_state_list(state).enqueue(this);
   }
 
-  void PhysicalRegister::init(int rfid, int idx) {
+  void init(int rfid, int idx) {
     this->rfid = rfid;
     this->idx = idx;
     reset();
@@ -1160,7 +1160,7 @@ CycleTimer cttrans;
 W64 bbcache_inserts;
 W64 bbcache_removes;
 
-static BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
+static BasicBlock* fetch_or_translate_basic_block(Waddr fetchrip) {
   BasicBlock** bb = bbcache(fetchrip);
   
   if (bb) {
@@ -1175,7 +1175,6 @@ static BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
     stop_timer(cttrans);
     
     if (logable(1)) logfile << padstring("", 20), " xlate  rip 0x", (void*)fetchrip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
-    bbcache.add(fetchrip, current_basic_block);
     bbcache_inserts++;
   }
   
@@ -3943,8 +3942,6 @@ enum {
   COMMIT_RESULT_BARRIER = 3,
   COMMIT_RESULT_STOP = 4
 };
-
-W64 total_uops_committed = 0;
 
 // See notes in handle_exception():
 W64 chk_recovery_rip;

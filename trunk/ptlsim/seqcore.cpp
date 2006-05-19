@@ -505,7 +505,6 @@ namespace SequentialCore {
       synth_uops_for_bb(*current_basic_block);
       
       if (logable(1)) logfile << padstring("", 20), " xlate  rip ", (void*)rip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
-      bbcache.add(rip, current_basic_block);
       bbcache_inserts++;
     }
     
@@ -528,6 +527,8 @@ namespace SequentialCore {
     bool barrier = 0;
 
     if (logable(1)) logfile << endl, "Sequentially executing basic block ", bb, " (rip ", (void*)(Waddr)bb->rip, ", ", bb->count, " uops), insn limit ", insnlimit, endl, flush;
+    if (!bb->synthops) synth_uops_for_bb(*bb);
+    bb->hitcount++;
 
     TransOpBuffer unaligned_ldst_buf;
     unaligned_ldst_buf.index = -1;
@@ -538,6 +539,7 @@ namespace SequentialCore {
     int user_insns = 0;
 
     seq_total_basic_blocks++;
+    total_basic_blocks_committed++;
 
     while ((uopindex < bb->count) & (user_insns < insnlimit)) {
       if (!asp.fastcheck((byte*)(Waddr)arf[REG_rip], asp.execmap)) {
@@ -631,6 +633,8 @@ namespace SequentialCore {
           if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
           logfile << endl;
         }
+
+        bb->predcount += (uop.opcode == OP_jmp) ? 1 : (state.reg.rddata == uop.riptaken);
       } else {
         assert((void*)synthop);
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags);
@@ -695,7 +699,7 @@ namespace SequentialCore {
       sim_cycle++;
       seq_total_cycles++;
 
-      if (logable(1)) {
+      if (logable(1) & 0) {
         logfile << "Core State after exec:", endl;
         logfile << ctx.commitarf;
       }
@@ -794,10 +798,10 @@ namespace SequentialCore {
 
     logfile << flush;
 
-    // Start counting from zero in out of order core
-    total_uops_committed = 0;
-    total_user_insns_committed = 0;
-    sim_cycle = 0;
+    // Start counting from zero in out of order core (only if desired)
+    // total_uops_committed = 0;
+    // total_user_insns_committed = 0;
+    // sim_cycle = 0;
 
     return exiting;
   }

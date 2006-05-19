@@ -394,6 +394,8 @@ void BasicBlock::reset(W64 rip) {
   storecount = 0;
   user_insn_count = 0;
   synthops = null;
+  hitcount = 0;
+  predcount = 0;
 }
 
 //

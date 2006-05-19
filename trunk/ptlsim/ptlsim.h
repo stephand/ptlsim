@@ -101,7 +101,19 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
 uopimpl_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except);
 void synth_uops_for_bb(BasicBlock& bb);
 
-extern Hashtable<W64, BasicBlock*, 16384> bbcache;
+static const int BB_CACHE_SIZE = 16384;
+
+struct BasicBlockCache: public Hashtable<W64, BasicBlock*, BB_CACHE_SIZE> {
+  BasicBlockCache(): Hashtable<W64, BasicBlock*, BB_CACHE_SIZE>() { }
+
+  ostream& print(ostream& os) const;
+};
+
+extern BasicBlockCache bbcache;
+
+static inline ostream& operator <<(ostream& os, const BasicBlockCache& bbcache) {
+  return bbcache.print(os);
+}
 
 //
 // Assists

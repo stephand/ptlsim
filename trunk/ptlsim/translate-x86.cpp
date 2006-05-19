@@ -9,7 +9,7 @@
 #include <ptlsim.h>
 #include <datastore.h>
 
-Hashtable<W64, BasicBlock*, 16384> bbcache;
+BasicBlockCache bbcache;
 
 static const bool ENABLE_LOAD_LATENCY_ADJUSTMENT = 0;
 
@@ -1004,9 +1004,6 @@ namespace TranslateX86 {
     }
   }
 
-#define AFLAG 2
-#define DFLAG 1
-
   enum { b_mode = 1, v_mode, w_mode, d_mode, q_mode, x_mode, m_mode, cond_jump_mode, loop_jcxz_mode, dq_mode };
 
   //
@@ -1070,10 +1067,12 @@ namespace TranslateX86 {
     W32 prefixes;
     ModRMByte modrm;
     RexByte rex;
-    int sizeflag;
     W64 user_insn_count;
     bool last_flags_update_was_atomic;
     bool invalid;
+
+    bool opsize_prefix;
+    bool addrsize_prefix;
 
     TraceDecoder(W64 rip) {
       reset(rip);
@@ -1089,7 +1088,6 @@ namespace TranslateX86 {
       prefixes = 0;
       rex = 0;
       modrm = 0;
-      sizeflag = 0;
       user_insn_count = 0;
       last_flags_update_was_atomic = 1;
       invalid = 0;
@@ -1209,8 +1207,8 @@ namespace TranslateX86 {
     case q_mode: this->reg.reg = reg64_to_uniform_reg[regfield + add]; break;
     case m_mode: this->reg.reg = (ctx.use64) ? reg64_to_uniform_reg[regfield + add] : reg32_to_uniform_reg[regfield + add]; break;
     case v_mode: case dq_mode: 
-      this->reg.reg = (state.rex.mode64 || (def64 && (state.sizeflag & DFLAG))) ? reg64_to_uniform_reg[regfield + add] : 
-        ((state.sizeflag & DFLAG) || (bytemode == dq_mode)) ? reg32_to_uniform_reg[regfield + add] :
+      this->reg.reg = (state.rex.mode64 | (def64 & (!state.opsize_prefix))) ? reg64_to_uniform_reg[regfield + add] : 
+        ((!state.opsize_prefix) | (bytemode == dq_mode)) ? reg32_to_uniform_reg[regfield + add] :
         reg16_to_uniform_reg[regfield + add];
       break;
     case x_mode: this->reg.reg = xmmreg_to_uniform_reg[regfield + add]; break;
@@ -1235,7 +1233,7 @@ namespace TranslateX86 {
       this->imm.imm = *(W64s*)state.rip; state.rip += 8; break;
     case v_mode:
       // NOTE: Even if rex.mode64 is specified, immediates are never longer than 32 bits (except for mov):
-      if (state.rex.mode64 || (state.sizeflag & DFLAG)) {
+      if (state.rex.mode64 | (!state.opsize_prefix)) {
         this->imm.imm = *(W32s*)state.rip; state.rip += 4;
       } else {
         this->imm.imm = *(W16s*)state.rip; state.rip += 2;
@@ -1262,10 +1260,10 @@ namespace TranslateX86 {
     case v_mode:
       if (state.rex.mode64) {
         this->imm.imm = *(W64s*)state.rip; state.rip += 8;
-      } else if (state.sizeflag & DFLAG) {
-        this->imm.imm = *(W32s*)state.rip; state.rip += 4;
-      } else {
+      } else if (state.opsize_prefix) {
         this->imm.imm = *(W16s*)state.rip; state.rip += 2;
+      } else {
+        this->imm.imm = *(W32s*)state.rip; state.rip += 4;
       }
       break;
     case w_mode:
@@ -1292,9 +1290,6 @@ namespace TranslateX86 {
     mem.scale = 0;
     mem.riprel = 0;
     mem.size = 0;
-
-    //if (DEBUG) logfile << "--------------------", endl;
-    //if (DEBUG) logfile << "mod=", state.modrm.mod, " reg=", state.modrm.reg, " rm=", state.modrm.rm, endl;
 
     const int mod_and_rexextbase_and_rm_to_basereg_x86_64[4][2][8] = {
       {
@@ -1392,7 +1387,7 @@ namespace TranslateX86 {
     case d_mode: mem.size = 2; break;
     case q_mode: mem.size = 3; break;
     case m_mode: mem.size = (ctx.use64) ? 3 : 2; break;
-    case v_mode: case dq_mode: mem.size = (state.rex.mode64) ? 3 : ((state.sizeflag & DFLAG) || (bytemode == dq_mode)) ? 2 : 1; break; // See table 1.2 (p35) of AMD64 ISA manual:
+    case v_mode: case dq_mode: mem.size = (state.rex.mode64) ? 3 : ((!state.opsize_prefix) | (bytemode == dq_mode)) ? 2 : 1; break; // See table 1.2 (p35) of AMD64 ISA manual
     case x_mode: mem.size = 3; break;
     default: return false;
     }
@@ -1411,8 +1406,8 @@ namespace TranslateX86 {
       this->reg.reg = reg64_to_uniform_reg[regcode + (state.rex.extbase * 8)];
     } else {
       this->reg.reg = (state.rex.mode64) ? reg64_to_uniform_reg[regcode + (state.rex.extbase * 8)] : 
-        (state.sizeflag & DFLAG) ? reg32_to_uniform_reg[regcode + (state.rex.extbase * 8)] : 
-        reg16_to_uniform_reg[regcode + (state.rex.extbase * 8)];
+        (state.opsize_prefix) ? reg16_to_uniform_reg[regcode + (state.rex.extbase * 8)]
+        : reg32_to_uniform_reg[regcode + (state.rex.extbase * 8)];
     }
 
     return true;
@@ -1752,9 +1747,14 @@ namespace TranslateX86 {
 
       assert(rasize < 3); // must be at most 32 bits
       // On x86-64, only 8-bit and 16-bit ops need to be merged; 32-bit is zero extended to full 64 bits:
-      TransOp transop(OP_maskb, rdreg, (rdsize < 2) ? rdreg : REG_zero, rareg, REG_imm, rdsize, 0, MaskControlInfo(0, (1<<rasize)*8, 0));
-      transop.cond = (zeroext) ? 1 : 2;
-      this << transop;
+      if (zeroext && rdsize >= 2) {
+        // Just use regular move
+        this << TransOp(OP_mov, rdreg, REG_zero, rareg, REG_zero, rasize);        
+      } else {
+        TransOp transop(OP_maskb, rdreg, (rdsize < 2) ? rdreg : REG_zero, rareg, REG_imm, rdsize, 0, MaskControlInfo(0, (1<<rasize)*8, 0));
+        transop.cond = (zeroext) ? 1 : 2;
+        this << transop;
+      }
     } else if ((rd.type == OPTYPE_REG) && (ra.type == OPTYPE_MEM)) {
       //
       // reg,[mem]
@@ -1821,7 +1821,8 @@ namespace TranslateX86 {
   bool TraceDecoder::translate() {
     bool DEBUG = analyze_in_detail();
 
-    sizeflag = AFLAG | DFLAG;
+    opsize_prefix = 0;
+    addrsize_prefix = 0;
     bool uses_sse = 0;
 
     bool end_of_block = false;
@@ -1842,7 +1843,7 @@ namespace TranslateX86 {
 #endif
 
     if (prefixes & PFX_ADDR) {
-      sizeflag ^= AFLAG;
+      addrsize_prefix = 1;
     }
 
     int op = *rip++;
@@ -1868,7 +1869,7 @@ namespace TranslateX86 {
 
     // SSE uses 0x66 prefix for an opcode extension:
     if (!uses_sse && (prefixes & PFX_DATA)) {
-      sizeflag ^= DFLAG;
+      opsize_prefix = 1;
     }
 
     modrm = (need_modrm) ? *((ModRMByte*)rip++) : ModRMByte(0);
@@ -1999,8 +2000,7 @@ namespace TranslateX86 {
     case 0x6a: {
       // push immediate
       DECODE(iform64, ra, (op == 0x68) ? v_mode : b_mode);
-
-      int sizeshift = (sizeflag & DFLAG) ? ((ctx.use64) ? 3 : 2) : 1;
+      int sizeshift = (opsize_prefix) ? 1 : ((ctx.use64) ? 3 : 2);
       int size = (1 << sizeshift);
       CheckInvalid();
 
@@ -2281,7 +2281,7 @@ namespace TranslateX86 {
     }
     case 0x98: {
       // cbw cwde cdqe
-      int rashift = (sizeflag & DFLAG) ? ((rex.mode64) ? 2 : 1) : 0;
+      int rashift = (opsize_prefix) ? 0 : ((rex.mode64) ? 2 : 1);
       int rdshift = rashift + 1;
 
       TransOp transop(OP_maskb, REG_rax, (rdshift < 3) ? REG_rax : REG_zero, REG_rax, REG_imm, rdshift, 0, MaskControlInfo(0, (1<<rashift)*8, 0));
@@ -2291,7 +2291,7 @@ namespace TranslateX86 {
     }
     case 0x99: {
       // cwd cdq cqo
-      int rashift = (sizeflag & DFLAG) ? ((rex.mode64) ? 3 : 2) : 1;
+      int rashift = (opsize_prefix) ? 1 : ((rex.mode64) ? 3 : 2);
 
       TransOp bt(OP_bt, REG_temp0, REG_rax, REG_imm, REG_zero, 2, ((1<<rashift)*8)-1, 0, SETFLAG_CF);
       bt.nouserflags = 1; // it still generates flags, but does not rename the user flags
@@ -2320,7 +2320,7 @@ namespace TranslateX86 {
     }
     case 0x9c: {
       // pushfw/pushfq
-      int sizeshift = (sizeflag & DFLAG) ? ((ctx.use64) ? 3 : 2) : 1;
+      int sizeshift = (opsize_prefix) ? 1 : ((ctx.use64) ? 3 : 2);
       int size = (1 << sizeshift);
 
       if (last_flags_update_was_atomic) {
@@ -2340,7 +2340,7 @@ namespace TranslateX86 {
     }
     case 0x9d: {
       // popfw/popfq
-      int sizeshift = (sizeflag & DFLAG) ? ((ctx.use64) ? 3 : 2) : 1;
+      int sizeshift = (opsize_prefix) ? 1 : ((ctx.use64) ? 3 : 2);
       int size = (1 << sizeshift);
 
       this << TransOp(OP_ld, REG_temp0, REG_rsp, REG_zero, REG_zero, sizeshift);
@@ -2368,12 +2368,13 @@ namespace TranslateX86 {
     }
 
     case 0xa0 ... 0xa3: {
+      // mov rAX,Ov and vice versa
       rd.gform_ext(*this, (op & 1) ? v_mode : b_mode, REG_rax);
-      DECODE(iform64, ra, (ctx.use64 ? q_mode : (sizeflag & AFLAG) ? d_mode : w_mode));
+      DECODE(iform64, ra, (ctx.use64 ? q_mode : addrsize_prefix ? w_mode : d_mode));
       CheckInvalid();
 
       ra.mem.offset = ra.imm.imm;
-      ra.mem.offset = (ctx.use64) ? ra.mem.offset : lowbits(ra.mem.offset, (sizeflag & AFLAG) ? 32 : 16);
+      ra.mem.offset = (ctx.use64) ? ra.mem.offset : lowbits(ra.mem.offset, (addrsize_prefix) ? 16 : 32);
       ra.mem.basereg = APR_zero;
       ra.mem.indexreg = APR_zero;
       ra.mem.scale = APR_zero;
@@ -2393,7 +2394,7 @@ namespace TranslateX86 {
     case 0xac ... 0xad:
     case 0xae ... 0xaf: {
       W64 rep = (prefixes & (PFX_REPNZ|PFX_REPZ));
-      int sizeshift = (!bit(op, 0)) ? 0 : (rex.mode64) ? 3 : (sizeflag & DFLAG) ? 2 : 1;
+      int sizeshift = (!bit(op, 0)) ? 0 : (rex.mode64) ? 3 : opsize_prefix ? 1 : 2;
 
       // only actually code if it is the very first insn in the block!
       // otherwise emit a branch:
@@ -2740,7 +2741,7 @@ namespace TranslateX86 {
         addend = (W16)ra.imm.imm;
       }
 
-      int sizeshift = (ctx.use64) ? ((sizeflag & DFLAG) ? 3 : 1) : ((sizeflag & DFLAG) ? 2 : 1);
+      int sizeshift = (ctx.use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
       int size = (1 << sizeshift);
       addend = size + addend;
 
@@ -2786,7 +2787,7 @@ namespace TranslateX86 {
 
       CheckInvalid();
 
-      int sizeshift = (ctx.use64) ? ((sizeflag & DFLAG) ? 3 : 1) : ((sizeflag & DFLAG) ? 2 : 1);
+      int sizeshift = (ctx.use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
 
       // Exactly equivalent to:
       // push %rbp
@@ -2803,7 +2804,7 @@ namespace TranslateX86 {
 
     case 0xc9: {
       // leave
-      int sizeshift = (ctx.use64) ? ((sizeflag & DFLAG) ? 3 : 1) : ((sizeflag & DFLAG) ? 2 : 1);
+      int sizeshift = (ctx.use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
       // Exactly equivalent to:
       // mov %rsp,%rbp
       // pop %rbp
@@ -3505,8 +3506,33 @@ namespace TranslateX86 {
     }
 
     case 0xe0 ... 0xe2: {
-      // loopne loope loop
-      MakeInvalid();
+      // 0xe0 loopnz
+      // 0xe1 loopz
+      // 0xe2 loop
+      DECODE(iform, ra, b_mode);
+      CheckInvalid();
+
+      int sizeshift = (rex.mode64) ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2);
+
+      TransOp testop(OP_and, REG_temp1, REG_rcx, REG_rcx, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
+      testop.nouserflags = 1;
+      this << testop;
+
+      // ornotcc: raflags | (~rbflags)
+      if ((op == 0xe0) | (op == 0xe1)) {
+        TransOp mergeop((op == 0xe0) ? OP_ornotcc : OP_orcc, REG_temp1, REG_temp1, REG_zf, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
+        mergeop.nouserflags = 1;
+        this << mergeop;
+      }
+
+      TransOp transop(OP_br, REG_rip, REG_temp1, REG_zero, REG_zero, 3, 0);
+      transop.cond = COND_e;
+      transop.riptaken = (Waddr)rip + ra.imm.imm;
+      transop.ripseq = (Waddr)rip;
+      bb.rip_taken = (Waddr)rip + ra.imm.imm;
+      bb.rip_not_taken = (Waddr)rip;
+      this << transop;
+      end_of_block = true;
       break;
     };
 
@@ -3516,7 +3542,7 @@ namespace TranslateX86 {
       DECODE(iform, ra, b_mode);
       CheckInvalid();
 
-      int sizeshift = (ctx.use64) ? ((sizeflag & DFLAG) ? 3 : 2) : ((sizeflag & DFLAG) ? 2 : 1);
+      int sizeshift = (ctx.use64) ? (opsize_prefix ? 2 : 3) : (opsize_prefix ? 1 : 2);
 
       TransOp testop(OP_and, REG_temp1, REG_rcx, REG_rcx, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
       testop.nouserflags = 1;
@@ -5283,6 +5309,15 @@ BasicBlock* translate_one_basic_block(void* rip) {
     logfile << "End of basic block: rip ", (void*)(Waddr)trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;
   }
 
+  bbcache.add((Waddr)rip, bb);
+
+#if 0
+  // For debugging:
+  bbp = bbcache((Waddr)rip);
+  assert(bbp);
+  assert((*bbp)->rip == (Waddr)rip);
+#endif
+
   translate_timer.stop();
   return bb;
 }
@@ -5291,6 +5326,31 @@ BasicBlock* translate_basic_block(void* rip) {
   BasicBlock* root = translate_one_basic_block(rip);
 
   return root;
+}
+
+ostream& BasicBlockCache::print(ostream& os) const {
+  dynarray<KeyValuePair<W64, BasicBlock*> >& bblist = getentries();
+
+  foreach (i, bblist.length) {
+    BasicBlock& bb = *bblist[i].value;
+    double percent_of_total_uops = ((double)(bb.hitcount * bb.tagcount) / (double)total_uops_committed);
+    double percent_of_total_bbs = ((double)(bb.hitcount) / (double)total_basic_blocks_committed);
+
+    os << "  ", (void*)(Waddr)bb.rip, ": ", 
+      intstring(bb.tagcount, 4), "t ", intstring(bb.memcount - bb.storecount, 3), "ld ",
+      intstring(bb.storecount, 3), "st ", intstring(bb.user_insn_count, 3), "u ",
+      intstring(bb.hitcount, 10), "h ", intstring(bb.predcount, 10), "pr ",
+      //floatstring(100.0 * (double)bb.predcount / (double)bb.hitcount, 10, 2), "%pr ",
+      //floatstring(100.0 * percent_of_total_uops, 6, 2), "%uops",
+      intstring(bb.hitcount * bb.tagcount, 10), "uu ",
+      ": taken 0x", hexstring(bb.rip_taken, 48), ", seq ", hexstring(bb.rip_not_taken, 48);
+    if (bb.rip_taken == bb.rip) os << " [loop]";
+    if (bb.repblock) os << " [repblock]";
+    os << endl;
+  }
+
+  delete& bblist;
+  return os;
 }
 
 void init_translate() { }

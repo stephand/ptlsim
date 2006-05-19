@@ -686,7 +686,7 @@ namespace superstl {
       int mhz;
       int n = sscanf(s, "cpu MHz : %d", &mhz);
       if (n == 1) {
-        hz = (W64)mhz * 1000000.0;
+        hz = (W64)mhz * 1000000;
         //cout << "CycleTimer::gethz(): core frequency is ", hz, " hz", endl;
         CycleTimer::hz = hz;
         return hz;
@@ -715,6 +715,18 @@ namespace superstl {
   istream cin(0);
   ostream cout(1);
   ostream cerr(2);
+
+  static void close_streams() {
+    cout.flush();
+    cerr.flush();
+  }
+
+  struct ExitCallbacks {
+    ExitCallbacks(bool x) { assert(atexit(close_streams) == 0); }
+  };
+  // Add to the automatic ctors list:
+  // Note that this only works on non-standalone code (i.e., not using klibc):
+  ExitCallbacks callbacks(true);
 };
 
 using namespace superstl;

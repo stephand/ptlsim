@@ -19,7 +19,9 @@ W64 sim_cycle = 0;
 W64 user_insn_commits = 0;
 W64 iterations = 0;
 W64 total_uops_executed = 0;
+W64 total_uops_committed = 0;
 W64 total_user_insns_committed = 0;
+W64 total_basic_blocks_committed = 0;
 
 W64 ptlsim_quiet = 0;
 W64 loglevel = 0;
@@ -290,6 +292,16 @@ void save_stats() {
 
 }
 
+extern void shutdown_uops();
+
+void shutdown_subsystems() {
+  //
+  // Let the subsystems close any special files or buffers
+  // they may have open:
+  //
+  shutdown_uops();
+}
+
 // FP control mxcsr for PTLsim internal code:
 W32 ptlsim_mxcsr;
 
@@ -298,6 +310,7 @@ void user_process_terminated(int rc) {
   logfile << "user_process_terminated(rc = ", rc, "): initiating shutdown at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits...", endl, flush;
   save_stats();
   logfile << "PTLsim exiting...", endl, flush;
+  shutdown_subsystems();
   logfile.close();
   sys_exit(rc);
 }
@@ -309,6 +322,7 @@ void show_stats_and_switch_to_native() {
   if (exit_after_fullsim) {
     logfile << endl, "=== Exiting after full simulation on tid ", sys_gettid(), " at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " (", 
       sim_cycle, " cycles, ", total_user_insns_committed, " user commits, ", iterations, " iterations) ===", endl, endl;
+    shutdown_subsystems();
     logfile.flush();
     sys_exit(0);
   }
@@ -322,7 +336,6 @@ void show_stats_and_switch_to_native() {
       bb = *bbp;
     } else {
       bb = translate_basic_block((byte*)rip);
-      bbcache.add(rip, bb);
     }
 
     assert(bb->transops[0].som);
@@ -362,6 +375,8 @@ void switch_to_sim() {
 
   if (sequential_mode_insns)
     done = sequential_core_toplevel_loop();
+
+  done |= (dump_at_end | overshoot_and_dump);
 
   if (!done) {
     if (use_out_of_order_core)

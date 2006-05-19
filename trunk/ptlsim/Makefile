@@ -11,19 +11,23 @@ __x86_64__=1
 endif
 
 CC = g++
+
+# GCCVER_SPECIFIC = -fno-threadsafe-statics # eliminate __cxa_guard_acquire and __cxa_guard_release
+GCCVER_SPECIFIC =
+
 SVNREV=`svn info | grep "Last Changed Rev" | cut -d " " -f4`
 SVNDATE=`svn info | grep "Last Changed Date" | cut -d " " -f4`
 INCFLAGS = -I. -DBUILDHOST="`hostname -f`" -DSVNREV="$(SVNREV)" -DSVNDATE="$(SVNDATE)"
 
 ifdef __x86_64__
-CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type -minline-all-stringops
-#CFLAGS = -O0 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type
+CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type -minline-all-stringops $(GCCVER_SPECIFIC)
+#CFLAGS = -O0 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type $(GCCVER_SPECIFIC)
 CFLAGS32BIT = -m32
 else
 # 32-bit PTLsim32 only, on a Pentium 4:
-CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
 # No optimizations:
-#CFLAGS = -O0 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type
+#CFLAGS = -O0 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
 CFLAGS32BIT = 
 endif
 
@@ -79,17 +83,25 @@ injectcode-64bit.o: injectcode.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
 
 injectcode-32bit.o: injectcode.cpp
-	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
+	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -Wa,--32  -c injectcode.cpp -o injectcode-32bit.o
 else
 injectcode-32bit.o: injectcode.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -DPTLSIM_FORCE_32BIT_ONLY -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
 endif
 
 lowlevel-32bit.o: lowlevel-32bit.S
+ifdef __x86_64__
+	$(CC) -c $(CFLAGS32BIT) $(INCFLAGS) -g -O3 -Wa,--32 lowlevel-32bit.S
+else
 	$(CC) -c $(CFLAGS32BIT) $(INCFLAGS) -g -O3 lowlevel-32bit.S
+endif
 
 ptlcalls-32bit.o: ptlcalls.c
+ifdef __x86_64__
+	$(CC) -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer -Wa,--32 ptlcalls.c -o ptlcalls-32bit.o
+else
 	$(CC) -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer ptlcalls.c -o ptlcalls-32bit.o
+endif
 
 ifdef __x86_64__
 ptlsim: $(OBJFILES) Makefile ptlsim.lds

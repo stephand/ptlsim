@@ -60,7 +60,9 @@ extern W64 sim_cycle;
 extern W64 user_insn_commits;
 extern W64 iterations;
 extern W64 total_uops_executed;
+extern W64 total_uops_committed;
 extern W64 total_user_insns_committed;
+extern W64 total_basic_blocks_committed;
 
 extern W64 loglevel;
 extern char* log_filename;

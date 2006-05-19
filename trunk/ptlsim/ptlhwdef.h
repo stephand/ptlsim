@@ -18,7 +18,11 @@
 // Maximum number of SMT threads supported:
 #define MAX_THREADS 2
 
-// These are also used in simtemplates.S
+//
+// Flags format: OF -  - - SF ZF - AF wait PF inv CF
+//               11 10 9 8 7  6    4  3    2  1   0
+//               rc -  - - ra ra - ra -    ra -   rb
+//
 #define FLAG_CF    0x001     // (1 << 0)
 #define FLAG_INV   0x002     // (1 << 1)
 #define FLAG_PF    0x004     // (1 << 2)
@@ -688,6 +692,8 @@ struct BasicBlockBase {
   W64 tagcount:10, memcount:8, storecount:8, repblock:1, user_insn_count:16;
   W64 usedregs;
   uopimpl_func_t* synthops;
+  W32 hitcount;
+  W32 predcount;
 
   void acquire() {
     refcount++;

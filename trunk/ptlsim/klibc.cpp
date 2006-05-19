@@ -2017,6 +2017,10 @@ char* getenv(const char* name) {
 extern "C" void __cxa_atexit(void (*arg1)(void*), void* arg2, void* arg3) { }
 void* __dso_handle = (void*)&__dso_handle;
 
+// gcc 4.x generates these for static constructors:
+extern "C" int __cxa_guard_acquire() { return 0; }
+extern "C" int __cxa_guard_release() { return 0; }
+
 extern "C" int atexit(void (*function)(void)) { return 0; }
 
 void* operator new(size_t sz) {
