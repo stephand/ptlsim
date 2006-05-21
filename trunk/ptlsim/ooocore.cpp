@@ -1171,12 +1171,14 @@ static BasicBlock* fetch_or_translate_basic_block(Waddr fetchrip) {
     current_basic_block = translate_basic_block((byte*)fetchrip);
     current_basic_block_rip = fetchrip;
     assert(current_basic_block);
-    synth_uops_for_bb(*current_basic_block);
     stop_timer(cttrans);
     
     if (logable(1)) logfile << padstring("", 20), " xlate  rip 0x", (void*)fetchrip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
     bbcache_inserts++;
   }
+
+  if (!current_basic_block->synthops) synth_uops_for_bb(*current_basic_block);
+  assert(current_basic_block->synthops);
   
   current_basic_block_transop_index = 0;
 
@@ -1294,6 +1296,8 @@ void fetch() {
     FetchBufferEntry& transop = *fetchq.alloc();
 
     uopimpl_func_t synthop = null;
+
+    assert(current_basic_block->synthops);
 
     if (!unaligned_ldst_buf.get(transop, synthop)) {
       transop = current_basic_block->transops[current_basic_block_transop_index];

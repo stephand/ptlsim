@@ -1628,8 +1628,7 @@ namespace superstl {
     }
 
     void maskop(size_t count) {
-      if (bitof(count))
-        w[wordof(count)] &= bitmask(bitof(count));
+      w[wordof(count)] &= bitmask(bitof(count));
 
       for (size_t i = wordof(count)+1; i < N; i++) {
         w[i] = 0;
