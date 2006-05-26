@@ -481,6 +481,7 @@ struct FetchBufferEntry: public TransOp {
   TransOp* origop;
   uopimpl_func_t synthop;
   BranchPredictorUpdateInfo predinfo;
+  BasicBlock* bb;
 
   int index() const;
 
@@ -1144,6 +1145,22 @@ bool stall_frontend = 0;
 Queue<FetchBufferEntry, FETCH_QUEUE_SIZE> fetchq;
 bool waiting_for_icache_fill = false;
 
+void annul_ras_updates_in_fetchq() {
+  //
+  // There may be return address stack (RAS) updates from calls and returns
+  // in the fetch queue that never made it to renaming, so they have no ROB
+  // that the core can annul normally. Therefore, we must go backwards in
+  // the fetch queue to annul these updates, in addition to checking the ROB.
+  //
+  foreach_backward (fetchq, i) {
+    FetchBufferEntry& fetchbuf = fetchq[i];
+    if (isbranch(fetchbuf.opcode) && (fetchbuf.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
+      if (logable(1)) logfile << intstring(fetchbuf.uuid, 20), " anlras rip ", (void*)(Waddr)fetchbuf.rip, ": annul RAS update still in fetchq", endl;
+      branchpred.annulras(fetchbuf.predinfo);
+    }
+  }
+}
+
 // call this in response to a branch mispredict:
 void reset_fetch_unit(W64 realrip) {
   fetchrip = realrip;
@@ -1331,7 +1348,11 @@ void fetch() {
 
     Waddr predrip = 0;
 
-    if (isclass(transop.opcode, OPCLASS_BRANCH)) {
+    transop.rip = fetchrip;
+    transop.uuid = fetch_uuid++;
+
+    if (isbranch(transop.opcode)) {
+      transop.predinfo.uuid = transop.uuid;
       transop.predinfo.bptype = 
         (isclass(transop.opcode, OPCLASS_COND_BRANCH) << log2(BRANCH_HINT_COND)) |
         (isclass(transop.opcode, OPCLASS_INDIR_BRANCH) << log2(BRANCH_HINT_INDIRECT)) |
@@ -1342,9 +1363,6 @@ void fetch() {
       predrip = branchpred.predict(transop.predinfo, transop.predinfo.bptype, transop.predinfo.ripafter, transop.riptaken);
       branchpred_predictions++;
     }
-
-    transop.rip = fetchrip;
-    transop.uuid = fetch_uuid++;
 
     // Set up branches so mispredicts can be calculated correctly:
     if (isclass(transop.opcode, OPCLASS_COND_BRANCH)) {
@@ -1380,6 +1398,9 @@ void fetch() {
 
     if (transop.eom) {
       fetchrip += bytes_in_current_insn;
+
+      if (isbranch(transop.opcode) && (transop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET)))
+        branchpred.updateras(transop.predinfo, transop.predinfo.ripafter);
 
       if (predrip) {
         // follow to target, then end fetching for this cycle if predicted taken
@@ -1698,9 +1719,6 @@ void rename() {
     if (logable(1)) {
       logfile << endl;
     }
-
-    if (isbranch(rob.uop.opcode) && (rob.uop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET)))
-      branchpred.updateras(rob.uop.predinfo, rob.uop.predinfo.ripafter);
 
     foreach (i, MAX_OPERANDS) {
       assert(rob.operands[i]->allocated());
@@ -2459,6 +2477,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
       assert(uop.origop);
       uop.origop->unaligned = 1;
 
+      annul_ras_updates_in_fetchq();
       W64 recoveryrip = annul_after_and_including();
       reset_fetch_unit(recoveryrip);
 
@@ -2616,20 +2635,6 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
       ldbuf.rob->operands[RS]->addref(*this);
 
       redispatch_dependents();
-      /*
-      // Old mechanism:
-      //
-      // Annul everything after and including the store: this implicitly
-      // includes the aliased load following the store in program order.
-      //
-      W64 recoveryrip = annul_after_and_including();
-
-      //
-      // The fetch queue is reset and fetching is redirected to the
-      // correct branch direction.
-      //
-      reset_fetch_unit(uop.rip);
-      */
 
       store_issue_ordering++;
 
@@ -2762,6 +2767,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
       assert(uop.origop);
       uop.origop->unaligned = 1;
 
+      annul_ras_updates_in_fetchq();
       W64 recoveryrip = annul_after_and_including();
       reset_fetch_unit(recoveryrip);
 
@@ -3678,6 +3684,7 @@ int ReorderBufferEntry::issue() {
         // Early misprediction handling. Annul everything after the
         // branch and restart fetching in the correct direction
         //
+        annul_ras_updates_in_fetchq();
         annul_after();
 
         //

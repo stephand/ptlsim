@@ -80,63 +80,138 @@ template <int SIZE> struct ReturnAddressStack;
 template <int SIZE>
 ostream& operator <<(ostream& os, ReturnAddressStack<SIZE>& ras);
 
+ostream& operator <<(ostream& os, const ReturnAddressStackEntry& e) {
+  os << "  ", intstring(e.idx, 4), ": uuid ", intstring(e.uuid, 16), ", rip ", (void*)(Waddr)e.rip, endl;
+  return os;
+}
+
+// Enable to debug the return address stack (RAS) predictor mechanism
+// #define DEBUG_RAS
+
 template <int SIZE>
-struct ReturnAddressStack: public array<W64, SIZE> {
-  typedef array<W64, SIZE> base_t;
-  int top;
+struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
+  typedef Queue<ReturnAddressStackEntry, SIZE> base_t;
 
-  void reset() {
-    top = 0;
-  }
+  void push(W64 uuid, W64 rip, ReturnAddressStackEntry& old) {
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "ReturnAddressStack::push(uuid ", uuid, ", rip ", (void*)(Waddr)rip, "):", endl;
+#endif
+    if (base_t::full()) {
+      if (logable(1)) logfile << "  Return address stack overflow: removing oldest entry to make space", endl;
+      branchpred_ras_overflows++;
+      base_t::pophead();
+    }
 
-  ReturnAddressStack() {
-    reset();
-  }
+    ReturnAddressStackEntry& e =* base_t::push();
+    assert(&e);
 
-  W64 peek() {
-    return (*this)[add_index_modulo(top, -1, SIZE)];
-  }
+    old = e;
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "  Old entry: ", old, endl;
+#endif
 
-  void push(W64 branchaddr, int& ras_old_top, W64& ras_old_data) {
-    ras_old_top = top;
-    ras_old_data = (*this)[top];
-
-    (*this)[top] = branchaddr;
-    top = add_index_modulo(top, +1, SIZE);
+    e.uuid = uuid;
+    e.rip = rip;
 
     branchpred_ras_pushes++;
 
-    if (logable(1)) logfile << *this;
+    if (logable(1)) { logfile << *this; }
   }
 
-  W64 pop(int& ras_old_top, W64& ras_old_data) {
-    ras_old_top = top;
-    ras_old_data = 0;
+  ReturnAddressStackEntry& pop(ReturnAddressStackEntry& old) {
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "ReturnAddressStack::pop():", endl;
+#endif
+    if (base_t::empty()) {
+      branchpred_ras_underflows++;
+      if (logable(1)) logfile << "  Return address stack underflow: returning entry with zero fields", endl;
+      old.idx = -1;
+      old.uuid = 0;
+      old.rip = 0;
+      return old;
+    }
 
-    top = add_index_modulo(top, -1, SIZE);
-    W64 target = (*this)[top];
+    ReturnAddressStackEntry& e =* base_t::pop();
+    assert(&e);
+    old = e;
+#ifdef DEBUG_RAS
+    if (logable(1)) { logfile << "  Old entry: ", old, endl; logfile << *this; }
+#endif
 
     branchpred_ras_pops++;
-    return target;
+
+    return e;
   }
 
-  void annul(bool push, int ras_old_top, W64 ras_old_data) {
-    top = ras_old_top;
-    assert(inrange(top, 0, SIZE-1));
-    if (push) (*this)[top] = ras_old_data;
+  W64 peek() {
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "ReturnAddressStack::peek():", endl;
+#endif
+    if (base_t::empty()) {
+      if (logable(1)) logfile << "  Return address stack is empty: returning bogus rip 0", endl;
+      return 0;
+    }
 
+#ifdef DEBUG_RAS
+    if (logable(1)) { logfile << "  Peeking entry ", (*base_t::peektail()); }
+#endif
+
+    return base_t::peektail()->rip;
+  }
+
+  //
+  // Pop a speculative push from the stack
+  //
+  void annulpush(const ReturnAddressStackEntry& old) {
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "ReturnAddressStack::annulpush(old index ", old.idx, ", uuid ", old.uuid, ", rip ", (void*)(Waddr)old.rip, "):", endl;
+#endif
+
+    if (base_t::empty()) {
+      if (logable(1)) logfile << "  Cannot annul: return address stack is empty", endl;
+      return;
+    }
+
+    ReturnAddressStackEntry& e =* base_t::peektail();
+    e.uuid = old.uuid;
+    e.rip = old.rip;
+
+    ReturnAddressStackEntry dummy;
+    pop(dummy);
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "  Popped speculative push; e.index = ", e.index(), " vs tail ", base_t::tail, endl;
+    assert(e.index() == base_t::tail);
+#endif
+
+    branchpred_ras_annuls++;
+  }
+
+  //
+  // Push the old data back on the stack
+  //
+  void annulpop(const ReturnAddressStackEntry& old) {
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "ReturnAddressStack::annulpop(old index ", old.idx, ", uuid ", old.uuid, ", rip ", (void*)(Waddr)old.rip, "):", endl;
+#endif
+
+    if (base_t::full()) {
+      if (logable(1)) logfile << "  Cannot annul: stack is full", endl;
+      return;
+    }
+    ReturnAddressStackEntry dummy;
+
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "  Pushed speculative pop; old.index = ", old.index(), " vs tail ", base_t::tail, endl;
+    assert(old.index() == base_t::tail);
+#endif
+    push(old.uuid, old.rip, dummy);
     branchpred_ras_annuls++;
   }
 };
 
 template <int SIZE>
 ostream& operator <<(ostream& os, ReturnAddressStack<SIZE>& ras) {
-  os << "ReturnAddressStack<", SIZE, ">: top ", ras.top, ":", endl;
-  foreach (i, ras.top+8) {
-    if (i == ras.top) os << "   ---- top ----", endl;
-    os << "  ", intstring(i, 3), ": ", (void*)(Waddr)ras[i], endl;
-  }
-
+  ras.print(os);
   return os;
 }
 
@@ -164,13 +239,13 @@ struct CombinedPredictor {
   W64 branchpred_update_matches;
   W64 branchpred_update_mismatches;
 
-  void updateras(PredictorUpdate& predinfo, W64 branchaddr) {
+  void updateras(PredictorUpdate& predinfo, W64 rip) {
     if (predinfo.flags & BRANCH_HINT_RET) {
       predinfo.ras_push = 0;
-      ras.pop(predinfo.ras_old_top, predinfo.ras_old_data);
+      ras.pop(predinfo.ras_old);
     } else if (predinfo.flags & BRANCH_HINT_CALL) {
       predinfo.ras_push = 1;
-      ras.push(branchaddr, predinfo.ras_old_top, predinfo.ras_old_data);
+      ras.push(predinfo.uuid, rip, predinfo.ras_old);
     }
   }
 
@@ -210,6 +285,9 @@ struct CombinedPredictor {
     // return insn.
     //
     if (type & BRANCH_HINT_RET) {
+#ifdef DEBUG_RAS
+      if (logable(1)) logfile << "Peeking RAS for uuid ", update.uuid, ":", endl;
+#endif
       return ras.peek();
     }
 
@@ -310,7 +388,12 @@ struct CombinedPredictor {
   // branch path, they must be annulled.
   //
   void annulras(const PredictorUpdate& predinfo) {
-    ras.annul(predinfo.ras_push, predinfo.ras_old_top, predinfo.ras_old_data);
+#ifdef DEBUG_RAS
+    if (logable(1)) logfile << "Update RAS for uuid ", predinfo.uuid, ":", endl;
+#endif
+    if (predinfo.ras_push)
+      ras.annulpush(predinfo.ras_old);
+    else ras.annulpop(predinfo.ras_old);
   }
 };
 

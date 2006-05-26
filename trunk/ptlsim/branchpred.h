@@ -19,14 +19,35 @@
 #define BRANCH_HINT_CALL        (1 << 2)
 #define BRANCH_HINT_RET         (1 << 3)
 
+struct ReturnAddressStackEntry {
+  int idx;
+  W32 uuid;
+  W64 rip;
+  operator W64() const { return rip; }
+
+  ReturnAddressStackEntry() { }
+  ReturnAddressStackEntry(W64 uuid, W64 rip) {
+    this->uuid = uuid;
+    this->rip = rip;
+    this->idx = -1;
+  }
+
+  // Required by Queue<> template class:
+  void init(int i) { idx = i; }
+  void validate() { }
+  int index() const { return idx; }
+};
+
+ostream& operator <<(ostream& os, const ReturnAddressStackEntry& e);
+
 struct PredictorUpdate {
+  W64 uuid;
   byte* cp1;
   byte* cp2;
   byte* cpmeta;
   // predicted directions:
   W32 bimodal:1, twolevel:1, meta:1, ras_push:1, flags:8;
-  int ras_old_top;
-  W64 ras_old_data;
+  ReturnAddressStackEntry ras_old;
 };
 
 extern W64 branchpred_ras_pushes;

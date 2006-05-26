@@ -116,7 +116,8 @@ int ConfigurationParser::parse(int argc, char* argv[]) {
         }
       }
       if (!found) {
-        cerr << "Warning: invalid option '", argv[i++], "'", endl;
+        cerr << "Warning: invalid option '", ((i < argc) ? argv[i] : "<missing>"), "'", endl;
+        i++;
       }
     } else {
       return i; // trailing arguments, if any

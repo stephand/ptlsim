@@ -51,11 +51,11 @@ typedef W32 Waddr;
 #  define __ASSERT_VOID_CAST (void)
 #endif
 
-extern "C" void __assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) __attribute__ ((__noreturn__));
+extern "C" void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) __attribute__ ((__noreturn__));
 
 #define __CONCAT(x,y)	x ## y
 #define __STRING(x)	#x
-#define assert(expr) (__ASSERT_VOID_CAST ((expr) ? 0 : (__assert_fail (__STRING(expr), __FILE__, __LINE__, __PRETTY_FUNCTION__), 0)))
+#define assert(expr) (__ASSERT_VOID_CAST ((expr) ? 0 : (assert_fail (__STRING(expr), __FILE__, __LINE__, __PRETTY_FUNCTION__), 0)))
 
 #define nan NAN
 #define inf INFINITY

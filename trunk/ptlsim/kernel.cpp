@@ -428,7 +428,7 @@ extern "C" void* realloc(void* ptr, size_t size) {
 
 void dump_ooo_state();
 
-extern "C" void __assert_fail (const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
+extern "C" void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
   sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") at ", sim_cycle, " cycles, ", iterations, " iterations, ", total_user_insns_committed, " user commits", endl;
 

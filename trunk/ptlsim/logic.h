@@ -75,22 +75,22 @@ struct SynchronousRegisterFile {
 //
 
 // Iterate forward through queue from head to tail 
-#define foreach_forward(Q, i) for (int i = Q.head; i != Q.tail; i = add_index_modulo(i, +1, Q.size))
+#define foreach_forward(Q, i) for (int i = (Q).head; i != (Q).tail; i = add_index_modulo(i, +1, (Q).size))
 
 // Iterate forward through queue from the specified entry until the tail
-#define foreach_forward_from(Q, E, i) for (int i = E->index(); i != Q.tail; i = add_index_modulo(i, +1, Q.size))
+#define foreach_forward_from(Q, E, i) for (int i = E->index(); i != (Q).tail; i = add_index_modulo(i, +1, (Q).size))
 
 // Iterate forward through queue from the entry after the specified entry until the tail
-#define foreach_forward_after(Q, E, i) for (int i = add_index_modulo(E->index(), +1, Q.size); i != Q.tail; i = add_index_modulo(i, +1, Q.size))
+#define foreach_forward_after(Q, E, i) for (int i = add_index_modulo(E->index(), +1, (Q).size); i != (Q).tail; i = add_index_modulo(i, +1, (Q).size))
 
 // Iterate backward through queue from tail to head
-#define foreach_backward(Q, i) for (int i = add_index_modulo(Q.tail, -1, Q.size); i != add_index_modulo(Q.head, -1, Q.size); i = add_index_modulo(i, -1, Q.size))
+#define foreach_backward(Q, i) for (int i = add_index_modulo((Q).tail, -1, (Q).size); i != add_index_modulo((Q).head, -1, (Q).size); i = add_index_modulo(i, -1, (Q).size))
 
 // Iterate backward through queue from the specified entry until the tail
-#define foreach_backward_from(Q, i) for (int i = E->index(); i != add_index_modulo(Q.head, -1, Q.size); i = add_index_modulo(i, -1, Q.size))
+#define foreach_backward_from(Q, i) for (int i = E->index(); i != add_index_modulo((Q).head, -1, (Q).size); i = add_index_modulo(i, -1, (Q).size))
 
 // Iterate backward through queue from the entry before the specified entry until the head
-#define foreach_backward_before(Q, E, i) for (int i = add_index_modulo(E->index(), -1, Q.size); ((i != add_index_modulo(Q.head, -1, Q.size)) && (E->index() != Q.head)); i = add_index_modulo(i, -1, Q.size))
+#define foreach_backward_before(Q, E, i) for (int i = add_index_modulo(E->index(), -1, (Q).size); ((i != add_index_modulo((Q).head, -1, (Q).size)) && (E->index() != (Q).head)); i = add_index_modulo(i, -1, (Q).size))
 
 template <class T, int SIZE>
 struct Queue: public array<T, SIZE> {
@@ -189,11 +189,37 @@ struct Queue: public array<T, SIZE> {
   void commit(T* entry) { commit(*entry); }
   void annul(T* entry) { annul(*entry); }
 
-  void print(ostream& os) {
+  T* pushhead() {
+    if (full()) return null;
+    head = add_index_modulo(head, -1, SIZE);
+    count++;
+    return &(*this)[head];
+  }
+
+  T* pophead() {
+    if (empty()) return null;
+    T* p = &(*this)[head];
+    count--;
+    head = add_index_modulo(head, +1, SIZE);
+    return p;
+  }
+
+  T* peekhead() {
+    if (empty()) return null;
+    return &(*this)[head];
+  }
+
+  T* peektail() {
+    if (empty()) return null;
+    int t = add_index_modulo(tail, -1, SIZE);
+    return &(*this)[t];
+  }
+
+  void print(ostream& os) const {
     int i;
 
     foreach_forward(*this, i) {
-      (*this)[i].print(os);
+      os << (*this)[i];
     }
   }
 };

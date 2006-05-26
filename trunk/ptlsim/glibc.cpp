@@ -19,3 +19,12 @@ int format_float(char* buf, int bufsize, double v, int precision, int pad) {
   return strlen(buf);
 }
 
+extern "C" void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
+  stringbuf sb;
+  sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ")", endl;
+
+  cerr << sb;
+  cerr.flush();
+  cout.flush();
+  abort();
+}
