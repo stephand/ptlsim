@@ -42,15 +42,15 @@ else
 COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o ptlhwdef.o translate-x86.o uopimpl.o dcache.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o linkend.o
 endif
 
-OOOOBJS = ooocore.o seqcore.o branchpred.o
+OOOOBJS = ooocore.o seqcore.o cptcore.o branchpred.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
 COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h
-OOOINCLUDES = branchpred.h ooohwdef.h
+OOOINCLUDES = branchpred.h ooohwdef.h cpthwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
 COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp
-OOOCPPFILES = ooocore.cpp seqcore.cpp branchpred.cpp
+OOOCPPFILES = ooocore.cpp cptcore.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
 #

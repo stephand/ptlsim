@@ -694,6 +694,7 @@ struct BasicBlockBase {
   uopimpl_func_t* synthops;
   W32 hitcount;
   W32 predcount;
+  W32 confidence;
 
   void acquire() {
     refcount++;

@@ -396,6 +396,7 @@ void BasicBlock::reset(W64 rip) {
   synthops = null;
   hitcount = 0;
   predcount = 0;
+  confidence = 0;
 }
 
 //

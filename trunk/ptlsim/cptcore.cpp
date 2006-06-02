@@ -11,11 +11,13 @@
 #include <branchpred.h>
 #include <datastore.h>
 #include <logic.h>
-#include <ooohwdef.h>
+#include <cpthwdef.h>
+
+namespace CheckpointCore {
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -47,7 +49,7 @@
 void print_rob(ostream& os);
 void print_lsq(ostream& os);
 void check_rob();
-void dump_ooo_state();
+void dump_cpt_state();
 void check_refcounts();
 
 struct ReorderBufferEntry;
@@ -426,7 +428,7 @@ struct Cluster {
 // Include the simulator configuration
 //
 #define DECLARE_CLUSTERS
-#include <ooohwdef.h>
+#include <cpthwdef.h>
 #undef DECLARE_CLUSTERS
 
 #define for_each_cluster(iter) for (int iter = 0; iter < MAX_CLUSTERS; iter++)
@@ -639,7 +641,7 @@ void check_rob() {
       assert(rob->current_state_list == &list);
       if (!((rob->current_state_list != &rob_free_list) ? rob->entry_valid : (!rob->entry_valid))) {
         logfile << "ROB ", rob->index(), " list = ", rob->current_state_list->name, " entry_valid ", rob->entry_valid, endl, flush;
-        dump_ooo_state();
+        dump_cpt_state();
         assert(false);
       }
     }
@@ -783,6 +785,7 @@ public:
   W8 archreg;
   W8 all_consumers_sourced_from_bypass:1;
   W16s refcount;
+  W16s group;
 
   StateList& get_state_list(int state) const;
 
@@ -822,6 +825,7 @@ public:
     changestate(PHYSREG_FREE);
     rob = 0;
     refcount = 0;
+    group = 0;
     all_consumers_sourced_from_bypass = 1;
   }
 
@@ -923,7 +927,7 @@ ostream& operator <<(ostream& os, const PhysicalRegisterFile& physregs) {
 }
 
 #define DECLARE_PHYS_REG_FILES
-#include <ooohwdef.h>
+#include <cpthwdef.h>
 #undef DECLARE_PHYS_REG_FILES
 
 StateList& PhysicalRegister::get_state_list(int s) const {
@@ -3384,7 +3388,7 @@ void redispatch_deadlock_recovery() {
     logfile << padstring("", 20), " recovr all recover from deadlock", endl;
   }
 
-  if (logable(1)) dump_ooo_state();
+  if (logable(1)) dump_cpt_state();
 
   redispatch_total_deadlock_flushes++;
 
@@ -3418,7 +3422,7 @@ void redispatch_deadlock_recovery() {
     }
   }
 
-  if (logable(1)) dump_ooo_state();
+  if (logable(1)) dump_cpt_state();
   */
 }
 
@@ -4417,14 +4421,14 @@ bool handle_exception() {
   cerr << sb, endl, flush;
   logfile << flush;
 
-  dump_ooo_state();
+  dump_cpt_state();
   logfile << "Aborting...", endl, flush;
   abort();
 
   return false;
 }
 
-void dump_ooo_state() {
+void dump_cpt_state() {
   print_rename_tables(logfile);
   print_rob(logfile);
   print_list_of_state_lists<PhysicalRegister>(logfile, physreg_states, "Physical register states");
@@ -4439,9 +4443,7 @@ void dump_ooo_state() {
   logfile << flush;
 }
 
-void dcache_save_stats(DataStoreNode& ds);
-
-void ooo_capture_stats(DataStoreNode& root) {
+void cpt_capture_stats_node(DataStoreNode& root) {
 
   DataStoreNode& summary = root("summary"); {
     summary.add("cycles", sim_cycle);
@@ -4718,7 +4720,7 @@ void ooo_capture_stats(DataStoreNode& root) {
   dcache_save_stats(root("dcache"));
 }
 
-void ooo_capture_stats(const char* snapshotname) {
+void cpt_capture_stats(const char* snapshotname = null) {
   cttotal.stop();
 
   if (!dsroot)
@@ -4728,7 +4730,7 @@ void ooo_capture_stats(const char* snapshotname) {
   if (snapshotname) sb << snapshotname; else sb << snapshotid;
   snapshotid++;
 
-  ooo_capture_stats((*dsroot)(sb));
+  cpt_capture_stats_node((*dsroot)(sb));
 
   cttotal.start();
 }
@@ -4790,10 +4792,10 @@ void check_refcounts() {
 
 W64 last_stats_captured_at_cycle = 0;
 
-int out_of_order_core_toplevel_loop() {
+int checkpoint_core_toplevel_loop() {
   init_luts();
 
-  logfile << "Starting out-of-order core toplevel loop", endl, flush;
+  logfile << "Starting checkpoint core toplevel loop", endl, flush;
 
   wakeup_func = load_filled_callback;
   icache_wakeup_func = icache_filled_callback;
@@ -4834,7 +4836,7 @@ int out_of_order_core_toplevel_loop() {
       logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)(Waddr)ctx.commitarf[REG_rip], ")", endl, flush;
 
     if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
-      ooo_capture_stats();
+      cpt_capture_stats();
       last_stats_captured_at_cycle = sim_cycle;
     }
 
@@ -4891,11 +4893,29 @@ int out_of_order_core_toplevel_loop() {
 
   if (logable(1) | ((sim_cycle - last_commit_at_cycle) > 1024)) {
     logfile << "Core State:", endl;
-    dump_ooo_state();
+    dump_cpt_state();
     logfile << ctx.commitarf;
   }
 
   logfile << flush;
 
   return exiting;
+}
+
+}; // CheckpointCore
+
+int checkpoint_core_toplevel_loop() {
+  return CheckpointCore::checkpoint_core_toplevel_loop();
+}
+
+void cpt_capture_stats(const char* snapshotname) {
+  CheckpointCore::cpt_capture_stats(snapshotname);
+}
+
+void cpt_capture_stats(DataStoreNode& root) {
+  CheckpointCore::cpt_capture_stats_node(root);
+}
+
+void dump_cpt_state() {
+  CheckpointCore::dump_cpt_state();
 }

@@ -104,6 +104,10 @@ struct Queue: public array<T, SIZE> {
     reset();
   }
 
+  void flush() {
+    head = tail = count = 0;
+  }
+
   void reset() {
     head = tail = count = 0;
     foreach (i, SIZE) {
@@ -147,18 +151,14 @@ struct Queue: public array<T, SIZE> {
     return slot;
   }
 
-  void prepfree(T& entry);
-
   void commit(T& entry) {
     assert(entry.index() == head);
-    prepfree(entry);
     count--;
     head = add_index_modulo(head, +1, SIZE);
   }
 
   void annul(T& entry) {
     assert(entry.index() == add_index_modulo(tail, -1, SIZE));
-    prepfree(entry);
     count--;
     tail = add_index_modulo(tail, -1, SIZE);
   }
@@ -185,7 +185,6 @@ struct Queue: public array<T, SIZE> {
     return entry;
   }
 
-  void prepfree(T* entry) { prepfree(*entry); }
   void commit(T* entry) { commit(*entry); }
   void annul(T* entry) { annul(*entry); }
 
@@ -436,6 +435,233 @@ ostream& operator <<(ostream& os, const FullyAssociativeTags<T, ways>& tags) {
 template <typename T, int ways>
 stringbuf& operator <<(stringbuf& sb, const FullyAssociativeTags<T, ways>& tags) {
   return tags.print(sb);
+}
+
+//
+// Associative array implemented using vectorized
+// comparisons spread across multiple byte slices
+// and executed in parallel.
+//
+// This implementation is roughly 2-4x as fast
+// as the naive scalar code on SSE2 machines,
+// especially for larger arrays.
+//
+// Very small arrays (less than 8 entries) should
+// use the normal scalar FullyAssociativeTags
+// for best performance. Both classes use the
+// same principle for very fast one-hot matching.
+//
+// Limitations:
+//
+// - Every tag in the array must be unique,
+//   except for the invalid tag (all 1s)
+//
+// - <size> can be from 1 to 128. Technically
+//   up to 254, however element 255 cannot
+//   be used. Matching is done in groups
+//   of 16 elements in parallel.
+//
+// - <width> in bits can be from 1 to 64
+//
+
+template <int size, int width, int padsize = 0>
+struct FullyAssociativeTagsNbitOneHot {
+  typedef vec16b vec_t;
+  typedef W64 base_t;
+
+  static const int slices = (width + 7) / 8;
+  static const int chunkcount = (size+15) / 16;
+  static const int padchunkcount = (padsize+15) / 16;
+
+  vec16b tags[slices][chunkcount + padchunkcount] alignto(16);
+  base_t tagsmirror[size]; // for fast scalar access
+  bitvec<size> valid;
+  bitvec<size> evictmap;
+
+  FullyAssociativeTagsNbitOneHot() {
+    reset();
+  }
+
+  void reset() {
+    valid = 0;
+    evictmap = 0;
+    memset(tags, 0xff, sizeof(tags));
+    memset(tagsmirror, 0xff, sizeof(tagsmirror));
+  }
+
+  int match(const vec16b* targetslices) const {
+    vec16b sum = x86_sse_zerob();
+
+    foreach (i, chunkcount) {
+      vec16b eq = *((vec16b*)&index_bytes_plus1_vec16b[i]);
+      foreach (j, slices) {
+        eq = x86_sse_pandb(x86_sse_pcmpeqb(tags[j][i], targetslices[j]), eq);
+      }
+      sum = x86_sse_psadbw(sum, eq);
+    }
+
+    int idx = (x86_sse_pextrw<0>(sum) + x86_sse_pextrw<4>(sum));
+
+    return idx-1;
+  }
+
+  static void prep(vec16b* targetslices, base_t tag) {
+    foreach (i, slices) {
+      targetslices[i] = x86_sse_dupb((byte)tag);
+      tag >>= 8;
+    }
+  }
+
+  int match(base_t tag) const {
+    vec16b targetslices[16];
+    prep(targetslices, tag);
+    return match(targetslices);
+  }
+
+  int search(base_t tag) const {
+    return match(tag);
+  }
+
+  int operator()(base_t tag) const {
+    return search(tag);
+  }
+
+  void update(int index, base_t tag) {
+    // Spread it across all the words
+    base_t t = tag;
+    foreach (i, slices) {
+      *(((byte*)(&tags[i])) + index) = (byte)t;
+      t >>= 8;
+    }
+    
+    tagsmirror[index] = tag;
+    valid[index] = 1;
+    evictmap[index] = 1;
+  }
+
+  class ref {
+    friend class FullyAssociativeTagsNbitOneHot;
+
+    FullyAssociativeTagsNbitOneHot<size, width, padsize>& tags;
+    int index;
+
+    ref();
+
+  public:
+    inline ref(FullyAssociativeTagsNbitOneHot& tags_, int index_): tags(tags_), index(index_) { }
+
+    inline ~ref() { }
+
+    inline ref& operator =(base_t tag) {
+      tags.update(index, tag);
+      return *this;
+    }
+
+    inline ref& operator =(const ref& other) {
+      tags.update(index, other.tagsmirror[other.index]);
+      return *this;
+    }
+  };
+
+  friend class ref;
+
+  ref operator [](int index) { return ref(*this, index); }
+  base_t operator [](int index) const { return tagsmirror[index]; }
+
+  bool isvalid(int index) {
+    return valid[index];
+  }
+
+  int insertslot(int idx, base_t tag) {
+    valid[idx] = 1;
+    (*this)[idx] = tag;
+    return idx;
+  }
+
+  int insert(base_t tag) {
+    if (valid.allset()) return -1;
+    int idx = (~valid).lsb();
+    return insertslot(idx, tag);
+  }
+
+  void invalidateslot(int index) {
+    valid[index] = 0;
+    (*this)[index] = 0xff; // invalid marker
+  }
+
+  void validateslot(int index) {
+    valid[index] = 1;
+  }
+
+  int invalidate(base_t target) {
+    int index = match(target);
+    if (index < 0) return 0;
+    invalidateslot(index);
+    return 1;
+  }
+
+  void use(int way) {
+    evictmap[way] = 1;
+
+    if (evictmap.allset()) {
+      evictmap = 0;
+      evictmap[way] = 1;
+    }
+  }
+
+  int probe(base_t target) {
+    int way = match(target);
+    if (way < 0) return way;
+    use(way);
+    return way;
+  }
+
+  int lru() const {
+    return (evictmap.allset()) ? 0 : (~evictmap).lsb();
+  }
+
+  int select(base_t target, base_t& oldtag) {
+    int way = probe(target);
+    if (way < 0) {
+      way = lru();
+      if (evictmap.allset()) evictmap = 0;
+      oldtag = tagsmirror[way];
+      update(way, target);
+    }
+    use(way);
+    return way;
+  }
+
+  int select(base_t target) {
+    base_t dummy;
+    return select(target, dummy);
+  }
+
+  ostream& printid(ostream& os, int slot) const {
+    base_t tag = (*this)[slot];
+    os << intstring(slot, 3), ": ";
+    os << hexstring(tag, 64);
+    os << " ";
+    foreach (i, slices) {
+      const byte b = *(((byte*)(&tags[i])) + slot);
+      os << " ", hexstring(b, 8);
+    }
+    if (!valid[slot]) os << " <invalid>";
+    return os;
+  }
+
+  ostream& print(ostream& os) const {
+    foreach (i, size) {
+      printid(os, i);
+      os << endl;
+    }
+    return os;
+  }
+};
+
+template <int size, int width, int padsize>
+ostream& operator <<(ostream& os, const FullyAssociativeTagsNbitOneHot<size, width, padsize>& tags) {
+  return tags.print(os);
 }
 
 template <typename T, typename V>

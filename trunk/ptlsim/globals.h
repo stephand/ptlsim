@@ -146,15 +146,24 @@ inline vec8w x86_sse_pandw(vec8w a, vec8w b) { asm("pand %[b],%[a]" : [a] "+x" (
 inline vec16b x86_sse_packsswb(vec8w a, vec8w b) { asm("packsswb %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return (vec16b)a; }
 inline W32 x86_sse_pmovmskb(vec16b vec) { W32 mask; asm("pmovmskb %[vec],%[mask]" : [mask] "=r" (mask) : [vec] "x" (vec)); return mask; }
 inline W32 x86_sse_pmovmskw(vec8w vec) { return x86_sse_pmovmskb(x86_sse_packsswb(vec, vec)) & 0xff; }
+inline vec16b x86_sse_psadbw(vec16b a, vec16b b) { asm("psadbw %[b],%[a]" : [a] "+x" (a) : [b] "xg" (b)); return a; }
+template <int i> inline W16 x86_sse_pextrw(vec16b a) { W32 rd; asm("pextrw %[i],%[a],%[rd]" : [rd] "=r" (rd) : [a] "x" (a), [i] "N" (i)); return rd; }
 
 inline vec16b x86_sse_ldvbu(const vec16b* m) { vec16b rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
 inline void x86_sse_stvbu(vec16b* m, const vec16b ra) { asm("movdqu %[ra],%[m]" : [m] "=xm" (*m) : [ra] "x" (ra) : "memory"); }
 inline vec8w x86_sse_ldvwu(const vec8w* m) { vec8w rd; asm("movdqu %[m],%[rd]" : [rd] "=x" (rd) : [m] "xm" (*m)); return rd; }
 inline void x86_sse_stvwu(vec8w* m, const vec8w ra) { asm("movdqu %[ra],%[m]" : [m] "=xm" (*m) : [ra] "x" (ra) : "memory"); }
 
+inline vec16b x86_sse_zerob() { vec16b rd; asm("pxor %[rd],%[rd]" : [rd] "+x" (rd)); return rd; }
+inline vec16b x86_sse_onesb() { vec16b rd; asm("pcmpeqb %[rd],%[rd]" : [rd] "+x" (rd)); return rd; }
+inline vec8w x86_sse_zerow() { vec8w rd; asm("pxor %[rd],%[rd]" : [rd] "+x" (rd)); return rd; }
+inline vec8w x86_sse_onesw() { vec8w rd; asm("pcmpeqw %[rd],%[rd]" : [rd] "+x" (rd)); return rd; }
+
 // If lddqu is available (SSE3: Athlon 64 (some cores, like X2), Pentium 4 Prescott), use that instead. It may be faster. 
 
 extern const byte byte_to_vec16b[256][16];
+extern const byte index_bytes_vec16b[16][16];
+extern const byte index_bytes_plus1_vec16b[16][16];
 
 inline vec16b x86_sse_dupb(const byte b) {
   return *((vec16b*)&byte_to_vec16b[b]);
@@ -185,9 +194,25 @@ inline W32 x86_bsf32(W32 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b
 inline W64 x86_bsf64(W64 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 inline W32 x86_bsr32(W32 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 inline W64 x86_bsr64(W64 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_bts64(W64 r, W64 b) { asm("bts %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_btr64(W64 r, W64 b) { asm("btr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W64 x86_btc64(W64 r, W64 b) { asm("btc %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+
+template <typename T> inline bool x86_bt(T r, T b) { byte c; asm("bt %[b],%[r]; setc %[c]" : [c] "=r" (c) : [r] "r" (r), [b] "r" (b)); return c; }
+template <typename T> inline bool x86_btn(T r, T b) { byte c; asm("bt %[b],%[r]; setnc %[c]" : [c] "=r" (c) : [r] "r" (r), [b] "r" (b)); return c; }
+
+// Return the updated data; ignore the old value
+template <typename T> inline W64 x86_bts(T r, T b) { asm("bts %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+template <typename T> inline W64 x86_btr(T r, T b) { asm("btr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+template <typename T> inline W64 x86_btc(T r, T b) { asm("btc %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+
+// Return the old value of the bit, but still update the data
+template <typename T> inline bool x86_test_bts(T& r, T b) { byte c; asm("bts %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+r" (r) : [b] "r" (b)); return c; }
+template <typename T> inline bool x86_test_btr(T& r, T b) { byte c; asm("btr %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+r" (r) : [b] "r" (b)); return c; }
+template <typename T> inline bool x86_test_btc(T& r, T b) { byte c; asm("btc %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+r" (r) : [b] "r" (b)); return c; }
+
+// Full SMP-aware locking with test-and-[set|reset|complement] in memory
+template <typename T> inline bool x86_locked_bts(T& r, T b) { byte c; asm volatile("lock bts %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+m" (r) : [b] "r" (b) : "memory"); return c; }
+template <typename T> inline bool x86_locked_btr(T& r, T b) { byte c; asm volatile("lock btr %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+m" (r) : [b] "r" (b) : "memory"); return c; }
+template <typename T> inline bool x86_locked_btc(T& r, T b) { byte c; asm volatile("lock btc %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+m" (r) : [b] "r" (b) : "memory"); return c; }
+
 inline void prefetch(const void* x) { asm volatile("prefetcht0 (%0)" : : "r" (x)); }
 
 inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
@@ -525,6 +550,10 @@ inline bool modulo_ranges_intersect(int a0, int a1, int b0, int b1, int size) {
 #define insection(x) __attribute__ ((section (x)))
 #define packedstruct __attribute__ ((packed))
 
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#define likely(x) (x) 
+#define isconst(x) __builtin_constant_p(x)
+
 #include <superstl.h>
 
 using namespace superstl;
@@ -539,9 +568,6 @@ ostream& operator <<(ostream& os, const vec16b& v);
 ostream& operator ,(ostream& os, const vec16b& v);
 ostream& operator <<(ostream& os, const vec8w& v);
 ostream& operator ,(ostream& os, const vec8w& v);
-
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#define likely(x) (x) 
 
 #endif // __cplusplus
 

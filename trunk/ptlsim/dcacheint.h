@@ -54,9 +54,9 @@
 #define MAX_WAKEUPS_PER_CYCLE 2
 
 // TLBs
-//#define USE_TLB
+#define USE_TLB
 #define ITLB_SIZE 32
-#define DTLB_SIZE 64
+#define DTLB_SIZE 32
 
 //#define ISSUE_LOAD_STORE_DEBUG
 //#define CHECK_LOADS_AND_STORES
@@ -372,34 +372,44 @@ namespace DataCache {
   }
 
 #ifdef USE_TLB
+  //
+  // TLB class with one-hot semantics. 36 bit tags are required since
+  // virtual addresses are 48 bits, so 48 - 12 (2^12 bytes per page)
+  // is 36 bits.
+  //
   template <int tlbid, int size>
-  struct TranslationLookasideBuffer: public FullyAssociativeTags<W64, size> {
-    FullyAssociativeTags<W64, size> tags;
+  struct TranslationLookasideBuffer: public FullyAssociativeTagsNbitOneHot<size, 36> {
+    typedef FullyAssociativeTagsNbitOneHot<size, 36> base_t;
+    TranslationLookasideBuffer(): base_t() { }
 
-    TranslationLookasideBuffer() { tags.reset(); }
-
-    AddressSpace::SPATChunk** gettop() const;
-
-    bool check(W64 addr) const {
-      return asp.fastcheck(addr, gettop());
+    void reset() {
+      base_t::reset();
     }
 
-    int replace(W64 addr) {
-      addr = floor(addr, PAGE_SIZE);
-      W64 oldaddr;
-      int slot = tags.select(addr, oldaddr);
-      if (oldaddr != tags.INVALID) asp.make_page_inaccessible((void*)oldaddr, gettop());
-      asp.make_page_accessible((void*)addr, gettop());
-      tags[slot] = addr;
-      return slot;
+    bool probe(W64 addr) {
+      return (base_t::probe(addr >> 12) >= 0);
+    }
+
+    bool insert(W64 addr) {
+      addr >>= 12;
+      W64 oldtag;
+      int way = base_t::select(addr, oldtag);
+      if (logable(1)) {
+        logfile << "TLB insertion of virt page ", (void*)(Waddr)addr, " (virt addr ", 
+          (void*)(Waddr)(addr << 12), ") into way ", way, ": ",
+          ((oldtag != addr) ? "evicted old entry" : "already present"), endl;
+      }
+      return (oldtag != addr);
     }
   };
 
+  template <int tlbid, int size>
+  inline ostream& operator <<(ostream& os, const TranslationLookasideBuffer<tlbid, size>& tlb) {
+    return tlb.print(os);
+  }
+
   typedef TranslationLookasideBuffer<0, DTLB_SIZE> DTLB;
   typedef TranslationLookasideBuffer<1, ITLB_SIZE> ITLB;
-
-  AddressSpace::SPATChunk** TranslationLookasideBuffer<0, DTLB_SIZE>::gettop() const { return asp.dtlbmap; }
-  AddressSpace::SPATChunk** TranslationLookasideBuffer<1, ITLB_SIZE>::gettop() const { return asp.itlbmap; }
 #endif
 };
 

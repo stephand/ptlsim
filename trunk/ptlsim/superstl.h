@@ -1870,13 +1870,13 @@ namespace superstl {
       friend class bitvec;
 
       T *wp;
-      size_t bpos;
+      T bpos;
 
       // left undefined
       reference();
 
     public:
-      reference(bitvec& __b, size_t index) {
+      inline reference(bitvec& __b, size_t index) {
         wp = &__b.getword(index);
         bpos = base_t::bitof(index);
       }
@@ -1884,46 +1884,82 @@ namespace superstl {
       ~reference() { }
 
       // For b[i] = x;
-      reference& operator=(bool x) {
-        if (x)
-          *wp |= base_t::maskof(bpos);
-        else
-          *wp &= ~base_t::maskof(bpos);
+      inline reference& operator =(bool x) {
+        // Optimized, x86-specific way:
+        if (__builtin_constant_p(x) & __builtin_constant_p(bpos)) {
+          // Most efficient to just AND/OR with a constant mask: 
+          *wp = ((x) ? (*wp | base_t::maskof(bpos)) : (*wp & (~base_t::maskof(bpos))));
+        } else {
+          // Use bit set or bit reset x86 insns:
+          T b1 = x86_bts(*wp, bpos);
+          T b0 = x86_btr(*wp, bpos);
+          *wp = (x) ? b1 : b0;
+        }
+        /*
+        // Optimized, branch free generic way:
+        *wp = (__builtin_constant_p(x)) ? 
+          ((x) ? (*wp | base_t::maskof(bpos)) : (*wp & (~base_t::maskof(bpos)))) :
+          (((*wp) & (~base_t::maskof(bpos))) | ((static_cast<T>((x != 0))) << base_t::bitof(bpos)));
+        */
         return *this;
       }
 
       // For b[i] = b[j];
-      reference& operator=(const reference& j) {
-        if ((*(j.wp) & base_t::maskof(j.bpos)))
-          *wp |= base_t::maskof(bpos);
-        else
-          *wp &= ~base_t::maskof(bpos);
+      inline reference& operator =(const reference& j) {
+        // Optimized, x86-specific way:
+        // Use bit set or bit reset x86 insns:
+        T b1 = x86_bts(*wp, bpos);
+        T b0 = x86_btr(*wp, bpos);
+        *wp = (x86_bt(*j.wp, j.bpos)) ? b1 : b0;
+        /*
+        // Optimized, branch free generic way:
+        *wp = (__builtin_constant_p(x)) ? 
+          (((*(j.wp) & base_t::maskof(j.bpos))) ? (*wp | base_t::maskof(bpos)) : (*wp & (~base_t::maskof(bpos)))) :
+          (((*wp) & (~base_t::maskof(bpos))) | ((static_cast<T>((((*(j.wp) & base_t::maskof(j.bpos))) != 0))) << base_t::bitof(bpos)));
+        */
         return *this;
       }
 
       // For b[i] = 1;
-      reference& operator++(int postfixdummy) {
-        *wp |= base_t::maskof(bpos);
+      inline reference& operator++(int postfixdummy) {
+        if (__builtin_constant_p(bpos))
+          *wp |= base_t::maskof(bpos);
+        else *wp = x86_bts(*wp, bpos);
         return *this;
       }
 
       // For b[i] = 0;
-      reference& operator--(int postfixdummy) {
-        *wp &= ~base_t::maskof(bpos);
+      inline reference& operator--(int postfixdummy) {
+        if (__builtin_constant_p(bpos))
+          *wp &= ~base_t::maskof(bpos);
+        else *wp = x86_btr(*wp, bpos);
         return *this;
       }
 
       // Flips the bit
-      bool operator~() const { return (*(wp) & base_t::maskof(bpos)) == 0; }
+      bool operator~() const {
+        //return (*(wp) & base_t::maskof(bpos)) == 0;
+        return x86_btn(*wp, bpos);
+      }
 
       // For x = b[i];
-      operator bool() const { return (*(wp) & base_t::maskof(bpos)) != 0; }
+      inline operator bool() const {
+        return x86_bt(*wp, bpos);
+      }
 
       // For b[i].invert();
-      reference& invert() {
-        *wp ^= base_t::maskof(bpos);
+      inline reference& invert() {
+        *wp = x86_btc(*wp, bpos);
         return *this;
       }
+
+      bool testset() { return x86_test_bts(*wp, bpos); }
+      bool testclear() { return x86_test_btr(*wp, bpos); }
+      bool testinv() { return x86_test_btc(*wp, bpos); }
+
+      bool atomicset() { return x86_locked_bts(*wp, bpos); }
+      bool atomicclear() { return x86_locked_btr(*wp, bpos); }
+      bool atomicinv() { return x86_locked_btc(*wp, bpos); }
     };
 
     friend class reference;

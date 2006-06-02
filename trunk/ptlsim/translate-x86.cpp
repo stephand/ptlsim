@@ -1144,8 +1144,9 @@ namespace TranslateX86 {
     // Did we convert the last user insn into a nop and not output anything?
     if (!transbufcount)
       return;
-
-    assert((rip - ripstart) <= 15);
+    
+    int bytes = (rip - ripstart);
+    assert(bytes <= 15);
 
     TransOp& first = transbuf[0];
     TransOp& last = transbuf[transbufcount-1];
@@ -1162,7 +1163,7 @@ namespace TranslateX86 {
       bool st = isstore(transop.opcode);
 
       transop.unaligned = 0;
-
+      transop.bytes = bytes;
       transop.index = bb.count;
       bb.transops[bb.count++] = transop;
       if (ld|st) bb.memcount++;

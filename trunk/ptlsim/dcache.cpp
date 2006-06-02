@@ -195,6 +195,7 @@ void dcache_save_stats(DataStoreNode& ds) {
       dtlb.summable = 1;
       dtlb.add("hits", dtlb_hits);
       dtlb.add("misses", dtlb_misses);
+      // dtlb.add("inserts", dtlb_inserts);
     }
   }
 
@@ -211,6 +212,7 @@ void dcache_save_stats(DataStoreNode& ds) {
       itlb.summable = 1;
       itlb.add("hits", itlb_hits);
       itlb.add("misses", itlb_misses);
+      // itlb.add("inserts", itlb_inserts);
     }
   }
 
@@ -732,6 +734,13 @@ namespace DataCache {
               // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
               // foreach (i, L2_LINE_SIZE / L1_LINE_SIZE) L1.validate(mb.addr + i*L1_LINE_SIZE, bitvec<L1_LINE_SIZE>().setall());
               L1.validate(mb.addr, bitvec<L1_LINE_SIZE>().setall());
+#ifdef USE_TLB
+              //
+              // Insert the line into the DTLB on its way up to the L1,
+              // in case no mapping was present.
+              //
+              dtlb_inserts += dtlb.insert(mb.addr);
+#endif
               missbuf_deliver_L2_to_L1++;
               lfrq.wakeup(mb.addr, mb.lfrqmap);
             }
@@ -741,6 +750,13 @@ namespace DataCache {
               // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
               // foreach (i, L2_LINE_SIZE / L1I_LINE_SIZE) L1I.validate(mb.addr + i*L1I_LINE_SIZE, bitvec<L1I_LINE_SIZE>().setall());
               L1I.validate(mb.addr, bitvec<L1I_LINE_SIZE>().setall());
+#ifdef USE_TLB
+              //
+              // Insert the line into the DTLB on its way up to the L1,
+              // in case no mapping was present.
+              //
+              itlb_inserts += itlb.insert(mb.addr);
+#endif
               missbuf_deliver_L2_to_L1I++;
               LoadStoreInfo lsi;
               lsi.data = 0;
@@ -934,9 +950,13 @@ ITLB itlb;
 
 W64 dtlb_hits;
 W64 dtlb_misses;
+W64 dtlb_inserts;
+W64 dtlb_invalidates;
 
 W64 itlb_hits;
 W64 itlb_misses;
+W64 itlb_inserts;
+W64 itlb_invalidates;
 
 bool probe_cache_and_sfr(W64 addr, const SFR* sfr, int sizeshift) {
   bitvec<L1_LINE_SIZE> sframask, reqmask;
@@ -949,14 +969,44 @@ bool probe_cache_and_sfr(W64 addr, const SFR* sfr, int sizeshift) {
     return true;
 
 #ifdef USE_TLB
-  bool tlbhit = dtlb.check(addr);
+  bool tlbhit = dtlb.probe(addr);
 
   dtlb_hits += tlbhit;
   dtlb_misses += !tlbhit;
 
   // issueload_slowpath() will check this again:
   if (!tlbhit) {
-    dtlb.replace(addr);
+    //
+    // In a user-mode simulator, there is no realistic way
+    // to simulate the number of cycles taken to service a
+    // TLB miss, since there are no page tables for the
+    // page table walker state machine to traverse in the
+    // first place.
+    //
+    // In a real machine, the page table walker would trigger
+    // additional cache misses. Studies show that in general
+    // the required cache line(s) inside the page table
+    // are usually in the L2 cache.
+    //
+    // Therefore, we tie the latency of a TLB miss to the
+    // latency of an L2-to-L1 access. This is done by
+    // forcibly invalidating the requested line (since it
+    // can't be accessed without the TLB entry anyway);
+    // when the line returns to the L1 again, it inserts
+    // the correct mapping into the TLB.
+    //
+    // This means multiple TLB misses on the same page
+    // will cause the equivalent of multiple cache misses
+    // until the first line updates the TLB.
+    //
+    // If this policy is undesirable, uncomment dtlb.insert()
+    // below to immediately update the TLB.
+    //
+
+    if (logable(1)) logfile << "DTLB miss on page ", (void*)(Waddr)(addr >> 12), ": initiate DTLB refill", endl;
+    //dtlb.insert(addr);
+    L1.invalidate(addr);
+    return false;
   }
 #endif
 
@@ -1022,14 +1072,21 @@ bool probe_icache(W64 addr) {
   bool hit = (L1line != null);
 
 #ifdef USE_TLB
-  bool tlbhit = itlb.check(addr);
+  bool tlbhit = itlb.probe(addr);
 
   itlb_hits += tlbhit;
   itlb_misses += !tlbhit;
 
   // issueload_slowpath() will check this again:
   if (!tlbhit) {
-    itlb.replace(addr);
+    //
+    // (See notes about TLB miss handling in probe_cache_and_sfr())
+    //
+    // itlb.insert(addr);
+    if (logable(1)) logfile << "ITLB miss on page ", (void*)(Waddr)(addr >> 12), ": initiate ITLB refill", endl;
+
+    L1.invalidate(addr);
+    return false;
   }
 #endif
 

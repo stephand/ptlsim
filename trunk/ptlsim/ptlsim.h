@@ -65,6 +65,7 @@ void capture_translate_timers(DataStoreNode& root);
 void capture_translate_stats(DataStoreNode& root);
 
 int out_of_order_core_toplevel_loop();
+int checkpoint_core_toplevel_loop();
 int sequential_core_toplevel_loop();
 int execute_sequential(BasicBlock* bb);
 
@@ -83,6 +84,8 @@ enum {
 
 void ooo_capture_stats(const char* snapshotname = null);
 void ooo_capture_stats(DataStoreNode& root);
+void cpt_capture_stats(const char* snapshotname = null);
+void cpt_capture_stats(DataStoreNode& root);
 void seq_capture_stats(DataStoreNode& root);
 void save_stats();
 

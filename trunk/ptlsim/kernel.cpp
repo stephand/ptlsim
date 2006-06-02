@@ -426,7 +426,10 @@ extern "C" void* realloc(void* ptr, size_t size) {
   assert(false); //++MTY FIXME This does not work correctly!
 }
 
+extern W64 use_checkpoint_core;
+
 void dump_ooo_state();
+void dump_cpt_state();
 
 extern "C" void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
@@ -436,11 +439,10 @@ extern "C" void assert_fail(const char *__assertion, const char *__file, unsigne
 
   if (logfile) {
     logfile << sb, flush;
-    if (use_out_of_order_core) {
-#ifdef __x86_64__
+    if (use_checkpoint_core)
+      dump_cpt_state();
+    else if (use_out_of_order_core)
       dump_ooo_state();
-#endif
-    }
 
     logfile.close();
   }

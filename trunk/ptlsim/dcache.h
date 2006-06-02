@@ -7,7 +7,7 @@
 #ifndef _DCACHE_H
 #define _DCACHE_H
 
-#include <globals.h>
+#include <ptlsim.h>
 
 #define VIRT_ADDR_BITS 48
 #define PHYS_ADDR_BITS 40
@@ -53,7 +53,11 @@ void dcache_rollback();
 void dcache_complete();
 void dcache_print_commit();
 void dcache_print_rollback();
+void dcache_save_stats(DataStoreNode& ds);
 ostream& dcache_print(ostream& os);
+
+// This is an internal MSR required to correctly truncate ld/st pointers in 32-bit mode
+extern W64 virt_addr_mask;
 
 // sum of 100%:
 extern W64 load_issue_unaligned;
@@ -116,8 +120,14 @@ extern W64 store_parallel_aliasing;
 extern W64 dtlb_hits;
 extern W64 dtlb_misses;
 
+extern W64 dtlb_inserts;
+extern W64 dtlb_invalidates;
+
 // sum of 100%:
 extern W64 itlb_hits;
 extern W64 itlb_misses;
+
+extern W64 itlb_inserts;
+extern W64 itlb_invalidates;
 
 #endif // _DCACHE_H
