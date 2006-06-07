@@ -99,10 +99,10 @@ static const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
   {1, 1, 1, 2}, // from FP
 };
 
-IssueQueue<64> issueq_int0;
-IssueQueue<64> issueq_int1;
-IssueQueue<64> issueq_ld;
-IssueQueue<64> issueq_fp;
+IssueQueue<16> issueq_int0;
+IssueQueue<16> issueq_int1;
+IssueQueue<16> issueq_ld;
+IssueQueue<16> issueq_fp;
 
 #define foreach_issueq(expr) { issueq_int0.expr; issueq_int1.expr; issueq_ld.expr; issueq_fp.expr; }
 
