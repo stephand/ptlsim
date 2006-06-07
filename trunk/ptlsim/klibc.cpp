@@ -2023,22 +2023,6 @@ extern "C" int __cxa_guard_release() { return 0; }
 
 extern "C" int atexit(void (*function)(void)) { return 0; }
 
-void* operator new(size_t sz) {
-  return malloc(sz);
-}
-
-void operator delete(void* m) {
-  free(m);
-}
-
-void* operator new[](size_t sz) {
-  return malloc(sz);
-}
-
-void operator delete[](void* m) {
-  free(m);
-}
-
 typedef void (*ctor_func_ptr) (void);
 
 extern ctor_func_ptr ctor_list[];

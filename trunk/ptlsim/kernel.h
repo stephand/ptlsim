@@ -1,9 +1,9 @@
 // -*- c++ -*-
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// Kernel interface for memory and thread management
+// Linux Kernel Interface
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _KERNEL_H_
@@ -34,45 +34,6 @@ void early_printk(const char* text);
 
 // Initialize all PTLsim kernel structures
 void init_kernel();
-
-//
-// Memory management
-//
-#ifdef __x86_64__
-
-// On x86-64 K8's, there are 48 bits of virtual address space and 40 bits of physical address space: 
-#define TOP_OF_MEM 0x1000000000000LL
-//#define PTL_PAGE_POOL_BASE 0x7ff000000000LL
-#define PTL_PAGE_POOL_BASE 0x70000000LL
-#define PTL_PAGE_POOL_SIZE (1*1024*1024*1024LL)  // (1 GB)
-#define PTL_PAGE_POOL_END (PTL_PAGE_POOL_BASE + PTL_PAGE_POOL_SIZE)
-
-#define mmap_invalid(addr) (((W64)(addr) & 0xfffffffffffff000) == 0xfffffffffffff000)
-#define mmap_valid(addr) (!mmap_invalid(addr))
-
-#else // ! __x86_64__
-
-// On x86, there are 32 bits of virtual address space and 32 bits of physical address space: 
-#define TOP_OF_MEM 0x100000000LL
-//#define PTL_PAGE_POOL_BASE 0x7ff000000000LL
-#define PTL_PAGE_POOL_BASE 0x70000000LL
-#define PTL_PAGE_POOL_SIZE (512*1024*1024LL)  // (512 MB)
-#define PTL_PAGE_POOL_END (PTL_PAGE_POOL_BASE + PTL_PAGE_POOL_SIZE)
-
-#define mmap_invalid(addr) (((W32)(addr) & 0xfffff000) == 0xfffff000)
-#define mmap_valid(addr) (!mmap_invalid(addr))
-
-#endif
-
-//
-// These take pages from the private page pool so we can keep all PTLsim 
-// data out of the way of the user virtual machine to ensure deterministic
-// allocations.
-//  
-void* ptl_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
-void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
-void ptl_free_private_pages(void* base, Waddr bytecount);
-void ptl_zero_private_pages(void* base, Waddr bytecount);
 
 //
 // Thunk and breakpoint management

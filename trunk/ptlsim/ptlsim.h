@@ -12,6 +12,7 @@
 #include <globals.h>
 #include <ptlhwdef.h>
 #include <kernel.h>
+#include <mm.h>
 #include <dcache.h>
 #include <config.h>
 #include <datastore.h>

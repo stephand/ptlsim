@@ -21,13 +21,13 @@ INCFLAGS = -I. -DBUILDHOST="`hostname -f`" -DSVNREV="$(SVNREV)" -DSVNDATE="$(SVN
 
 ifdef __x86_64__
 CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type -minline-all-stringops $(GCCVER_SPECIFIC)
-#CFLAGS = -O0 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type $(GCCVER_SPECIFIC)
+#CFLAGS = -O1 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type $(GCCVER_SPECIFIC)
 CFLAGS32BIT = -m32
 else
 # 32-bit PTLsim32 only, on a Pentium 4:
 CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
 # No optimizations:
-#CFLAGS = -O0 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
+#CFLAGS = -O1 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
 CFLAGS32BIT = 
 endif
 
@@ -36,20 +36,20 @@ STDOBJS = glibc.o
 
 ifdef __x86_64__
 # IMPORTANT: linkstart.o and linkend.o must be at opposite ends of the list to set up constructor tables properly:
-COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o ptlhwdef.o translate-x86.o uopimpl.o dcache.o datastore.o injectcode-32bit.o injectcode-64bit.o $(BASEOBJS) klibc.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o translate-x86.o uopimpl.o dcache.o datastore.o injectcode-32bit.o injectcode-64bit.o $(BASEOBJS) klibc.o linkend.o
 else
 # 32-bit PTLsim32 only:
-COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o ptlhwdef.o translate-x86.o uopimpl.o dcache.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o translate-x86.o uopimpl.o dcache.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o linkend.o
 endif
 
 OOOOBJS = ooocore.o seqcore.o cptcore.o branchpred.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h
+COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h
 OOOINCLUDES = branchpred.h ooohwdef.h cpthwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
-COMMONCPPFILES = ptlsim.cpp kernel.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp
+COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp translate-x86.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp
 OOOCPPFILES = ooocore.cpp cptcore.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 

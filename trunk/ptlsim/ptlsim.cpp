@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Simulator Control
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -251,6 +251,10 @@ int init_config(int argc, const char** argv) {
     sb << hostinfo.nodename, ".", hostinfo.domainname;
     info.add("hostname", sb);
 
+    info.add("kernel", hostinfo.release);
+    info.add("kernel-build", hostinfo.version);
+    info.add("arch", hostinfo.machine);
+
 
     info.addfloat("native-mhz", CycleTimer::gethz() / 1000000);
 
@@ -287,6 +291,7 @@ void save_stats() {
       ooo_capture_stats((*dsroot)("final")); 
     else if (use_out_of_order_core) 
       ooo_capture_stats((*dsroot)("final")); 
+    ptl_mm_capture_stats((*dsroot)("mm"));
   }
 
   if (stats_filename) {

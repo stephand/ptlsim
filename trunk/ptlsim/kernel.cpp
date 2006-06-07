@@ -1,12 +1,13 @@
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// Memory Manager and threading support
+// Linux Kernel Interface
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
 #include <superstl.h>
+#include <mm.h>
 
 #include <elf.h>
 #include <asm/ldt.h>
@@ -167,264 +168,6 @@ void early_printk(const char* text) {
 
 // Makes it easy to identify which segments PTLsim owns versus the user address space:
 bool inside_ptlsim = false;
-
-void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
-  int flags = MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : 0);
-  flags |= (inside_ptlsim) ? MAP_SHARED : MAP_PRIVATE;
-  if (base == 0) base = PTL_PAGE_POOL_BASE;
-  void* addr = sys_mmap((void*)base, ceil(bytecount, PAGE_SIZE), prot, flags, 0, 0);
-
-  return addr;
-}
-
-void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
-#ifdef __x86_64__
-  int flags = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : MAP_32BIT);
-#else
-  int flags = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : 0);
-#endif
-  return sys_mmap((void*)base, ceil(bytecount, PAGE_SIZE), prot, flags, 0, 0);  
-}
-
-void ptl_free_private_pages(void* addr, Waddr bytecount) {
-  sys_munmap(addr, bytecount);
-}
-
-void ptl_zero_private_pages(void* addr, Waddr bytecount) {
-  sys_madvise((void*)floor((Waddr)addr, PAGE_SIZE), bytecount, MADV_DONTNEED);
-}
-
-//
-// Very simple linked-list based malloc()/free().
-// Derived from klibc-0.153 malloc.c: 
-//
-
-/*
- * This is the minimum chunk size we will ask the kernel for; this should
- * be a multiple of the page size on all architectures.
- */
-#define MALLOC_CHUNK_SIZE	1048576
-#define MALLOC_CHUNK_MASK (MALLOC_CHUNK_SIZE-1)
-
-/*
- * This structure should be a power of two.  This becomes the
- * alignment unit.
- */
-struct free_arena_header;
-
-struct arena_header {
-  size_t type;
-  size_t size;			/* Also gives the location of the next entry */
-  struct free_arena_header *next, *prev;
-};
-
-#ifdef DEBUG_MALLOC
-#define ARENA_TYPE_USED 0x64e69c70
-#define ARENA_TYPE_FREE 0x012d610a
-#define ARENA_TYPE_HEAD 0x971676b5
-#define ARENA_TYPE_DEAD 0xeeeeeeee
-#else
-#define ARENA_TYPE_USED 0
-#define ARENA_TYPE_FREE 1
-#define ARENA_TYPE_HEAD 2
-#endif
-
-#define ARENA_SIZE_MASK (~(sizeof(struct arena_header)-1))
-
-/*
- * This structure should be no more than twice the size of the
- * previous structure.
- */
-struct free_arena_header {
-  struct arena_header a;
-  struct free_arena_header *next_free, *prev_free;
-};
-
-extern struct free_arena_header __malloc_head;
-
-struct free_arena_header __malloc_head = {
-  {
-    ARENA_TYPE_HEAD,
-    0,
-    &__malloc_head,
-    &__malloc_head,
-  },
-  &__malloc_head,
-  &__malloc_head
-};
-
-static void *__malloc_from_block(struct free_arena_header *fp, size_t size) {
-  size_t fsize;
-  struct free_arena_header *nfp, *na;
-
-  fsize = fp->a.size;
-  
-  /* We need the 2* to account for the larger requirements of a free block */
-  if ( fsize >= size+2*sizeof(struct arena_header) ) {
-    /* Bigger block than required -- split block */
-    nfp = (struct free_arena_header *)((char *)fp + size);
-    na = fp->a.next;
-
-    nfp->a.type = ARENA_TYPE_FREE;
-    nfp->a.size = fsize-size;
-    fp->a.type  = ARENA_TYPE_USED;
-    fp->a.size  = size;
-
-    /* Insert into all-block chain */
-    nfp->a.prev = fp;
-    nfp->a.next = na;
-    na->a.prev = nfp;
-    fp->a.next = nfp;
-    
-    /* Replace current block on free chain */
-    nfp->next_free = fp->next_free;
-    nfp->prev_free = fp->prev_free;
-    fp->next_free->prev_free = nfp;
-    fp->prev_free->next_free = nfp;
-  } else {
-    /* Allocate the whole block */
-    fp->a.type = ARENA_TYPE_USED;
-
-    /* Remove from free chain */
-    fp->next_free->prev_free = fp->prev_free;
-    fp->prev_free->next_free = fp->next_free;
-  }
-
-  //fprintf(stdout, "__malloc_from_block(%p, %d): returning %p: a->size = %d\n", fp, size, (void*)(&fp->a + 1), fp->a.size);
-  return (void *)(&fp->a + 1);
-}
-
-static struct free_arena_header *
-__free_block(struct free_arena_header *ah) {
-  struct free_arena_header *pah, *nah;
-
-  pah = ah->a.prev;
-  nah = ah->a.next;
-  if ( pah->a.type == ARENA_TYPE_FREE &&
-       (char *)pah+pah->a.size == (char *)ah ) {
-    /* Coalesce into the previous block */
-    pah->a.size += ah->a.size;
-    pah->a.next = nah;
-    nah->a.prev = pah;
-
-#ifdef DEBUG_MALLOC
-    ah->a.type = ARENA_TYPE_DEAD;
-#endif
-
-    ah = pah;
-    pah = ah->a.prev;
-  } else {
-    /* Need to add this block to the free chain */
-    ah->a.type = ARENA_TYPE_FREE;
-
-    ah->next_free = __malloc_head.next_free;
-    ah->prev_free = &__malloc_head;
-    __malloc_head.next_free = ah;
-    ah->next_free->prev_free = ah;
-  }
-
-  /* In either of the previous cases, we might be able to merge
-     with the subsequent block... */
-  if ( nah->a.type == ARENA_TYPE_FREE &&
-       (char *)ah+ah->a.size == (char *)nah ) {
-    ah->a.size += nah->a.size;
-
-    /* Remove the old block from the chains */
-    nah->next_free->prev_free = nah->prev_free;
-    nah->prev_free->next_free = nah->next_free;
-    ah->a.next = nah->a.next;
-    nah->a.next->a.prev = ah;
-
-#ifdef DEBUG_MALLOC
-    nah->a.type = ARENA_TYPE_DEAD;
-#endif
-  }
-
-  /* Return the block that contains the called block */
-  return ah;
-}
-
-extern "C" void *malloc(size_t size) {
-  struct free_arena_header *fp;
-  struct free_arena_header *pah;
-  size_t fsize;
-
-  if ( size == 0 )
-    return NULL;
-
-  /* Add the obligatory arena header, and round up */
-  size = (size+2*sizeof(struct arena_header)-1) & ARENA_SIZE_MASK;
-
-  for ( fp = __malloc_head.next_free ; fp->a.type != ARENA_TYPE_HEAD ;
-	fp = fp->next_free ) {
-    if ( fp->a.size >= size ) {
-      /* Found fit -- allocate out of this block */
-      return __malloc_from_block(fp, size);
-    }
-  }
-
-  /* Nothing found... need to request a block from the kernel */
-  fsize = (size+MALLOC_CHUNK_MASK) & ~MALLOC_CHUNK_MASK;
-
-  fp = (struct free_arena_header*)ptl_alloc_private_pages(fsize);
-
-  if ( fp == (struct free_arena_header *)MAP_FAILED ) {
-    return NULL;		/* Failed to get a block */
-  }
-
-  /* Insert the block into the management chains.  We need to set
-     up the size and the main block list pointer, the rest of
-     the work is logically identical to free(). */
-  fp->a.type = ARENA_TYPE_FREE;
-  fp->a.size = fsize;
-
-  /* We need to insert this into the main block list in the proper
-     place -- this list is required to be sorted.  Since we most likely
-     get memory assignments in ascending order, search backwards for
-     the proper place. */
-  for ( pah = __malloc_head.a.prev ; pah->a.type != ARENA_TYPE_HEAD ;
-	pah = pah->a.prev ) {
-    if ( pah < fp )
-      break;
-  }
-
-  /* Now pah points to the node that should be the predecessor of
-     the new node */
-  fp->a.next = pah->a.next;
-  fp->a.prev = pah;
-  pah->a.next  = fp;
-  fp->a.next->a.prev = fp;
-
-
-  /* Insert into the free chain and coalesce with adjacent blocks */
-  fp = __free_block(fp);
-
-  /* Now we can allocate from this block */
-  return __malloc_from_block(fp, size);
-}
-
-extern "C" void free(void *ptr)
-{
-  struct free_arena_header *ah;
-
-  if ( !ptr )
-    return;
-
-  ah = (struct free_arena_header *)
-    ((struct arena_header *)ptr - 1);
-
-#ifdef DEBUG_MALLOC
-  assert( ah->a.type == ARENA_TYPE_USED );
-#endif
-
-  __free_block(ah);
-
-  // (memory can be unmapped here if whole page is free)
-}
-
-extern "C" void* realloc(void* ptr, size_t size) {
-  assert(false); //++MTY FIXME This does not work correctly!
-}
 
 extern W64 use_checkpoint_core;
 
@@ -895,7 +638,7 @@ void AddressSpace::resync_with_process_maps() {
   //
   // Hence, using this simplistic approach works fine on 2.6.x kernels.
   //
-  setattr((void*)PTL_PAGE_POOL_BASE, PTL_PAGE_POOL_SIZE, PROT_NONE);
+  setattr((void*)PTL_IMAGE_BASE, PTL_IMAGE_SIZE, PROT_NONE);
 }
 
 AddressSpace asp;
@@ -2266,14 +2009,15 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 
   // The loader thunk patched our ELF header with the real RIP to enter at:
 #ifdef __x86_64__
-  Elf64_Ehdr* ptlsim_ehdr = (Elf64_Ehdr*)PTL_PAGE_POOL_BASE;
+  Elf64_Ehdr* ptlsim_ehdr = (Elf64_Ehdr*)PTL_IMAGE_BASE;
 #else
-  Elf32_Ehdr* ptlsim_ehdr = (Elf32_Ehdr*)PTL_PAGE_POOL_BASE;
+  Elf32_Ehdr* ptlsim_ehdr = (Elf32_Ehdr*)PTL_IMAGE_BASE;
 #endif
 
   inside_ptlsim = (ptlsim_ehdr->e_type == ET_PTLSIM);
-
   ptlsim_build_timestamp = (time_t)ptlsim_ehdr->e_version;
+
+  ptl_mm_init();
 
   if (!inside_ptlsim) {
     // We're still a normal process - don't do anything special
@@ -2318,14 +2062,14 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   // Round up a little so we don't over-run it when we fault in the stack:
   stack_min_addr = floor(stack_max_addr - user_stack_size, PAGE_SIZE) + 65536;
 
-  assert(stack_min_addr >= (PTL_PAGE_POOL_BASE + 128*1024*1024));
+  assert(stack_min_addr >= (PTL_IMAGE_BASE + 128*1024*1024));
 
   asp.reset();
 
   ThreadState* tls = &basetls;
   tls->self = tls;
   // Give PTLsim itself 64 MB for the .text, .data and .bss sections:
-  void* stack = ptl_alloc_private_pages(SIM_THREAD_STACK_SIZE, PROT_READ|PROT_WRITE, PTL_PAGE_POOL_BASE + 64*1024*1024);
+  void* stack = ptl_alloc_private_pages(SIM_THREAD_STACK_SIZE, PROT_READ|PROT_WRITE, PTL_IMAGE_BASE + 64*1024*1024);
   assert(mmap_valid(stack));
   tls->stack = (byte*)stack + SIM_THREAD_STACK_SIZE;
   setup_sim_thunk_page();

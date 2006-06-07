@@ -159,9 +159,9 @@ namespace superstl {
   public:
     odstream() { fd = -1; buf = null; bufsize = 0; tail = 0; }
 
-    bool open(const char* filename, bool append = false, int bufsize = 4096);
+    bool open(const char* filename, bool append = false, int bufsize = 65536);
 
-    bool open(int fd, int bufsize = 4096);
+    bool open(int fd, int bufsize = 65536);
 
     void close();
 
@@ -176,7 +176,7 @@ namespace superstl {
       open(fd);
     }
 
-    odstream(const char* filename, bool append = false, int bufsize = 4096) {
+    odstream(const char* filename, bool append = false, int bufsize = 65536) {
       this->fd = -1;
       open(filename, append, bufsize);
     }
@@ -444,9 +444,9 @@ namespace superstl {
   public:
     idstream() { reset(); }
 
-    bool open(const char* filename, int bufsize = 4096);
+    bool open(const char* filename, int bufsize = 65536);
 
-    bool open(int fd, int bufsize = 4096);
+    bool open(int fd, int bufsize = 65536);
 
     int setbuf(int bufsize);
 
@@ -958,6 +958,58 @@ namespace superstl {
     operator T*() const { return data; }
     operator T&() const { return *data; }
   };
+
+  /*
+   * selflistlink class
+   * Double linked list without pointer: useful as root
+   * of inheritance hierarchy for another class to save
+   * space, since object pointed to is implied
+   */
+  class selflistlink {
+  public:
+    selflistlink* next;
+    selflistlink* prev;
+  public:
+    void reset() { next = null; prev = null; }
+    selflistlink() { reset(); }
+
+    selflistlink* unlink() {
+      if (prev) prev->next = next;
+      if (next) next->prev = prev;
+      prev = null;
+      next = null;  
+      return this;
+    }
+
+    selflistlink* replacewith(selflistlink* newlink) {
+      if (prev) prev->next = newlink;
+      if (next) next->prev = newlink;
+      newlink->prev = prev;
+      newlink->next = next;
+      return newlink;
+    }
+
+    void addto(selflistlink*& root) {
+      // THIS <-> root <-> a <-> b <-> c
+      this->prev = (selflistlink*)&root;
+      this->next = root;
+      if (root) root->prev = this;
+      // Do not touch root->next since it might not even exist
+      root = this;
+    }
+
+    bool linked() const {
+      return (next || prev);
+    }
+
+    bool unlinked() const {
+      return !linked();
+    }
+  };
+
+  inline ostream& operator <<(ostream& os, const selflistlink& link) {
+    return os << "[prev ", link.prev, ", next ", link.next, "]";
+  }
 
   class selfqueuelink {
   public:
