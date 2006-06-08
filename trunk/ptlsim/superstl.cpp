@@ -10,9 +10,8 @@
 #include <globals.h>
 #include <superstl.h>
 
-//
-// System calls
-//
+// For debugging of messages before crashes:
+//#define FORCE_SYNCHRONOUS_STREAMS
 
 namespace superstl {
   //
@@ -74,6 +73,10 @@ namespace superstl {
         tail = 0;
       }
     }
+
+#ifdef FORCE_SYNCHRONOUS_STREAMS
+    flush();
+#endif
 
     return total;
   }

@@ -333,6 +333,32 @@ void* AddressSpace::mmap(void* start, Waddr length, int prot, int flags, int fd,
   start = sys_mmap(start, length, prot, flags, fd, offset);
   if (mmap_invalid(start)) return start;
   setattr(start, length, prot);
+  if (!(flags & MAP_ANONYMOUS)) {
+    //
+    // Linux has strange semantics w.r.t. memory mapped files
+    // when the mapped region is larger than the file itself.
+    // The process should get SIGBUS when we access memory
+    // beyond the end of the file, however we need a special
+    // check here to emulate this behavior in the SPT bitmaps.
+    // Otherwise in extremely rare cases speculative execution
+    // may attempt to access memory that looks valid but isn't.
+    //
+    W64 origoffs = sys_seek(fd, 0, SEEK_CUR);
+    W64 filesize = sys_seek(fd, 0, SEEK_END);
+    sys_seek(fd, origoffs, SEEK_SET);
+    if ((W64s)filesize < 0) return (void*)-EINVAL; // can't access the file?
+    W64 last_page_in_file = ceil(filesize, PAGE_SIZE);
+    W64 last_page_to_map = offset + length;
+    W64s delta_bytes = last_page_to_map - last_page_in_file;
+    if (delta_bytes <= 0) return start; // OK
+
+    logfile << "mmap(", start, ", ", length, ", ", prot, ", ", flags, ", ", fd, ", ", offset, "): ",
+      "mapping beyond end of file: file ends at byte ", last_page_in_file, " but mapping ends at byte ",
+      last_page_to_map, " (", delta_bytes, " bytes marked invalid starting at ",
+      ((byte*)start + length - delta_bytes), ")", endl;
+
+    setattr((byte*)start + length - delta_bytes, delta_bytes, PROT_NONE);
+  }
   return start;
 }
 
@@ -979,25 +1005,6 @@ void handle_syscall_64bit() {
       (void*)arg5, ", ", (void*)arg6, ") at iteration ", iterations, endl, flush;
 
   switch (syscallid) {
-    /*
-#if 0
-    // Make deterministic
-  case __NR_open: {
-    const char* p = (const char*)(Waddr)arg1;
-    static const char* devzero = "/dev/zero";
-    cerr << "Patching sys_open for /dev/urandom", endl;
-    if (strequal(p, "/dev/urandom")) {
-      arg1 = (W64)(Waddr)&devzero;
-    }
-    ctx.commitarf[REG_rax] = do_syscall_64bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
-    break;
-  }
-  case __NR_time: {
-    ctx.commitarf[REG_rax] = 0;
-    break;
-  }
-#endif
-    */
   case __NR_64bit_mmap:
     ctx.commitarf[REG_rax] = (W64)asp.mmap((void*)arg1, arg2, arg3, arg4, arg5, arg6);
     break;
