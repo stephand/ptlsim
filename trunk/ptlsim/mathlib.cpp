@@ -1126,7 +1126,7 @@ namespace mpa {
       else if (p==4) c =(X[1] + R* X[2]) + R*R*(X[3] + R*X[4]);
     }
     else {
-      for (a=ONE, z[1]=X[1]; z[1] < TWO23; )
+      for (a=ONE, z[1]=X[1]; z[1] != -inf && z[1] && z[1] < TWO23; )
         {a *= TWO;   z[1] *= TWO; }
 
       for (i=2; i<5; i++) {
