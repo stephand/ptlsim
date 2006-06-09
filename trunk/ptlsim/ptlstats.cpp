@@ -11,6 +11,7 @@
 
 char* mode_subtree;
 char* mode_histogram;
+char* mode_bargraph;
 char* mode_collect;
 char* mode_collect_sum;
 char* mode_collect_average;
@@ -18,7 +19,7 @@ char* mode_table;
 
 char* table_row_names;
 char* table_col_names;
-char* table_row_col_pattern = "%r/%c.stats";
+char* table_row_col_pattern = "%row/%col.stats";
 char* table_type_name = "text";
 W64 table_use_percents = false;
 
@@ -46,6 +47,8 @@ W64 cumulative_histogram = 0;
 
 W64 percent_of_toplevel = 0;
 
+W64 invert_gains = 0;
+
 static ConfigurationOption optionlist[] = {
   {null,                                 OPTION_TYPE_SECTION, 0, "Mode", null},
   {"subtree",                            OPTION_TYPE_STRING,  0, "Subtree (specify path to node)", &mode_subtree},
@@ -53,8 +56,9 @@ static ConfigurationOption optionlist[] = {
   {"collectsum",                         OPTION_TYPE_STRING,  0, "Sum of same tree in all data stores", &mode_collect_sum},
   {"collectaverage",                     OPTION_TYPE_STRING,  0, "Average of same tree in all data stores", &mode_collect_average},
   {"histogram",                          OPTION_TYPE_STRING,  0, "Histogram of specific node (specify path to node)", &mode_histogram},
+  {"bargraph",                           OPTION_TYPE_STRING,  0, "Bargraph of one node across multiple data stores", &mode_bargraph},
   {"table",                              OPTION_TYPE_STRING,  0, "Table of one node across multiple data stores", &mode_table},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Table", null},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Table or Bar Graph", null},
   {"rows",                               OPTION_TYPE_STRING,  0, "Row names (comma separated)", &table_row_names},
   {"cols",                               OPTION_TYPE_STRING,  0, "Column names (comma separated)", &table_col_names},
   {"table-pattern",                      OPTION_TYPE_STRING,  0, "Pattern to convert row (%row) and column (%col) names into stats filename", &table_row_col_pattern},
@@ -62,6 +66,7 @@ static ConfigurationOption optionlist[] = {
   {"scale-relative-to-col",              OPTION_TYPE_W64,     0, "Scale all other table columns relative to specified column", &table_scale_rel_to_col},
   {"table-percents",                     OPTION_TYPE_BOOL,    0, "Show percents (as in tree) rather than absolute values", &table_use_percents},
   {"table-mark-highest-col",             OPTION_TYPE_BOOL,    0, "Mark highest column in each row", &table_mark_highest_col},
+  {"invert-gains",                       OPTION_TYPE_BOOL,    0, "Invert sense of gains vs losses (i.e. 1 / x)", &invert_gains},
   {null,                                 OPTION_TYPE_SECTION, 0, "Statistics Range", null},
   {"deltastart",                         OPTION_TYPE_STRING,  0, "Snapshot to start at", &delta_start},
   {"deltaend",                           OPTION_TYPE_STRING,  0, "Snapshot to end at (i.e. subtract end - start)", &delta_end},
@@ -70,15 +75,17 @@ static ConfigurationOption optionlist[] = {
   {"maxdepth",                           OPTION_TYPE_W64,     0, "Maximum tree depth", &maxdepth},
   {"percent-digits",                     OPTION_TYPE_W64,     0, "Precision of percentage listings in digits", &percent_digits},
   {"percent-of-toplevel",                OPTION_TYPE_BOOL,    0, "Show percent relative to toplevel node, not parent node", &percent_of_toplevel},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Histogram Options", null},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Graph and Histogram Options", null},
   {"title",                              OPTION_TYPE_STRING,  0, "Graph Title", &graph_title},
   {"width",                              OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_width},
   {"height",                             OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_height},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Histogram Options", null},
   {"percentile",                         OPTION_TYPE_FLOAT,   0, "Clip percentile", &graph_clip_percentile},
   {"logscale",                           OPTION_TYPE_BOOL,    0, "Use log scale", &graph_logscale},
   {"logk",                               OPTION_TYPE_FLOAT,   0, "Log scale constant", &graph_logk},
   {"cumulative-histogram",               OPTION_TYPE_BOOL,    0, "Cumulative histogram", &cumulative_histogram},
   {"histogram-thresh",                   OPTION_TYPE_FLOAT,   0, "Histogram threshold (1.0 = print nothing, 0.0 = everything)", &histogram_thresh},
+  {null,                                 OPTION_TYPE_SECTION, 0, "Bar Graph Options", null},
 };
 
 
@@ -767,7 +774,7 @@ DataStoreNode* collect_into_supernode(int argc, char** argv, char* path) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
       return null;
     }
-        
+
     DataStoreNode* ds = new DataStoreNode(is);
     ds = ds->searchpath(path);
         
@@ -886,27 +893,14 @@ public:
 
 enum { TABLE_TYPE_TEXT, TABLE_TYPE_LATEX, TABLE_TYPE_HTML };
 
-void create_table(ostream& os, int tabletype, const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern, int scale_relative_to_col) {
-  dynarray<char*> rowlist;
+bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<double>& sum_of_all_rows, dynarray< dynarray<double> >& data,
+                   const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern) {
   rowlist.tokenize(rownames, ",");
-  dynarray<char*> collist;
   collist.tokenize(colnames, ",");
 
-  TableCreator* creator;
-  switch (tabletype) {
-  case TABLE_TYPE_TEXT:
-    creator = new TableCreator(os, rowlist, collist); break;
-  case TABLE_TYPE_LATEX:
-    creator = new LaTeXTableCreator(os, rowlist, collist); break;
-  case TABLE_TYPE_HTML:
-    assert(false);
-  }
-
-  dynarray<double> sum_of_all_rows;
   sum_of_all_rows.resize(collist.size());
   sum_of_all_rows.fill(0);
 
-  dynarray< dynarray<double> > data;
   data.resize(rowlist.size());
 
   //
@@ -916,6 +910,7 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
 
   for (int row = 0; row < rowlist.size(); row++) {
     data[row].resize(collist.size());
+
     for (int col = 0; col < collist.size(); col++) {
       stringbuf filename;
 
@@ -925,11 +920,13 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
       stringsubst(filename, table_row_col_pattern, findarray, replarray, 2);
 
       idstream is(filename);
+
+      cerr << "Reading ", filename, endl, flush;
       if (!is) {
-        cerr << "ptlstats: Cannot open '", filename, "' for row ", row, ", col ", col, endl, endl;
-        return;
+        cerr << "ptlstats: Cannot open '", filename, "' for row ", row, ", col ", col, endl, endl, flush;
+        return false;
       }
-        
+
       DataStoreNode* ds = new DataStoreNode(is);
       assert(ds);
       ds = ds->searchpath(statname);
@@ -945,6 +942,27 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
 
       data[row][col] = value;
     }
+  }
+
+  return true;
+}
+
+void create_table(ostream& os, int tabletype, const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern, int scale_relative_to_col) {
+  dynarray<char*> rowlist;
+  dynarray<char*> collist;
+  dynarray<double> sum_of_all_rows;
+  dynarray< dynarray<double> > data;
+
+  if (!capture_table(rowlist, collist, sum_of_all_rows, data, statname, rownames, colnames, row_col_pattern)) return;
+
+  TableCreator* creator;
+  switch (tabletype) {
+  case TABLE_TYPE_TEXT:
+    creator = new TableCreator(os, rowlist, collist); break;
+  case TABLE_TYPE_LATEX:
+    creator = new LaTeXTableCreator(os, rowlist, collist); break;
+  case TABLE_TYPE_HTML:
+    assert(false);
   }
 
   //
@@ -993,6 +1011,117 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
   creator->end_table();
 }
 
+//
+// In SVG standard, 1.25 points = 1.0 px
+//
+inline double px_to_pt(double px) { return px * 1.25; }
+inline double pt_to_px(double pt) { return pt / 1.25; }
+
+void create_grouped_bargraph(ostream& os, const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern,
+                             int scale_relative_to_col, const char* title = null, double imagewidth = 300.0, double imageheight = 100.0) {
+
+  dynarray<char*> rowlist;
+  dynarray<char*> collist;
+  dynarray<double> sum_of_all_rows;
+  dynarray< dynarray<double> > data;
+
+  if (!capture_table(rowlist, collist, sum_of_all_rows, data, statname, rownames, colnames, row_col_pattern)) return;
+
+  double leftpad = 10.0;
+  double toppad = 5.0;
+  double rightpad = 4.0;
+  double bottompad = 24.0;
+
+  if (title) toppad += 16;
+
+  double maxheight = 0;
+
+  if (scale_relative_to_col < collist.size()) {
+    foreach (i, rowlist.size()) {
+      double first = data[i][scale_relative_to_col];
+      foreach (j, collist.size()) {
+        data[i][j] /= first;
+        if (invert_gains) data[i][j] = 1.0 / data[i][j];
+        maxheight = max(maxheight, data[i][j]);
+      }
+    }
+  } else {
+    foreach (i, rowlist.size()) {
+      foreach (j, collist.size()) {
+        maxheight = max(maxheight, data[i][j]);
+      }
+    }
+  }
+
+  double rawwidth = (0.5 * (rowlist.count()-1)) + (1.0 * rowlist.count() * collist.count());
+  double xscale = imagewidth / rawwidth;
+
+  double barwidth = 1.0 * xscale;
+  double gapwidth = 0.5 * xscale;
+
+  /*
+  cerr << "maxheight = ", maxheight, endl;
+  cerr << "imagewidth = ", imagewidth, endl;
+  cerr << "imageheight = ", imageheight, endl;
+  cerr << "rawwidth = ", rawwidth, endl;
+  cerr << "xscale = ", xscale, endl;
+  cerr << "barwidth = ", barwidth, endl;
+  cerr << "gapwidth = ", gapwidth, endl;
+  */
+
+  SVGCreator svg(os, imagewidth + leftpad + rightpad, imageheight + toppad + bottompad);
+
+  svg.newlayer();
+
+  svg.setoffset(leftpad, toppad);
+
+#define CCC 128
+  static const RGBAColor barcolors[] = {
+    RGBA(CCC, CCC, CCC, 255), // gray
+    RGBA(255, 255, CCC, 255), // yellow
+    RGBA(CCC, 255, CCC, 255), // green
+    RGBA(CCC, CCC, 255, 255), // blue
+    RGBA(255, CCC, CCC, 255), // red
+    RGBA(255, CCC, 255, 255), // pink
+  };
+
+#undef CCC
+  double x = 0;
+  foreach (row, rowlist.count()) {
+
+    svg.fill = RGBA(0, 0, 0);
+    svg.filled = 1;
+    svg.setfont("font-size:8;font-style:bold;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
+    svg.text(rowlist[row], x + (barwidth * collist.count())/2, imageheight + 16);
+
+    foreach (col, collist.count()) {
+      svg.strokewidth = 0.5;
+      svg.stroke = RGBA(0, 0, 0);
+      svg.fill = barcolors[col % lengthof(barcolors)];
+
+      double barheight = (data[row][col] / maxheight) * imageheight;
+      svg.rectangle(x, imageheight - barheight, barwidth, barheight);
+
+      svg.strokewidth = 0;
+      svg.fill = RGBA(0, 0, 0);
+      svg.filled = 1;
+      svg.setfont("font-size:6;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
+      svg.text(collist[col], x + barwidth/2, imageheight + 8);
+
+      svg.setfont("font-size:8;font-style:bold;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
+      stringbuf label;
+      if (scale_relative_to_col < collist.count()) {
+        label << floatstring(data[row][col], 0, 2);
+        svg.text(label, x + barwidth/2, imageheight - barheight - 2.0);
+      }
+      x += barwidth;
+    }
+    x += gapwidth;
+  }
+
+  svg.exitlayer();
+}
+
 int main(int argc, char* argv[]) {
 
   ConfigurationParser options(optionlist, lengthof(optionlist));
@@ -1009,7 +1138,7 @@ int main(int argc, char* argv[]) {
 
   int n = options.parse(argc, argv);
 
-  bool no_args_needed = mode_table;
+  bool no_args_needed = mode_table || mode_bargraph;
 
   if ((n < 0) & (!no_args_needed)) {
     printbanner();
@@ -1127,6 +1256,13 @@ int main(int argc, char* argv[]) {
     }
 
     create_table(cout, tabletype, mode_table, table_row_names, table_col_names, table_row_col_pattern, table_scale_rel_to_col);
+  } else if (mode_bargraph) {
+    if ((!table_row_names) | (!table_col_names)) {
+      cerr << "ptlstats: Error: must specify both -rows and -cols options for the table mode", endl;
+      return 1;
+    }
+
+    create_grouped_bargraph(cout, mode_bargraph, table_row_names, table_col_names, table_row_col_pattern, table_scale_rel_to_col, graph_title, graph_width, graph_height);
   } else {
     idstream is(filename);
     if (!is) {
