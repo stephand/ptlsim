@@ -494,7 +494,7 @@ namespace superstl {
       // ||||.......|||||
       //     t      h
       // 0123456789abcdef
-      n = min(bufused, count);
+      n = min(min(bufsize - head, count), bufused);
       memcpy(dest, &buf[head], n);
       head = addmod(head, n);
       bufused -= n;

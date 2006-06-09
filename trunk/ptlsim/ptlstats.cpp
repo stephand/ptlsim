@@ -30,8 +30,7 @@ double graph_clip_percentile = 95.0;
 W64 graph_logscale = 0;
 double graph_logk = 100.;
 
-char* delta_start = null;
-char* delta_end = "final";
+char* subtract_branch = null;
 
 W64 show_sum_of_subtrees_only = 0;
 
@@ -68,8 +67,7 @@ static ConfigurationOption optionlist[] = {
   {"table-mark-highest-col",             OPTION_TYPE_BOOL,    0, "Mark highest column in each row", &table_mark_highest_col},
   {"invert-gains",                       OPTION_TYPE_BOOL,    0, "Invert sense of gains vs losses (i.e. 1 / x)", &invert_gains},
   {null,                                 OPTION_TYPE_SECTION, 0, "Statistics Range", null},
-  {"deltastart",                         OPTION_TYPE_STRING,  0, "Snapshot to start at", &delta_start},
-  {"deltaend",                           OPTION_TYPE_STRING,  0, "Snapshot to end at (i.e. subtract end - start)", &delta_end},
+  {"subtract",                           OPTION_TYPE_STRING,  0, "Snapshot to subtract from the main snapshot", &subtract_branch},
   {null,                                 OPTION_TYPE_SECTION, 0, "Display Control", null},
   {"sum-subtrees-only",                  OPTION_TYPE_BOOL,    0, "Show only the sum of subtrees in applicable nodes", &show_sum_of_subtrees_only},
   {"maxdepth",                           OPTION_TYPE_W64,     0, "Maximum tree depth", &maxdepth},
@@ -763,29 +761,43 @@ void printbanner() {
   cerr << endl;
 }
 
-DataStoreNode* collect_into_supernode(int argc, char** argv, char* path) {
+DataStoreNode* collect_into_supernode(int argc, char** argv, char* path, const char* deltastart = null) {
   DataStoreNode* supernode = new DataStoreNode("super");
 
   foreach (i, argc) {
     char* filename = argv[i];
         
     idstream is(filename);
+
     if (!is) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
-      return null;
-    }
-
-    DataStoreNode* ds = new DataStoreNode(is);
-    ds = ds->searchpath(path);
-        
-    if (!ds) {
-      cerr << "ptlstats: Error: cannot find subtree '", path, "'", endl;
       return null;
     }
 
     // Can't have slashes in tree pathnames
     int filenamelen = strlen(filename);
     foreach (i, filenamelen) { if (filename[i] == '/') filename[i] = ':'; }
+
+    DataStoreNode& dsbase =* new DataStoreNode(is);
+
+    DataStoreNode* ds = dsbase.searchpath(path);
+
+    if (!ds) {
+      cerr << "ptlstats: Error: cannot find subtree '", path, "'", endl;
+      delete &dsbase;
+      return null;
+    }
+
+    if (deltastart) {
+      DataStoreNode* dsstart = dsbase.searchpath(deltastart);
+      if (!dsstart) {
+        cerr << "ptlstats: Error: cannot find snapshot '", deltastart, "'", endl;
+        delete &dsbase;
+        return null;
+      }
+
+      *ds -= *dsstart;
+    }
 
     ds->rename(filename);
 
@@ -1184,14 +1196,14 @@ int main(int argc, char* argv[]) {
   } else if (mode_collect) {
     argv += n; argc -= n;
 
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect, subtract_branch);
     if (!supernode) return -1;
     supernode->identical_subtrees = 0;
     supernode->print(cout, printinfo);
     delete supernode;
   } else if (mode_collect_sum) {
     argv += n; argc -= n;
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_sum);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_sum, subtract_branch);
     if (!supernode) return -1;
     supernode->identical_subtrees = 1;
     DataStoreNode* sumnode = supernode->sum_of_subtrees();
@@ -1200,7 +1212,7 @@ int main(int argc, char* argv[]) {
     delete supernode;
   } else if (mode_collect_average) {
     argv += n; argc -= n;
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_average);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_average, subtract_branch);
     if (!supernode) return -1;
     supernode->identical_subtrees = 1;
     DataStoreNode* avgnode = supernode->average_of_subtrees();
@@ -1208,35 +1220,6 @@ int main(int argc, char* argv[]) {
     avgnode->rename(mode_collect_average);
     avgnode->print(cout, printinfo);
     delete supernode;
-  } else if (delta_start) {
-    idstream is(filename);
-    if (!is) {
-      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
-      return 2;
-    }
-
-    DataStoreNode* ds = new DataStoreNode(is);
-
-    DataStoreNode* startds = ds->searchpath(delta_start);
-
-    if (!startds) {
-      cerr << "ptlstats: Error: cannot find starting snapshot '", delta_start, "'", endl;
-      return 1;
-    }
-
-    DataStoreNode* endds = ds->searchpath(delta_end);
-
-    if (!endds) {
-      cerr << "ptlstats: Error: cannot find ending snapshot '", delta_end, "'", endl;
-      return 1;
-    }
-
-    DataStoreNode* deltads = *endds - *startds;
-
-    deltads->print(cout, printinfo);
-
-    delete deltads;
-    delete ds;
   } else if (mode_table) {
     if ((!table_row_names) | (!table_col_names)) {
       cerr << "ptlstats: Error: must specify both -rows and -cols options for the table mode", endl;
