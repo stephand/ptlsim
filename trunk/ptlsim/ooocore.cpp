@@ -863,7 +863,7 @@ struct PhysicalRegisterFile: public array<PhysicalRegister, MAX_PHYS_REG_FILE_SI
 
   void init(const char* name, int rfid, int size) {
     assert(rfid < PHYS_REG_FILE_COUNT);
-    assert(size < MAX_PHYS_REG_FILE_SIZE);
+    assert(size <= MAX_PHYS_REG_FILE_SIZE);
     this->size = size;
     this->rfid = rfid;
     this->name = name;
@@ -1043,8 +1043,13 @@ void external_to_core_state() {
     // IMPORTANT! If using some register file configuration other
     // than (integer, fp), this needs to be changed!
     //
-    bool fp = ((i >= REG_xmml0) & (i <= REG_xmmh15));
-    PhysicalRegisterFile& rf = physregfiles[(fp) ? 1 : 0];
+#ifdef UNIFIED_INT_FP_PHYS_REG_FILE
+    int rfid = (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
+#else
+    bool fp = inrange((int)i, REG_xmml0, REG_xmmh15) | (inrange((int)i, REG_fptos, REG_fp7)) | ((int)i == REG_mxcsr);
+    int rfid = (fp) ? PHYS_REG_FILE_FP : (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
+#endif
+    PhysicalRegisterFile& rf = physregfiles[rfid];
     PhysicalRegister* physreg = (i == REG_zero) ? zeroreg : rf.alloc();
     physreg->data = ctx.commitarf[i];
     physreg->flags = 0;
@@ -1447,7 +1452,6 @@ static const byte archdest_can_rename[TRANSREG_COUNT] = {
 };
 
 byte uop_executable_on_cluster[OP_MAX_OPCODE];
-W32 phys_reg_files_writable_by_uop[OP_MAX_OPCODE];
 
 #define archdest_can_commit archdest_can_rename
 
@@ -1485,6 +1489,31 @@ W64 frontend_rename_consumer_count_histogram[256];
 //
 int round_robin_reg_file_offset = 0;
 
+//
+// Determine which physical register files can be written
+// by a given type of uop.
+//
+// This must be customized if the physical register files
+// are altered in ooohwdef.h.
+//
+W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
+  W32 c = opinfo[uop.opcode].opclass;
+
+#ifdef UNIFIED_INT_FP_PHYS_REG_FILE
+  return
+    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
+    PHYS_REG_FILE_MASK_INT;
+#else
+  return
+    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
+    (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? PHYS_REG_FILE_MASK_INT : PHYS_REG_FILE_MASK_FP) :
+    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_fp7)) ? PHYS_REG_FILE_MASK_FP :
+    PHYS_REG_FILE_MASK_INT;
+#endif
+}
+
 void rename() {
   int prepcount = 0;
 
@@ -1507,7 +1536,7 @@ void rename() {
 
     int phys_reg_file = -1;
 
-    W32 acceptable_phys_reg_files = phys_reg_files_writable_by_uop[fetchbuf.opcode];
+    W32 acceptable_phys_reg_files = phys_reg_files_writable_by_uop(fetchbuf);
 
     foreach (i, PHYS_REG_FILE_COUNT) {
       int reg_file_to_check = add_index_modulo(round_robin_reg_file_offset, i, PHYS_REG_FILE_COUNT);
@@ -1902,35 +1931,6 @@ void init_luts() {
       if (clusters[cl].fu_mask & allowedfu) setbit(allowedcl, cl);
     }
     uop_executable_on_cluster[i] = allowedcl;
-  }
-
-  //
-  // Initialize LUTs to determine which physical register files may
-  // be used to allocate a destination for a given uop
-  //
-
-  foreach (op, OP_MAX_OPCODE) {
-    W32 clustermap = uop_executable_on_cluster[op];
-    W32 accessible_phys_reg_files = 0;
-    foreach (c, MAX_CLUSTERS) {
-      if (bit(clustermap, c)) {
-        //
-        // A given physreg file may be accessible from more than one cluster,
-        // and a given cluster may have access to multiple physreg files.
-        //
-        accessible_phys_reg_files |= phys_reg_files_accessible_from_cluster[c];
-      }
-    }
-
-    phys_reg_files_writable_by_uop[op] = accessible_phys_reg_files;
-
-#if 0
-    logfile << "Phys reg files writable by ", padstring(opinfo[op].name, -10), " = ";
-    foreach (i, PHYS_REG_FILE_COUNT) {
-      if (bit(phys_reg_files_writable_by_uop[op], i)) logfile << padstring(physregfiles[i].name, -12), " ";
-    }
-    logfile << endl;
-#endif
   }
 
   // Initialize forward-at-cycle LUTs

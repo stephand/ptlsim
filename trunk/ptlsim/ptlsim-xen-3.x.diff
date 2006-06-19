@@ -1,0 +1,1104 @@
+diff -r 840f33e54054 tools/libxc/Makefile
+--- a/tools/libxc/Makefile	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/libxc/Makefile	Sun Jun 18 18:08:33 2006 -0400
+@@ -27,6 +27,7 @@ CTRL_SRCS-$(CONFIG_Linux) += xc_linux.c
+ 
+ GUEST_SRCS-y :=
+ GUEST_SRCS-y += xc_linux_build.c
++GUEST_SRCS-y += xc_ptlsim.c
+ GUEST_SRCS-y += xc_load_bin.c
+ GUEST_SRCS-y += xc_load_elf.c
+ GUEST_SRCS-y += xg_private.c
+diff -r 840f33e54054 tools/libxc/xc_linux_build.c
+--- a/tools/libxc/xc_linux_build.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/libxc/xc_linux_build.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -5,6 +5,7 @@
+ #include "xg_private.h"
+ #include "xc_private.h"
+ #include <xenctrl.h>
++#include <xc_ptlsim.h>
+ 
+ #include "xc_elf.h"
+ #include "xc_aout9.h"
+@@ -12,6 +13,7 @@
+ #include <unistd.h>
+ #include <inttypes.h>
+ #include <zlib.h>
++#include <assert.h>
+ 
+ #if defined(__i386__)
+ #define L1_PROT (_PAGE_PRESENT|_PAGE_RW|_PAGE_ACCESSED)
+@@ -459,6 +461,7 @@ static int setup_guest(int xc_handle,
+                        const char *image, unsigned long image_size,
+                        struct initrd_info *initrd,
+                        unsigned long nr_pages,
++                       unsigned long nr_reserved_pages,
+                        unsigned long *pvsi, unsigned long *pvke,
+                        unsigned long *pvss, vcpu_guest_context_t *ctxt,
+                        const char *cmdline,
+@@ -624,6 +627,7 @@ static int setup_guest(int xc_handle,
+                        const char *image, unsigned long image_size,
+                        struct initrd_info *initrd,
+                        unsigned long nr_pages,
++                       unsigned long nr_reserved_pages,
+                        unsigned long *pvsi, unsigned long *pvke,
+                        unsigned long *pvss, vcpu_guest_context_t *ctxt,
+                        const char *cmdline,
+@@ -643,6 +647,7 @@ static int setup_guest(int xc_handle,
+     int rc;
+ 
+     unsigned long nr_pt_pages;
++    unsigned long nr_guest_pages;
+     unsigned long physmap_pfn;
+     xen_pfn_t *physmap, *physmap_e;
+ 
+@@ -663,6 +668,8 @@ static int setup_guest(int xc_handle,
+     unsigned long shadow_mode_enabled;
+     uint32_t supported_features[XENFEAT_NR_SUBMAPS] = { 0, };
+ 
++    nr_guest_pages = nr_pages - nr_reserved_pages;
++
+     rc = probeimageformat(image, image_size, &load_funcs);
+     if ( rc != 0 )
+         goto error_out;
+@@ -728,7 +735,7 @@ static int setup_guest(int xc_handle,
+     if ( !increment_ulong(&v_end, round_pgup(initrd->len)) )
+         goto error_out;
+     vphysmap_start = v_end;
+-    if ( !increment_ulong(&v_end, round_pgup(nr_pages * sizeof(long))) )
++    if ( !increment_ulong(&v_end, round_pgup(nr_guest_pages * sizeof(long))) )
+         goto error_out;
+     vstartinfo_start = v_end;
+     if ( !increment_ulong(&v_end, PAGE_SIZE) )
+@@ -822,11 +829,11 @@ static int setup_guest(int xc_handle,
+     IPRINTF(" TOTAL:            %p->%p\n", _p(dsi.v_start), _p(v_end));
+     IPRINTF(" ENTRY ADDRESS:    %p\n", _p(dsi.v_kernentry));
+ 
+-    if ( ((v_end - dsi.v_start)>>PAGE_SHIFT) > nr_pages )
++    if ( ((v_end - dsi.v_start)>>PAGE_SHIFT) > nr_guest_pages )
+     {
+         PERROR("Initial guest OS requires too much space\n"
+                "(%luMB is greater than %luMB limit)\n",
+-               (v_end-dsi.v_start)>>20, nr_pages>>(20-PAGE_SHIFT));
++               (v_end-dsi.v_start)>>20, nr_guest_pages>>(20-PAGE_SHIFT));
+         goto error_out;
+     }
+ 
+@@ -915,7 +922,7 @@ static int setup_guest(int xc_handle,
+         xc_handle, dom, PAGE_SIZE, PROT_READ|PROT_WRITE,
+         page_array[physmap_pfn++]);
+ 
+-    for ( count = 0; count < nr_pages; count++ )
++    for ( count = 0; count < nr_guest_pages; count++ )
+     {
+         if ( xc_add_mmu_update(
+             xc_handle, mmu,
+@@ -1016,7 +1023,7 @@ static int setup_guest(int xc_handle,
+     sprintf(start_info->magic, "xen-%i.%i-x86_%d%s",
+             rc >> 16, rc & (0xFFFF), (unsigned int)sizeof(long)*8,
+             (dsi.pae_kernel != PAEKERN_no) ? "p" : "");
+-    start_info->nr_pages     = nr_pages;
++    start_info->nr_pages     = nr_guest_pages;
+     start_info->shared_info  = guest_shared_info_mfn << PAGE_SHIFT;
+     start_info->flags        = flags;
+     start_info->pt_base      = vpt_start;
+@@ -1032,11 +1039,10 @@ static int setup_guest(int xc_handle,
+         start_info->mod_len      = initrd->len;
+     }
+     if ( cmdline != NULL )
+-    {
++    { 
+         strncpy((char *)start_info->cmd_line, cmdline, MAX_GUEST_CMDLINE);
+         start_info->cmd_line[MAX_GUEST_CMDLINE-1] = '\0';
+     }
+-    munmap(start_info, PAGE_SIZE);
+ 
+     /* shared_info page starts its life empty. */
+     shared_info = xc_map_foreign_range(
+@@ -1046,18 +1052,12 @@ static int setup_guest(int xc_handle,
+     for ( i = 0; i < MAX_VIRT_CPUS; i++ )
+         shared_info->vcpu_info[i].evtchn_upcall_mask = 1;
+ 
+-    munmap(shared_info, PAGE_SIZE);
+-
+-    /* Send the page update requests down to the hypervisor. */
+-    if ( xc_finish_mmu_updates(xc_handle, mmu) )
+-        goto error_out;
+-
+     p = strstr(dsi.xen_guest_string, "HYPERCALL_PAGE=");
+     if ( p != NULL )
+     {
+         p += strlen("HYPERCALL_PAGE=");
+         hypercall_pfn = strtoul(p, NULL, 16);
+-        if ( hypercall_pfn >= nr_pages )
++        if ( hypercall_pfn >= nr_guest_pages )
+             goto error_out;
+         op.u.hypercall_init.domain = (domid_t)dom;
+         op.u.hypercall_init.mfn    = page_array[hypercall_pfn];
+@@ -1065,6 +1065,18 @@ static int setup_guest(int xc_handle,
+         if ( xc_dom0_op(xc_handle, &op) )
+             goto error_out;
+     }
++
++    if (nr_reserved_pages > 0) {
++        setup_ptlsim_space(xc_handle, dom, page_array + nr_guest_pages, nr_reserved_pages,
++                           shared_info, shared_info_frame);
++    }
++
++    munmap(start_info, PAGE_SIZE);
++    munmap(shared_info, PAGE_SIZE);
++
++    /* Send the page update requests down to the hypervisor. */
++    if ( xc_finish_mmu_updates(xc_handle, mmu) )
++        goto error_out;
+ 
+     free(mmu);
+     free(page_array);
+@@ -1093,7 +1105,8 @@ static int xc_linux_build_internal(int x
+                                    unsigned int store_evtchn,
+                                    unsigned long *store_mfn,
+                                    unsigned int console_evtchn,
+-                                   unsigned long *console_mfn)
++                                   unsigned long *console_mfn,
++                                   unsigned long reserved_pages)
+ {
+     dom0_op_t launch_op;
+     DECLARE_DOM0_OP;
+@@ -1139,9 +1152,10 @@ static int xc_linux_build_internal(int x
+ 
+     memset(ctxt, 0, sizeof(*ctxt));
+ 
+-    if ( setup_guest(xc_handle, domid, image, image_size,
++    if ( setup_guest(xc_handle, domid, image, image_size, 
+                      initrd,
+-                     nr_pages,
++                     nr_pages, 
++                     reserved_pages,
+                      &vstartinfo_start, &vkern_entry,
+                      &vstack_start, ctxt, cmdline,
+                      op.u.getdomaininfo.shared_info_frame,
+@@ -1230,11 +1244,11 @@ static int xc_linux_build_internal(int x
+ 
+     launch_op.u.setvcpucontext.domain = (domid_t)domid;
+     launch_op.u.setvcpucontext.vcpu   = 0;
+-    set_xen_guest_handle(launch_op.u.setvcpucontext.ctxt, ctxt);
++    launch_op.u.setvcpucontext.ctxt.p = ctxt;
+ 
+     launch_op.cmd = DOM0_SETVCPUCONTEXT;
+     rc = xc_dom0_op(xc_handle, &launch_op);
+-
++    
+     return rc;
+ 
+  error_out:
+@@ -1253,7 +1267,8 @@ int xc_linux_build_mem(int xc_handle,
+                        unsigned int store_evtchn,
+                        unsigned long *store_mfn,
+                        unsigned int console_evtchn,
+-                       unsigned long *console_mfn)
++                       unsigned long *console_mfn,
++                       unsigned long reserved_pages)
+ {
+     int            sts;
+     char          *img_buf;
+@@ -1294,7 +1309,8 @@ int xc_linux_build_mem(int xc_handle,
+     sts = xc_linux_build_internal(xc_handle, domid, img_buf, img_len,
+                                   &initrd_info, cmdline, features, flags,
+                                   store_evtchn, store_mfn,
+-                                  console_evtchn, console_mfn);
++                                  console_evtchn, console_mfn,
++                                  reserved_pages);
+ 
+  out:
+     /* The inflation routines may pass back the same buffer so be */
+@@ -1319,7 +1335,8 @@ int xc_linux_build(int xc_handle,
+                    unsigned int store_evtchn,
+                    unsigned long *store_mfn,
+                    unsigned int console_evtchn,
+-                   unsigned long *console_mfn)
++                   unsigned long *console_mfn,
++                   unsigned long reserved_pages)
+ {
+     char *image = NULL;
+     unsigned long image_size;
+@@ -1351,7 +1368,8 @@ int xc_linux_build(int xc_handle,
+     sts = xc_linux_build_internal(xc_handle, domid, image, image_size,
+                                   &initrd_info, cmdline, features, flags,
+                                   store_evtchn, store_mfn,
+-                                  console_evtchn, console_mfn);
++                                  console_evtchn, console_mfn,
++                                  reserved_pages);
+ 
+  error_out:
+     free(image);
+diff -r 840f33e54054 tools/libxc/xc_linux_restore.c
+--- a/tools/libxc/xc_linux_restore.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/libxc/xc_linux_restore.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -11,6 +11,7 @@
+ 
+ #include "xg_private.h"
+ #include "xg_save_restore.h"
++#include "xc_ptlsim.h"
+ 
+ /* max mfn of the whole machine */
+ static unsigned long max_mfn;
+@@ -105,7 +106,8 @@ int xc_linux_restore(int xc_handle, int 
+ int xc_linux_restore(int xc_handle, int io_fd,
+                      uint32_t dom, unsigned long nr_pfns,
+                      unsigned int store_evtchn, unsigned long *store_mfn,
+-                     unsigned int console_evtchn, unsigned long *console_mfn)
++                     unsigned int console_evtchn, unsigned long *console_mfn,
++                     unsigned long reserved_pages)
+ {
+     DECLARE_DOM0_OP;
+     int rc = 1, i, n, pae_extended_cr3 = 0;
+@@ -241,8 +243,8 @@ int xc_linux_restore(int xc_handle, int 
+     }
+ 
+     /* We want zeroed memory so use calloc rather than malloc. */
+-    p2m        = calloc(max_pfn, sizeof(xen_pfn_t));
+-    pfn_type   = calloc(max_pfn, sizeof(unsigned long));
++    p2m        = calloc(max_pfn + reserved_pages, sizeof(xen_pfn_t));
++    pfn_type   = calloc(max_pfn + reserved_pages, sizeof(unsigned long));
+     region_mfn = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
+ 
+     if ((p2m == NULL) || (pfn_type == NULL) || (region_mfn == NULL)) {
+@@ -265,22 +267,22 @@ int xc_linux_restore(int xc_handle, int 
+     }
+     shared_info_frame = op.u.getdomaininfo.shared_info_frame;
+ 
+-    if(xc_domain_setmaxmem(xc_handle, dom, PFN_TO_KB(max_pfn)) != 0) {
++    if(xc_domain_setmaxmem(xc_handle, dom, PFN_TO_KB(max_pfn + reserved_pages)) != 0) {
+         errno = ENOMEM;
+         goto out;
+     }
+ 
+     if(xc_domain_memory_increase_reservation(
+-           xc_handle, dom, max_pfn, 0, 0, NULL) != 0) {
+-        ERR("Failed to increase reservation by %lx KB", PFN_TO_KB(max_pfn));
++           xc_handle, dom, max_pfn + reserved_pages, 0, 0, NULL) != 0) {
++        ERR("Failed to increase reservation by %lx KB", PFN_TO_KB(max_pfn + reserved_pages));
+         errno = ENOMEM;
+         goto out;
+     }
+ 
+-    DPRINTF("Increased domain reservation by %lx KB\n", PFN_TO_KB(max_pfn));
++    DPRINTF("Increased domain reservation by %lx KB\n", PFN_TO_KB(max_pfn + reserved_pages));
+ 
+     /* Build the pfn-to-mfn table. We choose MFN ordering returned by Xen. */
+-    if (xc_get_pfn_list(xc_handle, dom, p2m, max_pfn) != max_pfn) {
++    if (xc_get_pfn_list(xc_handle, dom, p2m, max_pfn + reserved_pages) != (max_pfn + reserved_pages)) {
+         ERR("Did not read correct number of frame numbers for new dom");
+         goto out;
+     }
+@@ -732,6 +734,11 @@ int xc_linux_restore(int xc_handle, int 
+     page = xc_map_foreign_range(
+         xc_handle, dom, PAGE_SIZE, PROT_WRITE, shared_info_frame);
+     memcpy(page, shared_info, sizeof(shared_info_t));
++
++    if (reserved_pages > 0) {
++      setup_ptlsim_space(xc_handle, dom, p2m + max_pfn, reserved_pages, (shared_info_t*)page, shared_info_frame);
++    }
++
+     munmap(page, PAGE_SIZE);
+ 
+     /* Uncanonicalise the pfn-to-mfn table frame-number list. */
+diff -r 840f33e54054 tools/libxc/xc_linux_save.c
+--- a/tools/libxc/xc_linux_save.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/libxc/xc_linux_save.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -15,6 +15,7 @@
+ #include "xc_private.h"
+ #include "xg_private.h"
+ #include "xg_save_restore.h"
++#include "xc_ptlsim.h"
+ 
+ /*
+ ** Default values for important tuning parameters. Can override by passing
+@@ -657,7 +658,7 @@ int xc_linux_save(int xc_handle, int io_
+ 
+     /* Map the shared info frame */
+     if(!(live_shinfo = xc_map_foreign_range(xc_handle, dom, PAGE_SIZE,
+-                                            PROT_READ, shared_info_frame))) {
++                                            PROT_READ|PROT_WRITE, shared_info_frame))) {
+         ERR("Couldn't map live_shinfo");
+         goto out;
+     }
+diff -r 840f33e54054 tools/libxc/xenguest.h
+--- a/tools/libxc/xenguest.h	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/libxc/xenguest.h	Sun Jun 18 18:08:33 2006 -0400
+@@ -40,7 +40,8 @@ int xc_linux_restore(int xc_handle, int 
+ int xc_linux_restore(int xc_handle, int io_fd, uint32_t dom,
+                      unsigned long nr_pfns, unsigned int store_evtchn,
+                      unsigned long *store_mfn, unsigned int console_evtchn,
+-                     unsigned long *console_mfn);
++                     unsigned long *console_mfn,
++                     unsigned long reserved_pages);
+ 
+ /**
+  * This function will create a domain for a paravirtualized Linux
+@@ -56,6 +57,7 @@ int xc_linux_restore(int xc_handle, int 
+  * @parm store_mfn returned with the mfn of the store page
+  * @parm console_evtchn the console event channel for this domain to use
+  * @parm conole_mfn returned with the mfn of the console page
++ * @parm reserved
+  * @return 0 on success, -1 on failure
+  */
+ int xc_linux_build(int xc_handle,
+@@ -68,7 +70,8 @@ int xc_linux_build(int xc_handle,
+                    unsigned int store_evtchn,
+                    unsigned long *store_mfn,
+                    unsigned int console_evtchn,
+-                   unsigned long *console_mfn);
++                   unsigned long *console_mfn,
++                   unsigned long reserved_pages);
+ 
+ /**
+  * This function will create a domain for a paravirtualized Linux
+@@ -100,7 +103,8 @@ int xc_linux_build_mem(int xc_handle,
+                        unsigned int store_evtchn,
+                        unsigned long *store_mfn,
+                        unsigned int console_evtchn,
+-                       unsigned long *console_mfn);
++                       unsigned long *console_mfn,
++                       unsigned long reserved_pages);
+ 
+ int xc_hvm_build(int xc_handle,
+                  uint32_t domid,
+diff -r 840f33e54054 tools/python/xen/lowlevel/xc/xc.c
+--- a/tools/python/xen/lowlevel/xc/xc.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/lowlevel/xc/xc.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -331,25 +331,27 @@ static PyObject *pyxc_linux_build(XcObje
+     int store_evtchn, console_evtchn;
+     unsigned long store_mfn = 0;
+     unsigned long console_mfn = 0;
++    int reserved_pages = 0;
+ 
+     static char *kwd_list[] = { "dom", "store_evtchn",
+                                 "console_evtchn", "image",
+ 				/* optional */
+ 				"ramdisk", "cmdline", "flags",
+-				"features", NULL };
+-
+-    if ( !PyArg_ParseTupleAndKeywords(args, kwds, "iiis|ssis", kwd_list,
++				"features", "reserved_pages", NULL };
++
++    if ( !PyArg_ParseTupleAndKeywords(args, kwds, "iiis|ssisi", kwd_list,
+                                       &dom, &store_evtchn,
+ 				      &console_evtchn, &image,
+ 				      /* optional */
+ 				      &ramdisk, &cmdline, &flags,
+-				      &features) )
++				      &features, &reserved_pages) )
+         return NULL;
+ 
+     if ( xc_linux_build(self->xc_handle, dom, image,
+                         ramdisk, cmdline, features, flags,
+                         store_evtchn, &store_mfn,
+-			console_evtchn, &console_mfn) != 0 ) {
++                        console_evtchn, &console_mfn,
++                        reserved_pages) != 0 ) {
+         if (!errno)
+              errno = EINVAL;
+         return PyErr_SetFromErrno(xc_error);
+@@ -1010,6 +1012,7 @@ static PyMethodDef pyxc_methods[] = {
+       " ramdisk [str, n/a]: Name of ramdisk file, if any.\n"
+       " cmdline [str, n/a]: Kernel parameters, if any.\n\n"
+       " vcpus   [int, 1]:   Number of Virtual CPUS in domain.\n\n"
++      " reserved_pages [int]: Pages reserved for integrated monitor.\n\n"
+       "Returns: [int] 0 on success; -1 on error.\n" },
+ 
+     { "hvm_build", 
+diff -r 840f33e54054 tools/python/xen/xend/XendCheckpoint.py
+--- a/tools/python/xen/xend/XendCheckpoint.py	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/xend/XendCheckpoint.py	Sun Jun 18 18:08:33 2006 -0400
+@@ -111,7 +111,9 @@ def save(fd, dominfo, network, live, dst
+         raise Exception, exn
+ 
+ 
+-def restore(xd, fd):
++def restore(xd, fd, paused, reserved_pages):
++    log.debug('Restore request: paused = %d, reserved_pages = %d', paused, reserved_pages)
++    
+     signature = read_exact(fd, len(SIGNATURE),
+         "not a valid guest state file: signature read")
+     if signature != SIGNATURE:
+@@ -147,11 +149,11 @@ def restore(xd, fd):
+             raise XendError(
+                 "not a valid guest state file: pfn count out of range")
+ 
+-        balloon.free(xc.pages_to_kib(nr_pfns))
++        balloon.free(xc.pages_to_kib(nr_pfns + reserved_pages))
+ 
+         cmd = map(str, [xen.util.auxbin.pathTo(XC_RESTORE),
+                         xc.handle(), fd, dominfo.getDomid(), nr_pfns,
+-                        store_port, console_port])
++                        store_port, console_port, reserved_pages])
+         log.debug("[xc_restore]: %s", string.join(cmd))
+ 
+         handler = RestoreInputHandler()
+@@ -161,7 +163,8 @@ def restore(xd, fd):
+         if handler.store_mfn is None or handler.console_mfn is None:
+             raise XendError('Could not read store/console MFN')
+ 
+-        dominfo.unpause()
++        if paused == 0:
++            dominfo.unpause()
+ 
+         dominfo.completeRestore(handler.store_mfn, handler.console_mfn)
+ 
+diff -r 840f33e54054 tools/python/xen/xend/XendDomain.py
+--- a/tools/python/xen/xend/XendDomain.py	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/xend/XendDomain.py	Sun Jun 18 18:08:33 2006 -0400
+@@ -240,7 +240,7 @@ class XendDomain:
+         # !!!
+         raise XendError("Unsupported")
+ 
+-    def domain_restore(self, src):
++    def domain_restore(self, src, paused, reserved_pages):
+         """Restore a domain from file.
+ 
+         @param src:      source file
+@@ -249,18 +249,18 @@ class XendDomain:
+         try:
+             fd = os.open(src, os.O_RDONLY)
+             try:
+-                return self.domain_restore_fd(fd)
++                return self.domain_restore_fd(fd, paused, reserved_pages)
+             finally:
+                 os.close(fd)
+         except OSError, ex:
+             raise XendError("can't read guest state file %s: %s" %
+                             (src, ex[1]))
+ 
+-    def domain_restore_fd(self, fd):
++    def domain_restore_fd(self, fd, paused, reserved_pages):
+         """Restore a domain from the given file descriptor."""
+ 
+         try:
+-            return XendCheckpoint.restore(self, fd)
++            return XendCheckpoint.restore(self, fd, paused, reserved_pages)
+         except:
+             # I don't really want to log this exception here, but the error
+             # handling in the relocation-socket handling code (relocate.py) is
+diff -r 840f33e54054 tools/python/xen/xend/XendDomainInfo.py
+--- a/tools/python/xen/xend/XendDomainInfo.py	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/xend/XendDomainInfo.py	Sun Jun 18 18:08:33 2006 -0400
+@@ -1273,6 +1273,7 @@ class XendDomainInfo:
+                     xc.vcpu_setaffinity(self.domid, v, cpu)
+ 
+             m = self.image.getDomainMemory(self.info['memory'] * 1024)
++            log.debug('XendDomainInfo.initDomain: memory %d', m);
+             balloon.free(m)
+             xc.domain_setmaxmem(self.domid, m)
+ 
+diff -r 840f33e54054 tools/python/xen/xend/image.py
+--- a/tools/python/xen/xend/image.py	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/xend/image.py	Sun Jun 18 18:08:33 2006 -0400
+@@ -69,6 +69,7 @@ class ImageHandler:
+         self.kernel = None
+         self.ramdisk = None
+         self.cmdline = None
++        self.reserved_pages = 0
+ 
+         self.configure(imageConfig, deviceConfig)
+ 
+@@ -90,7 +91,9 @@ class ImageHandler:
+         if args:
+             self.cmdline += " " + args
+         self.ramdisk = get_cfg("ramdisk", '')
+-        
++
++        self.reserved_pages = (int(get_cfg("reservedmem", 0)) * 1024 * 1024) / 4096
++
+         self.vm.storeVm(("image/ostype", self.ostype),
+                         ("image/kernel", self.kernel),
+                         ("image/cmdline", self.cmdline),
+@@ -182,14 +185,16 @@ class LinuxImageHandler(ImageHandler):
+         log.debug("ramdisk        = %s", self.ramdisk)
+         log.debug("vcpus          = %d", self.vm.getVCpuCount())
+         log.debug("features       = %s", self.vm.getFeatures())
+-
++        log.debug("reservedpages  = %s", self.reserved_pages)
++        
+         return xc.linux_build(dom            = self.vm.getDomid(),
+                               image          = self.kernel,
+                               store_evtchn   = store_evtchn,
+                               console_evtchn = console_evtchn,
+                               cmdline        = self.cmdline,
+                               ramdisk        = self.ramdisk,
+-                              features       = self.vm.getFeatures())
++                              reserved_pages = self.reserved_pages)
++                              # features       = self.features,
+ 
+ class HVMImageHandler(ImageHandler):
+ 
+diff -r 840f33e54054 tools/python/xen/xend/server/XMLRPCServer.py
+--- a/tools/python/xen/xend/server/XMLRPCServer.py	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/xend/server/XMLRPCServer.py	Sun Jun 18 18:08:33 2006 -0400
+@@ -63,8 +63,8 @@ def domain_create(config):
+     info = XendDomain.instance().domain_create(config)
+     return fixup_sxpr(info.sxpr())
+ 
+-def domain_restore(src):
+-    info = XendDomain.instance().domain_restore(src)
++def domain_restore(src, paused, reserved_pages):
++    info = XendDomain.instance().domain_restore(src, paused, reserved_pages)
+     return fixup_sxpr(info.sxpr())
+ 
+ def get_log():
+diff -r 840f33e54054 tools/python/xen/xm/create.py
+--- a/tools/python/xen/xm/create.py	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/xm/create.py	Sun Jun 18 18:08:33 2006 -0400
+@@ -150,6 +150,10 @@ gopts.var('memory', val='MEMORY',
+           fn=set_int, default=128,
+           use="Domain memory in MB.")
+ 
++gopts.var('reservedmem', val='RESERVEDMEM',
++          fn=set_value, default=0,
++          use="Memory in MB to reserve for internal supervisor.")
++
+ gopts.var('maxmem', val='MEMORY',
+           fn=set_int, default=None,
+           use="Maximum domain memory in MB.")
+@@ -471,6 +475,8 @@ def configure_image(vals):
+         config_image.append(['root', cmdline_root])
+     if vals.extra:
+         config_image.append(['args', vals.extra])
++    if vals.reservedmem:
++        config_image.append(['reservedmem', vals.reservedmem])
+ 
+     if vals.builder == 'hvm':
+         configure_hvm(config_image, vals)
+diff -r 840f33e54054 tools/python/xen/xm/main.py
+--- a/tools/python/xen/xm/main.py	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/python/xen/xm/main.py	Sun Jun 18 18:08:33 2006 -0400
+@@ -63,7 +63,7 @@ migrate_help = "migrate <DomId> <Host>  
+ migrate_help = "migrate <DomId> <Host>           Migrate a domain to another machine"
+ pause_help =   "pause <DomId>                    Pause execution of a domain"
+ reboot_help =  "reboot <DomId> [-w][-a]          Reboot a domain"
+-restore_help = "restore <File>                   Create a domain from a saved state file"
++restore_help = "restore <File> [--paused] [--reserved kb] Create a domain from a saved state file"
+ save_help =    "save <DomId> <File>              Save domain state (and config) to file"
+ shutdown_help ="shutdown <DomId> [-w][-a][-R|-H] Shutdown a domain"
+ top_help =     "top                              Monitor system and domains in real-time"
+@@ -335,15 +335,26 @@ def xm_save(args):
+     server.xend.domain.save(dom, savefile)
+     
+ def xm_restore(args):
+-    arg_check(args, "restore", 1)
++    arg_check(args, "restore", 1, 4)
+ 
+     savefile = os.path.abspath(args[0])
++
++    paused = 0
++    reserved_pages = 0
++
++    # Convert to pages
++    if (len(args) >= 3) and (args[1] in ['--reserve']):
++        reserved_pages = int(args[2]) * ((1024 * 1024) / 4096)
++
++    for f in args:
++        if f in ['--paused']:
++            paused = 1
+ 
+     if not os.access(savefile, os.R_OK):
+         err("xm restore: Unable to read file %s" % savefile)
+         sys.exit(1)
+ 
+-    server.xend.domain.restore(savefile)
++    server.xend.domain.restore(savefile, paused, reserved_pages)
+ 
+ 
+ def getDomains(domain_names):
+diff -r 840f33e54054 tools/xcutils/xc_restore.c
+--- a/tools/xcutils/xc_restore.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/tools/xcutils/xc_restore.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -19,9 +19,9 @@ main(int argc, char **argv)
+ {
+     unsigned int xc_fd, io_fd, domid, nr_pfns, store_evtchn, console_evtchn;
+     int ret;
+-    unsigned long store_mfn, console_mfn;
++    unsigned long store_mfn, console_mfn, reserved_pages;
+ 
+-    if (argc != 7)
++    if (argc < 7)
+ 	errx(1,
+ 	     "usage: %s xcfd iofd domid nr_pfns store_evtchn console_evtchn",
+ 	     argv[0]);
+@@ -32,9 +32,10 @@ main(int argc, char **argv)
+     nr_pfns = atoi(argv[4]);
+     store_evtchn = atoi(argv[5]);
+     console_evtchn = atoi(argv[6]);
++    reserved_pages = (argc > 7) ? atoi(argv[7]) : 0;
+ 
+     ret = xc_linux_restore(xc_fd, io_fd, domid, nr_pfns, store_evtchn,
+-			   &store_mfn, console_evtchn, &console_mfn);
++			   &store_mfn, console_evtchn, &console_mfn, reserved_pages);
+     if (ret == 0) {
+ 	printf("store-mfn %li\n", store_mfn);
+ 	printf("console-mfn %li\n", console_mfn);
+diff -r 840f33e54054 xen/arch/x86/dom0_ops.c
+--- a/xen/arch/x86/dom0_ops.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/dom0_ops.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -455,7 +455,16 @@ void arch_getdomaininfo_ctxt(
+     else
+     {
+         /* IOPL privileges are virtualised: merge back into returned eflags. */
+-        BUG_ON((c->user_regs.eflags & EF_IOPL) != 0);
++        //++MTY This crashes Xen sometimes (calls ud2 opcode as part of FORCE_CRASH)
++        //
++        // Call trace:
++        // arch_getdomaininfo_ctxt
++        // do_dom0_op
++        // get_page_froml1e
++        // do_iret
++        // syscall_entry
++        //
++        // BUG_ON((c->user_regs.eflags & EF_IOPL) != 0);
+         c->user_regs.eflags |= v->arch.iopl << 12;
+     }
+ 
+diff -r 840f33e54054 xen/arch/x86/domain.c
+--- a/xen/arch/x86/domain.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/domain.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -309,8 +309,13 @@ int arch_set_info_guest(
+         hvm_load_cpu_guest_regs(v, &v->arch.guest_context.user_regs);
+     }
+ 
+-    if ( test_bit(_VCPUF_initialised, &v->vcpu_flags) )
++    if ( test_bit(_VCPUF_initialised, &v->vcpu_flags) ) {
++        update_vcpu_pt_base(v, c->ctrlreg[3] >> PAGE_SHIFT, 0);
++        if (d->domain_id > 0) printk("arch_set_info_guest: cpu already initialized (guest_table %lu, cr3 %lx)\n", v->arch.guest_table.pfn, v->arch.guest_context.ctrlreg[3]);
+         return 0;
++    }
++
++    // otherwise take special initialization actions below
+ 
+     memset(v->arch.guest_context.debugreg, 0,
+            sizeof(v->arch.guest_context.debugreg));
+diff -r 840f33e54054 xen/arch/x86/mm.c
+--- a/xen/arch/x86/mm.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/mm.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -1712,34 +1712,40 @@ int get_page_type(struct page_info *page
+ }
+ 
+ 
+-int new_guest_cr3(unsigned long mfn)
+-{
+-    struct vcpu *v = current;
++int update_vcpu_pt_base(struct vcpu *v, unsigned long mfn, int update_cr3)
++{
+     struct domain *d = v->domain;
+     int okay;
+     unsigned long old_base_mfn;
+ 
+     ASSERT(writable_pagetable_in_sync(d));
+ 
++    if (d->domain_id > 0) {
++        MEM_LOG("update_vcpu_cr3: domain %d, vcpu %d -> mfn %lu\n", d->domain_id, v->vcpu_id, mfn);
++    } 
++
+     if ( shadow_mode_refcounts(d) )
+     {
+         okay = get_page_from_pagenr(mfn, d);
+         if ( unlikely(!okay) )
+         {
+-            MEM_LOG("Error while installing new baseptr %lx", mfn);
++            MEM_LOG("Error while installing new baseptr %lu", mfn);
+             return 0;
+         }
+     }
+     else
+     {
+         okay = get_page_and_type_from_pagenr(mfn, PGT_root_page_table, d);
++        if ((d->domain_id > 0) && (!okay)) {
++            MEM_LOG("new_guest_cr3: get_page_and_type_from_pagenr: okay = %d\n", okay);
++        }
+         if ( unlikely(!okay) )
+         {
+             /* Switch to idle pagetable: this VCPU has no active p.t. now. */
+             old_base_mfn = pagetable_get_pfn(v->arch.guest_table);
+             v->arch.guest_table = pagetable_null();
+             update_pagetables(v);
+-            write_cr3(__pa(idle_pg_table));
++            if (update_cr3) write_cr3(__pa(idle_pg_table));
+             if ( old_base_mfn != 0 )
+                 put_page_and_type(mfn_to_page(old_base_mfn));
+ 
+@@ -1748,8 +1754,8 @@ int new_guest_cr3(unsigned long mfn)
+             if ( !okay )
+             {
+                 /* Failure here is unrecoverable: the VCPU has no pagetable! */
+-                MEM_LOG("Fatal error while installing new baseptr %lx", mfn);
+-                domain_crash(d);
++                MEM_LOG("Fatal error while installing new baseptr %lu", mfn);
++                // domain_crash(d); // DO NOT DO THIS! It propagates crash back to dom0!
+                 percpu_info[v->processor].deferred_ops = 0;
+                 return 0;
+             }
+@@ -1762,7 +1768,10 @@ int new_guest_cr3(unsigned long mfn)
+     v->arch.guest_table = pagetable_from_pfn(mfn);
+     update_pagetables(v); /* update shadow_table and monitor_table */
+ 
+-    write_ptbase(v);
++    if (update_cr3) {
++        write_ptbase(v);
++        if (d->domain_id > 0) MEM_LOG("new_guest_cr3: updating local cr3 for vcpu %d\n", v->vcpu_id);
++    }
+ 
+     if ( likely(old_base_mfn != 0) )
+     {
+@@ -1783,6 +1792,7 @@ int new_guest_cr3(unsigned long mfn)
+         get_shadow_ref(v->arch.monitor_shadow_ref);
+     }
+ 
++    if (d->domain_id > 0) MEM_LOG("update_vcpu_pt_base: installed new baseptr %lu (guest_table = %lu)\n", mfn, v->arch.guest_table.pfn);
+     return 1;
+ }
+ 
+diff -r 840f33e54054 xen/arch/x86/setup.c
+--- a/xen/arch/x86/setup.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/setup.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -628,7 +628,7 @@ void arch_get_xen_caps(xen_capabilities_
+ 
+ #elif defined(CONFIG_X86_64)
+ 
+-    p += sprintf(p, "xen-%d.%d-x86_64 ", XEN_VERSION, XEN_SUBVERSION);
++    p += sprintf(p, "xen-%d.%d-x86_64-ptlsim ", XEN_VERSION, XEN_SUBVERSION);
+     if ( hvm_enabled )
+     {
+         p += sprintf(p, "hvm-%d.%d-x86_32 ", XEN_VERSION, XEN_SUBVERSION);
+diff -r 840f33e54054 xen/arch/x86/time.c
+--- a/xen/arch/x86/time.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/time.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -4,7 +4,9 @@
+  * Per-CPU time calibration and management.
+  * 
+  * Copyright (c) 2002-2005, K A Fraser
+- * 
++ *
++ * CPU frequency scaling support: Matt T. Yourst <yourst@yourst.com> 
++ *
+  * Portions from Linux are:
+  * Copyright (c) 1991, 1992, 1995  Linus Torvalds
+  */
+@@ -85,6 +87,15 @@ static inline u32 div_frac(u32 dividend,
+ static inline u32 div_frac(u32 dividend, u32 divisor)
+ {
+     u32 quotient, remainder;
++
++    if (divisor == dividend) {
++        return 0xffffffff; /* a.k.a. 0.99999, as close as we can */
++    }
++
++    if (!divisor) {
++        return 0; /* avoid divide-by-zero at all costs */
++    }
++
+     ASSERT(dividend < divisor);
+     __asm__ ( 
+         "divl %4"
+@@ -914,6 +925,141 @@ void __init early_time_init(void)
+     setup_irq(0, &irq0);
+ }
+ 
++/*
++ * Frequency Scaling Support
++ *
++ * These functions are called from emulate_privileged_op
++ * in response to the MSR writes that control core frequency
++ * and voltage on various CPU types.
++ *
++ * We identify only those writes that alter the frequency
++ * itself (i.e. between raising or lowering the voltage
++ * appropriately) and make sure that the requested frequency
++ * is different from the current frequency. In this case
++ * we read the appropriate status MSR until the frequency
++ * stabilizes, then recalibrate all hypervisor timing
++ * variables to the new frequency as indicated in the MSR.
++ *
++ * The frequency change is effective on the CPU this code
++ * is called on: it's the responsibility of the guest OS
++ * to only write the virtual MSR on the target CPU context.
++ *
++ * No modifications to the guest OS cpufreq drivers are
++ * needed as long as support is provided below for the
++ * corresponding CPU type.
++ */
++
++/*
++ * AMD Athlon 64 / Opteron Support (from powernow-k8 driver):
++ */
++
++/*
++ * According to the AMD manuals, the following formula
++ * always converts an FID to the actual frequency,
++ * based on increments of 100 MHz (200 MHz steps):
++ *
++ *   mhz = 800 + 100*fid
++ *
++ * Technically the BIOS is supposed to provide this
++ * table (so matching voltages can be found), but
++ * the frequency part is fixed for all K8 cores,
++ * so we just hard code the following formula:
++ */
++static inline int k8_fid_to_mhz(int fid) {
++    return 800 + 100*fid;
++}
++
++int handle_k8_fidvid_status_msr_read(u32* lo, u32* hi) {
++    /* This will return -1 if the processor isn't a K8: */
++    return rdmsr_safe(MSR_FIDVID_STATUS, *lo, *hi);
++}
++
++static int k8_fidvid_wait(void) {
++	u32 lo, hi;
++	u32 i = 0;
++
++    DPRINTK("k8_fidvid_wait: waiting for frequency and voltage to stabilize...");
++
++	do {
++        if (i++ > 10000) {
++            printk("k8_vidfid_wait: Excessive wait time for vid/fid to stabilize\n");
++            return -1;
++		}
++        rdmsr_safe(MSR_FIDVID_STATUS, lo, hi);
++	} while (lo & MSR_S_LO_CHANGE_PENDING);
++
++    DPRINTK("OK: new fid %d\n", lo & MSR_S_LO_CHANGE_PENDING);
++
++    return lo & MSR_S_LO_CURRENT_FID;
++}
++
++#if 0
++#undef DPRINTK
++#define DPRINTK printk
++#endif
++
++int handle_k8_fidvid_ctl_msr_write(u32 lo, u32 hi) {
++    int rc;
++    u32 oldlo, oldhi;
++    int oldfid, newfid;
++    int mhz;
++    unsigned int cpu = smp_processor_id();
++    s_time_t now;
++
++    DPRINTK("fidvid_ctl: requested msr write 0x%08x:0x%08x\n", hi, lo);
++
++    rc = rdmsr_safe(MSR_FIDVID_STATUS, oldlo, oldhi);
++    /* This will return -1 if the processor isn't a K8: */
++    if (rc) return rc;
++
++    oldfid = (oldlo & MSR_S_LO_CURRENT_FID);
++    newfid = (lo & MSR_C_LO_NEW_FID);
++
++    if (oldfid != newfid) {
++        DPRINTK("fidvid_ctl: moving from old fid %d to new fid %d\n", oldfid, newfid);
++    } else {
++        DPRINTK("fidvid_ctl: same fid %d\n", oldfid);
++    }
++
++    DPRINTK("fidvid_ctl: writing MSR 0x%08x with 0x%08x:0x%08x...\n", MSR_FIDVID_CTL, hi, lo);
++
++    rc = wrmsr_safe(MSR_FIDVID_CTL, lo, hi);
++    if (rc) return rc;
++
++    if (oldfid == newfid) return 0;
++
++    /* Only do the stabilization wait if we're changing the frequency */
++    /* For voltage changes, the OS will do this itself */
++
++    newfid = k8_fidvid_wait();
++    /* excessive wait? abort the change and let guest kernel figure it out */
++    if (newfid < 0) return 0;
++
++    DPRINTK("fidvid_ctl: recalibrating TSC...");
++
++    mhz = k8_fid_to_mhz(newfid);
++    DPRINTK("%d MHz\n", mhz);
++
++    cpu_khz = mhz * 1000;
++    set_time_scale(&cpu_time[smp_processor_id()].tsc_scale, (u64)mhz * 1000000ULL);
++
++    DPRINTK("fidvid_ctl: resetting timestamps...");
++
++    rdtscll(cpu_time[cpu].local_tsc_stamp);
++    now = read_platform_stime();
++
++    cpu_time[cpu].stime_master_stamp = now;
++    cpu_time[cpu].stime_local_stamp  = now;
++
++    DPRINTK("fidvid_ctl: recalibrating timers...");
++
++    local_time_calibration(NULL);
++    __update_vcpu_system_time(current);
++    DPRINTK("OK\n");
++
++    return 0;
++}
++
+ void send_timer_event(struct vcpu *v)
+ {
+     send_guest_vcpu_virq(v, VIRQ_TIMER);
+diff -r 840f33e54054 xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/traps.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -1221,6 +1221,16 @@ static int emulate_privileged_op(struct 
+                 ((u64)regs->edx << 32) | regs->eax;
+             break;
+ #endif
++        case MSR_FIDVID_CTL: {
++            extern int handle_k8_fidvid_ctl_msr_write(u32 lo, u32 hi);
++            /* domU is never allowed to mess with core frequencies and voltages */
++            if (!IS_PRIV(current->domain))
++                break;
++            if (handle_k8_fidvid_ctl_msr_write(regs->eax, regs->edx))
++                goto fail;
++            break;
++        }
++
+         default:
+             if ( (rdmsr_safe(regs->ecx, l, h) != 0) ||
+                  (regs->eax != l) || (regs->edx != h) )
+@@ -1252,6 +1262,14 @@ static int emulate_privileged_op(struct 
+             if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
+                 goto fail;
+             break;
++
++        case MSR_FIDVID_STATUS: {
++            extern int handle_k8_fidvid_status_msr_read(u32* lo, u32* hi);
++            if (handle_k8_fidvid_status_msr_read((u32*)&regs->eax, (u32*)&regs->edx))
++                goto fail;
++            break;
++        }
++
+         default:
+             /* Everyone can read the MSR space. */
+             /*DPRINTK("Domain attempted RDMSR %p.\n", _p(regs->ecx));*/
+diff -r 840f33e54054 xen/arch/x86/x86_64/entry.S
+--- a/xen/arch/x86/x86_64/entry.S	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/x86_64/entry.S	Sun Jun 18 18:08:33 2006 -0400
+@@ -337,6 +337,14 @@ ENTRY(ret_from_intr)
+         jnz   test_all_events
+         jmp   restore_all_xen
+ 
++.data
++ENTRY(last_exception_type)
++  .int 0
++
++ENTRY(last_exception_error_code)
++  .int 0
++.previous
++
+         ALIGN
+ /* No special register assumptions. */
+ handle_exception:
+@@ -345,7 +353,12 @@ handle_exception:
+         jz    exception_with_ints_disabled
+         sti
+         movq  %rsp,%rdi
++        movl  UREGS_error_code(%rsp),%eax
++        leaq  last_exception_error_code(%rip),%rdx
++        movl  %eax,(%rdx)
+         movl  UREGS_entry_vector(%rsp),%eax
++        leaq  last_exception_type(%rip),%rdx
++        movl  %eax,(%rdx)
+         leaq  exception_table(%rip),%rdx
+         GET_CURRENT(%rbx)
+         PERFC_INCR(PERFC_exceptions, %rax)
+diff -r 840f33e54054 xen/arch/x86/x86_64/traps.c
+--- a/xen/arch/x86/x86_64/traps.c	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/arch/x86/x86_64/traps.c	Sun Jun 18 18:08:33 2006 -0400
+@@ -21,6 +21,18 @@
+ 
+ #include <public/callback.h>
+ 
++#define TRAP_COUNT 20
++static char *trap_name[TRAP_COUNT] = { 
++    "divide error", "debug", "nmi", "bkpt",
++    "overflow", "bounds", "invalid opcode", "device not available",
++    "double fault",  "coprocessor segment", "invalid tss", "segment not found", 
++    "stack error", "general protection fault", "page fault", "spurious interrupt",
++    "coprocessor error", "alignment check", "machine check", "simd error"
++};
++
++extern unsigned int last_exception_type;
++extern unsigned int last_exception_error_code;
++
+ void show_registers(struct cpu_user_regs *regs)
+ {
+     struct cpu_user_regs fault_regs = *regs;
+@@ -47,6 +59,8 @@ void show_registers(struct cpu_user_regs
+     printk("----[ Xen-%d.%d%s    %s ]----\n",
+            XEN_VERSION, XEN_SUBVERSION, XEN_EXTRAVERSION,
+            print_tainted(taint_str));
++    printk("Trap: %s (%d)\n", (last_exception_type < TRAP_COUNT) ? trap_name[last_exception_type] : "Unknown", last_exception_type);
++    printk("Error code %08x\n", last_exception_error_code);
+     printk("CPU:    %d\nRIP:    %04x:[<%016lx>]",
+            smp_processor_id(), fault_regs.cs, fault_regs.rip);
+     if ( !guest_mode(regs) )
+diff -r 840f33e54054 xen/include/asm-x86/mm.h
+--- a/xen/include/asm-x86/mm.h	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/include/asm-x86/mm.h	Sun Jun 18 18:08:33 2006 -0400
+@@ -7,6 +7,7 @@
+ #include <xen/list.h>
+ #include <asm/io.h>
+ #include <asm/uaccess.h>
++#include <asm/current.h>
+ 
+ /*
+  * Per-page-frame information.
+@@ -379,7 +380,11 @@ void ptwr_eip_stat_print(void);
+ 
+ #endif
+ 
+-int new_guest_cr3(unsigned long pfn);
++int update_vcpu_pt_base(struct vcpu *v, unsigned long mfn, int update_cr3);
++
++static inline int new_guest_cr3(unsigned long mfn) {
++  return update_vcpu_pt_base(current, mfn, 1);
++}
+ 
+ void propagate_page_fault(unsigned long addr, u16 error_code);
+ 
+diff -r 840f33e54054 xen/include/asm-x86/msr.h
+--- a/xen/include/asm-x86/msr.h	Fri Jun 16 18:45:45 2006 -0700
++++ b/xen/include/asm-x86/msr.h	Sun Jun 18 18:08:33 2006 -0400
+@@ -137,6 +137,37 @@ static inline void wrmsrl(unsigned int m
+ #define EFER_LMA (1<<_EFER_LMA)
+ #define EFER_NX (1<<_EFER_NX)
+ #define EFER_SVME (1<<_EFER_SVME)
++
++/* Model Specific Registers for K8 p-state transitions. MSRs are 64-bit. For */
++/* writes (wrmsr - opcode 0f 30), the register number is placed in ecx, and   */
++/* the value to write is placed in edx:eax. For reads (rdmsr - opcode 0f 32), */
++/* the register number is placed in ecx, and the data is returned in edx:eax. */
++
++#define MSR_FIDVID_CTL      0xc0010041
++#define MSR_FIDVID_STATUS   0xc0010042
++
++/* Field definitions within the FID VID Low Control MSR : */
++#define MSR_C_LO_INIT_FID_VID     0x00010000
++#define MSR_C_LO_NEW_VID          0x00003f00
++#define MSR_C_LO_NEW_FID          0x0000003f
++#define MSR_C_LO_VID_SHIFT        8
++
++/* Field definitions within the FID VID High Control MSR : */
++#define MSR_C_HI_STP_GNT_TO 	  0x000fffff
++
++/* Field definitions within the FID VID Low Status MSR : */
++#define MSR_S_LO_CHANGE_PENDING   0x80000000   /* cleared when completed */
++#define MSR_S_LO_MAX_RAMP_VID     0x3f000000
++#define MSR_S_LO_MAX_FID          0x003f0000
++#define MSR_S_LO_START_FID        0x00003f00
++#define MSR_S_LO_CURRENT_FID      0x0000003f
++
++/* Field definitions within the FID VID High Status MSR : */
++#define MSR_S_HI_MIN_WORKING_VID  0x3f000000
++#define MSR_S_HI_MAX_WORKING_VID  0x003f0000
++#define MSR_S_HI_START_VID        0x00003f00
++#define MSR_S_HI_CURRENT_VID      0x0000003f
++#define MSR_C_HI_STP_GNT_BENIGN	  0x00000001
+ 
+ /* Intel MSRs. Some also available on other CPUs */
+ #define MSR_IA32_PLATFORM_ID	0x17

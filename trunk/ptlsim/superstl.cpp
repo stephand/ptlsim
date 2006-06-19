@@ -83,7 +83,14 @@ namespace superstl {
 
   void odstream::flush() {
     if (buf) {
-      if (tail) assert(sys_write(fd, buf, tail) == tail);
+      int rc = 0;
+      if (tail) rc = sys_write(fd, buf, tail);
+      if (rc != tail) {
+        stringbuf sb;
+        sb << "odstream WRITE FAILED: tried to write ", tail, " bytes but only wrote ", rc, " bytes", endl;
+        sys_write(2, (char*)sb, strlen(sb));
+        asm("int3");
+      }
       tail = 0;
     }
   }

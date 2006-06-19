@@ -28,7 +28,7 @@ void ptl_mm_reclaim();
 
 class DataStoreNode;
 DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root);
-void ptl_mm_init();
+void ptl_mm_init(byte* heap_start = null, byte* heap_end = null);
 
 //
 // Memory management

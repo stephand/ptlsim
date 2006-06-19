@@ -603,7 +603,9 @@ struct DataStoreNodeHeader {
 };
 
 DataStoreNode::DataStoreNode(idstream& is) {
-  read(is);
+  if (!read(is)) {
+    init("INVALID", DS_NODE_TYPE_NULL, 0);
+  }
 }
 
 #define DSN_MAGIC_VER_1 0x324c5450 // 'PTL2'

@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Statistical Analysis Tools
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -152,7 +152,6 @@ void collect_short_stats(char** statfiles, int count) {
   foreach (i, count) {
     char cwd[1024];
     getcwd(cwd, sizeof(cwd));
-    cerr << "Collecting from ", statfiles[i], endl, flush;
 
     idstream is(statfiles[i]);
     assert(is);
@@ -933,7 +932,6 @@ bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<
 
       idstream is(filename);
 
-      cerr << "Reading ", filename, endl, flush;
       if (!is) {
         cerr << "ptlstats: Cannot open '", filename, "' for row ", row, ", col ", col, endl, endl, flush;
         return false;
@@ -1032,6 +1030,9 @@ inline double pt_to_px(double pt) { return pt / 1.25; }
 void create_grouped_bargraph(ostream& os, const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern,
                              int scale_relative_to_col, const char* title = null, double imagewidth = 300.0, double imageheight = 100.0) {
 
+  static const bool show_row_labels_in_group = false;
+  static const bool show_average = false;
+
   dynarray<char*> rowlist;
   dynarray<char*> collist;
   dynarray<double> sum_of_all_rows;
@@ -1039,10 +1040,22 @@ void create_grouped_bargraph(ostream& os, const char* statname, const char* rown
 
   if (!capture_table(rowlist, collist, sum_of_all_rows, data, statname, rownames, colnames, row_col_pattern)) return;
 
+  if (show_average) {
+    dynarray<double>& avg_of_all_rows =* new dynarray<double>();
+    avg_of_all_rows.resize(collist.size());
+
+    foreach (i, collist.size()) {
+      avg_of_all_rows[i] = sum_of_all_rows[i] / rowlist.size();
+    }
+
+    rowlist.push(strdup("Avg"));
+    data.push(avg_of_all_rows);
+  }
+
   double leftpad = 10.0;
   double toppad = 5.0;
   double rightpad = 4.0;
-  double bottompad = 24.0;
+  double bottompad = (show_row_labels_in_group) ? 24.0 : 12.0;
 
   if (title) toppad += 16;
 
@@ -1060,16 +1073,20 @@ void create_grouped_bargraph(ostream& os, const char* statname, const char* rown
   } else {
     foreach (i, rowlist.size()) {
       foreach (j, collist.size()) {
+        //data[i][j] = data[i][j] - 1.0;
         maxheight = max(maxheight, data[i][j]);
       }
     }
   }
 
-  double rawwidth = (0.5 * (rowlist.count()-1)) + (1.0 * rowlist.count() * collist.count());
+  static const double relative_barwidth = 1.0;
+  static const double relative_gapwidth = 1.0;
+
+  double rawwidth = (relative_gapwidth * (rowlist.count()-1)) + (relative_barwidth * rowlist.count() * collist.count());
   double xscale = imagewidth / rawwidth;
 
-  double barwidth = 1.0 * xscale;
-  double gapwidth = 0.5 * xscale;
+  double barwidth = relative_gapwidth * xscale;
+  double gapwidth = relative_barwidth * xscale;
 
   /*
   cerr << "maxheight = ", maxheight, endl;
@@ -1087,7 +1104,31 @@ void create_grouped_bargraph(ostream& os, const char* statname, const char* rown
 
   svg.setoffset(leftpad, toppad);
 
+  //
+  // Make horizontal bars and labels
+  //
+  for (double i = 0; i <= maxheight; i += 0.2) {
+    double value = i;
+    double y = imageheight - ((i / maxheight)*imageheight);
+
+    svg.strokewidth = 0;
+    svg.fill = RGBA(0, 0, 0);
+    svg.filled = 1;
+    svg.setfont("font-size:6;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:right;writing-mode:lr-tb");
+
+    stringbuf sb;
+    sb << floatstring(value, 0, 1);
+    svg.text(sb, -8.0, y - 1);
+
+    svg.filled = 0;
+    svg.strokewidth = 0.5;
+    svg.stroke = RGBA(128, 128, 128);
+    svg.line(-8.0, y, imagewidth, y);
+    svg.strokewidth = 0;
+  }
+
 #define CCC 128
+  /*
   static const RGBAColor barcolors[] = {
     RGBA(CCC, CCC, CCC, 255), // gray
     RGBA(255, 255, CCC, 255), // yellow
@@ -1096,15 +1137,22 @@ void create_grouped_bargraph(ostream& os, const char* statname, const char* rown
     RGBA(255, CCC, CCC, 255), // red
     RGBA(255, CCC, 255, 255), // pink
   };
+  */
+  static const RGBAColor barcolors[] = {
+    RGBA(CCC, CCC, CCC, 255), // gray
+    RGBA(255, 128, 128, 255), // yellow
+    RGBA(64,  192, 64,  255), // green
+    RGBA(64,  64,  128, 255), // blue
+  };
 
 #undef CCC
   double x = 0;
   foreach (row, rowlist.count()) {
-
+    svg.strokewidth = 0;
     svg.fill = RGBA(0, 0, 0);
     svg.filled = 1;
     svg.setfont("font-size:8;font-style:bold;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
-    svg.text(rowlist[row], x + (barwidth * collist.count())/2, imageheight + 16);
+    svg.text(rowlist[row], x + (barwidth * collist.count())/2, imageheight + ((show_row_labels_in_group) ? 16 : 8));
 
     foreach (col, collist.count()) {
       svg.strokewidth = 0.5;
@@ -1114,15 +1162,21 @@ void create_grouped_bargraph(ostream& os, const char* statname, const char* rown
       double barheight = (data[row][col] / maxheight) * imageheight;
       svg.rectangle(x, imageheight - barheight, barwidth, barheight);
 
-      svg.strokewidth = 0;
-      svg.fill = RGBA(0, 0, 0);
-      svg.filled = 1;
-      svg.setfont("font-size:6;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
-      svg.text(collist[col], x + barwidth/2, imageheight + 8);
+      if (show_row_labels_in_group) {
+        svg.strokewidth = 0;
+        svg.fill = RGBA(0, 0, 0);
+        svg.filled = 1;
+        svg.setfont("font-size:6;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
+        svg.text(collist[col], x + barwidth/2, imageheight + 8);
+      }
 
-      svg.setfont("font-size:8;font-style:bold;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
+      svg.setfont("font-size:10;font-style:bold;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
       stringbuf label;
-      if (scale_relative_to_col < collist.count()) {
+      if (false) { // (scale_relative_to_col < collist.count()) {
+        svg.strokewidth = 0;
+        svg.fill = RGBA(0, 0, 0);
+        svg.filled = 1;
+        svg.setfont("font-size:6;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Arial Narrow;text-anchor:middle;writing-mode:lr-tb");
         label << floatstring(data[row][col], 0, 2);
         svg.text(label, x + barwidth/2, imageheight - barheight - 2.0);
       }

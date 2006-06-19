@@ -15,7 +15,9 @@
 //
 
 #define MAX_ISSUE_WIDTH 8
-#define MAX_PHYS_REG_FILE_SIZE 256
+
+// Largest size of any physical register file or the store queue:
+#define MAX_PHYS_REG_FILE_SIZE 128
 #define PHYS_REG_NULL 0
 
 //
@@ -25,42 +27,54 @@
 //
 //#define BIG_ROB
 
-#define ROB_SIZE 192
+#define ROB_SIZE 128
 
-#define PHYS_REG_FILE_COUNT 2
+// Maximum number of branches in the pipeline at any given time
+#define MAX_BRANCHES_IN_FLIGHT 64
+
+// Set this to combine the integer and FP phys reg files:
+// #define UNIFIED_INT_FP_PHYS_REG_FILE
+
+#ifdef UNIFIED_INT_FP_PHYS_REG_FILE
+// unified, br, st
+#define PHYS_REG_FILE_COUNT 3
+#else
+// int, fp, br, st
+#define PHYS_REG_FILE_COUNT 4
+#endif
 
 //
 // Load and Store Queues
 //
-#define LDQ_SIZE 96
-#define STQ_SIZE 48
+#define LDQ_SIZE 64
+#define STQ_SIZE 64
 
 //
 // Fetch
 //
-#define FETCH_QUEUE_SIZE 18
-#define FETCH_WIDTH 6
+#define FETCH_QUEUE_SIZE 32
+#define FETCH_WIDTH 4
 
 //
 // Frontend (Rename and Decode)
 //
-#define FRONTEND_WIDTH 3
-#define FRONTEND_STAGES 4
+#define FRONTEND_WIDTH 4
+#define FRONTEND_STAGES 6
 
 //
 // Dispatch
 //
-#define DISPATCH_WIDTH 3
+#define DISPATCH_WIDTH 4
 
 //
 // Writeback
 //
-#define WRITEBACK_WIDTH 3
+#define WRITEBACK_WIDTH 4
 
 //
 // Commit
 //
-#define COMMIT_WIDTH 3
+#define COMMIT_WIDTH 4
 
 //
 // Clustering, Issue Queues and Bypass Network
@@ -135,19 +149,23 @@ void sched_get_all_issueq_free_slots(int* a) {
 // Physical register file parameters
 //
 
+enum {
+  PHYS_REG_FILE_INT,
+  PHYS_REG_FILE_FP,
+  PHYS_REG_FILE_ST,
+  PHYS_REG_FILE_BR
+};
+
 PhysicalRegisterFile physregfiles[PHYS_REG_FILE_COUNT] = {
   PhysicalRegisterFile("int", 0, 128),
   PhysicalRegisterFile("fp", 1, 128),
+  PhysicalRegisterFile("st", 2, STQ_SIZE),
+  PhysicalRegisterFile("br", 3, MAX_BRANCHES_IN_FLIGHT),
 };
 
 #define PHYS_REG_FILE_MASK_INT (1 << 0)
-#define PHYS_REG_FILE_MASK_FP (1 << 1)
-
-const W32 phys_reg_files_accessible_from_cluster[MAX_CLUSTERS] = {
-  PHYS_REG_FILE_MASK_INT, // int0
-  PHYS_REG_FILE_MASK_INT, // int1
-  PHYS_REG_FILE_MASK_INT, // ld
-  PHYS_REG_FILE_MASK_FP,  // fp
-};
+#define PHYS_REG_FILE_MASK_FP  (1 << 1)
+#define PHYS_REG_FILE_MASK_ST  (1 << 2)
+#define PHYS_REG_FILE_MASK_BR  (1 << 3)
 
 #endif

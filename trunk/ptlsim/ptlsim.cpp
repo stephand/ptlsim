@@ -291,7 +291,7 @@ void save_stats() {
       ooo_capture_stats((*dsroot)("final")); 
     else if (use_out_of_order_core) 
       ooo_capture_stats((*dsroot)("final")); 
-    ptl_mm_capture_stats((*dsroot)("mm"));
+    ptl_mm_capture_stats((*dsroot)("ptlsim")("mm"));
   }
 
   if (stats_filename) {

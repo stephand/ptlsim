@@ -855,12 +855,11 @@ void ptl_zero_private_page(void* addr) {
   ptl_zero_private_pages(addr, PAGE_SIZE);
 }
 
-void ptl_mm_init() {
+void ptl_mm_init(byte* heap_start, byte* heap_end) {
   page_is_slab_bitmap--;
 
 #ifdef PTLSIM_HYPERVISOR
-  //++MTY TODO
-  pagealloc.free(pool, POOLSIZE);
+  pagealloc.free(heap_start, heap_end - heap_start);
 #else
   // No special actions required
 #endif
@@ -975,6 +974,7 @@ void ptl_mm_reclaim() {
 }
 
 DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root) {
+#ifndef PTLSIM_HYPERVISOR
   pagealloc.capture_stats(root("page"));
   genalloc.capture_stats(root("general"));
   DataStoreNode& slab = root("slab"); {
@@ -985,7 +985,7 @@ DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root) {
       slaballoc[i].capture_stats(slab(sizestr));
     }
   }
-
+#endif
   return root;
 }
 
