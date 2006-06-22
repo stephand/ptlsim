@@ -3353,7 +3353,13 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
       dependent_operands[i] = (operand->rob && depmap[operand->rob->index()]);
     }
 
-    bool dep = (*dependent_operands) | (robidx == index());
+    //
+    // We must also redispatch all stores, since in pathological cases, there may
+    // be store-store ordering cases we don't know about, i.e. if some store
+    // inherits from a previous store, but that previous store actually has the
+    // wrong address because of some other bogus uop providing its address.
+    //
+    bool dep = (*dependent_operands) | (robidx == index()) | isstore(uop.opcode);
 
     if (dep) {
       count++;
