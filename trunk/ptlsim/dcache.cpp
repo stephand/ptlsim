@@ -1041,6 +1041,8 @@ void initiate_prefetch(W64 addr, int cachelevel) {
   //bool DEBUG = analyze_in_detail();
   static const bool DEBUG = 0;
 
+  addr &= ctx.virt_addr_mask;
+
   addr = floor(addr, L1_LINE_SIZE);
 
   L1CacheLine* L1line = L1.probe(addr);
@@ -1188,11 +1190,8 @@ void dcache_print_commit() {
 #endif
 }
 
-W64 virt_addr_mask;
-extern bool user_thread_64bit;
-
 void init_cache() {
-  virt_addr_mask = (ctx.use64 ? 0xffffffffffffffffLL : 0x00000000ffffffffLL);
+  ctx.virt_addr_mask = (ctx.use64 ? 0xffffffffffffffffLL : 0x00000000ffffffffLL);
 }
 
 ostream& dcache_print(ostream& os) {

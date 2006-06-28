@@ -1046,7 +1046,7 @@ void external_to_core_state() {
 #ifdef UNIFIED_INT_FP_PHYS_REG_FILE
     int rfid = (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
 #else
-    bool fp = inrange((int)i, REG_xmml0, REG_xmmh15) | (inrange((int)i, REG_fptos, REG_fp7)) | ((int)i == REG_mxcsr);
+    bool fp = inrange((int)i, REG_xmml0, REG_xmmh15) | (inrange((int)i, REG_fptos, REG_tr7));
     int rfid = (fp) ? PHYS_REG_FILE_FP : (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
 #endif
     PhysicalRegisterFile& rf = physregfiles[rfid];
@@ -1426,8 +1426,8 @@ static const byte archdest_is_visible[TRANSREG_COUNT] = {
   1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1,
   // x87 FP / MMX / special
-  1, 1, 1, 1, 0, 0, 0, 0,
-  0, 0, 0, 1, 0, 0, 0, 0,
+  1, 1, 1, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0,
   // The following are ONLY used during the translation and renaming process:
   0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0,
@@ -1509,7 +1509,7 @@ W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
     (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
     (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
     (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? PHYS_REG_FILE_MASK_INT : PHYS_REG_FILE_MASK_FP) :
-    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_fp7)) ? PHYS_REG_FILE_MASK_FP :
+    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_tr7)) ? PHYS_REG_FILE_MASK_FP :
     PHYS_REG_FILE_MASK_INT;
 #endif
 }
@@ -2382,7 +2382,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   bool internal = uop.internal;
 
   W64 raddr = ra + rb;
-  raddr &= virt_addr_mask;
+  raddr &= ctx.virt_addr_mask;
   W64 origaddr = raddr;
   bool annul = 0;
 
@@ -2695,7 +2695,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
 
   W64 raddr = (aligntype == LDST_ALIGN_NORMAL) ? (ra + rb) : ra;
   // if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
-  raddr &= virt_addr_mask;
+  raddr &= ctx.virt_addr_mask;
   W64 origaddr = raddr;
   bool annul = 0;
 
@@ -4353,21 +4353,24 @@ bool handle_barrier() {
   core_to_external_state();
   assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
-  if (logable(1)) logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ", (void*)(Waddr)ctx.commitarf[REG_sr1], 
-    ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+  if (logable(1)) {
+    logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ",
+      (void*)(Waddr)ctx.commitarf[REG_selfrip], ", return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
+      ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+  }
 
   if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
 
   update_assist_stats(assist);
-  assist();
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_sr1];
+  assist(ctx);
+
   if (logable(1)) {
     logfile << "Done with assist", endl;
     logfile << "New state:", endl;
     logfile << ctx.commitarf;
   }
 
-  flush_pipeline(ctx.commitarf[REG_sr1]);
+  flush_pipeline(ctx.commitarf[REG_rip]);
 
   cttotal.start();
 
@@ -4375,7 +4378,7 @@ bool handle_barrier() {
     logfile << "PTL call requested switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
     return false;
   }
-
+  
   return true;
 }
 
@@ -4898,7 +4901,7 @@ int out_of_order_core_toplevel_loop() {
   if (logable(1) | ((sim_cycle - last_commit_at_cycle) > 1024)) {
     logfile << "Core State:", endl;
     dump_ooo_state();
-    logfile << ctx.commitarf;
+    logfile << ctx;
   }
 
   logfile << flush;

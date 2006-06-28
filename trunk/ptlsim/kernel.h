@@ -72,71 +72,6 @@ void remove_signal_callback();
 extern bool running_in_sim_mode;
 
 //
-// x87 structures
-//
-
-typedef byte X87Reg[10];
-
-union X87StatusWord {
-  struct { W16 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, sf:1, es:1, c0:1, c1:1, c2:1, tos:3, c3:1, b:1; } fields;
-  W16 data;
-};
-
-union X87ControlWord {
-  struct { W16 im:1, dm:1, zm:1, om:1, um:1, pm:1, res1:2, pc:2, rc:2, y:1, res2:3; } fields;
-  W16 data;
-};
-
-struct X87State {
-  X87ControlWord cw;
-  W16 reserved1;
-  X87StatusWord sw;
-  W16 reserved2;
-  W16 tw;
-  W16 reserved3;
-  W32 eip;
-  W16 cs;
-  W16 opcode;
-  W32 dataoffs;
-  W16 ds;
-  W16 reserved4;
-  X87Reg stack[8];
-} __attribute__((packed));
-
-inline W64 x87_fp_80bit_to_64bit(const X87Reg* x87reg) {
-  W64 reg64;
-  asm("fldt (%[mem80])\n"
-      "fstpl %[mem64]\n"
-      : : [mem64] "m" (reg64), [mem80] "r" (x87reg));
-  return reg64;
-}
-
-inline void x87_fp_64bit_to_80bit(X87Reg* x87reg, W64 reg64) {
-  asm("fldl %[mem64]\n"
-      "fstpt (%[mem80])\n"
-      : : [mem80] "r" (*x87reg), [mem64] "m" (reg64) : "memory");
-}
-
-inline void cpu_fsave(X87State& state) {
-  asm volatile("fsave %[state]" : [state] "=m" (*&state));
-}
-
-inline void cpu_frstor(X87State& state) {
-  asm volatile("frstor %[state]" : : [state] "m" (*&state));
-}
-
-inline W16 cpu_get_fpcw() {
-  W16 fpcw;
-  asm volatile("fstcw %[fpcw]" : [fpcw] "=m" (fpcw));
-  return fpcw;
-}
-
-inline void cpu_set_fpcw(W16 fpcw) {
-  asm volatile("fldcw %[fpcw]" : : [fpcw] "m" (fpcw));
-}
-
-
-//
 // Address space management
 //
 
@@ -284,6 +219,77 @@ public:
 
 extern AddressSpace asp;
 
+inline int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
+  bool readable;
+  bool executable;
+
+  int n = 0;
+  pfec = 0;
+
+  readable = asp.fastcheck((byte*)addr, asp.readmap);
+  if (forexec) executable = asp.fastcheck((byte*)addr, asp.execmap);
+  if ((!readable) | (forexec & !executable)) {
+    faultaddr = addr;
+    pfec.p = !readable;
+    pfec.nx = (forexec & (!executable));
+    return n;
+  }
+
+  n = min((Waddr)(4096 - lowbits(addr, 12)), (Waddr)bytes);
+
+  memcpy(target, (void*)addr, n);
+
+  // All the bytes were on the first page
+  if (n == bytes) return n;
+
+  // Go on to second page, if present
+  readable = asp.fastcheck((byte*)(addr + n), asp.readmap);
+  if (forexec) executable = asp.fastcheck((byte*)(addr + n), asp.execmap);
+  if ((!readable) | (forexec & !executable)) {
+    faultaddr = addr + n;
+    pfec.p = !readable;
+    pfec.nx = (forexec & (!executable));
+    return n;
+  }
+
+  memcpy((byte*)target + n, (void*)(addr + n), bytes - n);
+  return bytes;
+}
+
+inline int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
+  pfec = 0;
+  bool writable = asp.fastcheck((byte*)target, asp.writemap);
+  if (!writable) {
+    faultaddr = target;
+    pfec.p = asp.fastcheck((byte*)target, asp.readmap);
+    pfec.rw = 1;
+    return 0;
+  }
+
+  byte* targetlo = (byte*)target;
+  int nlo = min((Waddr)(4096 - lowbits(target, 12)), (Waddr)bytes);
+
+  // All the bytes were on the first page
+  if (nlo == bytes) {
+    memcpy(targetlo, source, nlo);
+    return bytes;
+  }
+
+  // Go on to second page, if present
+  writable = asp.fastcheck((byte*)(target + nlo), asp.writemap);
+  if (!writable) {
+    faultaddr = target + nlo;
+    pfec.p = asp.fastcheck((byte*)(target + nlo), asp.readmap);
+    pfec.rw = 1;
+    return nlo;
+  }
+
+  memcpy((byte*)(target + nlo), (byte*)source + nlo, bytes - nlo);
+  memcpy(targetlo, source, nlo);
+
+  return bytes;
+}
+
 //
 // System calls
 //
@@ -299,11 +305,6 @@ void handle_syscall_64bit();
 //
 #define LDT_SIZE 8192
 extern W64 ldt_seg_base_cache[LDT_SIZE];
-
-extern "C" {
-  int get_gs();
-  int get_fs();
-};
 
 //
 // This is set if we are running within the target process address space;

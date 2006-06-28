@@ -2,15 +2,14 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Hardware Definitions
 //
-// Copyright 2000-2004 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <ptlsim.h>
 #include <dcache.h>
 
-//CoreState ctx[MAX_THREADS] alignto(4096) insection(".corectx");
-CoreState ctx alignto(4096) insection(".corectx");
-W64 fpregs[8] alignto(64) insection(".ldm");
+Context ctx alignto(4096) insection(".ctx");
+//W64 fpregs[8] alignto(64) insection(".ldm");
 
 extern void print_message(const char* text);
 
@@ -256,13 +255,74 @@ const char* arch_reg_names[TRANSREG_COUNT] = {
   "xmml8", "xmmh8", "xmml9", "xmmh9", "xmml10", "xmmh10", "xmml11", "xmmh11",
   "xmml12", "xmmh12", "xmml13", "xmmh13", "xmml14", "xmmh14", "xmml15", "xmmh15",
   // x87 FP/MMX
-  "fptos", "fpsw", "fpcw", "fptags", "fp4", "fp5", "fp6", "fp7",
+  "fptos", "fpsw", "fptags", "tr3", "tr4", "tr5", "tr6", "tr7",
   // Special
-  "rip", "flags", "sr3", "mxcsr", "sr0", "sr1", "sr2", "zero",
+  "rip", "flags", "iflags", "selfrip","nextrip", "ar1", "ar2", "zero",
   // The following are ONLY used during the translation and renaming process:
   "tr0", "tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "tr7",
   "zf", "cf", "of", "imm", "mem", "tr8", "tr9", "tr10",
 };
+
+void Context::fxsave(FXSAVEStruct& state) {
+  state.cw = ctx.fpcw;
+  // clear everything but 4 FP status flag bits (c3/c2/c1/c0):
+  state.sw = ctx.commitarf[REG_fpsw] & ((0x7 << 8) | (1 << 14));
+  int tos = ctx.commitarf[REG_fptos] >> 3;
+  assert(inrange(tos, 0, 7));
+  state.sw.tos = tos;
+  state.tw = 0;
+
+  // Prepare tag word (special format for FXSAVE)
+  foreach (i, 8) state.tw |= (bit(ctx.commitarf[REG_fptags], i*8) << i);
+
+  // Prepare actual registers
+  foreach (i, 8) x87_fp_64bit_to_80bit(&state.fpregs[i].reg, fpstack[lowbits(tos + i, 3)]);
+
+  state.fop = 0;
+
+  if (ctx.use64) {
+    state.use64.rip = 0;
+    state.use64.rdp = 0;
+  } else {
+    state.use32.eip = 0;
+    state.use32.cs = 0;
+    state.use32.dp = 0;
+    state.use32.ds = 0;
+  }
+
+  state.mxcsr = ctx.mxcsr;
+  state.mxcsr_mask = 0x0000ffff; // all MXCSR features supported
+
+  foreach (i, (ctx.use64) ? 16 : 8) {
+    state.xmmregs[i].lo = ctx.commitarf[REG_xmml0 + i*2];
+    state.xmmregs[i].hi = ctx.commitarf[REG_xmmh0 + i*2];
+  }
+}
+
+void Context::fxrstor(const FXSAVEStruct& state) {
+  commitarf[REG_fptos] = state.sw.tos * 8;
+  commitarf[REG_fpsw] = state.sw;
+  fpcw = state.cw;
+
+  commitarf[REG_fptags] = 0;
+  foreach (i, 8) {
+    int type = bits(state.tw, i*2, 2);
+    commitarf[REG_fptags] |= ((W64)(type != 3)) << i*8;
+  }
+
+  // x86 FSAVE state is in order of stack rather than physical registers:
+  foreach (i, 8) {
+    fpstack[lowbits(state.sw.tos + i, 3)] = x87_fp_80bit_to_64bit(&state.fpregs[i].reg);
+  }
+
+  mxcsr = state.mxcsr & state.mxcsr_mask;
+
+  //++MTY CHECKME Should we *always* restore all 16 regs, even on 32-bit systems?
+  foreach (i, (use64) ? 16 : 8) {
+    commitarf[REG_xmml0 + i*2] = state.xmmregs[i].lo;
+    commitarf[REG_xmmh0 + i*2] = state.xmmregs[i].hi;
+  }
+}
 
 const char* datatype_names[DATATYPE_COUNT] = {
   "int", "float", "vec-float",
@@ -506,7 +566,7 @@ ostream& operator <<(ostream& os, const UserContext& arf) {
   }
   for (int i = 7; i >= 0; i--) {
     int stackid = (i - (arf[REG_fptos] >> 3)) & 0x7;
-    os << "  fp", i, "  st(", stackid, ")  ", /* (bit(arf[REG_fptags], i*8) ? "Valid" : "Empty"), */ "  0x", hexstring(fpregs[i], 64), " => ", *((double*)&fpregs[i]), endl;
+    os << "  fp", i, "  st(", stackid, ")  ", /* (bit(arf[REG_fptags], i*8) ? "Valid" : "Empty"), */ "  0x", hexstring(ctx.fpstack[i], 64), " => ", *((double*)&ctx.fpstack[i]), endl;
   }
   return os;
 }
@@ -542,27 +602,131 @@ stringbuf& print_value_and_flags(stringbuf& sb, W64 value, W16 flags) {
   return sb;
 }
 
-ostream& operator <<(ostream& os, const CoreState& ctx) {
-  static const int arfwidth = 4;
-  os << "Speculative ARF:", endl;
-  foreach (i, ARCHREG_COUNT) {
-    os << "  ", padstring(arch_reg_names[i], -6), " 0x", hexstring(ctx.specarf[i], 64);
-    if ((i % arfwidth) == (arfwidth-1)) os << endl;
+ostream& operator <<(ostream& os, const SegmentDescriptor& seg) {
+  if (!seg.p) {
+    os << "not present";
+    return os;
   }
 
-  os << "Committed ARF:", endl;
+  os << "base ", hexstring(seg.getbase(), 32), ", limit ", hexstring(seg.getlimit(), 32),
+    ", ring ", seg.dpl;
+  os << ((seg.s) ? " sys" : " usr");
+  os << ((seg.l) ? " 64bit" : "      ");
+  os << ((seg.d) ? " 32bit" : " 16bit");
+  os << ((seg.g) ? " g=4KB" : "      ");
+  os << endl;
+  return os;
+}
+
+ostream& operator <<(ostream& os, const SegmentDescriptorCache& seg) {
+  os << "0x", hexstring(seg.selector, 16), ": ";
+  if (!seg.present) {
+    os << "(not present)";
+    return os;
+  }
+
+  os << "base ", hexstring(seg.base, 64), ", limit ", hexstring(seg.limit, 64), ", ring ", seg.dpl, ":";
+  os << ((seg.supervisor) ? " sys" : " usr");
+  os << ((seg.use64) ? " 64bit" : "      ");
+  os << ((seg.use32) ? " 32bit" : "      ");
+
+  return os;
+}
+
+#ifdef PTLSIM_HYPERVISOR
+ostream& operator <<(ostream& os, const CR0& cr0) {
+  os << hexstring(cr0, 64);
+  os << " ";
+  os << (cr0.pe ? " PE" : " pe");
+  os << (cr0.mp ? " MP" : " mp");
+  os << (cr0.em ? " EM" : " em");
+  os << (cr0.ts ? " TS" : " ts");
+  os << (cr0.et ? " ET" : " et");
+  os << (cr0.ne ? " NE" : " ne");
+  os << (cr0.wp ? " WP" : " wp");
+  os << (cr0.am ? " AM" : " am");
+  os << (cr0.nw ? " NW" : " nw");
+  os << (cr0.cd ? " CD" : " cd");
+  os << (cr0.pg ? " PG" : " pg");
+  return os;
+}
+
+ostream& operator <<(ostream& os, const CR4& cr4) {
+  os << hexstring(cr4, 64);
+  os << " ";
+  os << (cr4.vme ? " VME" : " vme");
+  os << (cr4.pvi ? " PVI" : " pvi");
+  os << (cr4.tsd ? " TSD" : " tsd");
+  os << (cr4.de  ? " DBE" : " dbe");
+  os << (cr4.pse ? " PSE" : " pse");
+  os << (cr4.pae ? " PAE" : " pae");
+  os << (cr4.mce ? " MCE" : " mce");
+  os << (cr4.pge ? " PGE" : " pge");
+  os << (cr4.pce ? " PCE" : " pce");
+  os << (cr4.osfxsr ? " FXS" : " fxs");
+  os << (cr4.osxmmexcpt ? " MME" : " mme");
+  return os;
+}
+#endif
+
+ostream& operator <<(ostream& os, const Context& ctx) {
+  static const int arfwidth = 4;
+
+  os << "VCPU State:", endl;
+  os << "  Architectural Registers:", endl;
   foreach (i, ARCHREG_COUNT) {
     os << "  ", padstring(arch_reg_names[i], -6), " 0x", hexstring(ctx.commitarf[i], 64);
     if ((i % arfwidth) == (arfwidth-1)) os << endl;
   }
 
+#ifdef PTLSIM_HYPERVISOR
+  os << "  Flags:", endl;
+  os << "    Mode:      ", ((ctx.kernel_mode) ? "kernel" : "user"), endl;
+  os << "    32/64:     ", ((ctx.use64) ? "64-bit x86-64" : "32-bit x86"), endl;
+  os << "    x87 state: ", ((ctx.i387_valid) ? "valid" : "invalid"), endl;
+  os << "    Event dis: ", ((ctx.syscall_disables_events) ? " syscall" : ""), ((ctx.failsafe_disables_events) ? " failsafe" : ""), endl;
+#endif
+  os << "  Segment Registers:", endl;
+  os << "    cs ", ctx.seg[SEGID_CS], endl;
+  os << "    ss ", ctx.seg[SEGID_SS], endl;
+  os << "    ds ", ctx.seg[SEGID_DS], endl;
+  os << "    es ", ctx.seg[SEGID_ES], endl;
+  os << "    fs ", ctx.seg[SEGID_FS], endl;
+  os << "    gs ", ctx.seg[SEGID_GS], endl;
+#ifdef PTLSIM_HYPERVISOR
+  os << "  Segment Control Registers:", endl;
+  os << "    ldt ", hexstring(ctx.ldtvirt, 64), "  ld# ", hexstring(ctx.ldtsize, 64), "  gd# ", hexstring(ctx.gdtsize, 64), endl;
+  os << "    gdt mfns"; foreach (i, 16) { os << " ", ctx.gdtpages[i]; } os << endl;
+  os << "    fsB ", hexstring(ctx.fs_base, 64), "  gsB ", hexstring(ctx.gs_base_user, 64), "  gkB ", hexstring(ctx.gs_base_kernel, 64), endl;
+  os << "  Control Registers:", endl;
+  os << "    cr0 ", ctx.cr0, endl;
+  os << "    cr2 ", hexstring(ctx.cr2, 64), "  fault virtual address", endl;
+  os << "    cr3 ", hexstring(ctx.cr3, 64), "  page table base (mfn ", (ctx.cr3 >> 12), ")", endl;
+  os << "    cr4 ", ctx.cr4, endl;
+  os << "    kss ", hexstring(ctx.kernel_ss, 64), "  ksp ", hexstring(ctx.kernel_sp, 64), "  vma ", hexstring(ctx.vm_assist, 64),endl;
+  os << "  Debug Registers:", endl;
+  os << "    dr0 ", hexstring(ctx.dr0, 64), "  dr1 ", hexstring(ctx.dr1, 64), "  dr2 ", hexstring(ctx.dr2, 64),  "  dr3 ", hexstring(ctx.dr3, 64), endl;
+  os << "    dr4 ", hexstring(ctx.dr4, 64), "  dr5 ", hexstring(ctx.dr5, 64), "  dr6 ", hexstring(ctx.dr6, 64),  "  dr7 ", hexstring(ctx.dr7, 64), endl;
+  os << "  Callbacks:", endl;
+  os << "    event_callback_rip    ", hexstring(ctx.event_callback_rip, 64), endl;
+  os << "    failsafe_callback_rip ", hexstring(ctx.failsafe_callback_rip, 64), endl;
+  os << "    syscall_rip           ", hexstring(ctx.syscall_rip, 64), endl;
+  os << "  Exception and Event Control:", endl;
+  os << "    exception ", intstring(ctx.exception_type, 2), "  errorcode ", hexstring(ctx.error_code, 32),
+    "  saved_upcall_mask ", hexstring(ctx.saved_upcall_mask, 8), endl;
+#endif
+
+  os << "  FPU:", endl;
+  os << "    FP Control Word: 0x", hexstring(ctx.fpcw, 32), endl;
+  os << "    MXCSR:           0x", hexstring(ctx.mxcsr, 32), endl;
+
   for (int i = 7; i >= 0; i--) {
     int stackid = (i - (ctx.commitarf[REG_fptos] >> 3)) & 0x7;
-    os << "  fp", i, "  st(", stackid, ")  ", /* (bit(arf[REG_fptags], i*8) ? "Valid" : "Empty"), */ "  0x", hexstring(fpregs[i], 64), " => ", *((double*)&fpregs[i]), endl;
+    os << "    fp", i, "  st(", stackid, ")  ", /* (bit(arf[REG_fptags], i*8) ? "Valid" : "Empty"), */ "  0x", hexstring(ctx.fpstack[i], 64), " => ", *((double*)&ctx.fpstack[i]), endl;
   }
 
-  os << "Exception Flags", endl;
-  os << "  Last exception:            ", "0x", hexstring(ctx.exception, 64), " (", exception_name(ctx.exception), ")", endl;
+  os << "  Internal State:", endl;
+  os << "    Last internal exception: ", "0x", hexstring(ctx.exception, 64), " (", exception_name(ctx.exception), ")", endl;
 
   return os;
 }

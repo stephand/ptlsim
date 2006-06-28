@@ -70,10 +70,12 @@ struct PTLsimStub {
   W64 boot_page_mfn;
 };
 
+#ifndef __cplusplus
 typedef struct LongModeLevel1PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, phys:51, nx:1; } LongModeLevel1PTE;
 typedef struct LongModeLevel2PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, psz:1, mbz:1, avl:3, next:51, nx:1; } LongModeLevel2PTE;
 typedef struct LongModeLevel3PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1; } LongModeLevel3PTE;
 typedef struct LongModeLevel4PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1; } LongModeLevel4PTE;
+#endif
 
 int setup_ptlsim_space(int xc_handle, uint32_t dom, mfn_t* mfns, int count,
                        shared_info_t* shared_info, mfn_t shared_info_mfn);

@@ -382,7 +382,7 @@ void switch_to_sim() {
   // Swap the FP control registers to the user process version, so FP uopimpls
   // can use the real rounding control bits.
   //
-  x86_set_mxcsr(ctx.commitarf[REG_mxcsr] | MXCSR_EXCEPTION_DISABLE_MASK);
+  x86_set_mxcsr(ctx.mxcsr | MXCSR_EXCEPTION_DISABLE_MASK);
 
   if (sequential_mode_insns)
     done = sequential_core_toplevel_loop();

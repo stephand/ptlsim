@@ -121,8 +121,8 @@ template <typename T, int genflags> \
 struct name { \
   T operator ()(T ra, T rb, T rc, W16 raflags, W16 rbflags, W16 rcflags, byte& cf, byte& of) { \
     if (genflags & (SETFLAG_CF|SETFLAG_OF)) \
-      asm(pretext #opcode " %[rb],%[ra]; setc %[cf]; seto %[of]" : [ra] "+r" (ra), [cf] "=q" (cf), [of] "=q" (of) : [rb] "rm" (rb), [rcflags] "rm" (rcflags)); \
-    else asm(#opcode " %[rb],%[ra]" : [ra] "+r" (ra) : [rb] "rm" (rb) : "flags"); \
+      asm(pretext #opcode " %[rb],%[ra]; setc %[cf]; seto %[of]" : [ra] "+q" (ra), [cf] "=q" (cf), [of] "=q" (of) : [rb] "qm" (rb), [rcflags] "rm" (rcflags)); \
+    else asm(#opcode " %[rb],%[ra]" : [ra] "+q" (ra) : [rb] "qm" (rb) : "flags"); \
     return ra; \
   } \
 }
@@ -852,11 +852,9 @@ make_condop_all_conds_any(OP_chk, make_condop, [1], chk, uop_impl_chk);
 make_condop_all_conds_all_sizes(chk_sub, uop_impl_chk_sub);
 make_condop_all_conds_all_sizes(chk_and, uop_impl_chk_and);
 
-extern W64 virt_addr_mask;
-
 template <int level>
 inline void uop_impl_prefetch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  initiate_prefetch((ra + rb) & virt_addr_mask, level);
+  initiate_prefetch(ra + rb, level);
   state.reg.rddata = 0;
   state.reg.rdflags = 0;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_ld_pre, 0, 0, level);
@@ -871,13 +869,6 @@ uopimpl_func_t implmap_ld_pre[4] = {&uop_impl_prefetch<0>, &uop_impl_prefetch<1>
 // Floating Point
 //
 #define make_exp_floatop(name, expr) template <typename T> struct name { T operator ()(T ra, T rb, T rc) { T rd; expr; return rd; } }
-
-union SSEType {
-  double d;
-  struct { float lo, hi; } f;
-  W64 w64;
-  struct { W32 lo, hi; } w32;
-};
 
 template <int ptlopcode, template<typename> class F, int datatype>
 inline void floatop(IssueState& state, W64 raraw, W64 rbraw, W64 rcraw, W16 raflags, W16 rbflags, W16 rcflags) {

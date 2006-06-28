@@ -49,6 +49,14 @@ inside_sim_escape_code_template_32bit_end:
 
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
+  fxsave x87state
+  mov   word ptr [saved_cs],%cs
+  mov   word ptr [saved_ss],%ss
+  mov   word ptr [saved_ds],%ds
+  mov   word ptr [saved_es],%es
+  mov   word ptr [saved_fs],%fs
+  mov   word ptr [saved_gs],%gs
+
   mov   byte ptr [running_in_sim_mode],1
   mov   %eax,%esp       # origrsp
   push  offset main     # next_init_func
@@ -92,18 +100,6 @@ ptlsim_preinit_entry:
   push  %eax
   call  main
 
-.global get_fs
-get_fs:
-  xor   %eax,%eax
-  mov   %ax,%fs
-  ret
-
-.global get_gs
-get_gs:
-  xor   %eax,%eax
-  mov   %ax,%gs
-  ret
-
 /*
  * struct ThreadState {
  *   ThreadState* self;
@@ -120,10 +116,17 @@ get_gs:
 .extern save_context_switch_to_sim
 .extern x87state
 .extern basetls
-.extern fsreg
-.extern gsreg
-
 .extern running_in_sim_mode
+
+.data
+.global saved_fsreg
+saved_fsreg:
+  .word 0
+
+.global saved_gsreg
+saved_gsreg: 
+  .word 0
+.previous
 
 .global save_context_switch_to_sim_lowlevel
 save_context_switch_to_sim_lowlevel:
@@ -155,38 +158,18 @@ save_context_switch_to_sim_lowlevel:
   pushfd                                         # Save rflags
   pop      dword ptr [ctx + 8*REG_flags + 8]     # Put flags into structure
 
-  and      %esp,-16
-
-  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
-  stmxcsr  [ctx + 8*REG_mxcsr]                   # Save SSE flags
-
-  # SSE registers
-  movlpd   [ctx + 8*REG_xmml0],%xmm0
-  movlpd   [ctx + 8*REG_xmml1],%xmm1
-  movlpd   [ctx + 8*REG_xmml2],%xmm2
-  movlpd   [ctx + 8*REG_xmml3],%xmm3
-  movlpd   [ctx + 8*REG_xmml4],%xmm4
-  movlpd   [ctx + 8*REG_xmml5],%xmm5
-  movlpd   [ctx + 8*REG_xmml6],%xmm6
-  movlpd   [ctx + 8*REG_xmml7],%xmm7
-
-  movhpd   [ctx + 8*REG_xmmh0],%xmm0
-  movhpd   [ctx + 8*REG_xmmh1],%xmm1
-  movhpd   [ctx + 8*REG_xmmh2],%xmm2
-  movhpd   [ctx + 8*REG_xmmh3],%xmm3
-  movhpd   [ctx + 8*REG_xmmh4],%xmm4
-  movhpd   [ctx + 8*REG_xmmh5],%xmm5
-  movhpd   [ctx + 8*REG_xmmh6],%xmm6
-  movhpd   [ctx + 8*REG_xmmh7],%xmm7
-
-  # Save x87 state
-  fsave    x87state
-
   # (skip tr0/tr1/tr2)
   mov      dword ptr [ctx + 8*REG_zero],0        # Save %zero
 
-  mov      [fsreg],%fs
-  mov      [gsreg],%gs
+  and      %esp,-16
+
+  fxsave x87state
+  mov   word ptr [saved_cs],%cs
+  mov   word ptr [saved_ss],%ss
+  mov   word ptr [saved_ds],%ds
+  mov   word ptr [saved_es],%es
+  mov   word ptr [saved_fs],%fs
+  mov   word ptr [saved_gs],%gs
 
   sub      %esp,4                                # Realign stack
   jmp      save_context_switch_to_sim
@@ -207,11 +190,6 @@ switch_to_native_restore_context_lowlevel:
   # %rdi = pointer to state to restore
   mov      %edi,[%esp + 4 + 0*4] # get arg 0 (pointer to state to restore)
 
-  frstor   x87state
-
-  mov      %fs,[fsreg]
-  mov      %gs,[gsreg]
-
   mov      %eax,[%edi + 8*REG_rip]        # Load %rip
   mov      [switch_to_native_restore_context_temp_32_to_32],%eax  # Save %rip for final jump
 
@@ -231,28 +209,12 @@ switch_to_native_restore_context_lowlevel:
   # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
 # mov      %rip,[%edi + 8*REG_rip]      # (do later)
 # mov      %rflags,[%edi + 8*REG_flags] # (already done)
-# fldsw    [%edi + 8*REG_mxcsr + 4]     # Restore FP status word
-#  fldcw    [%edi + 8*REG_mxcsr + 6]     # Restore FP control word
-  ldmxcsr  [%edi + 8*REG_mxcsr]         # Restore SSE flags
   # (No need to restore %tr0, %tr1, %tr2, %zero
 
-  movlpd   %xmm0,[%edi + 8*REG_xmml0]
-  movlpd   %xmm1,[%edi + 8*REG_xmml1]
-  movlpd   %xmm2,[%edi + 8*REG_xmml2]
-  movlpd   %xmm3,[%edi + 8*REG_xmml3]
-  movlpd   %xmm4,[%edi + 8*REG_xmml4]
-  movlpd   %xmm5,[%edi + 8*REG_xmml5]
-  movlpd   %xmm6,[%edi + 8*REG_xmml6]
-  movlpd   %xmm7,[%edi + 8*REG_xmml7]
+  fxrstor  x87state
 
-  movhpd   %xmm0,[%edi + 8*REG_xmmh0]
-  movhpd   %xmm1,[%edi + 8*REG_xmmh1]
-  movhpd   %xmm2,[%edi + 8*REG_xmmh2]
-  movhpd   %xmm3,[%edi + 8*REG_xmmh3]
-  movhpd   %xmm4,[%edi + 8*REG_xmmh4]
-  movhpd   %xmm5,[%edi + 8*REG_xmmh5]
-  movhpd   %xmm6,[%edi + 8*REG_xmmh6]
-  movhpd   %xmm7,[%edi + 8*REG_xmmh7]
+  mov      %fs,word ptr [saved_fs]
+  mov      %gs,word ptr [saved_gs]
 
   mov      %edi,[%edi + 8*REG_rdi]      # Restore %rdi
 

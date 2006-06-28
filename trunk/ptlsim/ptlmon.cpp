@@ -22,6 +22,8 @@ typedef W16 domid_t;
 #include <xen-types.h>
 #include <xen/linux/privcmd.h>
 #include <xen/linux/evtchn.h>
+
+#define EXCLUDE_BOOTINFO_SHINFO
 #include <ptlxen.h>
 
 extern "C" {
@@ -213,65 +215,6 @@ void ptl_zero_private_pages(void* addr, Waddr bytecount) {
 
 #define PSL_T 0x00000100 // single step bit in eflags
 
-union DebugReg {
-  struct {
-    W64 l0:1, g0:1, l1:1, g1:1, l2:1, g2:1, l3:1, g3:1, le:1, ge:1, res1:3, gd:1, res2:2,
-    t0:2, s0:2, t1:2, s1:2, t2:2, s2:2, t3:2, s3:2;
-  } fields;
-  W64 data;
-
-  DebugReg() { }
-
-  DebugReg(W64 data) { this->data = data; }
-
-  operator W64() const { return data; }
-};
-
-#define DEBUGREG_TYPE_EXEC  0
-#define DEBUGREG_TYPE_WRITE 1
-#define DEBUGREG_TYPE_IO    2
-#define DEBUGREG_TYPE_RW    3
-
-#define DEBUGREG_SIZE_1     0
-#define DEBUGREG_SIZE_2     1
-#define DEBUGREG_SIZE_8     2
-#define DEBUGREG_SIZE_4     3
-
-ostream& operator <<(ostream& os, const cpu_user_regs_t& regs) {
-  os << "  State Registers:", endl;
-  os << "    rip ", hexstring(regs.rip, 64), "  flg ", hexstring(regs.rflags, 64), endl;
-  os << "  Integer Registers:", endl;
-  os << "    rax ", hexstring(regs.rax, 64), "  rcx ", hexstring(regs.rcx, 64), "  rdx ", hexstring(regs.rdx, 64),  " rbx ", hexstring(regs.rbx, 64), endl;
-  os << "    rsp ", hexstring(regs.rsp, 64), "  rbp ", hexstring(regs.rbp, 64), "  rsi ", hexstring(regs.rsi, 64),  " rdi ", hexstring(regs.rdi, 64), endl;
-  os << "    r8  ", hexstring(regs.r8, 64),  "  rbp ", hexstring(regs.r9, 64),  "  r10 ", hexstring(regs.r10, 64),  " r11 ", hexstring(regs.r11, 64), endl;
-  os << "    r12 ", hexstring(regs.r12, 64), "  r13 ", hexstring(regs.r13, 64), "  r14 ", hexstring(regs.r14, 64),  " r15 ", hexstring(regs.r15, 64), endl;
-  os << "  Segment Registers:", endl;
-  os << "    cs  ", hexstring(regs.cs, 16), "  ds ", hexstring(regs.ds, 16), "  ss ", hexstring(regs.ss, 16), "  es ", hexstring(regs.es, 16), "  fs ", hexstring(regs.fs, 16), "  gs ", hexstring(regs.gs, 16), endl;
-  os << "  Other Registers:", endl;
-  os << "    err ", hexstring(regs.error_code, 32), "  evc ", hexstring(regs.entry_vector, 32), "  saved_upcall_mask ", hexstring(regs.saved_upcall_mask, 8), endl;
-  return os;
-}
-
-ostream& operator <<(ostream& os, const vcpu_guest_context_t& ctx) {
-  os << ctx.user_regs;
-  os << "  Debug Registers:", endl;
-  os << "    dr0 ", hexstring(ctx.debugreg[0], 64), "  dr1 ", hexstring(ctx.debugreg[1], 64), "  dr2 ", hexstring(ctx.debugreg[2], 64),  "  dr3 ", hexstring(ctx.debugreg[3], 64), endl;
-  os << "    dr4 ", hexstring(ctx.debugreg[4], 64), "  dr5 ", hexstring(ctx.debugreg[5], 64), "  dr6 ", hexstring(ctx.debugreg[6], 64),  "  dr7 ", hexstring(ctx.debugreg[7], 64), endl;
-  os << "  Control Registers:", endl;
-  os << "    cr0 ", hexstring(ctx.ctrlreg[0], 64), "  cr1 ", hexstring(ctx.ctrlreg[1], 64), "  cr2 ", hexstring(ctx.ctrlreg[2], 64),  "  cr3 ", hexstring(ctx.ctrlreg[3], 64), endl;
-  os << "    cr4 ", hexstring(ctx.ctrlreg[4], 64), "  cr5 ", hexstring(ctx.ctrlreg[5], 64), "  cr6 ", hexstring(ctx.ctrlreg[6], 64),  "  cr7 ", hexstring(ctx.ctrlreg[7], 64), endl;
-  os << "    kss ", hexstring(ctx.kernel_ss, 64), "  ksp ", hexstring(ctx.kernel_sp, 64), "  vma ", hexstring(ctx.vm_assist, 64),  "  flg ", hexstring(ctx.flags, 64), endl;
-  os << "  Segment Registers:", endl;
-  os << "    ldt ", hexstring(ctx.ldt_base, 64), "  ld# ", hexstring(ctx.ldt_ents, 64), "  gd# ", hexstring(ctx.gdt_ents, 64), endl;
-  os << "    gdt mfns"; foreach (i, 16) { os << " ", ctx.gdt_frames[i]; } os << endl;
-  os << "    fsB ", hexstring(ctx.fs_base, 64), "  gsB ", hexstring(ctx.gs_base_user, 64), "  gkB ", hexstring(ctx.gs_base_kernel, 64), endl;
-  os << "  Callbacks:", endl;
-  os << "    event_callback_rip    ", hexstring(ctx.event_callback_eip, 64), endl;
-  os << "    failsafe_callback_rip ", hexstring(ctx.failsafe_callback_eip, 64), endl;
-  os << "    syscall_callback_rip  ", hexstring(ctx.syscall_callback_eip, 64), endl;
-  return os;
-}
-
 // 
 // These options are directly handled by PTLmon rather than PTLcore:
 //
@@ -335,104 +278,6 @@ static ConfigurationOption optionlist[] = {
   {"-event-replay",                      OPTION_TYPE_STRING,  0, "Replay events (interrupts, DMAs, etc) to this file, starting at Xen checkpoint", &event_trace_replay_filename},
 };
 
-union VirtAddr {
-  struct { W64 offset:12, level1:9, level2:9, level3:9, level4:9, signext:16; } lm;
-  struct { W64 offset:12, level1:9, level2:9, level3:9, level4:9, signext:16; } pae;
-  struct { W32 offset:12, level1:10, level2:10; } x86;
-  W64 raw;
-
-  VirtAddr() { }
-  VirtAddr(W64 data) { this->raw = data; }
-
-  operator W64() const { return raw; }
-};
-
-ostream& operator <<(ostream& os, const LongModeLevel1PTE& pte) {
-  if (pte.p) {
-    os << ((pte.rw) ? "wrt " : "-   ");
-    os << ((pte.us) ? "sup " : "-   ");
-    os << ((pte.nx) ? "nx  " : "-   ");
-    os << ((pte.a) ? "acc " : "-   ");
-    os << ((pte.d) ? "dty " : "-   ");
-    os << ((pte.pat) ? "pat " : "-   ");
-    os << ((pte.pwt) ? "wt  " : "-   ");
-    os << ((pte.pcd) ? "cd  " : "-   ");
-    os << ((pte.g) ? "gbl " : "-   ");
-    os << " phys 0x", hexstring((W64)pte.phys << 12, 40), " mfn ", intstring(pte.phys, 10);
-  } else {
-    os << "(not present)";
-  }
-  return os;
-}
-
-ostream& operator <<(ostream& os, const LongModeLevel2PTE& pte) {
-  if (pte.p) {
-    os << ((pte.rw) ? "wrt " : "-   ");
-    os << ((pte.us) ? "sup " : "-   ");
-    os << ((pte.nx) ? "nx  " : "-   ");
-    os << ((pte.a) ? "acc " : "-   ");
-    os << "    ";
-    os << "    ";
-    os << ((pte.pwt) ? "wt  " : "-   ");
-    os << ((pte.pcd) ? "cd  " : "-   ");
-    os << ((pte.psz) ? "psz " : "-   ");
-    os << " next 0x", hexstring((W64)pte.next << 12, 40), " mfn ", intstring(pte.next, 10);
-  } else {
-    os << "(not present)";
-  }
-  return os;
-}
-
-ostream& operator <<(ostream& os, const LongModeLevel3PTE& pte) {
-  if (pte.p) {
-    os << ((pte.rw) ? "wrt " : "-   ");
-    os << ((pte.us) ? "sup " : "-   ");
-    os << ((pte.nx) ? "nx  " : "-   ");
-    os << ((pte.a) ? "acc " : "-   ");
-    os << "    ";
-    os << "    ";
-    os << ((pte.pwt) ? "wt  " : "-   ");
-    os << ((pte.pcd) ? "cd  " : "-   ");
-    os << "    ";
-    os << " next 0x", hexstring((W64)pte.next << 12, 40), " mfn ", intstring(pte.next, 10);
-  } else {
-    os << "(not present)";
-  }
-  return os;
-}
-
-ostream& operator <<(ostream& os, const LongModeLevel4PTE& pte) {
-  if (pte.p) {
-    os << ((pte.rw) ? "wrt " : "-   ");
-    os << ((pte.us) ? "sup " : "-   ");
-    os << ((pte.nx) ? "nx  " : "-   ");
-    os << ((pte.a) ? "acc " : "-   ");
-    os << "    ";
-    os << "    ";
-    os << ((pte.pwt) ? "wt  " : "-   ");
-    os << ((pte.pcd) ? "cd  " : "-   ");
-    os << "    ";
-    os << " next 0x", hexstring((W64)pte.next << 12, 40), " mfn ", intstring(pte.next, 10);
-  } else {
-    os << "(not present)";
-  }
-  return os;
-}
-
-ostream& print_page_table(ostream& os, LongModeLevel1PTE* ptes, W64 baseaddr) {
-  VirtAddr virt(baseaddr);
-
-  virt.lm.offset = 0;
-  virt.lm.level1 = 0;
-
-  foreach (i, 512) {
-    virt.lm.level1 = i;
-    os << "        ", hexstring(virt, 64), " -> ", ptes[i], endl;
-  }
-
-  return os;
-}
-
 // This is from ptlxen.bin.o:
 extern byte _binary_ptlxen_bin_start;
 extern byte _binary_ptlxen_bin_end;
@@ -475,8 +320,8 @@ struct XenController {
   W64 xen_hypervisor_start_va;
   int page_table_levels;
 
-  vcpu_guest_context_t* frozen_ptlctx;
-  vcpu_guest_context_t* frozen_guestctx;
+  Context* frozen_ptlctx;
+  Context* frozen_guestctx;
 
   XenController() { reset(); }
 
@@ -785,9 +630,6 @@ struct XenController {
     return map_ptlsim_pages(shinfo);
   }
 
-  //
-  //
-  //
   W64 virt_to_mfn(W64 toplevel_mfn, W64 rawvirt) {
     VirtAddr virt(rawvirt);
     LongModeLevel4PTE* level4_base = null;
@@ -830,7 +672,7 @@ struct XenController {
     level1 = level1_base[virt.lm.level1];
     // cout << "  Level 1: mfn ", intstring(level2.next, 12), ", pte ", intstring(virt.lm.level1, 4), " -> ", level1, endl;
 
-    if (!level4.p) goto out_level1;
+    if (!level1.p) goto out_level1;
 
     // cout << "  Final: mfn ", intstring(level1.phys, 12), endl;
 
@@ -850,13 +692,13 @@ struct XenController {
   //
   // Prepare the initial PTLsim entry context
   //
-  void prep_initial_context(vcpu_guest_context_t* ctx, int vcpu_count) {
+  void prep_initial_context(Context* ctx, int vcpu_count) {
     //
     //++MTY TODO: Put all other VCPUs into spin state (i.e. blocked)
     //
 
     foreach (i, vcpu_count) {
-      vcpu_guest_context_t& ptlctx = ctx[i];
+      Context& ptlctx = ctx[i];
       // These are filled in later on a per-VCPU basis.
       // ptlctx.user_regs.rip = ehdr.e_entry;
       // ptlctx.user_regs.rsp = (Waddr)sp;
@@ -866,28 +708,28 @@ struct XenController {
       // Use as a template:
       getcontext(i, ptlctx);
 
-      ptlctx.ctrlreg[3] = (ptl_virt_to_mfn(toplevel_page_table) << log2(PAGE_SIZE));
+      ptlctx.cr3 = (ptl_virt_to_mfn(toplevel_page_table) << log2(PAGE_SIZE));
 
-      ptlctx.user_regs.cs = FLAT_KERNEL_CS;
-      ptlctx.user_regs.ds = FLAT_KERNEL_DS;
-      ptlctx.user_regs.ss = FLAT_KERNEL_SS;
-      ptlctx.user_regs.es = FLAT_KERNEL_DS;
-      ptlctx.user_regs.fs = 0;
-      ptlctx.user_regs.gs = 0;
-      ptlctx.user_regs.eflags = 0; // 1<<9 (set interrupt flag)
-      ptlctx.user_regs.saved_upcall_mask = 1;
+      ptlctx.seg[SEGID_CS].selector = FLAT_KERNEL_CS;
+      ptlctx.seg[SEGID_DS].selector = FLAT_KERNEL_DS;
+      ptlctx.seg[SEGID_SS].selector = FLAT_KERNEL_SS;
+      ptlctx.seg[SEGID_ES].selector = FLAT_KERNEL_DS;
+      ptlctx.seg[SEGID_FS].selector = 0;
+      ptlctx.seg[SEGID_GS].selector = 0;
+      ptlctx.commitarf[REG_flags] = 0; // 1<<9 (set interrupt flag)
+      ptlctx.saved_upcall_mask = 1;
 
-      memset(ptlctx.trap_ctxt, 0, sizeof(ptlctx.trap_ctxt));
+      memset(ptlctx.idt, 0, sizeof(ptlctx.idt));
 
 #if defined(__i386__)
       ptlctx.event_callback_cs     = FLAT_KERNEL_CS;
-      ptlctx.event_callback_eip    = 0;
+      ptlctx.event_callback_rip    = 0;
       ptlctx.failsafe_callback_cs  = FLAT_KERNEL_CS;
-      ptlctx.failsafe_callback_eip = 0;
+      ptlctx.failsafe_callback_rip = 0;
 #elif defined(__x86_64__)
-      ptlctx.event_callback_eip    = 0;
-      ptlctx.failsafe_callback_eip = 0;
-      ptlctx.syscall_callback_eip  = 0;
+      ptlctx.event_callback_rip    = 0;
+      ptlctx.failsafe_callback_rip = 0;
+      ptlctx.syscall_rip = 0;
 #endif
     }
   }
@@ -917,10 +759,12 @@ struct XenController {
 
     if (DEBUG) cerr << "  Setting up ", stacksize, "-byte stack starting at ", sp, endl, flush;
 
-    sp -= (vcpu_count * sizeof(vcpu_guest_context_t));
-    vcpu_guest_context_t* ctx = (vcpu_guest_context_t*)sp;
+    sp -= (vcpu_count * sizeof(Context));
+    Context* ctx = (Context*)sp;
 
     bootinfo->vcpu_count = vcpu_count;
+    bootinfo->max_pages = info.max_pages;
+    bootinfo->total_machine_pages = total_machine_pages;
     bootinfo->stack_top = stacktop;
     bootinfo->stack_size = stacksize;
 
@@ -971,19 +815,19 @@ struct XenController {
     bootinfo->hostreq.op = PTLSIM_HOST_NOP;
     bootinfo->ptlsim_state = PTLSIM_STATE_INITIALIZING;
 
-    vcpu_guest_context_t* ptlctx = new vcpu_guest_context_t[vcpu_count];
+    Context* ptlctx = new Context[vcpu_count];
     prep_initial_context(ptlctx, vcpu_count);
 
-    ptlctx[0].user_regs.rip = ehdr.e_entry;
-    ptlctx[0].user_regs.rsp = (Waddr)sp;
-    ptlctx[0].user_regs.rdi = (Waddr)bootinfo; // start info in %rdi (arg[0])
+    ptlctx[0].commitarf[REG_rip] = ehdr.e_entry;
+    ptlctx[0].commitarf[REG_rsp] = (Waddr)sp;
+    ptlctx[0].commitarf[REG_rdi] = (Waddr)bootinfo; // start info in %rdi (arg[0])
 
     frozen_guestctx = ctx;
     frozen_ptlctx = ptlctx;
 
     W64 target_cr3 = (ptl_virt_to_mfn(toplevel_page_table) << log2(PAGE_SIZE));
-    if (DEBUG) cerr << "  PTLsim toplevel cr3 = ", (void*)ptlctx[0].ctrlreg[3], " (mfn ", (ptlctx[0].ctrlreg[3] >> log2(PAGE_SIZE)), ")", endl;
-    if (DEBUG) cerr << "  Guest was interrupted at rip ", (void*)(Waddr)ctx[0].user_regs.rip, endl, flush;
+    if (DEBUG) cerr << "  PTLsim toplevel cr3 = ", (void*)ptlctx[0].cr3, " (mfn ", (ptlctx[0].cr3 >> log2(PAGE_SIZE)), ")", endl;
+    if (DEBUG) cerr << "  Guest was interrupted at rip ", (void*)(Waddr)ctx[0].commitarf[REG_rip], endl, flush;
     if (DEBUG) cerr << "  PTLsim entrypoint at ", (void*)ehdr.e_entry, endl;
     if (DEBUG) cerr << "  Ready, set, go!", endl, flush;
 
@@ -1016,14 +860,14 @@ struct XenController {
     ptlsim_upcall_port = ioctl(evtchnfd, IOCTL_EVTCHN_BIND_UNBOUND_PORT, &alloc);
   }
 
-  void swap_context(vcpu_guest_context_t* saved, vcpu_guest_context_t* restored, int vcpu_count) {
+  void swap_context(Context* saved, Context* restored, int vcpu_count) {
     int rc;
     pause();
 
     foreach (i, vcpu_count) {
       rc = getcontext(i, saved[i]);
       rc = setcontext(i, restored[i]);
-      shinfo->vcpu_info[i].evtchn_upcall_mask = restored[i].user_regs.saved_upcall_mask;
+      shinfo->vcpu_info[i].evtchn_upcall_mask = restored[i].saved_upcall_mask;
     }
   }
 
@@ -1033,7 +877,7 @@ struct XenController {
   void switch_to_ptlsim(bool first_time = false) {
     assert(frozen_guestctx);
     assert(frozen_ptlctx);
-    if (frozen_ptlctx[0].event_callback_eip == 0) {
+    if (frozen_ptlctx[0].event_callback_rip == 0) {
       // Block upcalls until PTLsim installs its handlers for the first time
       shinfo->vcpu_info[0].evtchn_upcall_mask = 1;
     } else {
@@ -1121,6 +965,10 @@ struct XenController {
       return (bootinfo->hostreq.op == PTLSIM_HOST_TERMINATE);
     };
 
+    case PTLSIM_HOST_QUERY_PAGES: {
+      bootinfo->hostreq.rc = query_page_types(bootinfo->hostreq.querypages.pft, bootinfo->hostreq.querypages.count);
+      break;
+    };
     default:
       bootinfo->hostreq.rc = (W64)-ENOSYS;
     };
@@ -1176,19 +1024,19 @@ struct XenController {
     return 0;
   }
 
-  int getcontext(int vcpu, vcpu_guest_context_t& ctx) {
-    vcpu_guest_context_t tempctx;
+  int getcontext(int vcpu, Context& ctx) {
+    vcpu_guest_context_t xenctx;
     assert(domain != 0);
-    int rc = xc_vcpu_getcontext(xc, domain, vcpu, &tempctx);
-    ctx = tempctx;
+    int rc = xc_vcpu_getcontext(xc, domain, vcpu, &xenctx);
+    ctx.restorefrom(xenctx);
     return rc;
   }
 
-  int setcontext(int vcpu, vcpu_guest_context_t& ctx) {
-    vcpu_guest_context_t tempctx;
-    tempctx = ctx;
+  int setcontext(int vcpu, Context& ctx) {
+    vcpu_guest_context_t xenctx;
+    ctx.saveto(xenctx);
     assert(domain != 0);
-    int rc = xc_vcpu_setcontext(xc, domain, vcpu, &tempctx);
+    int rc = xc_vcpu_setcontext(xc, domain, vcpu, &xenctx);
     return rc;
   }
 
@@ -1230,6 +1078,32 @@ struct XenController {
     return rc;
   }
 
+  int query_page_types(PageFrameType* pft, int count) {
+    // Xen will only handle up to 1024 pages at a time:
+    static const int MAX_BATCH_SIZE = 1024;
+
+    int origcount = count;
+    PageFrameType* origpft = pft;
+
+    count = xc_get_pfn_list(xc, domain, (unsigned long*)pft, count);
+    assert(count <= origcount);
+
+    // cout << "Host: got ", count, " out of max ", origcount, " pages", endl, flush;
+    assert(count > 0);
+
+    int remaining = count;
+    while (remaining > 0) {
+      int n = min(remaining, MAX_BATCH_SIZE);
+      int rc = xc_get_pfn_type_batch(xc, domain, n, (unsigned long*)pft);
+      // cout << "Host: query_page_types(", pft, ", ", n, ") => ", rc, " (errno ", errno, ")", endl, flush;
+      if (rc) return rc;
+      pft += n;
+      remaining -= n;
+    }
+
+    return count;
+  }
+
   int query_dirty_pages() {
     pause();
 
@@ -1260,8 +1134,6 @@ struct XenController {
     cout << "Got ", pagecount, " out of max ", info.max_pages, " page types", endl;
     assert(pagetypecount > 0);
     assert(pagetypecount == pagecount);
-
-    // Use DOM0_GETPAGEFRAMEINFO to find out which frames are data/shared/L1/L2/L3/L4-pagetable-pinned so we don't try to map them read-write
 
     //
     // Print the list (including pages belonging to PTLsim):
@@ -1373,9 +1245,9 @@ void print_banner(ostream& os, int argc, char** argv) {
 
   os << "//  ", endl;
 #ifdef __x86_64__
-  os << "//  PTLsim: Cycle Accurate Full System SMP/SMT x86-64 Simulator", endl;
+  os << "//  PTLsim: Cycle Accurate x86-64 Full System SMP/SMT Simulator", endl;
 #else
-  os << "//  PTLsim: Cycle Accurate Full System SMP/SMT x86 Simulator (32-bit version)", endl;
+  os << "//  PTLsim: Cycle Accurate x86 Full System SMP/SMT Simulator (32-bit version)", endl;
 #endif
   os << "//  Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>", endl;
   os << "// ", endl;
@@ -1594,14 +1466,3 @@ int main(int argc, char** argv) {
 
   return 0;
 }
-
-/*
-  cout << "After notify:", endl, flush;
-  cout << "  evtchn_mask = ", *(bitvec<64>*)(&shinfo->evtchn_mask[0]), endl;
-  cout << "  evtchn_pend = ", *(bitvec<64>*)(&shinfo->evtchn_pending[0]), endl;
-  cout << "  evtchn_upcall_mask = ", shinfo->vcpu_info[0].evtchn_upcall_mask, endl, flush;
-  cout << "  evtchn_upcall_pend = ", shinfo->vcpu_info[0].evtchn_upcall_pending, endl, flush;
-  
-  print_log_buffer(cout);
-  cout << flush;
-*/

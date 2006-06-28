@@ -11,11 +11,15 @@
 
 #include <globals.h>
 #include <ptlhwdef.h>
-#include <kernel.h>
 #include <mm.h>
 #include <dcache.h>
 #include <config.h>
 #include <datastore.h>
+#ifdef PTLSIM_HYPERVISOR
+#include <ptlxen.h>
+#else
+#include <kernel.h>
+#endif
 
 extern W64 sim_cycle;
 
@@ -122,8 +126,6 @@ static inline ostream& operator <<(ostream& os, const BasicBlockCache& bbcache) 
 //
 // Assists
 //
-
-typedef void (*assist_func_t)();
 
 const char* assist_name(assist_func_t func);
 int assist_index(assist_func_t func);

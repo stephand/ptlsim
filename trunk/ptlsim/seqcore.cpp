@@ -27,9 +27,6 @@
 #define logable(level) (0)
 #endif
 
-// This is an internal MSR required to correctly truncate ld/st pointers in 32-bit mode
-extern W64 virt_addr_mask;
-
 extern W64 total_uops_committed;
 extern W64 total_user_insns_committed;
 extern W64 sim_cycle;
@@ -135,7 +132,7 @@ namespace SequentialCore {
     Waddr rip = arf[REG_rip];
 
     W64 raddr = ra + rb;
-    raddr &= virt_addr_mask;
+    raddr &= ctx.virt_addr_mask;
     W64 origaddr = raddr;
     bool annul = 0;
 
@@ -276,7 +273,7 @@ namespace SequentialCore {
 
     W64 raddr = (aligntype == LDST_ALIGN_NORMAL) ? ra + rb : ra;
     // if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
-    raddr &= virt_addr_mask;
+    raddr &= ctx.virt_addr_mask;
     W64 origaddr = raddr;
     bool annul = 0;
 
@@ -410,9 +407,9 @@ namespace SequentialCore {
     REG_xmml8,  REG_xmmh8,  REG_xmml9,  REG_xmmh9,  REG_xmml10,  REG_xmmh10,  REG_xmml11,  REG_xmmh11,
     REG_xmml12,  REG_xmmh12,  REG_xmml13,  REG_xmmh13,  REG_xmml14,  REG_xmmh14,  REG_xmml15,  REG_xmmh15,
 
-    REG_fptos,  REG_fpsw,  REG_fpcw,  REG_fptags,  REG_fp4,  REG_fp5,  REG_fp6,  REG_fp7,
+    REG_fptos,  REG_fpsw,  REG_fptags,  REG_tr3,  REG_tr4,  REG_tr5,  REG_tr6, REG_tr7,
 
-    REG_rip,  REG_flags,  REG_sr3,  REG_mxcsr,  REG_sr0,  REG_sr1,  REG_sr2,  REG_zero,
+    REG_rip,  REG_flags,  REG_iflags, REG_selfrip, REG_nextrip, REG_ar1, REG_ar2, REG_zero,
 
     REG_temp0,  REG_temp1,  REG_temp2,  REG_temp3,  REG_temp4,  REG_temp5,  REG_temp6,  REG_temp7,
 
@@ -441,21 +438,26 @@ namespace SequentialCore {
     core_to_external_state();
     assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
-    if (logable(1)) logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ", (void*)(Waddr)ctx.commitarf[REG_sr1],
-      ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+    if (logable(1)) {
+      logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ",
+        (void*)(Waddr)ctx.commitarf[REG_selfrip], "; return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
+        ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+    }
 
     if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
 
     update_assist_stats(assist);
-    assist();
-    ctx.commitarf[REG_rip] = ctx.commitarf[REG_sr1];
+    if (logable(1)) logfile << "Before assist:", endl, ctx, endl;
+
+    assist(ctx);
+
     if (logable(1)) {
       logfile << "Done with assist", endl;
       logfile << "New state:", endl;
       logfile << ctx.commitarf;
     }
 
-    reset_fetch(ctx.commitarf[REG_sr1]);
+    reset_fetch(ctx.commitarf[REG_rip]);
     external_to_core_state();
 
     if (requested_switch_to_native) {

@@ -79,6 +79,15 @@ MakeLimits(unsigned long, 0, 0xffffffff);
 #endif
 #undef MakeLimits
 
+// Null pointer to the specified object type, for computing field offsets
+template <typename T> static inline T* nullptr() { return (T*)(Waddr)0; }
+
+// Add raw data auto-casts to a structured or bitfield type 
+#define RawDataAccessors(structtype, rawtype) \
+  structtype() { } \
+  structtype(rawtype rawbits) { *((rawtype*)this) = rawbits; } \
+  operator rawtype() const { return *((rawtype*)this); }
+
 // Typecasts in bizarre ways required for binary form access
 union W32orFloat { W32 w; float f; };
 union W64orDouble {
@@ -183,6 +192,7 @@ union MXCSR {
   struct { W32 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, daz:1, im:1, dm:1, zm:1, om:1, um:1, pm:1, rc:2, fz:1; } fields;
   W32 data;
 
+  MXCSR() { }
   MXCSR(W32 v) { data = v; }
   operator W32() const { return data; }
 };
@@ -275,7 +285,8 @@ static inline bool fcmpeqtol(float a, float b) {
 static inline float fsqrt(float v) { return (float)math::sqrt(v); }
 static inline void freemem(void* p) { free(p); }
 
-#define setzero(x) memset(x, 0, sizeof(x))
+template <typename T> static inline void setzero(T& x) { memset(&x, 0, sizeof(T)); }
+
 #define HI32(x) (W32)((x) >> 32LL)
 #define LO32(x) (W32)((x) & 0xffffffffLL)
 #define CONCAT64(hi, lo) ((((W64)(hi)) << 32) + (((W64)(lo)) & 0xffffffffLL))

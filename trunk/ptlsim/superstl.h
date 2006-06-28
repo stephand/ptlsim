@@ -2201,7 +2201,42 @@ namespace superstl {
       }
       return sb;
     }
+
+    ostream& printhl(ostream& os) const {
+      for (int i = N-1; i >= 0; i--) {
+        os << (((*this)[i]) ? '1' : '0');
+      }
+      return os;
+    }
+
+    stringbuf& printhl(stringbuf& sb) const {
+      for (int i = N-1; i >= 0; i--) {
+        sb << (((*this)[i]) ? '1' : '0');
+      }
+      return sb;
+    }
   };
+
+  //
+  // Print hi-to-lo:
+  //
+  template <int N>
+  struct hilo {
+    const bitvec<N>& b;
+    int bitcount;
+
+    hilo() { }
+
+    hilo(const bitvec<N>& b_, int bitcount_ = N): b(b_), bitcount(bitcount_) { }
+  };
+
+  template <int N>
+  static inline stringbuf& operator <<(stringbuf& os, const hilo<N>& hl) {
+    return hl.b.printhl(os);
+  }
+
+  template <int N>
+  DeclareStringBufToStream(hilo<N>);
 
   template <size_t N>
   inline ostream& operator <<(ostream& os, const bitvec<N>& v) {

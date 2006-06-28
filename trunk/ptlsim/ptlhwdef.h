@@ -15,9 +15,6 @@
 // __ASM_ONLY__ found below.
 //
 
-// Maximum number of SMT threads supported:
-#define MAX_THREADS 2
-
 //
 // Flags format: OF -  - - SF ZF - AF wait PF inv CF
 //               11 10 9 8 7  6    4  3    2  1   0
@@ -136,19 +133,19 @@
 
 #define REG_fptos   48
 #define REG_fpsw    49
-#define REG_fpcw    50
-#define REG_fptags  51
-#define REG_fp4     52
-#define REG_fp5     53
-#define REG_fp6     54
-#define REG_fp7     55
+#define REG_fptags  50
+#define REG_tr3     51
+#define REG_tr4     52
+#define REG_tr5     53
+#define REG_tr6     54
+#define REG_tr7     55
 #define REG_rip     56
 #define REG_flags   57
-#define REG_sr3     58
-#define REG_mxcsr   59
-#define REG_sr0     60
-#define REG_sr1     61
-#define REG_sr2     62
+#define REG_iflags  58
+#define REG_selfrip 59
+#define REG_nextrip 60
+#define REG_ar1     61
+#define REG_ar2     62
 #define REG_zero    63
 
 // For renaming only:
@@ -256,37 +253,400 @@ typedef W64 UserContext[ARCHREG_COUNT];
 
 ostream& operator <<(ostream& os, const UserContext& ctx);
 
+typedef byte X87Reg[10];
+
+struct X87StatusWord {
+  W16 ie:1, de:1, ze:1, oe:1, ue:1, pe:1, sf:1, es:1, c0:1, c1:1, c2:1, tos:3, c3:1, b:1;
+
+  X87StatusWord() { }
+  X87StatusWord(const W16& w) { *((W16*)this) = w; }
+  operator W16() const { return *((W16*)this); }
+};
+
+struct X87ControlWord {
+  W16 im:1, dm:1, zm:1, om:1, um:1, pm:1, res1:2, pc:2, rc:2, y:1, res2:3;
+
+  X87ControlWord() { }
+  X87ControlWord(const W16& w) { *((W16*)this) = w; }
+  operator W16() const { return *((W16*)this); }
+};
+
+struct X87State {
+  X87ControlWord cw;
+  W16 reserved1;
+  X87StatusWord sw;
+  W16 reserved2;
+  W16 tw;
+  W16 reserved3;
+  W32 eip;
+  W16 cs;
+  W16 opcode;
+  W32 dataoffs;
+  W16 ds;
+  W16 reserved4;
+  X87Reg stack[8];
+};
+
+union SSEType {
+  double d;
+  struct { float lo, hi; } f;
+  W64 w64;
+  struct { W32 lo, hi; } w32;
+
+  SSEType() { }
+  SSEType(W64 w) { w64 = w; }
+  operator W64() const { return w64; }
+};
+
+struct X87RegPadded {
+  X87Reg reg;
+  byte pad[6];
+} packedstruct;
+
+struct XMMReg {
+  W64 lo, hi;
+};
+
+struct FXSAVEStruct {
+  X87ControlWord cw;
+  X87StatusWord sw;
+  W16 tw;
+  W16 fop;
+  union {
+    struct {
+      W32 eip;
+      W16 cs;
+      W16 reserved1;
+      W32 dp;
+      W16 ds;
+      W16 reserved2;
+    } use32;
+    struct { 
+      W64 rip;
+      W64 rdp;
+    } use64;
+  };
+  W32 mxcsr;
+  W32 mxcsr_mask;
+  X87RegPadded fpregs[8];
+  XMMReg xmmregs[8];
+};
+
+inline W64 x87_fp_80bit_to_64bit(const X87Reg* x87reg) {
+  W64 reg64;
+  asm("fldt (%[mem80])\n"
+      "fstpl %[mem64]\n"
+      : : [mem64] "m" (reg64), [mem80] "r" (x87reg));
+  return reg64;
+}
+
+inline void x87_fp_64bit_to_80bit(X87Reg* x87reg, W64 reg64) {
+  asm("fldl %[mem64]\n"
+      "fstpt (%[mem80])\n"
+      : : [mem80] "r" (*x87reg), [mem64] "m" (reg64) : "memory");
+}
+
+inline void cpu_fsave(X87State& state) {
+  asm volatile("fsave %[state]" : [state] "=m" (*&state));
+}
+
+inline void cpu_frstor(X87State& state) {
+  asm volatile("frstor %[state]" : : [state] "m" (*&state));
+}
+
+inline W16 cpu_get_fpcw() {
+  W16 fpcw;
+  asm volatile("fstcw %[fpcw]" : [fpcw] "=m" (fpcw));
+  return fpcw;
+}
+
+inline void cpu_set_fpcw(W16 fpcw) {
+  asm volatile("fldcw %[fpcw]" : : [fpcw] "m" (fpcw));
+}
+
+struct SegmentDescriptor { 
+	W16 limit0;
+	W16 base0;
+	W16 base1:8, type:4, s:1, dpl:2, p:1;
+	W16 limit:4, avl:1, l:1, d:1, g:1, base2:8;
+
+  SegmentDescriptor() { }
+  SegmentDescriptor(W64 rawbits) { *((W64*)this) = rawbits; }
+  operator W64() const { return *((W64*)this); }
+
+  void setbase(W64 addr) {
+    assert((addr >> 32) == 0); // must use FSBASE and GSBASE MSRs for 64-bit addresses
+    base0 = lowbits(addr, 16);
+    base1 = bits(addr, 16, 8);
+    base2 = bits(addr, 24, 8);
+  }
+
+  W64 getbase() const {
+    return base0 + (base1 << 16) + (base2 << 24);
+  }
+
+  void setlimit(W64 size) {
+    g = (size >= (1 << 20));
+    if (g) size = ceil(size, 4096) >> 12;
+    limit0 = lowbits(size, 16);
+    limit = bits(size, 16, 4);
+  }
+
+  W64 getlimit() const {
+    W64 size = limit0 + (limit << 16);
+    if (g) size <<= 12;
+    return size;
+  }
+} packedstruct;
+
+// Encoding of segment numbers:
+enum { SEGID_ES = 0, SEGID_CS = 1, SEGID_SS = 2, SEGID_DS = 3, SEGID_FS = 4, SEGID_GS = 5, SEGID_COUNT = 6 };
+
+ostream& operator <<(ostream& os, const SegmentDescriptor& seg);
+
+struct SegmentDescriptorCache {
+  W32 selector;
+  W32 present:1, use64:1, use32:1, supervisor:1, dpl:2;
+  W64 base;
+  W64 limit;
+
+  SegmentDescriptorCache() { }
+
+  SegmentDescriptorCache& operator =(const SegmentDescriptor& desc) {
+    selector = 0;
+    present = desc.p;
+    use64 = desc.l;
+    use32 = desc.d;
+    supervisor = desc.s;
+    dpl = desc.dpl;
+    base = desc.getbase();
+    limit = desc.getlimit();
+
+    return *this;
+  }
+};
+
+ostream& operator <<(ostream& os, const SegmentDescriptorCache& seg);
+
 //
-// These are directly accessed by the PTL synthesized code:
+// These are x86 exceptions, not PTLsim internal exceptions
 //
-extern W64 csbase;
-extern W64 dsbase;
-extern W64 esbase;
-extern W64 ssbase;
-extern W64 fsbase;
-extern W64 gsbase;
+enum {
+  EXCEPTION_x86_divide          = 0,
+  EXCEPTION_x86_debug           = 1,
+  EXCEPTION_x86_nmi             = 2,
+  EXCEPTION_x86_breakpoint      = 3,
+  EXCEPTION_x86_overflow        = 4,
+  EXCEPTION_x86_bounds          = 5,
+  EXCEPTION_x86_invalid_opcode  = 6,
+  EXCEPTION_x86_no_coproc       = 7,
+  EXCEPTION_x86_double_fault    = 8,
+  EXCEPTION_x86_coproc_overrun  = 9,
+  EXCEPTION_x86_invalid_tss     = 10,
+  EXCEPTION_x86_seg_not_present = 11,
+  EXCEPTION_x86_stack_fault     = 12,
+  EXCEPTION_x86_gp_fault        = 13,
+  EXCEPTION_x86_page_fault      = 14,
+  EXCEPTION_x86_spurious_int    = 15,
+  EXCEPTION_x86_fpu             = 16,
+  EXCEPTION_x86_unaligned       = 17,
+  EXCEPTION_x86_machine_check   = 18,
+  EXCEPTION_x86_sse             = 19,
+  EXCEPTION_x86_count           = 20,
+};
 
-extern W16 csreg;
-extern W16 dsreg;
-extern W16 esreg;
-extern W16 ssreg;
-extern W16 fsreg;
-extern W16 gsreg;
+extern const char* x86_exception_names[EXCEPTION_x86_count];
 
-extern W64 fpregs[8];
+struct PageFaultErrorCode {
+  W64 p:1, rw:1, us:1, rsv:1, nx:1;
+  PageFaultErrorCode() { }
+  PageFaultErrorCode(W64 rawbits) { *((W64*)this) = rawbits; }
+  operator W64() const { return *((W64*)this); }
+};
+
+static inline ostream& operator <<(ostream& os, const PageFaultErrorCode& pfec) {
+  os << "[";
+  if (pfec.p) os << " not-present";
+  os << ((pfec.rw) ? " write" : " read");
+  if (pfec.us) os << " supervisor-only";
+  if (pfec.rsv) os << " reserved-bits-set";
+  if (pfec.nx) os << " not-executable";
+  os << " ]";
+
+  return os;
+}
 
 
-struct CoreState {
-  UserContext commitarf;    
-  UserContext specarf;
-  W64 use64:1;
+#ifdef PTLSIM_HYPERVISOR
+struct TrapTarget {
+  Waddr rip;
+  W16 cs;
+  W16 cpl:2, maskevents:1;
+};
+
+union VirtAddr {
+  struct { W64 offset:12, level1:9, level2:9, level3:9, level4:9, signext:16; } lm;
+  struct { W64 offset:12, level1:9, level2:9, level3:9, level4:9, signext:16; } pae;
+  struct { W32 offset:12, level1:10, level2:10; } x86;
+
+  RawDataAccessors(VirtAddr, W64);
+};
+
+typedef struct LongModeLevel4PTE {
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1;
+  RawDataAccessors(LongModeLevel4PTE, W64);
+};
+
+struct LongModeLevel3PTE {
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1;
+  RawDataAccessors(LongModeLevel3PTE, W64);
+};
+
+struct LongModeLevel2PTE {
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, psz:1, mbz:1, avl:3, next:51, nx:1;
+  RawDataAccessors(LongModeLevel2PTE, W64);
+};
+
+struct LongModeLevel1PTE {
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, phys:51, nx:1;
+  RawDataAccessors(LongModeLevel1PTE, W64);
+
+  void accum(const LongModeLevel1PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+  void accum(const LongModeLevel2PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+  void accum(const LongModeLevel3PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+  void accum(const LongModeLevel4PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+};
+
+struct CR0 {
+  W64 pe:1, mp:1, em:1, ts:1, et:1, ne:1, res6:10, wp:1, res17:1, am:1, res19:10, nw:1, cd:1, pg:1, res32:32;
+  RawDataAccessors(CR0, W64);
+};
+
+ostream& operator <<(ostream& os, const CR0& cr0);
+// CR2 is page fault linear address
+
+// CR3 is page table physical base
+
+struct CR4 {
+  W64 vme:1, pvi:1, tsd:1, de:1, pse:1, pae:1, mce:1, pge:1, pce:1, osfxsr:1, osxmmexcpt:1, res11:53;
+  RawDataAccessors(CR4, W64);
+};
+
+ostream& operator <<(ostream& os, const CR4& cr4);
+
+struct DebugReg {
+  W64 l0:1, g0:1, l1:1, g1:1, l2:1, g2:1, l3:1, g3:1, le:1, ge:1, res1:3, gd:1, res2:2,
+      t0:2, s0:2, t1:2, s1:2, t2:2, s2:2, t3:2, s3:2;
+  RawDataAccessors(DebugReg, W64);
+};
+
+enum {
+  DEBUGREG_TYPE_EXEC = 0,
+  DEBUGREG_TYPE_WRITE = 1,
+  DEBUGREG_TYPE_IO = 2,
+  DEBUGREG_TYPE_RW = 3,
+};
+
+enum {
+  DEBUGREG_SIZE_1 = 0,
+  DEBUGREG_SIZE_2 = 1,
+  DEBUGREG_SIZE_8 = 2, 
+  DEBUGREG_SIZE_4 = 3,
+};
+
+LongModeLevel1PTE page_table_walk_longmode(W64 rawvirt, W64 toplevel_mfn);
+
+struct vcpu_guest_context;
+
+#endif
+
+//
+// This is the complete x86 user-visible context for a single VCPU.
+// It includes both the renamable registers (commitarf) as well as
+// all relevant control registers, MSRs, x87 FP state, exception
+// and interrupt vectors, Xen-specific data and so forth.
+//
+// PTLsim cores will need to define other per-VCPU structures to
+// hold their internal state.
+//
+struct Context {
+  W64 commitarf[64];
+  int vcpuid;
+  SegmentDescriptorCache seg[SEGID_COUNT];
+
+  W64 fpstack[8];
+  X87ControlWord fpcw;
+  MXCSR mxcsr;
+
+  byte use32; // depends on active CS descriptor
+  byte use64; // depends on active CS descriptor
+
+  Waddr virt_addr_mask;
+
+#ifdef PTLSIM_HYPERVISOR
+  Waddr error_code;
+  Waddr exception_type;
+
+  byte saved_upcall_mask;
+
+  byte kernel_mode; // VGCF_IN_KERNEL
+  byte i387_valid; // VGCF_I387_VALID
+  byte failsafe_disables_events;
+  byte syscall_disables_events;
+
+  CR0 cr0;
+  Waddr cr1, cr2, cr3;
+  CR4 cr4;
+  Waddr cr5, cr6, cr7;
+  DebugReg dr0, dr1, dr2, dr3, dr4, dr5, dr6, dr7;
+  Waddr kernel_ss, kernel_sp;
+
+  Waddr event_callback_rip;
+  Waddr failsafe_callback_rip;
+  Waddr syscall_rip;
+
+  Waddr fs_base;
+  Waddr gs_base_kernel;
+  Waddr gs_base_user;
+
+  struct TrapTarget idt[256]; // Virtual IDT
+  Waddr ldtvirt;
+  Waddr gdtpages[16];
+  W16 ldtsize;
+  W16 gdtsize;
+
+  Waddr vm_assist;
+
+  void restorefrom(const vcpu_guest_context& ctx);
+  void saveto(vcpu_guest_context& ctx);
+
+  // idx must be between 0 and 8191 (i.e. 65535 >> 3)
+  bool gdt_entry_valid(W16 idx) {
+    return (idx < gdtsize);
+  }
+
+  inline LongModeLevel1PTE virt_to_pte(W64 rawvirt) const {
+    // Do intermediate caching here
+    return page_table_walk_longmode(rawvirt, cr3 >> 12);
+  }
+
+  const SegmentDescriptor& get_gdt_entry(W16 idx);
+#endif
+
+  int copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec = false);
+  int copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr);
+
+  void update_shadow_segment_descriptors();
+  void fxsave(FXSAVEStruct& state);
+  void fxrstor(const FXSAVEStruct& state);
+
+  Context() { }
+
+  //W64 use64:1;
   W64 exception;
-
-  CoreState() { }
 
   inline void reset() {
     memset(&commitarf, 0, sizeof(commitarf));
-    memset(&specarf, 0, sizeof(specarf));
     exception = 0;
   }
 
@@ -296,9 +656,9 @@ struct CoreState {
   void restart();
 };
 
-ostream& operator <<(ostream& os, const CoreState& ctx);
+ostream& operator <<(ostream& os, const Context& ctx);
 
-extern CoreState ctx;
+extern Context ctx;
 
 // Other flags not defined above
 enum {
@@ -751,7 +1111,7 @@ static inline stringbuf& operator <<(stringbuf& sb, const flagstring& bs) {
   return sb;
 }
 
-typedef void (*assist_func_t)();
+typedef void (*assist_func_t)(Context& ctx);
 
 const char* assist_name(assist_func_t func);
 int assist_index(assist_func_t func);

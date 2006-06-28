@@ -10,19 +10,6 @@
 #include <ptlxen.h>
 #include <mm.h>
 
-//
-// The boot page is page 0 in PTL space, but gcc does not like null
-// pointers and will complain without the following contortions:
-//
-//#define bootinfo (*((PTLsimMonitorInfo*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_BASE))
-
-static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_BASE; }
-#define bootinfo (*((PTLsimMonitorInfo*)getbootinfo()))
-#define shinfo (*((shared_info_t*)(Waddr)PTLSIM_SHINFO_PAGE_VIRT_BASE))
-
-#define shinfo_evtchn_pending (*((bitvec<4096>*)&shinfo.evtchn_pending))
-#define shinfo_evtchn_mask (*((bitvec<4096>*)&shinfo.evtchn_mask))
-
 void early_printk(const char* p);
 
 #ifdef __i386__
@@ -452,8 +439,8 @@ W64s synchronous_host_call(const PTLsimHostCall& call) {
 // NOTE: If there are multiple VCPUs in this VM, ctx is actually
 // an *array* of contexts, one per VCPU.
 //
-int switch_to_native(vcpu_guest_context_t* ctx) {
-  vcpu_guest_context_t ptlctx[32];
+int switch_to_native(Context* ctx) {
+  Context ptlctx[32];
   int rc;
 
   PTLsimHostCall call;
@@ -466,8 +453,8 @@ int switch_to_native(vcpu_guest_context_t* ctx) {
   return rc;
 }
 
-int shutdown(vcpu_guest_context_t* ctx) {
-  vcpu_guest_context_t ptlctx[32];
+int shutdown(Context* ctx) {
+  Context ptlctx[32];
   int rc;
 
   PTLsimHostCall call;
@@ -480,6 +467,16 @@ int shutdown(vcpu_guest_context_t* ctx) {
   rc = synchronous_host_call(call);
   // (never returns)
   return rc;
+}
+
+int query_pages(PageFrameType* pft, int count) {
+  PTLsimHostCall call;
+  call.op = PTLSIM_HOST_QUERY_PAGES;
+  call.ready = 0;
+  call.querypages.pft = pft;
+  call.querypages.count = count;
+
+  return synchronous_host_call(call);
 }
 
 ssize_t sys_read(int fd, void* buf, size_t count) {
@@ -507,7 +504,25 @@ void* sys_mmap(void* start, size_t length, int prot, int flags, int fd, W64 offs
   return (void*)(Waddr)0xffffffffffffffffULL;
 }
 
-extern ostream logfile;
+ostream logfile;
+W64 loglevel = 0;
+W64 sim_cycle = 0;
+W64 user_insn_commits = 0;
+W64 iterations = 0;
+W64 total_uops_executed = 0;
+W64 total_uops_committed = 0;
+W64 total_user_insns_committed = 0;
+W64 total_basic_blocks_committed = 0;
+char* dumpcode_filename = null;
+
+// This is where we end up after issuing opcode 0x0f37 (undocumented x86 PTL call opcode)
+void assist_ptlcall(Context& ctx) {
+  //ctx.commitarf[REG_rax] = handle_ptlcall(ctx.commitarf[REG_sr1], ctx.commitarf[REG_rdi], ctx.commitarf[REG_rsi], ctx.commitarf[REG_rdx], ctx.commitarf[REG_rcx], ctx.commitarf[REG_r8], ctx.commitarf[REG_r9]);
+}
+
+void initiate_prefetch(W64 addr, int cachelevel) {
+  // (dummy for now)
+}
 
 extern "C" void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
@@ -528,6 +543,228 @@ void early_printk(const char* p) {
 
 extern "C" void xen_event_callback_entry();
 
+//Hashtable<W64, PageFrameType, 512> pinned_pages;
+
+// Just big enough to have more than one word; rely on having no bounds checks:
+typedef bitvec<65> infinite_bitvec_t;
+
+infinite_bitvec_t* ptlsim_mfn_bitmap = null;
+
+void* ptl_virt_to_phys(void* p) {
+  Waddr virt = (Waddr)p;
+
+  assert(inrange(virt, (Waddr)PTLSIM_VIRT_BASE, (Waddr)(PTLSIM_VIRT_BASE + ((PAGE_SIZE*bootinfo.mfn_count)-1))));
+  return (void*)((bootinfo.ptl_pagedir[(virt - PTLSIM_VIRT_BASE) >> 12].phys << 12) + lowbits(virt, 12));
+}
+
+// Update a PTE entry within PTLsim:
+template <typename T>
+int update_ptl_pte(T& dest, const T& src) {
+	mmu_update_t u;
+	u.ptr = (W64)ptl_virt_to_phys(&dest);
+	u.val = (W64)src;
+  return HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
+}
+
+LongModeLevel1PTE page_table_walk_longmode(W64 rawvirt, W64 toplevel_mfn) {
+  VirtAddr virt(rawvirt);
+
+  LongModeLevel4PTE& level4 = ((LongModeLevel4PTE*)(PHYS_VIRT_BASE + (toplevel_mfn << 12)))[virt.lm.level4];
+  LongModeLevel1PTE final = (W64)level4;
+  if (!level4.p) return final;
+  if (!level4.a) level4.a = 1;
+
+  LongModeLevel3PTE& level3 = ((LongModeLevel3PTE*)(PHYS_VIRT_BASE + (level4.next << 12)))[virt.lm.level3];
+  final.accum(level3);
+  if (!level3.p) return final;
+  if (!level3.a) level3.a = 1;
+
+  LongModeLevel2PTE& level2 = ((LongModeLevel2PTE*)(PHYS_VIRT_BASE + (level3.next << 12)))[virt.lm.level2];
+  final.accum(level2);
+  if (!level2.p) return final;
+  if (!level2.a) level2.a = 1;
+
+  if (level2.psz) {
+    final.phys = level2.next;
+    final.pwt = level2.pwt;
+    final.pcd = level2.pcd;
+    final.a = level2.a;
+    final.d = level2.d;
+    return final;
+  }
+
+  LongModeLevel1PTE& level1 = ((LongModeLevel1PTE*)(PHYS_VIRT_BASE + (level2.next << 12)))[virt.lm.level1];
+  final.accum(level1);
+  if (!level1.p) return final;
+  if (!level1.a) level1.a = 1;
+
+  final.phys = level1.phys;
+  final.g = level1.g;
+  final.pat = level1.pat;
+  final.pwt = level1.pwt;
+  final.pcd = level1.pcd;
+  final.a = level1.a;
+  final.d = level1.d;
+  return final;
+}
+
+void prep_address_space() {
+  int bytes_required = ceil(bootinfo.total_machine_pages, 8) / 8;
+
+  ptlsim_mfn_bitmap = (infinite_bitvec_t*)ptl_alloc_private_pages(bytes_required);
+  memset(ptlsim_mfn_bitmap, 0, bytes_required);
+
+  foreach (i, bootinfo.mfn_count) {
+    mfn_t mfn = bootinfo.ptl_pagedir[i].phys;
+    assert(mfn < bootinfo.total_machine_pages);
+    (*ptlsim_mfn_bitmap)[mfn] = 1;
+  }
+}
+
+const SegmentDescriptor& Context::get_gdt_entry(W16 idx) {
+  if (idx >= gdtsize) return *((const SegmentDescriptor*)null);
+  mfn_t mfn = gdtpages[idx / 512];
+  return *(const SegmentDescriptor*)phys_to_ptl_virt((mfn << 12) + (lowbits(idx, 9) * 8));
+}
+
+void Context::update_shadow_segment_descriptors() {
+  seg[SEGID_CS] = get_gdt_entry(seg[SEGID_CS].selector);
+  use32 = seg[SEGID_CS].use32;
+  use64 = seg[SEGID_CS].use64;
+  virt_addr_mask = (use64 ? 0xffffffffffffffffULL : 0x00000000ffffffffULL);
+
+  seg[SEGID_DS] = get_gdt_entry(seg[SEGID_DS].selector);
+  seg[SEGID_SS] = get_gdt_entry(seg[SEGID_SS].selector);
+  seg[SEGID_ES] = get_gdt_entry(seg[SEGID_ES].selector);
+  
+  //
+  // FS and GS are special on x86-64: they have bases, but the full 64-bit base
+  // is specified by the FSBASE (0xc0000100) and GSBASE (0xc0000101) MSRs.
+  //
+  SegmentDescriptorCache& fs = seg[SEGID_FS];
+  if (fs.selector) {
+    fs = get_gdt_entry(fs.selector);
+  } else {
+    // If fs.selector is zero, base is forced to fs_base
+    fs.present = 1;
+    fs.base = fs_base;
+    fs.limit = 0xffffffffffffffffULL;
+    fs.dpl = 3;
+  }
+
+  SegmentDescriptorCache& gs = seg[SEGID_GS];
+  if (gs.selector) {
+    gs = get_gdt_entry(gs.selector);
+  } else {
+    // If fs.selector is zero, base is forced to fs_base
+    gs.present = 1;
+    gs.base = (kernel_mode) ? gs_base_kernel : gs_base_user;
+    gs.limit = 0xffffffffffffffffULL;
+    gs.dpl = 3;
+  }
+}
+
+//
+// Map all machine pages belonging to the domain into our address space,
+// starting at PHYS_VIRT_BASE. The permissions are set according to the
+// Xen pinned status (normal pages are writable, PT pages are read-only).
+//
+// ++MTY TODO Need to handle grant pages here too - we need a new hypercall
+// to return the MFNs passed to GNTTABOP_setup_table since Xen does not
+// provide a way of reading this back.
+//
+
+void update_address_space() {
+  PageFrameType* pftlist = (PageFrameType*)ptl_alloc_private_pages((bootinfo.max_pages + 1) * sizeof(PageFrameType));
+  assert(pftlist);
+
+  cerr << "Getting ", bootinfo.max_pages, " pages and types to pftlist ", pftlist, " (", bootinfo.max_pages, " max pages)", endl, flush;
+
+  int real_page_count = query_pages(pftlist, bootinfo.max_pages);
+
+  cerr << "Queried ", real_page_count, " out of ", bootinfo.max_pages, " pages and types:", endl, flush;
+
+  // Add the shared info page
+  PageFrameType& shinfo_pft = pftlist[real_page_count];
+  shinfo_pft.pin = 0;
+  shinfo_pft.type = 0;
+  shinfo_pft.mfn = bootinfo.shared_info_mfn;
+  real_page_count++;
+
+  int map_bytes_required = ceil(bootinfo.total_machine_pages, 8) / 8;
+
+  infinite_bitvec_t& pinned_mfn_bitmap = *(infinite_bitvec_t*)ptl_alloc_private_pages(map_bytes_required);
+  memset(&pinned_mfn_bitmap, 0, map_bytes_required);
+
+  foreach (i, real_page_count) {
+    const PageFrameType& pft = pftlist[i];
+    assert(pft.mfn < bootinfo.total_machine_pages);
+    pinned_mfn_bitmap[pft.mfn] = (pft.type != PageFrameType::NORMAL);
+  }
+
+  // GDT pages must also be mapped read-only:
+  foreach (c, bootinfo.vcpu_count) {
+    int gdt_page_count = ceil(bootinfo.ctx[c].gdtsize, 512) / 512;
+    cerr << "GDT size: ", bootinfo.ctx[c].gdtsize, " -> ", gdt_page_count, " pages", endl;
+    foreach (i, gdt_page_count) {
+      mfn_t mfn = bootinfo.ctx[c].gdtpages[i];
+      assert(mfn < bootinfo.total_machine_pages);
+      cerr << "  Pin GDT mfn ", mfn, endl;
+      pinned_mfn_bitmap[mfn] = 1;
+    }
+  }
+
+  foreach (i, real_page_count) {
+    const PageFrameType& pft = pftlist[i];
+
+    if ((*ptlsim_mfn_bitmap)[pft.mfn]) continue;
+
+    LongModeLevel1PTE pte = 0;
+    pte.p = 1;
+    pte.rw = (!pinned_mfn_bitmap[pft.mfn]);
+    pte.us = 1;
+    pte.phys = pft.mfn;
+    
+    int rc;
+    rc = update_ptl_pte(bootinfo.phys_pagedir[pft.mfn], pte);
+
+    if (rc < 0) {
+      cerr << intstring(i, 8), ": mfn ", intstring(pft.mfn, 8), ", pin? ", pft.pin, ", type ", pft.type, ": ", PageFrameType::names[pft.type], (((*ptlsim_mfn_bitmap)[pft.mfn]) ? " [PTLsim]" : ""),  endl;
+      cerr << "  Cannot map mfn ", pft.mfn, " with pte ", pte, ": rc ", rc, endl;
+    }
+  }
+
+  ptl_free_private_pages(&pinned_mfn_bitmap, map_bytes_required);
+  ptl_free_private_pages(pftlist, bootinfo.max_pages * sizeof(PageFrameType));
+}
+
+//
+// This is required before switching back to native mode, since we may have
+// read/write maps of pages that the guest kernel thinks are read-only
+// everywhere; this will cause later pin operations to fail.
+//
+// We also need to hook into the MMUEXT_pin_xxx hypercalls while simulating
+// so we unmap our read-write map to the page when these occur.
+//
+void unmap_address_space() {
+  PageFrameType* pftlist = (PageFrameType*)ptl_alloc_private_pages(bootinfo.max_pages * sizeof(PageFrameType));
+  assert(pftlist);
+
+  int real_page_count = query_pages(pftlist, bootinfo.max_pages);
+
+  int n = 0;
+  foreach (i, real_page_count) {
+    const PageFrameType& pft = pftlist[i];
+    assert(pft.mfn < bootinfo.total_machine_pages);
+
+    LongModeLevel1PTE pte = 0;
+    int rc = update_ptl_pte(bootinfo.phys_pagedir[pft.mfn], pte);
+    if (rc < 0) cerr << "  Cannot unmap mfn ", pft.mfn, " with pte ", pte, ": rc ", rc, endl;
+  }
+
+  ptl_free_private_pages(pftlist, bootinfo.max_pages * sizeof(PageFrameType));
+}
+
 extern "C" void ptlsim_preinit(PTLsimMonitorInfo* dummy) {
   stringbuf sb;
   int rc;
@@ -544,6 +781,13 @@ extern "C" void ptlsim_preinit(PTLsimMonitorInfo* dummy) {
   // Initialize the page pools and memory management
   //
   ptl_mm_init(bootinfo.heap_start, bootinfo.heap_end);
+
+  //
+  // We need this to clear the TS bit in CR0: otherwise any
+  // modifications to the FPU or SSE context will create a
+  // device-not-available exception.
+  //
+  HYPERVISOR_fpu_taskswitch(0);
 
   //
   // Connect to the host call port the monitor set up for us:
@@ -595,6 +839,7 @@ extern "C" void ptlsim_preinit(PTLsimMonitorInfo* dummy) {
   // At this point we can start making host requests
   //
   call_global_constuctors();
+  logfile.open(1);
 
   bootinfo.ptlsim_state = PTLSIM_STATE_RUNNING;
   
@@ -603,9 +848,48 @@ extern "C" void ptlsim_preinit(PTLsimMonitorInfo* dummy) {
   cerr << "//", endl;
   cerr.flush();
 
+  prep_address_space();
+  update_address_space();
+
+  Context& ctx = contextof(0);
+  ctx.update_shadow_segment_descriptors();
+
+  cerr << "vcpu0 user context:", endl, ctx, flush;
+
+  void* ripvirt = (void*)(Waddr)ctx.commitarf[REG_rip];
+
+  cerr << "rip: ", ripvirt, endl;
+  cerr << "Toplevel page table in cr3: ", (ctx.cr3 >> 12), endl;
+
+  LongModeLevel1PTE entrypte = ctx.virt_to_pte((Waddr)ripvirt);
+  cerr << entrypte, endl;
+
+  byte* entryptr = (byte*)pte_to_ptl_virt((Waddr)ripvirt, entrypte);
+
+  cerr << "Entry ptr = ", entryptr, endl, flush;
+
+  byte insnbuf[16];
+  PageFaultErrorCode pfec;
+  Waddr faultaddr;
+  int n = ctx.copy_from_user(insnbuf, ctx.commitarf[REG_rip], sizeof(insnbuf), pfec, faultaddr, true);
+
+  cerr << "Got ", n, " bytes of insn data: ", bytemaskstring(entryptr, 0xffffffffffffffffULL, n), endl, flush;
+
+  cerr << "Now ready to run...", endl, flush;
+  
+  //cerr << "Dumping grant table...", endl, flush;
+  //gnttab_dump_table grantop;
+  //grantop.dom = DOMID_SELF;
+  //rc = HYPERVISOR_grant_table_op(GNTTABOP_dump_table, &grantop, 1);
+  //cerr << "Dump rc ", rc, ", status ", grantop.status, endl, flush;
+
+  unmap_address_space();
+
+  cerr << "Unmapped address space", endl, flush;
+
   int i = 0;
   int iter = 0;
-
+#if 0
   for (;;) {
     if (trigger_switch_to_native || (iter == 1)) {
       early_printk("Request from ptlmon: switch to native\n");
@@ -627,7 +911,7 @@ extern "C" void ptlsim_preinit(PTLsimMonitorInfo* dummy) {
       iter++;
     }
   }
-
+#endif
   shutdown(bootinfo.ctx);
 
   // We should never get here!

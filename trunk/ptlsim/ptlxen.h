@@ -18,9 +18,52 @@ extern "C" {
 #include <xen/dom0_ops.h>
 #include <xen/sched.h>
 #include <xen/event_channel.h>
+#include <xen/grant_table.h>
 #include "xc_ptlsim.h"
 }
 
+#include <ptlhwdef.h>
+
+//
+// The boot page is page 0 in PTL space, but gcc does not like null
+// pointers and will complain without the following contortions:
+//
+//#define bootinfo (*((PTLsimMonitorInfo*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_BASE))
+
+#ifndef EXCLUDE_BOOTINFO_SHINFO
+static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_BASE; }
+#define bootinfo (*((PTLsimMonitorInfo*)getbootinfo()))
+#define shinfo (*((shared_info_t*)(Waddr)PTLSIM_SHINFO_PAGE_VIRT_BASE))
+
+#define shinfo_evtchn_pending (*((bitvec<4096>*)&shinfo.evtchn_pending))
+#define shinfo_evtchn_mask (*((bitvec<4096>*)&shinfo.evtchn_mask))
+#endif
+
+LongModeLevel1PTE page_table_walk_longmode(W64 rawvirt, W64 toplevel_mfn);
+ostream& print_page_table(ostream& os, LongModeLevel1PTE* ptes, W64 baseaddr);
+
+struct PageFrameType {
+  Waddr mfn:28, type:3, pin:1;
+  
+  enum {
+    NORMAL = 0,
+    L1 = 1,
+    L2 = 2,
+    L3 = 3,
+    L4 = 4,
+    INVALID = 7,
+    COUNT = 8,
+  };
+
+  static const char* names[COUNT];
+
+  PageFrameType() { }
+  operator Waddr() const { return *((const Waddr*)this); }
+};
+
+//
+// Hypercalls
+//
 int HYPERVISOR_set_trap_table(trap_info_t *table);
 int HYPERVISOR_mmu_update(mmu_update_t *req, int count, int *success_count, domid_t domid);
 int HYPERVISOR_set_gdt(unsigned long *frame_list, int entries);
@@ -95,6 +138,12 @@ enum {
   // from the address space.
   //
   PTLSIM_HOST_TERMINATE,
+
+  //
+  // Query the pages belonging to the domain
+  // and their respective types
+  //
+  PTLSIM_HOST_QUERY_PAGES,
 };
 
 // Calls from guest domain -> ptlmon in dom0:
@@ -116,17 +165,21 @@ struct PTLsimHostCall {
       W64 arg6;
     } syscall;
     struct {
-      vcpu_guest_context_t* guestctx;
-      vcpu_guest_context_t* ptlctx;
+      Context* guestctx;
+      Context* ptlctx;
     } switch_to_native;
     struct {
       int dummy;
     } switch_to_sim;
     struct {
-      vcpu_guest_context_t* guestctx;
-      vcpu_guest_context_t* ptlctx;
+      Context* guestctx;
+      Context* ptlctx;
       int exitcode;
     } terminate;
+    struct {
+      PageFrameType* pft;
+      int count;
+    } querypages;
   };
 
   PTLsimHostCall() { }
@@ -220,12 +273,101 @@ struct PTLsimMonitorInfo: public PTLsimBootPageInfo {
   byte* heap_start;
   byte* heap_end;
   int vcpu_count;
-  vcpu_guest_context_t* ctx;
+  int max_pages;
+  int total_machine_pages;
+  Context* ctx;
   byte* startup_log_buffer;
   int startup_log_buffer_tail;
   int startup_log_buffer_size;
   int ptlsim_state; // (PTLSIM_STATE_xxx)
 };
+
+#ifndef EXCLUDE_BOOTINFO_SHINFO
+
+static inline Context& contextof(int vcpu) { return bootinfo.ctx[vcpu]; }
+
+static inline void* phys_to_ptl_virt(W64 rawphys) {
+  return (void*)(PHYS_VIRT_BASE + rawphys);
+}
+
+static inline void* pte_to_ptl_virt(W64 rawvirt, const LongModeLevel1PTE& pte) {
+  if (!pte.p) return null;
+  return phys_to_ptl_virt((pte.phys << 12) + lowbits(rawvirt, 12));
+}
+
+inline int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
+  LongModeLevel1PTE pte;
+
+  int n = 0;
+
+  pfec = 0;
+  pte = virt_to_pte(source);
+  if ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = source;
+    pfec.p = !pte.p;
+    pfec.nx = pte.nx;
+    pfec.us = ((!kernel_mode) & (!pte.us));
+    return 0;
+  }
+
+  n = min(4096 - lowbits(source, 12), (Waddr)15);
+  memcpy(target, pte_to_ptl_virt(source, pte), n);
+
+  // All the bytes were on the first page
+  if (n == bytes) return n;
+
+  // Go on to second page, if present
+  pte = virt_to_pte(source + n);
+  if ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = source + n;
+    pfec.p = !pte.p;
+    pfec.nx = pte.nx;
+    pfec.us = ((!kernel_mode) & (!pte.us));
+    return n;
+  }
+
+  memcpy((byte*)target + n, pte_to_ptl_virt(source + n, pte), bytes - n);
+  n = bytes;
+  return n;
+}
+
+inline int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
+  LongModeLevel1PTE pte;
+
+  pfec = 0;
+  pte = virt_to_pte(target);
+  if ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = target;
+    pfec.p = !pte.p;
+    pfec.us = ((!kernel_mode) & (!pte.us));
+    return 0;
+  }
+
+  byte* targetlo = (byte*)pte_to_ptl_virt(target, pte);
+  int nlo = min(4096 - lowbits(target, 12), (Waddr)15);
+
+  // All the bytes were on the first page
+  if (nlo == bytes) {
+    memcpy(targetlo, source, nlo);
+    return bytes;
+  }
+
+  // Go on to second page, if present
+  pte = virt_to_pte(target + nlo);
+  if ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = target + nlo;
+    pfec.p = !pte.p;
+    pfec.us = ((!kernel_mode) & (!pte.us));
+    return nlo;
+  }
+
+  memcpy(pte_to_ptl_virt(target + nlo, pte), (byte*)source + nlo, bytes - nlo);
+  memcpy(targetlo, source, nlo);
+
+  return bytes;
+}
+
+#endif
 
 //
 // Subset of system calls available under PTLsim/Xen:

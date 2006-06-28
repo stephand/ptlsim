@@ -65,19 +65,19 @@ static inline W64 do_syscall_64bit(W64 syscallid, W64 arg1, W64 arg2, W64 arg3, 
                 "d" ((W64)(arg3)), "g" ((W64)(arg4)), "g" ((W64)(arg5)),
                 "g" ((W64)(arg6)) 
                 : "r11","rcx","memory" ,"r8", "r10", "r9" );
-	return rc;
+  return rc;
 }
 
 struct user_desc_32bit {
-	W32 entry_number;
-	W32 base_addr;
-	W32 limit;
-	W32 seg_32bit:1;
-	W32 contents:2;
-	W32 read_exec_only:1;
-	W32 limit_in_pages:1;
-	W32 seg_not_present:1;
-	W32 useable:1;
+  W32 entry_number;
+  W32 base_addr;
+  W32 limit;
+  W32 seg_32bit:1;
+  W32 contents:2;
+  W32 read_exec_only:1;
+  W32 limit_in_pages:1;
+  W32 seg_not_present:1;
+  W32 useable:1;
 };
 
 #ifdef __x86_64__
@@ -91,15 +91,23 @@ static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 
 }
 
 Waddr get_fs_base() {
-  Waddr fsbase;
-  assert(sys_arch_prctl(ARCH_GET_FS, &fsbase) == 0);
-  return fsbase;
+  if (ctx.use64) {
+    Waddr fsbase;
+    assert(sys_arch_prctl(ARCH_GET_FS, &fsbase) == 0);
+    return fsbase;
+  } else {
+    return ldt_seg_base_cache[ctx.seg[SEGID_FS].selector >> 3];
+  }
 }
 
 Waddr get_gs_base() {
-  W64 gsbase;
-  assert(sys_arch_prctl(ARCH_GET_GS, &gsbase) == 0);
-  return gsbase;
+  if (ctx.use64) {
+    W64 gsbase;
+    assert(sys_arch_prctl(ARCH_GET_GS, &gsbase) == 0);
+    return gsbase;
+  } else {
+    return ldt_seg_base_cache[ctx.seg[SEGID_GS].selector >> 3];
+  }
 }
 
 #else
@@ -120,7 +128,7 @@ static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 
 Waddr get_fs_base() {
   user_desc_32bit ud;
   memset(&ud, 0, sizeof(ud));
-  ud.entry_number = get_fs() >> 3;
+  ud.entry_number = ctx.seg[SEGID_FS].selector >> 3;
   int rc = sys_get_thread_area((user_desc*)&ud);
   return (rc) ? 0 : ud.base_addr;
 }
@@ -128,12 +136,48 @@ Waddr get_fs_base() {
 Waddr get_gs_base() {
   user_desc_32bit ud;
   memset(&ud, 0, sizeof(ud));
-  ud.entry_number = get_gs() >> 3;
+  ud.entry_number = ctx.seg[SEGID_GS].selector >> 3;
   int rc = sys_get_thread_area((user_desc*)&ud);
   return (rc) ? 0 : ud.base_addr;
 }
 
 #endif // !__x86_64__
+
+void Context::update_shadow_segment_descriptors() {
+  W64 limit = (use64) ? 0xffffffffffffffffULL : 0xffffffffULL;
+
+  SegmentDescriptorCache& cs = seg[SEGID_CS];
+  cs.present = 1;
+  cs.base = 0;
+  cs.limit = limit;
+
+  virt_addr_mask = limit;
+
+  SegmentDescriptorCache& ss = seg[SEGID_SS];
+  ss.present = 1;
+  ss.base = 0;
+  ss.limit = limit;
+
+  SegmentDescriptorCache& ds = seg[SEGID_DS];
+  ds.present = 1;
+  ds.base = 0;
+  ds.limit = limit;
+
+  SegmentDescriptorCache& es = seg[SEGID_ES];
+  es.present = 1;
+  es.base = 0;
+  es.limit = limit;
+  
+  SegmentDescriptorCache& fs = seg[SEGID_FS];
+  fs.present = 1;
+  fs.base = get_fs_base();
+  fs.limit = limit;
+
+  SegmentDescriptorCache& gs = seg[SEGID_GS];
+  gs.present = 1;
+  gs.base = get_gs_base();
+  gs.limit = limit;
+}
 
 // Based on /usr/include/asm-i386/unistd.h:
 #define __NR_32bit_mmap 90
@@ -156,7 +200,7 @@ Waddr get_gs_base() {
 #define __NR_64bit_mremap 25
 #define __NR_64bit_arch_prctl 158
 #define __NR_64bit_exit 60
-#define __NR_64bit_exit_group	231
+#define __NR_64bit_exit_group 231
 #define __NR_64bit_rt_sigaction 13
 #define __NR_64bit_alarm 37
 
@@ -410,23 +454,6 @@ void* AddressSpace::setbrk(void* reqbrk) {
 Waddr stack_min_addr;
 Waddr stack_max_addr;
 
-//
-// These are in PTL space accessed directly by uops:
-//
-W64 csbase;
-W64 dsbase;
-W64 esbase;
-W64 ssbase;
-W64 fsbase;
-W64 gsbase;
-
-W16 csreg;
-W16 dsreg;
-W16 esreg;
-W16 ssreg;
-W16 fsreg;
-W16 gsreg;
-
 /*
  * Memory map query support
  *
@@ -640,10 +667,12 @@ void AddressSpace::resync_with_process_maps() {
   brk = sys_brk(null);
   if (DEBUG) logfile << "resync_with_process_maps: brk from ", (void*)brkbase, " to ", (void*)brk, endl;
 
-  fsbase = get_fs_base();
-  gsbase = get_gs_base();
-
-  if (DEBUG) logfile << "resync_with_process_maps: fsbase ", (void*)(Waddr)fsbase, ", gsbase ", (void*)(Waddr)gsbase, endl;
+  if (DEBUG) {
+    logfile << "resync_with_process_maps: fs ", hexstring(ctx.seg[SEGID_FS].selector, 16),
+      ", fsbase ", (void*)(Waddr)ctx.seg[SEGID_FS].base, 
+      ", gs ", hexstring(ctx.seg[SEGID_GS].selector, 16),
+      ", gsbase ", (void*)(Waddr)ctx.seg[SEGID_GS].base, endl;
+  }
 
   Waddr stackleft = stackbase - stack_min_addr;
 
@@ -672,47 +701,13 @@ AddressSpace asp;
 W64 ldt_seg_base_cache[LDT_SIZE];
 
 // Saved and restored by asm code:
-X87State x87state;
-
-void fpu_state_to_ptlsim_state() {
-  ctx.commitarf[REG_fptos] = x87state.sw.fields.tos * 8;
-  ctx.commitarf[REG_fpsw] = x87state.sw.data;
-  ctx.commitarf[REG_fpcw] = x87state.cw.data;
-
-  ctx.commitarf[REG_fptags] = 0;
-  foreach (i, 8) {
-    int type = bits(x87state.tw, i*2, 2);
-    ctx.commitarf[REG_fptags] |= ((W64)(type != 3)) << i*8;
-  }
-
-  // x86 FSAVE state is in order of stack rather than physical registers:
-  foreach (i, 8) {
-    fpregs[lowbits(x87state.sw.fields.tos + i, 3)] = x87_fp_80bit_to_64bit(&x87state.stack[i]);
-  }
-}
-
-void ptlsim_state_to_fpu_state() {
-  // x87state.cw already filled and assumed not to be modified
-  // clear everything but 4 FP status flag bits (c3/c2/c1/c0):
-  x87state.sw.data = ctx.commitarf[REG_fpsw] & ((0x7 << 8) | (1 << 14));
-  int tos = ctx.commitarf[REG_fptos] >> 3;
-  assert(inrange(tos, 0, 7));
-  x87state.sw.fields.tos = tos;
-  x87state.tw = 0;
-
-  // Prepare tag word
-  foreach (i, 8) {
-    x87state.tw |= (bit(ctx.commitarf[REG_fptags], i*8) ? 0 : 3) << (i*2);
-  }
-
-  // Prepare actual registers
-  foreach (i, 8) {
-    x87_fp_64bit_to_80bit(&x87state.stack[i], fpregs[lowbits(tos + i, 3)]);
-  }
-
-  ctx.commitarf[REG_fpsw] = x87state.sw.data;
-  ctx.commitarf[REG_fptags] = x87state.tw;
-}
+FXSAVEStruct x87state;
+W16 saved_cs;
+W16 saved_ss;
+W16 saved_ds;
+W16 saved_es;
+W16 saved_fs;
+W16 saved_gs;
 
 #define ARCH_ENABLE_EXIT_HOOK 0x2001
 #define ARCH_SET_EXIT_HOOK_ADDR 0x2002
@@ -932,14 +927,28 @@ void switch_to_native_restore_context() {
 
   thunkpage->call_code_addr = (Waddr)&thunkpage->switch_to_sim_thunk;
   thunkpage->simulated = 0;
-  ptlsim_state_to_fpu_state();
+
+  saved_cs = ctx.seg[SEGID_CS].selector;
+  saved_ss = ctx.seg[SEGID_SS].selector;
+  saved_ds = ctx.seg[SEGID_DS].selector;
+  saved_es = ctx.seg[SEGID_ES].selector;
+  saved_fs = ctx.seg[SEGID_FS].selector;
+  saved_gs = ctx.seg[SEGID_GS].selector;
+
+  ctx.fxsave(x87state);
 
   logfile << endl, "=== Preparing to switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
 
   logfile << "Final state:", endl;
-  logfile << ctx.commitarf;
+  logfile << ctx;
+  logfile << "fs: ", ctx.seg[SEGID_FS], endl;
+  logfile << "gs: ", ctx.seg[SEGID_GS], endl;
+
+  saved_fs = ctx.seg[SEGID_FS].selector;
+  saved_gs = ctx.seg[SEGID_GS].selector;
 
   logfile << endl, "=== Switching to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
+  logfile << "saved_fs = ", (void*)saved_fs, ", saved_gs = ", (void*)saved_gs, endl, flush;
 
   switch_to_native_restore_context_lowlevel(ctx.commitarf, !ctx.use64);
 }
@@ -959,7 +968,16 @@ extern "C" void save_context_switch_to_sim() {
   logfile << endl, "=== Switching to simulation mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
 
   ctx.commitarf[REG_flags] &= ~(FLAG_INV|FLAG_WAIT);
-  fpu_state_to_ptlsim_state();
+  ctx.seg[SEGID_CS].selector = saved_cs;
+  ctx.seg[SEGID_SS].selector = saved_ss;
+  ctx.seg[SEGID_DS].selector = saved_ds;
+  ctx.seg[SEGID_ES].selector = saved_es;
+  ctx.seg[SEGID_FS].selector = saved_fs;
+  ctx.seg[SEGID_GS].selector = saved_gs;
+  ctx.update_shadow_segment_descriptors();
+
+  ctx.fxrstor(x87state);
+
   asp.resync_with_process_maps();
 
   PTLsimThunkPagePrivate* thunkpage = (PTLsimThunkPagePrivate*)PTLSIM_THUNK_PAGE;
@@ -1024,13 +1042,16 @@ void handle_syscall_64bit() {
   case __NR_64bit_arch_prctl: {
     // We need to trap this so we can virtualize ARCH_SET_FS and ARCH_SET_GS:
     ctx.commitarf[REG_rax] = sys_arch_prctl(arg1, (void*)arg2);
+    ctx.update_shadow_segment_descriptors();
     switch (arg1) {
     case ARCH_SET_FS:
-      logfile << "arch_prctl: set FS base to ", (void*)arg2, endl;
-      fsbase = arg2; break;
+      ctx.seg[SEGID_FS].base = arg2;
+      logfile << "arch_prctl: set FS base to ", (void*)ctx.seg[SEGID_FS].base, endl;
+      break;
     case ARCH_SET_GS:
-      logfile << "arch_prctl: set GS base to ", (void*)arg2, endl;
-      gsbase = arg2; break;
+      ctx.seg[SEGID_GS].base = arg2;
+      logfile << "arch_prctl: set GS base to ", (void*)ctx.seg[SEGID_GS].base, endl;
+      break;
     }
     break;
   }
@@ -1076,12 +1097,12 @@ void handle_syscall_64bit() {
 #endif // __x86_64__
 
 struct old_mmap32_arg_struct {
-	W32 addr;
-	W32 len;
-	W32 prot;
-	W32 flags;
-	W32 fd;
-	W32 offset;
+  W32 addr;
+  W32 len;
+  W32 prot;
+  W32 flags;
+  W32 fd;
+  W32 offset;
 };
 
 const char* syscall_names_32bit[] = {"restart_syscall", "exit", "fork", "read", "write", "open", "close", "waitpid", "creat", "link", "unlink", "execve", "chdir", "time", "mknod", "chmod", "lchown", "break", "oldstat", "lseek", "getpid", "mount", "umount", "setuid", "getuid", "stime", "ptrace", "alarm", "oldfstat", "pause", "utime", "stty", "gtty", "access", "nice", "ftime", "sync", "kill", "rename", "mkdir", "rmdir", "dup", "pipe", "times", "prof", "brk", "setgid", "getgid", "signal", "geteuid", "getegid", "acct", "umount2", "lock", "ioctl", "fcntl", "mpx", "setpgid", "ulimit", "oldolduname", "umask", "chroot", "ustat", "dup2", "getppid", "getpgrp", "setsid", "sigaction", "sgetmask", "ssetmask", "setreuid", "setregid", "sigsuspend", "sigpending", "sethostname", "setrlimit", "getrlimit", "getrusage", "gettimeofday", "settimeofday", "getgroups", "setgroups", "select", "symlink", "oldlstat", "readlink", "uselib", "swapon", "reboot", "readdir", "mmap", "munmap", "truncate", "ftruncate", "fchmod", "fchown", "getpriority", "setpriority", "profil", "statfs", "fstatfs", "ioperm", "socketcall", "syslog", "setitimer", "getitimer", "stat", "lstat", "fstat", "olduname", "iopl", "vhangup", "idle", "vm86old", "wait4", "swapoff", "sysinfo", "ipc", "fsync", "sigreturn", "clone", "setdomainname", "uname", "modify_ldt", "adjtimex", "mprotect", "sigprocmask", "create_module", "init_module", "delete_module", "get_kernel_syms", "quotactl", "getpgid", "fchdir", "bdflush", "sysfs", "personality", "afs_syscall", "setfsuid", "setfsgid", "_llseek", "getdents", "_newselect", "flock", "msync", "readv", "writev", "getsid", "fdatasync", "_sysctl", "mlock", "munlock", "mlockall", "munlockall", "sched_setparam", "sched_getparam", "sched_setscheduler", "sched_getscheduler", "sched_yield", "sched_get_priority_max", "sched_get_priority_min", "sched_rr_get_interval", "nanosleep", "mremap", "setresuid", "getresuid", "vm86", "query_module", "poll", "nfsservctl", "setresgid", "getresgid", "prctl", "rt_sigreturn", "rt_sigaction", "rt_sigprocmask", "rt_sigpending", "rt_sigtimedwait", "rt_sigqueueinfo", "rt_sigsuspend", "pread64", "pwrite64", "chown", "getcwd", "capget", "capset", "sigaltstack", "sendfile", "getpmsg", "putpmsg", "vfork", "ugetrlimit", "mmap2", "truncate64", "ftruncate64", "stat64", "lstat64", "fstat64", "lchown32", "getuid32", "getgid32", "geteuid32", "getegid32", "setreuid32", "setregid32", "getgroups32", "setgroups32", "fchown32", "setresuid32", "getresuid32", "setresgid32", "getresgid32", "chown32", "setuid32", "setgid32", "setfsuid32", "setfsgid32", "pivot_root", "mincore", "madvise", "madvise1", "getdents64", "fcntl64", "<unused>", "<unused>", "gettid", "readahead", "setxattr", "lsetxattr", "fsetxattr", "getxattr", "lgetxattr", "fgetxattr", "listxattr", "llistxattr", "flistxattr", "removexattr", "lremovexattr", "fremovexattr", "tkill", "sendfile64", "futex", "sched_setaffinity", "sched_getaffinity", "set_thread_area", "get_thread_area", "io_setup", "io_destroy", "io_getevents", "io_submit", "io_cancel", "fadvise64", "<unused>", "exit_group", "lookup_dcookie", "epoll_create", "epoll_ctl", "epoll_wait", "remap_file_pages", "set_tid_address", "timer_create", "statfs64", "fstatfs64", "tgkill", "utimes", "fadvise64_64", "vserver", "mbind", "get_mempolicy", "set_mempolicy", "mq_open", "sys_kexec_load", "waitid"};
@@ -1129,7 +1150,7 @@ void handle_syscall_32bit(int semantics) {
     arg4 = ctx.commitarf[REG_rsi];
     arg5 = ctx.commitarf[REG_rdi];
     arg6 = ctx.commitarf[REG_rbp];
-    retaddr = ctx.commitarf[REG_sr1];
+    retaddr = ctx.commitarf[REG_nextrip];
   } else if (semantics == SYSCALL_SEMANTICS_SYSENTER) {
     //
     // SYSENTER is just like int 0x80, but it only works in 32-bit
@@ -1139,7 +1160,7 @@ void handle_syscall_32bit(int semantics) {
     // in the VDSO page, so there's no need to store the address.
     // We do need to dynamically find that address though.
     //
-    retaddr = get_sysenter_retaddr(ctx.commitarf[REG_sr1]);
+    retaddr = get_sysenter_retaddr(ctx.commitarf[REG_nextrip]);
 
     assert(!ctx.use64);
     syscallid = ctx.commitarf[REG_rax];
@@ -1169,7 +1190,7 @@ void handle_syscall_32bit(int semantics) {
     // kernel page is used. The semantics are then as follows:
     //
     // Arguments:
-    // %eax	System call number.
+    // %eax System call number.
     // %ebx Arg1
     // %ecx return EIP 
     // %edx Arg3
@@ -1242,6 +1263,7 @@ void handle_syscall_32bit(int semantics) {
       logfile << "handle_syscall at iteration ", iterations, ": set_thread_area: LDT desc 0x", 
         hexstring(((desc->entry_number << 3) + 3), 16), " now has base ", (void*)(Waddr)desc->base_addr, endl, flush;
       ldt_seg_base_cache[desc->entry_number] = desc->base_addr;
+      ctx.update_shadow_segment_descriptors();
     }
     break;
   }
@@ -1323,8 +1345,9 @@ W64 handle_ptlcall(W64 rip, W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, 
 }
 
 // This is where we end up after issuing opcode 0x0f37 (undocumented x86 PTL call opcode)
-void assist_ptlcall() {
-  ctx.commitarf[REG_rax] = handle_ptlcall(ctx.commitarf[REG_sr1], ctx.commitarf[REG_rdi], ctx.commitarf[REG_rsi], ctx.commitarf[REG_rdx], ctx.commitarf[REG_rcx], ctx.commitarf[REG_r8], ctx.commitarf[REG_r9]);
+void assist_ptlcall(Context& ctx) {
+  ctx.commitarf[REG_rax] = handle_ptlcall(ctx.commitarf[REG_nextrip], ctx.commitarf[REG_rdi], ctx.commitarf[REG_rsi], ctx.commitarf[REG_rdx], ctx.commitarf[REG_rcx], ctx.commitarf[REG_r8], ctx.commitarf[REG_r9]);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
 CycleTimer ctperfctrs;
@@ -1337,7 +1360,7 @@ static struct vperfctr* perfctrset = null;
 
 static void setup_perfctr_control(struct perfctr_cpu_control *cpu_control, int eventcount, const W64* events) {
   memset(cpu_control, 0, sizeof(*cpu_control));
-	/* count at CPL > 0, Enable */
+  /* count at CPL > 0, Enable */
   static const W64 FLAGS_USERMODE_AND_ENABLED = ((1 << 16) | (1 << 22));
   cpu_control->tsc_on = 1;
   cpu_control->nractrs = eventcount;
@@ -2038,15 +2061,19 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   ctx.reset();
   ctx.commitarf[REG_rsp] = (Waddr)origrsp;
   ctx.commitarf[REG_rip] = (Waddr)ptlsim_ehdr->e_entry;
-
   ctx.commitarf[REG_flags] = 0;
-  ctx.use64 = (ptlsim_ehdr->e_machine == EM_X86_64);
-  cpu_fsave(x87state);
-  fpu_state_to_ptlsim_state();
-  ctx.commitarf[REG_mxcsr] = x86_get_mxcsr();
 
-  fsbase = get_fs_base();
-  gsbase = get_gs_base();
+  ctx.seg[SEGID_CS].selector = saved_cs;
+  ctx.seg[SEGID_SS].selector = saved_ss;
+  ctx.seg[SEGID_DS].selector = saved_ds;
+  ctx.seg[SEGID_ES].selector = saved_es;
+  ctx.seg[SEGID_FS].selector = saved_fs;
+  ctx.seg[SEGID_GS].selector = saved_gs;
+  ctx.update_shadow_segment_descriptors();
+
+  ctx.use32 = 1;
+  ctx.use64 = (ptlsim_ehdr->e_machine == EM_X86_64);
+  ctx.fxrstor(x87state);
 
   //
   // Generally the true stack top can be found by rounding up to some big fraction

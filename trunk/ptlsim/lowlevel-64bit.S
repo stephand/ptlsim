@@ -20,6 +20,14 @@ __CTOR_LIST__:
 
 .extern stack_min_addr
 
+.extern x87state
+.extern saved_cs
+.extern saved_ss
+.extern saved_ds
+.extern saved_es
+.extern saved_fs
+.extern saved_gs
+
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
   #
@@ -27,6 +35,15 @@ ptlsim_preinit_entry:
   # which means argv, argc, etc. will be in 32-bit format and need
   # to be converted before any initialization routines.
   #
+
+  fxsave x87state
+  mov   word ptr [saved_cs],%cs
+  mov   word ptr [saved_ss],%ss
+  mov   word ptr [saved_ds],%ds
+  mov   word ptr [saved_es],%es
+  mov   word ptr [saved_fs],%fs
+  mov   word ptr [saved_gs],%gs
+
   mov   byte ptr [running_in_sim_mode],1
   mov   %rdi,%rsp            # origrsp
   mov   %rsi,offset main     # next_init_func
@@ -67,18 +84,6 @@ ptlsim_preinit_entry:
 
   call  main
 
-.global get_fs
-get_fs:
-  xor   %eax,%eax
-  mov   %ax,%fs
-  ret
-
-.global get_gs
-get_gs:
-  xor   %eax,%eax
-  mov   %ax,%gs
-  ret
-
 /*
  * struct ThreadState {
  *   ThreadState* self;
@@ -95,14 +100,11 @@ get_gs:
 .extern save_context_switch_to_sim
 .extern x87state
 .extern basetls
-.extern fsreg
-.extern gsreg
-
 .extern running_in_sim_mode
 
 .global save_context_switch_to_sim_lowlevel
 save_context_switch_to_sim_lowlevel:
-  mov      byte ptr [running_in_sim_mode],1      # store must be atomic
+  mov      byte ptr [running_in_sim_mode],1
   mov      [ctx + 8*REG_rax + 8*0],%rax
   mov      [ctx + 8*REG_rax + 8*1],%rcx
   mov      [ctx + 8*REG_rax + 8*2],%rdx
@@ -127,54 +129,19 @@ save_context_switch_to_sim_lowlevel:
   pushfq                                         # Save rflags
   pop      qword ptr [ctx + 8*REG_flags + 8]     # Put flags into structure
 
-  and      %rsp,-16
-
-  # SSE registers
-  movlpd   [ctx + 8*REG_xmml0],%xmm0
-  movlpd   [ctx + 8*REG_xmml1],%xmm1
-  movlpd   [ctx + 8*REG_xmml2],%xmm2
-  movlpd   [ctx + 8*REG_xmml3],%xmm3
-  movlpd   [ctx + 8*REG_xmml4],%xmm4
-  movlpd   [ctx + 8*REG_xmml5],%xmm5
-  movlpd   [ctx + 8*REG_xmml6],%xmm6
-  movlpd   [ctx + 8*REG_xmml7],%xmm7
-  movlpd   [ctx + 8*REG_xmml8],%xmm8
-  movlpd   [ctx + 8*REG_xmml9],%xmm9
-  movlpd   [ctx + 8*REG_xmml10],%xmm10
-  movlpd   [ctx + 8*REG_xmml11],%xmm11
-  movlpd   [ctx + 8*REG_xmml12],%xmm12
-  movlpd   [ctx + 8*REG_xmml13],%xmm13
-  movlpd   [ctx + 8*REG_xmml14],%xmm14
-  movlpd   [ctx + 8*REG_xmml15],%xmm15
-
-  movhpd   [ctx + 8*REG_xmmh0],%xmm0
-  movhpd   [ctx + 8*REG_xmmh1],%xmm1
-  movhpd   [ctx + 8*REG_xmmh2],%xmm2
-  movhpd   [ctx + 8*REG_xmmh3],%xmm3
-  movhpd   [ctx + 8*REG_xmmh4],%xmm4
-  movhpd   [ctx + 8*REG_xmmh5],%xmm5
-  movhpd   [ctx + 8*REG_xmmh6],%xmm6
-  movhpd   [ctx + 8*REG_xmmh7],%xmm7
-  movhpd   [ctx + 8*REG_xmmh8],%xmm8
-  movhpd   [ctx + 8*REG_xmmh9],%xmm9
-  movhpd   [ctx + 8*REG_xmmh10],%xmm10
-  movhpd   [ctx + 8*REG_xmmh11],%xmm11
-  movhpd   [ctx + 8*REG_xmmh12],%xmm12
-  movhpd   [ctx + 8*REG_xmmh13],%xmm13
-  movhpd   [ctx + 8*REG_xmmh14],%xmm14
-  movhpd   [ctx + 8*REG_xmmh15],%xmm15
-
-  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
-  stmxcsr  [ctx + 8*REG_mxcsr]                   # Save SSE flags
-
-  # Save x87 state
-  fsave    x87state
-
   # (skip tr0/tr1/tr2)
   mov      qword ptr [ctx + 8*REG_zero],0        # Save %zero
 
-  mov      [fsreg],%fs
-  mov      [gsreg],%gs
+  and      %rsp,-16
+
+  fxsave x87state
+
+  mov   word ptr [saved_cs],%cs
+  mov   word ptr [saved_ss],%ss
+  mov   word ptr [saved_ds],%ds
+  mov   word ptr [saved_es],%es
+  mov   word ptr [saved_fs],%fs
+  mov   word ptr [saved_gs],%gs
 
   sub      %rsp,64
   and      %rsp,-16
@@ -201,11 +168,6 @@ switch_to_native_restore_context_lowlevel:
   # Calling convention:
   # %rdi = pointer to state to restore
   # %rsi = set if switching from 64-bit to 32-bit mode
-
-  frstor   x87state
-
-  mov      %fs,[fsreg]
-  mov      %gs,[gsreg]
 
   mov      %rcx,offset switch_to_native_restore_context_64_to_64
   mov      %rdx,offset switch_to_native_restore_context_64_to_32
@@ -238,41 +200,10 @@ switch_to_native_restore_context_lowlevel:
   mov      %r14,[%rdi + 8*REG_rax + 8*14]
   mov      %r15,[%rdi + 8*REG_rax + 8*15]
 
-  movlpd   %xmm0,[%rdi + 8*REG_xmml0]
-  movlpd   %xmm1,[%rdi + 8*REG_xmml1]
-  movlpd   %xmm2,[%rdi + 8*REG_xmml2]
-  movlpd   %xmm3,[%rdi + 8*REG_xmml3]
-  movlpd   %xmm4,[%rdi + 8*REG_xmml4]
-  movlpd   %xmm5,[%rdi + 8*REG_xmml5]
-  movlpd   %xmm6,[%rdi + 8*REG_xmml6]
-  movlpd   %xmm7,[%rdi + 8*REG_xmml7]
-  movlpd   %xmm8,[%rdi + 8*REG_xmml8]
-  movlpd   %xmm9,[%rdi + 8*REG_xmml9]
-  movlpd   %xmm10,[%rdi + 8*REG_xmml10]
-  movlpd   %xmm11,[%rdi + 8*REG_xmml11]
-  movlpd   %xmm12,[%rdi + 8*REG_xmml12]
-  movlpd   %xmm13,[%rdi + 8*REG_xmml13]
-  movlpd   %xmm14,[%rdi + 8*REG_xmml14]
-  movlpd   %xmm15,[%rdi + 8*REG_xmml15]
+  fxrstor  x87state
 
-  movhpd   %xmm0,[%rdi + 8*REG_xmmh0]
-  movhpd   %xmm1,[%rdi + 8*REG_xmmh1]
-  movhpd   %xmm2,[%rdi + 8*REG_xmmh2]
-  movhpd   %xmm3,[%rdi + 8*REG_xmmh3]
-  movhpd   %xmm4,[%rdi + 8*REG_xmmh4]
-  movhpd   %xmm5,[%rdi + 8*REG_xmmh5]
-  movhpd   %xmm6,[%rdi + 8*REG_xmmh6]
-  movhpd   %xmm7,[%rdi + 8*REG_xmmh7]
-  movhpd   %xmm8,[%rdi + 8*REG_xmmh8]
-  movhpd   %xmm9,[%rdi + 8*REG_xmmh9]
-  movhpd   %xmm10,[%rdi + 8*REG_xmmh10]
-  movhpd   %xmm11,[%rdi + 8*REG_xmmh11]
-  movhpd   %xmm12,[%rdi + 8*REG_xmmh12]
-  movhpd   %xmm13,[%rdi + 8*REG_xmmh13]
-  movhpd   %xmm14,[%rdi + 8*REG_xmmh14]
-  movhpd   %xmm15,[%rdi + 8*REG_xmmh15]
-
-  ldmxcsr  [%rdi + 8*REG_mxcsr]         # Restore SSE flags
+  mov      %fs,word ptr [saved_fs]
+  mov      %gs,word ptr [saved_gs]
   mov      %rdi,[%rdi + 8*REG_rdi]      # Restore %rdi
 
   jmp      [switch_to_native_restore_context_temp_64_or_32_func]
