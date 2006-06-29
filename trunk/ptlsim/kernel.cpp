@@ -724,9 +724,13 @@ struct FarJumpDescriptor {
 
   FarJumpDescriptor() { }
 
-  FarJumpDescriptor(void* target) {
+  void setup(void* target) {
     offset = LO32((W64)target);
     seg = 0x33;
+  }
+
+  FarJumpDescriptor(void* target) {
+    setup(target);
   }
 };
 
@@ -750,7 +754,7 @@ void switch_stack_and_jump_32_or_64(void* code, void* stack, bool use64) {
 }
 
 extern "C" void save_context_switch_to_sim_lowlevel();
-FarJumpDescriptor switch_to_sim_save_context_indirect((void*)&save_context_switch_to_sim_lowlevel);
+FarJumpDescriptor switch_to_sim_save_context_indirect;
 
 struct SwitchToSimThunkCode {
   byte opcode[3];
@@ -879,6 +883,7 @@ void setup_sim_thunk_page() {
   thunkpage->simulated = 0;
   thunkpage->call_code_addr = 0; // (initialized later)
 #ifdef __x86_64__
+  switch_to_sim_save_context_indirect.setup((void*)&save_context_switch_to_sim_lowlevel);
   thunkpage->switch_to_sim_thunk.farjump(switch_to_sim_save_context_indirect);
 #else // ! __x86_64__
   switch_to_sim_save_context_indirect = (Waddr)&save_context_switch_to_sim_lowlevel;
@@ -937,15 +942,8 @@ void switch_to_native_restore_context() {
 
   logfile << "Final state:", endl;
   logfile << ctx;
-  logfile << "fs: ", ctx.seg[SEGID_FS], endl;
-  logfile << "gs: ", ctx.seg[SEGID_GS], endl;
-
-  saved_fs = ctx.seg[SEGID_FS].selector;
-  saved_gs = ctx.seg[SEGID_GS].selector;
 
   logfile << endl, "=== Switching to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
-  logfile << "saved_fs = ", (void*)saved_fs, ", saved_gs = ", (void*)saved_gs, endl, flush;
-
   switch_to_native_restore_context_lowlevel(ctx.commitarf, !ctx.use64);
 }
 

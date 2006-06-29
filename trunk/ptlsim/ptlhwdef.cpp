@@ -264,23 +264,23 @@ const char* arch_reg_names[TRANSREG_COUNT] = {
 };
 
 void Context::fxsave(FXSAVEStruct& state) {
-  state.cw = ctx.fpcw;
+  state.cw = fpcw;
   // clear everything but 4 FP status flag bits (c3/c2/c1/c0):
-  state.sw = ctx.commitarf[REG_fpsw] & ((0x7 << 8) | (1 << 14));
-  int tos = ctx.commitarf[REG_fptos] >> 3;
+  state.sw = commitarf[REG_fpsw] & ((0x7 << 8) | (1 << 14));
+  int tos = commitarf[REG_fptos] >> 3;
   assert(inrange(tos, 0, 7));
   state.sw.tos = tos;
   state.tw = 0;
 
   // Prepare tag word (special format for FXSAVE)
-  foreach (i, 8) state.tw |= (bit(ctx.commitarf[REG_fptags], i*8) << i);
+  foreach (i, 8) state.tw |= (bit(commitarf[REG_fptags], i*8) << i);
 
   // Prepare actual registers
   foreach (i, 8) x87_fp_64bit_to_80bit(&state.fpregs[i].reg, fpstack[lowbits(tos + i, 3)]);
 
   state.fop = 0;
 
-  if (ctx.use64) {
+  if (use64) {
     state.use64.rip = 0;
     state.use64.rdp = 0;
   } else {
@@ -290,12 +290,12 @@ void Context::fxsave(FXSAVEStruct& state) {
     state.use32.ds = 0;
   }
 
-  state.mxcsr = ctx.mxcsr;
+  state.mxcsr = mxcsr;
   state.mxcsr_mask = 0x0000ffff; // all MXCSR features supported
 
-  foreach (i, (ctx.use64) ? 16 : 8) {
-    state.xmmregs[i].lo = ctx.commitarf[REG_xmml0 + i*2];
-    state.xmmregs[i].hi = ctx.commitarf[REG_xmmh0 + i*2];
+  foreach (i, (use64) ? 16 : 8) {
+    state.xmmregs[i].lo = commitarf[REG_xmml0 + i*2];
+    state.xmmregs[i].hi = commitarf[REG_xmmh0 + i*2];
   }
 }
 
@@ -317,7 +317,6 @@ void Context::fxrstor(const FXSAVEStruct& state) {
 
   mxcsr = state.mxcsr & state.mxcsr_mask;
 
-  //++MTY CHECKME Should we *always* restore all 16 regs, even on 32-bit systems?
   foreach (i, (use64) ? 16 : 8) {
     commitarf[REG_xmml0 + i*2] = state.xmmregs[i].lo;
     commitarf[REG_xmmh0 + i*2] = state.xmmregs[i].hi;

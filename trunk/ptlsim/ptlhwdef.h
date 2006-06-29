@@ -329,7 +329,7 @@ struct FXSAVEStruct {
   W32 mxcsr;
   W32 mxcsr_mask;
   X87RegPadded fpregs[8];
-  XMMReg xmmregs[8];
+  XMMReg xmmregs[16];
 };
 
 inline W64 x87_fp_80bit_to_64bit(const X87Reg* x87reg) {

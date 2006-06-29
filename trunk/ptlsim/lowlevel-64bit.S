@@ -214,8 +214,7 @@ switch_to_native_restore_context_64_to_32:
 
 switch_to_native_restore_context_64_to_64:
   mov byte ptr [running_in_sim_mode],0      # store must be atomic
-  jmp      [switch_to_native_restore_context_temp_64_to_64]
-
+  jmp qword ptr [switch_to_native_restore_context_temp_64_to_64]
 
 .global inside_sim_escape_code_template_64bit
 .global inside_sim_escape_code_template_64bit_end
