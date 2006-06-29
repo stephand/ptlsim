@@ -60,7 +60,7 @@ struct BranchPredictorInterface {
   BranchPredictorInterface() { reset(); }
   void reset();
   W64 predict(PredictorUpdate& update, int type, W64 branchaddr, W64 target);
-  void update(PredictorUpdate& update, W64 branchaddr, W64 target, bool taken, bool pred_taken, bool correct);
+  void update(PredictorUpdate& update, W64 branchaddr, W64 target);
   void updateras(PredictorUpdate& predinfo, W64 branchaddr);
   void annulras(const PredictorUpdate& predinfo);
   void flush();

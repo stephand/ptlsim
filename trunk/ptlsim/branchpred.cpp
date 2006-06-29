@@ -232,13 +232,6 @@ struct CombinedPredictor {
     ras.reset();
   }
 
-  W64 branchpred_predictions;
-  W64 branchpred_subpred_twolevel;
-  W64 branchpred_subpred_bimodal;
-  W64 branchpred_update_correct;
-  W64 branchpred_update_matches;
-  W64 branchpred_update_mismatches;
-
   void updateras(PredictorUpdate& predinfo, W64 rip) {
     if (predinfo.flags & BRANCH_HINT_RET) {
       predinfo.ras_push = 0;
@@ -254,8 +247,6 @@ struct CombinedPredictor {
   // since x86 has variable length instructions.
   //
   W64 predict(PredictorUpdate& update, int type, W64 branchaddr, W64 target) {
-    branchpred_predictions++;
-
     update.cp1 = null;
     update.cp2 = null;
     update.cpmeta = null;
@@ -304,14 +295,10 @@ struct CombinedPredictor {
     return (*(update.cp1) >= 2) ? target : branchaddr;
   }
 
-  void update(PredictorUpdate& update, W64 branchaddr, W64 target, bool taken, bool pred_taken, bool correct) {
+  void update(PredictorUpdate& update, W64 branchaddr, W64 target) {
     int type = update.flags;
 
-    branchpred_update_correct += correct;
-    branchpred_update_matches += (pred_taken == taken);
-    branchpred_update_mismatches += (pred_taken != taken);
-    branchpred_subpred_twolevel += update.meta;
-    branchpred_subpred_bimodal += !update.meta;
+    bool taken = (target != branchaddr);
 
     //
     // keep stats about JMPs; also, but don't change any pred state for JMPs
@@ -409,8 +396,8 @@ W64 BranchPredictorInterface::predict(PredictorUpdate& update, int type, W64 bra
   return combpred.predict(update, type, branchaddr, target);
 }
 
-void BranchPredictorInterface::update(PredictorUpdate& update, W64 branchaddr, W64 target, bool taken, bool pred_taken, bool correct) {
-  combpred.update(update, branchaddr, target, taken, pred_taken, correct);
+void BranchPredictorInterface::update(PredictorUpdate& update, W64 branchaddr, W64 target) {
+  combpred.update(update, branchaddr, target);
 }
 
 void BranchPredictorInterface::updateras(PredictorUpdate& predinfo, W64 branchaddr) {

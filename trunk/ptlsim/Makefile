@@ -60,7 +60,7 @@ else
 COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o dcache.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o linkend.o
 endif
 
-OOOOBJS = ooocore.o seqcore.o cptcore.o branchpred.o
+OOOOBJS = ooocore.o seqcore.o branchpred.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
 COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h xen-types.h xc_ptlsim.h
@@ -72,7 +72,7 @@ COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-c
 ifdef PTLSIM_HYPERVISOR
 COMMONCPPFILES += lowlevel-64bit-xen.S ptlxen.cpp ptlxen-common.cpp ptlmon.cpp
 endif
-OOOCPPFILES = ooocore.cpp cptcore.cpp seqcore.cpp branchpred.cpp
+OOOCPPFILES = ooocore.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
 #

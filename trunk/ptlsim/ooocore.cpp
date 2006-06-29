@@ -4245,13 +4245,13 @@ int ReorderBufferEntry::commit() {
     // instructions vary in length and we cannot easily calculate the next
     // instruction in sequence from within the branch predictor logic.
     //
-    W64 end_of_branch_x86_insn = uop.rip + bytes_in_current_insn_to_commit;
+    W64 end_of_branch_x86_insn = uop.rip + uop.bytes;
     bool taken = (ctx.commitarf[REG_rip] != end_of_branch_x86_insn);
     bool predtaken = (uop.riptaken != end_of_branch_x86_insn);
 
     if (logable(1)) logfile << " [brupdate", (taken ? " tk" : " nt"), (predtaken ? " pt" : " np"), ((taken == predtaken) ? " ok" : " MP"), "]";
 
-    branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip], taken, predtaken, (taken == predtaken));
+    branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip]);
     branchpred_updates++;
   }
 

@@ -213,8 +213,6 @@ void early_printk(const char* text) {
 // Makes it easy to identify which segments PTLsim owns versus the user address space:
 bool inside_ptlsim = false;
 
-extern W64 use_checkpoint_core;
-
 void dump_ooo_state();
 void dump_cpt_state();
 
@@ -226,9 +224,7 @@ extern "C" void assert_fail(const char *__assertion, const char *__file, unsigne
 
   if (logfile) {
     logfile << sb, flush;
-    if (use_checkpoint_core)
-      dump_cpt_state();
-    else if (use_out_of_order_core)
+    if (use_out_of_order_core)
       dump_ooo_state();
 
     logfile.close();

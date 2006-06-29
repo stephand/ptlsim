@@ -50,7 +50,6 @@ W64 dump_at_end = 0;
 
 W64 use_out_of_order_core = 1;
 W64 use_out_of_order_core_dummy;
-W64 use_checkpoint_core = 0;
 
 DataStoreNode* dsroot = null;
 W64 snapshotid;
@@ -93,7 +92,6 @@ static ConfigurationOption optionlist[] = {
   {"perfect-cache",                      OPTION_TYPE_BOOL,    0, "Perfect cache hit rate", &perfect_cache},
 
   {"ooo",                                OPTION_TYPE_BOOL,    0, "Use out of order core (always)", &use_out_of_order_core_dummy},
-  {"cpt",                                OPTION_TYPE_BOOL,    0, "Use checkpoint core", &use_checkpoint_core},
 };
 
 void print_usage(int argc, const char** argv) {
@@ -281,15 +279,11 @@ void save_stats() {
   if ((sequential_mode_insns > 0) && dsroot)
     seq_capture_stats((*dsroot)("seq"));
 
-  if (use_checkpoint_core)
-    cpt_capture_stats();
-  else if (use_out_of_order_core)
+  if (use_out_of_order_core)
     ooo_capture_stats();
 
   if (dsroot) {
-    if (use_checkpoint_core) 
-      ooo_capture_stats((*dsroot)("final")); 
-    else if (use_out_of_order_core) 
+    if (use_out_of_order_core) 
       ooo_capture_stats((*dsroot)("final")); 
     ptl_mm_capture_stats((*dsroot)("ptlsim")("mm"));
   }
@@ -390,9 +384,7 @@ void switch_to_sim() {
   done |= (dump_at_end | overshoot_and_dump);
 
   if (!done) {
-    if (use_checkpoint_core)
-      checkpoint_core_toplevel_loop();
-    else if (use_out_of_order_core)
+    if (use_out_of_order_core)
       out_of_order_core_toplevel_loop();
   }
 
