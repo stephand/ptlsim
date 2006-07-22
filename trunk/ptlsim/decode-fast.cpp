@@ -268,7 +268,7 @@ bool TraceDecoder::decode_fast() {
     CheckInvalid();
     int rashift = (opsize_prefix) ? 1 : ((rex.mode64) ? 3 : 2);
 
-    TransOp bt(OP_bt, REG_temp0, REG_rax, REG_imm, REG_zero, 2, ((1<<rashift)*8)-1, 0, SETFLAG_CF);
+    TransOp bt(OP_bt, REG_temp0, REG_rax, REG_imm, REG_zero, rashift, ((1<<rashift)*8)-1, 0, SETFLAG_CF);
     bt.nouserflags = 1; // it still generates flags, but does not rename the user flags
     this << bt;
 
