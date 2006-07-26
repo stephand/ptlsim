@@ -52,22 +52,24 @@ bool TraceDecoder::decode_fast() {
 
   case 0x50 ... 0x5f: {
     // push (0x50..0x57) or pop (0x58..0x5f) reg (defaults to 64 bit; pushing bytes not possible)
-    ra.gform_ext(*this, v_mode, bits(op, 0, 3), ctx.use64, true);
+    ra.gform_ext(*this, v_mode, bits(op, 0, 3), use64, true);
     int r = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
-    if (ctx.use64 && (sizeshift == 2)) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
+    if (use64 && (sizeshift == 2)) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
     int size = (1 << sizeshift);
     CheckInvalid();
 
     if (op < 0x58) {
       // push
       this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, r, sizeshift, -size);
-      this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (ctx.use64 ? 3 : 2), size);
-
+      this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (use64 ? 3 : 2), size);
     } else {
       // pop
       this << TransOp(OP_ld, r, REG_rsp, REG_zero, REG_zero, sizeshift);
-      this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, (ctx.use64 ? 3 : 2), size);
+      if (r != REG_rsp) {
+        // Only update %rsp if the target register is not itself %rsp
+        this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, (use64 ? 3 : 2), size);
+      }
     }
     break;
   }
@@ -99,7 +101,7 @@ bool TraceDecoder::decode_fast() {
   case 0x6a: {
     // push immediate
     DECODE(iform64, ra, (op == 0x68) ? v_mode : b_mode);
-    int sizeshift = (opsize_prefix) ? 1 : ((ctx.use64) ? 3 : 2);
+    int sizeshift = (opsize_prefix) ? 1 : ((use64) ? 3 : 2);
     int size = (1 << sizeshift);
     CheckInvalid();
 
@@ -229,17 +231,30 @@ bool TraceDecoder::decode_fast() {
 
     int sizeshift = (rd.type == OPTYPE_REG) ? reginfo[rd.reg.reg].sizeshift : rd.mem.size;
     if (sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
+    int rdreg = (rd.type == OPTYPE_REG) ? arch_pseudo_reg_to_arch_reg[rd.reg.reg] : REG_temp7;
 
-    this << TransOp(OP_ld, REG_temp7, REG_rsp, REG_zero, REG_zero, sizeshift);
+    this << TransOp(OP_ld, rdreg, REG_rsp, REG_zero, REG_zero, sizeshift);
 
-    ra.type = OPTYPE_REG;
-    ra.reg.reg = 0; // not used
+    //
+    // Special ordering semantics: if the destination is memory
+    // and in [base + index*scale + offs], the base is rsp,
+    // rsp is incremented *before* calculating the store address.
+    // To maintain idempotent atomic semantics, we simply add
+    // 2/4/8 to the immediate in this case.
+    //
+    if unlikely ((rd.type == OPTYPE_MEM) & (arch_pseudo_reg_to_arch_reg[rd.mem.basereg] == REG_rsp))
+      rd.mem.offset += (1 << sizeshift);
+
     // There is no way to encode 32-bit pushes and pops in 64-bit mode:
     if (rd.type == OPTYPE_MEM && rd.mem.size == 2) rd.mem.size = 3;
-    move_reg_or_mem(rd, ra, REG_temp7);
 
-    // Do this last since technically rsp update is not visible at address generation time:
-    this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
+    if (rd.type == OPTYPE_MEM) {
+      result_store(REG_temp7, REG_temp0, rd);
+      this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
+    } else {
+      // Only update %rsp if the target register (if any) itself is not itself %rsp
+      if (rdreg != REG_rsp) this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
+    }
 
     break;
   }
@@ -289,7 +304,7 @@ bool TraceDecoder::decode_fast() {
     CheckInvalid();
     this << TransOp(OP_maskb, REG_temp0, REG_zero, REG_rax, REG_imm, 3, 0, MaskControlInfo(0, 8, 8));
     // only low 8 bits affected (OF not included)
-    this << TransOp(OP_movrcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 3, 0, 0, SETFLAG_ZF|SETFLAG_CF);
+    this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_temp0, REG_zero, 3, 0, 0, SETFLAG_ZF|SETFLAG_CF);
     break;
   }
 
@@ -303,11 +318,11 @@ bool TraceDecoder::decode_fast() {
   case 0xa0 ... 0xa3: {
     // mov rAX,Ov and vice versa
     rd.gform_ext(*this, (op & 1) ? v_mode : b_mode, REG_rax);
-    DECODE(iform64, ra, (ctx.use64 ? q_mode : addrsize_prefix ? w_mode : d_mode));
+    DECODE(iform64, ra, (use64 ? q_mode : addrsize_prefix ? w_mode : d_mode));
     CheckInvalid();
 
     ra.mem.offset = ra.imm.imm;
-    ra.mem.offset = (ctx.use64) ? ra.mem.offset : lowbits(ra.mem.offset, (addrsize_prefix) ? 16 : 32);
+    ra.mem.offset = (use64) ? ra.mem.offset : lowbits(ra.mem.offset, (addrsize_prefix) ? 16 : 32);
     ra.mem.basereg = APR_zero;
     ra.mem.indexreg = APR_zero;
     ra.mem.scale = APR_zero;
@@ -462,7 +477,7 @@ bool TraceDecoder::decode_fast() {
       addend = (W16)ra.imm.imm;
     }
 
-    int sizeshift = (ctx.use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
+    int sizeshift = (use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
     int size = (1 << sizeshift);
     addend = size + addend;
 
@@ -502,7 +517,7 @@ bool TraceDecoder::decode_fast() {
 
     CheckInvalid();
 
-    int sizeshift = (ctx.use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
+    int sizeshift = (use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
 
     // Exactly equivalent to:
     // push %rbp
@@ -519,7 +534,7 @@ bool TraceDecoder::decode_fast() {
 
   case 0xc9: {
     // leave
-    int sizeshift = (ctx.use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
+    int sizeshift = (use64) ? (opsize_prefix ? 1 : 3) : (opsize_prefix ? 1 : 2);
     // Exactly equivalent to:
     // mov %rsp,%rbp
     // pop %rbp
@@ -548,7 +563,7 @@ bool TraceDecoder::decode_fast() {
     bb.rip_taken = (Waddr)rip + (W64s)ra.imm.imm;
     bb.rip_not_taken = bb.rip_taken;
 
-    int sizeshift = (ctx.use64) ? 3 : 2;
+    int sizeshift = (use64) ? 3 : 2;
 
     if (iscall) {
       immediate(REG_temp0, 3, (Waddr)rip);
@@ -613,27 +628,12 @@ bool TraceDecoder::decode_fast() {
 
   case 0xf8: { // clc
     CheckInvalid();
-    this << TransOp(OP_andcc, REG_temp0, REG_zero, REG_zero, REG_zero, 3, 0, 0, SETFLAG_CF);
+    this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_imm, REG_zero, 3, 0, 0, SETFLAG_CF);
     break;
   }
   case 0xf9: { // stc
     CheckInvalid();
-    this << TransOp(OP_orcc, REG_temp0, REG_zero, REG_imm, REG_zero, 3, FLAG_CF, 0, SETFLAG_CF);
-    break;
-  }
-
-  case 0xfc: { // cld
-    CheckInvalid();
-    // bit 63 of mxcsr is the direction flag:
-    this << TransOp(OP_and, REG_iflags, REG_iflags, REG_imm, REG_zero, 3, (W64)~(1LL<<63));
-    break;
-  }
-
-  case 0xfd: { // std
-    CheckInvalid();
-    // bit 63 of mxcsr is the direction flag:
-    this << TransOp(OP_or, REG_iflags, REG_iflags, REG_imm, REG_zero, 3, (W64)(1LL<<63));
-    //assert(false);
+    this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_imm, REG_zero, 3, FLAG_CF, 0, SETFLAG_CF);
     break;
   }
 
@@ -674,12 +674,12 @@ bool TraceDecoder::decode_fast() {
       if (!last_flags_update_was_atomic)
         this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
 
-      int sizeshift = (ctx.use64) ? 3 : 2;
+      int sizeshift = (use64) ? 3 : 2;
       if (ra.type == OPTYPE_REG) {
         int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
         int rashift = reginfo[ra.reg.reg].sizeshift;
         // there is no way to encode a 32-bit jump address in x86-64 mode:
-        if (ctx.use64 && (rashift == 2)) rashift = 3;
+        if (use64 && (rashift == 2)) rashift = 3;
         if (iscall) {
           immediate(REG_temp6, 3, (Waddr)rip);
           this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp6, sizeshift, -(1 << sizeshift));
@@ -691,7 +691,7 @@ bool TraceDecoder::decode_fast() {
         this << transop;
       } else if (ra.type == OPTYPE_MEM) {
         // there is no way to encode a 32-bit jump address in x86-64 mode:
-        if (ctx.use64 && (ra.mem.size == 2)) ra.mem.size = 3;
+        if (use64 && (ra.mem.size == 2)) ra.mem.size = 3;
         operand_load(REG_temp0, ra);
         if (iscall) {
           immediate(REG_temp6, 3, (Waddr)rip);
@@ -711,16 +711,23 @@ bool TraceDecoder::decode_fast() {
       // push Ev: push reg or memory
       DECODE(eform, ra, v_mode);
       CheckInvalid();
-      rd.type = OPTYPE_REG;
-      rd.reg.reg = 0; // not used
+
       // There is no way to encode 32-bit pushes and pops in 64-bit mode:
-      if (ctx.use64 && ra.type == OPTYPE_MEM && ra.mem.size == 2) ra.mem.size = 3;
-      move_reg_or_mem(rd, ra, REG_temp7);
+      if (use64 && ra.type == OPTYPE_MEM && ra.mem.size == 2) ra.mem.size = 3;
+
+      int rareg;
+
+      if (ra.type == OPTYPE_REG) {
+        rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      } else {
+        rareg = REG_temp7;
+        operand_load(rareg, ra);
+      }
 
       int sizeshift = (ra.type == OPTYPE_REG) ? reginfo[ra.reg.reg].sizeshift : ra.mem.size;
-      if (ctx.use64 && sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
-      this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp7, sizeshift, -(1 << sizeshift));
-      this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (ctx.use64 ? 3 : 2), (1 << sizeshift));
+      if (use64 && sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
+      this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, rareg, sizeshift, -(1 << sizeshift));
+      this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (use64 ? 3 : 2), (1 << sizeshift));
 
       break;
     }
@@ -804,80 +811,44 @@ bool TraceDecoder::decode_fast() {
     break;
   }
 
-  case 0x1a3: // bt ra,rb
-  case 0x1bb: // btc ra,rb
-  case 0x1b3: // btr ra,rb
-  case 0x1ab: { // bts ra,rb
+  case 0x1a3: // bt ra,rb     101 00 011
+  case 0x1ab: // bts ra,rb    101 01 011
+  case 0x1b3: // btr ra,rb    101 10 011
+  case 0x1bb: { // btc ra,rb  101 11 011
+    // COMPLEX: Let complex decoder handle memory forms
+    if (modrm.mod != 3) return false;
+
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
     CheckInvalid();
 
-    if (rd.type == OPTYPE_REG) {
-      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-      int opcode;
-      switch (op) {
-      case 0x1a3: opcode = OP_bt; break;
-      case 0x1ab: opcode = OP_bts; break;
-      case 0x1b3: opcode = OP_btr; break;
-      case 0x1bb: opcode = OP_btc; break;
-      }
-        
-      // bt has no output - just flags:
-      this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
-      break;
-    } else {
-      // Mem form is more complicated:
-      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+    static const byte x86_to_uop[4] = {OP_bt, OP_bts, OP_btr, OP_btc};
+    int opcode = x86_to_uop[bits(op, 3, 2)];
 
-      int basereg = arch_pseudo_reg_to_arch_reg[rd.mem.basereg];
-      int indexreg = arch_pseudo_reg_to_arch_reg[rd.mem.indexreg];
-
-      // [ra + rb*scale + imm32]
-      basereg = bias_by_segreg(basereg);
-      TransOp addop(OP_adda, REG_temp1, basereg, REG_imm, indexreg, 3, rd.mem.offset);
-      addop.extshift = rd.mem.scale;
-      this << addop;
-
-      this << TransOp(OP_sar, REG_temp2, rareg, REG_imm, REG_zero, 3, 3); // byte index
-
-      this << TransOp(OP_ld, REG_temp0, REG_temp1, REG_temp2, REG_zero, 0);
-
-      int opcode;
-      switch (op) {
-      case 0x1a3: opcode = OP_bt; break;
-      case 0x1ab: opcode = OP_bts; break;
-      case 0x1b3: opcode = OP_btr; break;
-      case 0x1bb: opcode = OP_btc; break;
-      }
-
-      this << TransOp(opcode, REG_temp0, REG_temp0, rareg, REG_zero, 0, 0, 0, SETFLAG_CF);
-
-      if (opcode != OP_bt) {
-        this << TransOp(OP_st, REG_mem, REG_temp1, REG_temp2, REG_temp0, 0);
-      }
-
-      break;
-    }
+    assert(rd.type == OPTYPE_REG);
+    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+    
+    // bt has no output - just flags:
+    this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
+    break;
   }
 
   case 0x1ba: { // bt|btc|btr|bts ra,imm
+    // COMPLEX: Let complex decoder handle memory forms
+    if (modrm.mod != 3) return false;
+
     DECODE(eform, rd, v_mode);
     DECODE(iform, ra, b_mode);
-    // Mem form is too complicated and very rare: we don't support it
-    if (rd.type != OPTYPE_REG) MakeInvalid();
+    if (modrm.reg < 4) MakeInvalid();
     CheckInvalid();
 
-    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    static const byte x86_to_uop[4] = {OP_bt, OP_bts, OP_btr, OP_btc};
+    int opcode = x86_to_uop[lowbits(modrm.reg, 2)];
 
-    int opcode;
-    switch (modrm.reg) {
-    case 4: opcode = OP_bt; break;
-    case 5: opcode = OP_bts; break;
-    case 6: opcode = OP_btr; break;
-    case 7: opcode = OP_btc; break;
-    default: MakeInvalid();
-    }
+    assert(rd.type == OPTYPE_REG);
+    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
 
     // bt has no output - just flags:
     this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, REG_imm, REG_zero, 3, ra.imm.imm, 0, SETFLAG_CF);

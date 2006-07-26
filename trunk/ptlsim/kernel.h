@@ -13,6 +13,12 @@
 #include <ptlhwdef.h>
 #include <elf.h>
 
+struct PTLsimConfig;
+
+extern PTLsimConfig config;
+
+extern ConfigurationParser<PTLsimConfig> configparser;
+
 //
 // Thread local storage
 //
@@ -130,6 +136,11 @@ public:
   spat_t execmap;
   spat_t dtlbmap;
   spat_t itlbmap;
+  spat_t transmap;
+  spat_t dirtymap;
+
+  spat_t allocmap();
+  void freemap(spat_t top);
 
   byte& pageid_to_map_byte(spat_t top, Waddr pageid);
   void make_accessible(void* address, Waddr size, spat_t top);
@@ -178,7 +189,7 @@ public:
 #ifdef __x86_64__
     W64 chunkid = pageid(addr) >> log2(SPAT_PAGES_PER_CHUNK);
 
-    if (!top[chunkid])
+    if unlikely (!top[chunkid])
       return false;
 
     AddressSpace::SPATChunk& chunk = *top[chunkid];
@@ -194,13 +205,13 @@ public:
   }
 
   bool check(void* p, int prot) const {
-    if ((prot & PROT_READ) && (!fastcheck(p, readmap)))
+    if unlikely ((prot & PROT_READ) && (!fastcheck(p, readmap)))
       return false;
     
-    if ((prot & PROT_WRITE) && (!fastcheck(p, writemap)))
+    if unlikely ((prot & PROT_WRITE) && (!fastcheck(p, writemap)))
       return false;
-    
-    if ((prot & PROT_EXEC) && (!fastcheck(p, execmap)))
+
+    if unlikely ((prot & PROT_EXEC) && (!fastcheck(p, execmap)))
       return false;
     
     return true;
@@ -214,10 +225,38 @@ public:
   void itlbset(void* page) { make_page_accessible(page, itlbmap); }
   void itlbclear(void* page) { make_page_inaccessible(page, itlbmap); }
 
+  bool istrans(Waddr mfn) { return fastcheck(mfn << 12, transmap); }
+  void settrans(Waddr mfn) { make_page_accessible((void*)(mfn << 12), transmap); }
+  void cleartrans(Waddr mfn) { make_page_inaccessible((void*)(mfn << 12), transmap); }
+
+  bool isdirty(Waddr mfn) { return fastcheck(mfn << 12, dirtymap); }
+  void setdirty(Waddr mfn) { make_page_accessible((void*)(mfn << 12), dirtymap); }
+  void cleardirty(Waddr mfn) { make_page_inaccessible((void*)(mfn << 12), dirtymap); }
+
   void resync_with_process_maps();
 };
 
 extern AddressSpace asp;
+
+static inline bool smc_istrans(Waddr mfn) { return asp.istrans(mfn); }
+static inline void smc_settrans(Waddr mfn) { asp.settrans(mfn); }
+static inline void smc_cleartrans(Waddr mfn) { asp.cleartrans(mfn); }
+
+static inline bool smc_isdirty(Waddr mfn) { return asp.isdirty(mfn); }
+static inline void smc_setdirty(Waddr mfn) { asp.setdirty(mfn); }
+static inline void smc_cleardirty(Waddr mfn) { asp.cleardirty(mfn); }
+
+// Only one VCPU in userspace PTLsim:
+static inline Context& contextof(int vcpu) { return ctx; }
+
+// virtual == physical in userspace PTLsim:
+static inline void* phys_to_mapped_virt(Waddr rawphys) {
+  return (void*)rawphys;
+}
+
+static inline Waddr mapped_virt_to_phys(void* rawvirt) {
+  return (Waddr)rawvirt;
+}
 
 inline int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
   bool readable;
@@ -227,8 +266,8 @@ inline int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaul
   pfec = 0;
 
   readable = asp.fastcheck((byte*)addr, asp.readmap);
-  if (forexec) executable = asp.fastcheck((byte*)addr, asp.execmap);
-  if ((!readable) | (forexec & !executable)) {
+  if likely (forexec) executable = asp.fastcheck((byte*)addr, asp.execmap);
+  if unlikely ((!readable) | (forexec & !executable)) {
     faultaddr = addr;
     pfec.p = !readable;
     pfec.nx = (forexec & (!executable));
@@ -240,12 +279,12 @@ inline int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaul
   memcpy(target, (void*)addr, n);
 
   // All the bytes were on the first page
-  if (n == bytes) return n;
+  if likely (n == bytes) return n;
 
   // Go on to second page, if present
   readable = asp.fastcheck((byte*)(addr + n), asp.readmap);
-  if (forexec) executable = asp.fastcheck((byte*)(addr + n), asp.execmap);
-  if ((!readable) | (forexec & !executable)) {
+  if likely (forexec) executable = asp.fastcheck((byte*)(addr + n), asp.execmap);
+  if unlikely ((!readable) | (forexec & !executable)) {
     faultaddr = addr + n;
     pfec.p = !readable;
     pfec.nx = (forexec & (!executable));
@@ -259,7 +298,7 @@ inline int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaul
 inline int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
   pfec = 0;
   bool writable = asp.fastcheck((byte*)target, asp.writemap);
-  if (!writable) {
+  if unlikely (!writable) {
     faultaddr = target;
     pfec.p = asp.fastcheck((byte*)target, asp.readmap);
     pfec.rw = 1;
@@ -269,15 +308,17 @@ inline int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaul
   byte* targetlo = (byte*)target;
   int nlo = min((Waddr)(4096 - lowbits(target, 12)), (Waddr)bytes);
 
+  smc_setdirty(target >> 12);
+
   // All the bytes were on the first page
-  if (nlo == bytes) {
+  if likely (nlo == bytes) {
     memcpy(targetlo, source, nlo);
     return bytes;
   }
 
   // Go on to second page, if present
   writable = asp.fastcheck((byte*)(target + nlo), asp.writemap);
-  if (!writable) {
+  if unlikely (!writable) {
     faultaddr = target + nlo;
     pfec.p = asp.fastcheck((byte*)(target + nlo), asp.readmap);
     pfec.rw = 1;
@@ -287,7 +328,56 @@ inline int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaul
   memcpy((byte*)(target + nlo), (byte*)source + nlo, bytes - nlo);
   memcpy(targetlo, source, nlo);
 
+  smc_setdirty((target + nlo) >> 12);
+
   return bytes;
+}
+
+inline void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
+  exception = 0;
+  pteupdate = 0;
+  pfec = 0;
+
+  if unlikely (lowbits(virtaddr, sizeshift)) {
+    exception = EXCEPTION_UnalignedAccess;
+    return null;
+  }
+
+  if unlikely (internal) {
+    // Directly mapped to PTL space:
+    return (void*)virtaddr;
+  }
+
+  AddressSpace::spat_t top = (store) ? asp.writemap : asp.readmap;
+
+  if unlikely (!asp.fastcheck(virtaddr, top)) {
+    exception = (store) ? EXCEPTION_PageFaultOnWrite : EXCEPTION_PageFaultOnRead;
+    pfec.p = !store;
+    pfec.rw = store;
+    pfec.us = 0;
+    return null;
+  }
+
+  return (void*)virtaddr;
+}
+
+static inline W64 storemask(Waddr addr, W64 data, byte bytemask) {
+  addr = signext64(addr, 48);
+  W64& mem = *(W64*)(Waddr)addr;
+  mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+  return data;
+}
+
+// In userspace PTLsim, virtual == physical:
+RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
+  use64 = ctx.use64;
+  kernel = 0;
+  df = ((ctx.internal_eflags & FLAG_DF) != 0);
+  padlo = 0;
+  padhi = 0;
+  mfnlo = rip >> 12;
+  mfnhi = (rip + (bytes-1)) >> 12;
+  return *this;
 }
 
 //

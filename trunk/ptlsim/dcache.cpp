@@ -375,7 +375,7 @@ namespace DataCache {
       W64 sframask = expand_8bit_to_64bit_lut[mask];
       W64 muxdata = mux64(sframask, cachedata, data);
       W64 data = (sizeshift == 3) ? data : bits(muxdata, 8*lowbits(addr, 3), (8 << sizeshift));
-      if (lsi.info.signext) data = signext64(data, 8*sizeshift);
+      if unlikely (lsi.info.signext) data = signext64(data, 8*sizeshift);
       return data;
     }
 
@@ -443,7 +443,7 @@ namespace DataCache {
     // Add an entry to the LFRQ in the waiting state.
     //
     int add(const LoadFillReq& req) {
-      if (full()) return -1;
+      if unlikely (full()) return -1;
       int idx = freemap.lsb();
       changestate(idx, freemap, waiting);         
       reqs[idx] = req;
@@ -485,7 +485,7 @@ namespace DataCache {
       //
       int wakeupcount = 0;
       foreach (i, MAX_WAKEUPS_PER_CYCLE) {
-        if (!ready) break;
+        if unlikely (!ready) break;
 
         int idx = ready.lsb();
         LoadFillReq& req = reqs[idx];
@@ -495,7 +495,7 @@ namespace DataCache {
         if (true)
         {
           W64 delta = LO32(sim_cycle) - LO32(req.initcycle);
-          if (delta >= 65536) {
+          if unlikely (delta >= 65536) {
             // avoid overflow induced erroneous values:
             // logfile << "LFRQ: warning: cycle counter wraparound in initcycle latency (current ", sim_cycle, " vs init ", req.initcycle, " = delta ", delta, ")", endl;
           } else {
@@ -504,7 +504,7 @@ namespace DataCache {
 
           lfrq_wakeups++;
           wakeupcount++;
-          if (wakeup_func) wakeup_func(req.lsi, req.addr);
+          if likely (wakeup_func) wakeup_func(req.lsi, req.addr);
         } else {
           if (analyze_in_detail()) logfile << "  Wakeup prefetch", endl;
         }
@@ -585,7 +585,7 @@ namespace DataCache {
     // something else in the new trace.
     //
     void restart() {
-      if (!(freemap.allset())) {
+      if likely (!(freemap.allset())) {
         foreach (i, SIZE) {
           missbufs[i].lfrqmap = 0;
         }
@@ -615,7 +615,7 @@ namespace DataCache {
 
       int idx = find(addr);
 
-      if (idx >= 0) {
+      if unlikely (idx >= 0) {
         // Handle case where dcache miss is already in progress but some 
         // code needed in icache is also stored in that line:
         Entry& mb = missbufs[idx];
@@ -627,7 +627,7 @@ namespace DataCache {
         return idx;
       }
 
-      if (full()) {
+      if unlikely (full()) {
         if (DEBUG) logfile << "Miss buffer full while allocating slot for address ", (void*)(Waddr)addr, endl;
         return -1;
       }
@@ -643,7 +643,7 @@ namespace DataCache {
 
       if (DEBUG) logfile << "mb", idx, ": allocated for address ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
 
-      if (hit_in_L2) {
+      if likely (hit_in_L2) {
         if (DEBUG) logfile << "mb", idx, ": enter state deliver to L1 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
         mb.state = STATE_DELIVER_TO_L1;
         mb.cycles = L2_LATENCY;
@@ -653,7 +653,7 @@ namespace DataCache {
       }
       
       bool L3hit = L3.probe(addr);
-      if (L3hit) {
+      if likely (L3hit) {
         if (DEBUG) logfile << "mb", idx, ": enter state deliver to L2 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
         mb.state = STATE_DELIVER_TO_L2;
         mb.cycles = L3_LATENCY;
@@ -664,7 +664,7 @@ namespace DataCache {
       if (DEBUG) logfile << "mb", idx, ": enter state deliver to L3 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
       mb.state = STATE_DELIVER_TO_L3;
       mb.cycles = MAIN_MEM_LATENCY;
-      if (icache) fetch_hit_mem++; else load_hit_mem++;
+      if unlikely (icache) fetch_hit_mem++; else load_hit_mem++;
 
       return idx;
     }
@@ -674,11 +674,11 @@ namespace DataCache {
 
       if (analyze_in_detail()) logfile << "missbuf.initiate_miss(req ", req, ", L2hit? ", hit_in_L2, ") -> lfrqslot ", lfrqslot, endl;
 
-      if (lfrqslot < 0)
+      if unlikely (lfrqslot < 0)
         return -1;
 
       int mbidx = initiate_miss(req.addr, hit_in_L2);
-      if (mbidx < 0) {
+      if unlikely (mbidx < 0) {
         lfrq.free(lfrqslot);
         return -1;
       }
@@ -703,7 +703,7 @@ namespace DataCache {
         case STATE_DELIVER_TO_L3: {
           if (DEBUG) logfile << "mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L3 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
           mb.cycles--;
-          if (!mb.cycles) {
+          if unlikely (!mb.cycles) {
             L3.validate(mb.addr);
             mb.cycles = L3_LATENCY;
             mb.state = STATE_DELIVER_TO_L2;
@@ -714,7 +714,7 @@ namespace DataCache {
         case STATE_DELIVER_TO_L2: {
           if (DEBUG) logfile << "mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L2 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
           mb.cycles--;
-          if (!mb.cycles) {
+          if unlikely (!mb.cycles) {
             if (DEBUG) logfile << "mb", i, ": delivered to L2 (map ", mb.lfrqmap, ")", endl;
             L2.validate(mb.addr);
             mb.cycles = L2_LATENCY;
@@ -726,10 +726,10 @@ namespace DataCache {
         case STATE_DELIVER_TO_L1: {
           if (DEBUG) logfile << "mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L1 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
           mb.cycles--;
-          if (!mb.cycles) {
+          if unlikely (!mb.cycles) {
             if (DEBUG) logfile << "mb", i, ": delivered to L1 switch (map ", mb.lfrqmap, ")", endl;
 
-            if (mb.dcache) {
+            if likely (mb.dcache) {
               if (DEBUG) logfile << "mb", i, ": delivered ", (void*)(Waddr)mb.addr, " to L1 dcache (map ", mb.lfrqmap, ")", endl;
               // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
               // foreach (i, L2_LINE_SIZE / L1_LINE_SIZE) L1.validate(mb.addr + i*L1_LINE_SIZE, bitvec<L1_LINE_SIZE>().setall());
@@ -744,7 +744,7 @@ namespace DataCache {
               missbuf_deliver_L2_to_L1++;
               lfrq.wakeup(mb.addr, mb.lfrqmap);
             }
-            if (mb.icache) {
+            if unlikely (mb.icache) {
               // Sometimes we can initiate an icache miss on an existing dcache line in the missbuf
               if (DEBUG) logfile << "mb", i, ": delivered ", (void*)(Waddr)mb.addr, " to L1 icache", endl;
               // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
@@ -760,7 +760,7 @@ namespace DataCache {
               missbuf_deliver_L2_to_L1I++;
               LoadStoreInfo lsi;
               lsi.data = 0;
-              if (icache_wakeup_func) icache_wakeup_func(lsi, mb.addr);
+              if likely (icache_wakeup_func) icache_wakeup_func(lsi, mb.addr);
             }
 
             freemap[i] = 1;
@@ -782,7 +782,7 @@ namespace DataCache {
     ostream& print(ostream& os) const {
       os << "MissBuffer<", SIZE, ">:", endl;
       foreach (i, SIZE) {
-        if (freemap[i]) continue;
+        if likely (freemap[i]) continue;
         const Entry& mb = missbufs[i];
 
         os << "  slot ", intstring(i, 2), ": ", (void*)(Waddr)mb.addr, " state ", 
@@ -865,7 +865,7 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
     logfile << endl;
   }
 
-  if (!L1line) {
+  if likely (!L1line) {
     //L1line = L1.select(addr);
     load_transfer_L2_to_L1_full++;
   } else {
@@ -876,7 +876,7 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
     
   L2CacheLine* L2line = L2.probe(addr);
 
-  if (L2line) {
+  if likely (L2line) {
     //
     // We had at least a partial L2 hit, but is the requested data actually mapped into the line?
     //
@@ -922,7 +922,7 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
 
   int lfrqslot = missbuf.initiate_miss(req, L2hit);
 
-  if (lfrqslot < 0) {
+  if unlikely (lfrqslot < 0) {
     if (DEBUG) logfile << "iteration ", iterations, ": LFRQ or MB has no free entries for L2->L1: forcing LFRQFull rollback", endl;
     state.ldreg.flags = FLAG_INV;
     state.ldreg.rddata = EXCEPTION_LFRQFull;
@@ -965,7 +965,7 @@ bool probe_cache_and_sfr(W64 addr, const SFR* sfr, int sizeshift) {
   //
   // Short circuit if the SFR covers the entire load: no need for cache probe
   //
-  if ((sframask & reqmask) == reqmask)
+  if unlikely ((sframask & reqmask) == reqmask)
     return true;
 
 #ifdef USE_TLB
@@ -975,7 +975,7 @@ bool probe_cache_and_sfr(W64 addr, const SFR* sfr, int sizeshift) {
   dtlb_misses += !tlbhit;
 
   // issueload_slowpath() will check this again:
-  if (!tlbhit) {
+  if unlikely (!tlbhit) {
     //
     // In a user-mode simulator, there is no realistic way
     // to simulate the number of cycles taken to service a
@@ -1012,7 +1012,7 @@ bool probe_cache_and_sfr(W64 addr, const SFR* sfr, int sizeshift) {
 
   L1CacheLine* L1line = L1.probe(addr);
 
-  if (!L1line)
+  if unlikely (!L1line)
     return false;
 
   //
@@ -1047,14 +1047,14 @@ void initiate_prefetch(W64 addr, int cachelevel) {
 
   L1CacheLine* L1line = L1.probe(addr);
 
-  if (L1line) {
+  if unlikely (L1line) {
     prefetch_already_in_L1++;
     return;
   }
 
   L2CacheLine* L2line = L2.probe(addr);
 
-  if (L2line) {
+  if unlikely (L2line) {
     prefetch_already_in_L2++;
     if (PREFETCH_STOPS_AT_L2) return; // only move up to L2 level, and it's already there
   }
@@ -1080,7 +1080,7 @@ bool probe_icache(W64 addr) {
   itlb_misses += !tlbhit;
 
   // issueload_slowpath() will check this again:
-  if (!tlbhit) {
+  if unlikely (!tlbhit) {
     //
     // (See notes about TLB miss handling in probe_cache_and_sfr())
     //
@@ -1106,12 +1106,6 @@ int initiate_icache_miss(W64 addr) {
   return mb;
 }
 
-static inline W64 storemask(W64 addr, W64 data, byte bytemask) {
-  W64& mem = *(W64*)(Waddr)addr;
-  mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
-  return data;
-}
-
 
 //
 // Commit one store from an SFR to the L2 cache without locking
@@ -1119,7 +1113,7 @@ static inline W64 storemask(W64 addr, W64 data, byte bytemask) {
 // to have no exceptions.
 //
 W64 commitstore_unlocked(const SFR& sfr) {
-  if (sfr.invalid | (sfr.bytemask == 0))
+  if unlikely (sfr.invalid | (sfr.bytemask == 0))
     return 0;
 
   //bool DEBUG = analyze_in_detail();
@@ -1131,7 +1125,7 @@ W64 commitstore_unlocked(const SFR& sfr) {
 
   L2CacheLine* L2line = L2.select(addr);
 
-  storemask(signext64(sfr.physaddr << 3, 48), sfr.data, sfr.bytemask);
+  storemask(sfr.physaddr << 3, sfr.data, sfr.bytemask);
   store_commit_direct++;
 
   L1CacheLine* L1line = L1.select(addr);
@@ -1139,7 +1133,7 @@ W64 commitstore_unlocked(const SFR& sfr) {
   L1line->valid |= ((W64)sfr.bytemask << lowbits(addr, 6));
   L2line->valid |= ((W64)sfr.bytemask << lowbits(addr, 6));
 
-  if (!L1line->valid.allset()) {
+  if unlikely (!L1line->valid.allset()) {
     store_prefetches++;
     missbuf.initiate_miss(addr, L2line->valid.allset());
   }
@@ -1151,7 +1145,7 @@ W64 commitstore_unlocked(const SFR& sfr) {
 
 
 void dcache_clock() {
-  if ((sim_cycle & 0x7fffffff) == 0x7fffffff) {
+  if unlikely ((sim_cycle & 0x7fffffff) == 0x7fffffff) {
     // Clear any 32-bit cycle-related counters in the cache to prevent wraparound:
     L1.clearstats();
     L1I.clearstats();

@@ -156,7 +156,7 @@ DataStoreNode* DataStoreNode::searchpath(const char* path) const {
 
   if (path[0] == '/') path++;
 
-  char* pbase = tokens.tokenize(path, "/");
+  char* pbase = tokens.tokenize(strdup(path), "/");
 
   const DataStoreNode* ds = this;
 

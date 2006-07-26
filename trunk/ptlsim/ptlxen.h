@@ -19,10 +19,18 @@ extern "C" {
 #include <xen/sched.h>
 #include <xen/event_channel.h>
 #include <xen/grant_table.h>
+#include <xen/vcpu.h>
+#include <xen/memory.h>
+#include <xen/version.h>
+#include <xen/sched_ctl.h>
+#include <xen/xenoprof.h>
+#include <xen/callback.h>
+#include <xen/features.h>
 #include "xc_ptlsim.h"
 }
 
 #include <ptlhwdef.h>
+#include <config.h>
 
 //
 // The boot page is page 0 in PTL space, but gcc does not like null
@@ -37,10 +45,14 @@ static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_B
 
 #define shinfo_evtchn_pending (*((bitvec<4096>*)&shinfo.evtchn_pending))
 #define shinfo_evtchn_mask (*((bitvec<4096>*)&shinfo.evtchn_mask))
-#endif
+#define shinfo_evtchn_pending_sel(vcpuid) (*((bitvec<64>*)&shinfo.vcpu_info[vcpuid].evtchn_pending_sel))
 
-LongModeLevel1PTE page_table_walk_longmode(W64 rawvirt, W64 toplevel_mfn);
-ostream& print_page_table(ostream& os, LongModeLevel1PTE* ptes, W64 baseaddr);
+#define sshinfo (*(bootinfo.shadow_shinfo))
+#define sshinfo_evtchn_pending (*((bitvec<4096>*)&sshinfo.evtchn_pending))
+#define sshinfo_evtchn_mask (*((bitvec<4096>*)&sshinfo.evtchn_mask))
+#define sshinfo_evtchn_pending_sel(vcpuid) (*((bitvec<64>*)&sshinfo.vcpu_info[vcpuid].evtchn_pending_sel))
+
+#endif
 
 struct PageFrameType {
   Waddr mfn:28, type:3, pin:1;
@@ -119,6 +131,15 @@ enum {
   PTLSIM_HOST_SYSCALL,
 
   //
+  // Get a pending request from PTLmon, typically in response
+  // to an upcall event notification. This call will block
+  // until a request is available.
+  //
+  // Requests are provided in text format as a command line.
+  //
+  PTLSIM_HOST_ACCEPT_UPCALL,
+
+  //
   // Switch to native mode, suspending PTLsim and
   // freezing its state until we switch back.
   //
@@ -144,6 +165,14 @@ enum {
   // and their respective types
   //
   PTLSIM_HOST_QUERY_PAGES,
+
+  //
+  // Notify external waiters that the current simulation
+  // phase is complete, i.e. PTLsim has returned to
+  // waiting for a request, so parameters may be updated
+  // or a new run can be started.
+  //
+  PTLSIM_HOST_COMPLETE_UPCALL,
 };
 
 // Calls from guest domain -> ptlmon in dom0:
@@ -165,21 +194,27 @@ struct PTLsimHostCall {
       W64 arg6;
     } syscall;
     struct {
+      char* buf;
+      size_t count;
+      bool blocking;
+    } accept_upcall;
+    struct {
       Context* guestctx;
       Context* ptlctx;
+      bool pause;
     } switch_to_native;
     struct {
-      int dummy;
-    } switch_to_sim;
-    struct {
       Context* guestctx;
       Context* ptlctx;
-      int exitcode;
+      bool pause;
     } terminate;
     struct {
       PageFrameType* pft;
       int count;
     } querypages;
+    struct {
+      W64 uuid;
+    } complete_upcall;
   };
 
   PTLsimHostCall() { }
@@ -204,53 +239,6 @@ struct PTLsimHostCall {
   }
 };
 
-//
-// Notifications (upcalls) from ptlmon in dom0 -> guest domain
-//
-// These are asynchronous notifications, i.e. ptlmon does not
-// expect a reply. If a reply is required, the guest must do
-// a normal host call to send it.
-//
-// Inside PTLsim, the upcall handler is like an irq handler:
-// it cannot do anything that may block, and that includes
-// making any normal host calls. Instead, it should just
-// set some flags for later processing.
-//
-enum {
-  PTLSIM_UPCALL_NOP,
-  PTLSIM_UPCALL_TERMINATE,
-  PTLSIM_UPCALL_SWITCH_TO_NATIVE,
-  PTLSIM_UPCALL_SET_LOGLEVEL,
-  PTLSIM_UPCALL_SNAPSHOT_NOW,
-
-  // Pseudo-upcalls (interpreted only by ptlmon):
-  PTLSIM_UPCALL_SWITCH_TO_SIM,
-  PTLSIM_UPCALL_WAIT_FOR_COMPLETION,
-};
-
-struct PTLsimUpcall {
-  W32 op; // PTLSIM_UPCALL_...
-  union {
-    struct {
-      int exitcode;
-    } terminate;
-    struct {
-    } switch_to_sim;
-    struct {
-    } wait_for_completion;
-    struct {
-      int snapshot_before_switch;
-    } switch_to_native;
-    struct {
-      int loglevel;
-    } set_loglevel;
-    struct {
-      int create_named_snapshot;
-      char snapshot_name[64];
-    } snapshot_now;
-  } call;
-};
-
 // PTLsim states
 enum {
   PTLSIM_STATE_NONE,
@@ -261,7 +249,7 @@ enum {
 
 struct PTLsimMonitorInfo: public PTLsimBootPageInfo {
   PTLsimHostCall hostreq;
-  PTLsimUpcall upcall;
+  int queued_upcall_count;
   int hostcall_port;
   int monitor_hostcall_port;
   int upcall_port;
@@ -276,96 +264,82 @@ struct PTLsimMonitorInfo: public PTLsimBootPageInfo {
   int max_pages;
   int total_machine_pages;
   Context* ctx;
+  shared_info_t* shadow_shinfo;
   byte* startup_log_buffer;
   int startup_log_buffer_tail;
   int startup_log_buffer_size;
   int ptlsim_state; // (PTLSIM_STATE_xxx)
 };
 
+ostream& print_page_table(ostream& os, Level1PTE* ptes, W64 baseaddr);
+
 #ifndef EXCLUDE_BOOTINFO_SHINFO
+
+Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
+void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);
 
 static inline Context& contextof(int vcpu) { return bootinfo.ctx[vcpu]; }
 
-static inline void* phys_to_ptl_virt(W64 rawphys) {
-  return (void*)(PHYS_VIRT_BASE + rawphys);
+static inline void* phys_to_mapped_virt(W64 rawphys) {
+  return (void*)signext64(PHYS_VIRT_BASE + rawphys, 48);
 }
 
-static inline void* pte_to_ptl_virt(W64 rawvirt, const LongModeLevel1PTE& pte) {
-  if (!pte.p) return null;
-  return phys_to_ptl_virt((pte.phys << 12) + lowbits(rawvirt, 12));
+static inline void* ptl_virt_to_phys(void* p) {
+  Waddr virt = (Waddr)p;
+
+  assert(inrange(virt, (Waddr)PTLSIM_VIRT_BASE, (Waddr)(PTLSIM_VIRT_BASE + ((PAGE_SIZE*bootinfo.mfn_count)-1))));
+  return (void*)((bootinfo.ptl_pagedir[(virt - PTLSIM_VIRT_BASE) >> 12].phys << 12) + lowbits(virt, 12));
 }
 
-inline int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
-  LongModeLevel1PTE pte;
-
-  int n = 0;
-
-  pfec = 0;
-  pte = virt_to_pte(source);
-  if ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = source;
-    pfec.p = !pte.p;
-    pfec.nx = pte.nx;
-    pfec.us = ((!kernel_mode) & (!pte.us));
-    return 0;
-  }
-
-  n = min(4096 - lowbits(source, 12), (Waddr)15);
-  memcpy(target, pte_to_ptl_virt(source, pte), n);
-
-  // All the bytes were on the first page
-  if (n == bytes) return n;
-
-  // Go on to second page, if present
-  pte = virt_to_pte(source + n);
-  if ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = source + n;
-    pfec.p = !pte.p;
-    pfec.nx = pte.nx;
-    pfec.us = ((!kernel_mode) & (!pte.us));
-    return n;
-  }
-
-  memcpy((byte*)target + n, pte_to_ptl_virt(source + n, pte), bytes - n);
-  n = bytes;
-  return n;
+static inline W64 mapped_virt_to_phys(void* rawvirt) {
+  return ((Waddr)lowbits((Waddr)rawvirt, 48)) - PHYS_VIRT_BASE;
 }
 
-inline int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
-  LongModeLevel1PTE pte;
-
-  pfec = 0;
-  pte = virt_to_pte(target);
-  if ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = target;
-    pfec.p = !pte.p;
-    pfec.us = ((!kernel_mode) & (!pte.us));
-    return 0;
-  }
-
-  byte* targetlo = (byte*)pte_to_ptl_virt(target, pte);
-  int nlo = min(4096 - lowbits(target, 12), (Waddr)15);
-
-  // All the bytes were on the first page
-  if (nlo == bytes) {
-    memcpy(targetlo, source, nlo);
-    return bytes;
-  }
-
-  // Go on to second page, if present
-  pte = virt_to_pte(target + nlo);
-  if ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = target + nlo;
-    pfec.p = !pte.p;
-    pfec.us = ((!kernel_mode) & (!pte.us));
-    return nlo;
-  }
-
-  memcpy(pte_to_ptl_virt(target + nlo, pte), (byte*)source + nlo, bytes - nlo);
-  memcpy(targetlo, source, nlo);
-
-  return bytes;
+static inline void* pte_to_mapped_virt(W64 rawvirt, const Level1PTE& pte) {
+  if unlikely (!pte.p) return null;
+  return phys_to_mapped_virt((pte.phys << 12) + lowbits(rawvirt, 12));
 }
+
+static inline pfn_t ptl_virt_to_pfn(void* p) {
+  Waddr vpn = ((Waddr)p) >> 12;
+  if (!inrange(vpn, (Waddr)(PTLSIM_VIRT_BASE >> 12), (Waddr)(PTLSIM_VIRT_BASE >> 12) + bootinfo.mfn_count - 1)) return (pfn_t)INVALID_MFN;
+  return vpn - (PTLSIM_VIRT_BASE >> 12);
+}
+
+static inline mfn_t ptl_virt_to_mfn(void* p) {
+  pfn_t pfn = ptl_virt_to_pfn(p);
+  if unlikely (pfn == INVALID_MFN) return (mfn_t)INVALID_MFN;
+
+  return bootinfo.ptl_pagedir[pfn].phys;
+}
+
+W64 storemask(Waddr physaddr, W64 data, byte bytemask);
+
+static inline bool smc_isdirty(Waddr mfn) {
+  // MFN (2^28)-1 is INVALID_MFN as stored in RIPVirtPhys:
+  if unlikely (mfn >= bootinfo.total_machine_pages) return false;
+  return bootinfo.phys_pagedir[mfn].d;
+}
+
+void smc_setdirty_internal(Level1PTE& pte, bool dirty);
+
+static inline void smc_setdirty_value(Waddr mfn, bool dirty) {
+  if unlikely (mfn >= bootinfo.total_machine_pages) return;
+  Level1PTE& pte = bootinfo.phys_pagedir[mfn];
+  if likely (pte.d == dirty) return;
+  smc_setdirty_internal(pte, dirty);
+}
+
+static inline void smc_setdirty(Waddr mfn) {
+  smc_setdirty_value(mfn, 1);
+}
+
+static inline void smc_cleardirty(Waddr mfn) {
+  smc_setdirty_value(mfn, 0);
+}
+
+int inject_events();
+bool check_for_async_sim_break();
 
 #endif
 
@@ -394,5 +368,66 @@ extern "C" {
   int sys_gettimeofday(struct timeval* tv, struct timezone* tz);
   time_t sys_time(time_t* t);
 };
+
+// 
+// Configuration Options:
+//
+struct PTLsimConfig {
+  W64 domain;
+  bool run;
+  bool native;
+  bool pause;
+  bool kill;
+  stringbuf core_name;
+
+  W64 clock_adj_factor;
+
+  // Logging
+  bool quiet;
+  stringbuf log_filename;
+  W64 loglevel;
+  W64 start_log_at_iteration;
+  bool log_ptlsim_boot;
+  bool log_on_console;
+
+  // Statistics Database
+  stringbuf stats_filename;
+  W64 snapshot_cycles;
+  bool snapshot_now;
+
+  // Stopping Point
+  W64 stop_at_user_insns;
+  W64 stop_at_iteration;
+  W64 stop_at_rip;
+  W64 insns_in_last_basic_block;
+  W64 flush_interval;
+
+  // Event tracing
+  stringbuf event_trace_record_filename;
+  bool event_trace_record_stop;
+  stringbuf event_trace_replay_filename;
+
+  // Core features
+  W64 core_freq_hz;
+  W64 timer_interrupt_freq_hz;
+  bool pseudo_real_time_clock;
+
+  // Other info
+  stringbuf dumpcode_filename;
+
+  W64 console_mfn;
+
+  void reset();
+};
+
+extern PTLsimConfig config;
+
+extern ConfigurationParser<PTLsimConfig> configparser;
+
+ostream& operator <<(ostream& os, const PTLsimConfig& config);
+
+ostream& operator <<(ostream& os, const shared_info& si);
+
+void print_banner(ostream& os);
 
 #endif // _PTLXEN_H_

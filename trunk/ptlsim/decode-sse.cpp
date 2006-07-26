@@ -7,48 +7,6 @@
 
 #include <decode.h>
 
-void assist_ldmxcsr(Context& ctx) {
-  //
-  // LDMXCSR needs to flush the pipeline since future FP instructions will
-  // depend on its value and can't be issued out of order w.r.t the mxcsr.
-  //
-  W32 mxcsr = (W32)ctx.commitarf[REG_ar1];
-
-  // Top bit of mxcsr archreg doubles as direction flag and other misc flags: preserve it
-  ctx.mxcsr = (ctx.mxcsr & 0xffffffff00000000ULL) | mxcsr;
-
-  // We can't have exceptions going on inside PTLsim: virtualize this feature in uopimpl code
-  // Everything else will be used by real SSE insns inside uopimpls. 
-  mxcsr |= MXCSR_EXCEPTION_DISABLE_MASK;
-  x86_set_mxcsr(mxcsr);
-
-  //
-  // Technically all FP uops should update the sticky exception bits in the mxcsr
-  // if marked as such (i.e. non-x87). Presently we don't do this, so hopefully
-  // no code checks for exception conditions in this manner. Otherwise each FP
-  // uopimpl would need to update a speculative version of the mxcsr.
-  //
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-}
-
-void assist_fxsave(Context& ctx) {
-  FXSAVEStruct state;
-
-  ctx.fxsave(state);
-
-  Waddr target = ctx.commitarf[REG_ar1];
-
-  PageFaultErrorCode pfec;
-  Waddr faultaddr;
-  int bytes = ctx.copy_to_user(target, &state, sizeof(state), pfec, faultaddr);
-
-  if (bytes < sizeof(state)) {
-    propagate_exception_during_assist(ctx, EXCEPTION_x86_page_fault, pfec, faultaddr);
-    return;
-  }
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-}
-
 static const byte sse_float_datatype_to_ptl_datatype[4] = {DATATYPE_FLOAT, DATATYPE_VEC_FLOAT, DATATYPE_DOUBLE, DATATYPE_VEC_DOUBLE};
 
 bool TraceDecoder::decode_sse() {
@@ -927,15 +885,6 @@ bool TraceDecoder::decode_sse() {
     break;
   }
 
-  case 0x1c3: {
-    // movnti
-    DECODE(eform, rd, v_mode);
-    DECODE(gform, ra, v_mode);
-    CheckInvalid();
-    move_reg_or_mem(rd, ra);
-    break;
-  }
-
     /*
       0x2xx   0xf3  OPpd
       0x3xx   none  OPps
@@ -1010,62 +959,6 @@ bool TraceDecoder::decode_sse() {
       int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
       this << TransOp(OP_mov, rdreg, REG_zero, rareg, REG_zero, 3);
       this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3); // zero high 64 bits
-    }
-    break;
-  }
-
-  case 0x1ae: {
-    // fxsave fxrstor ldmxcsr stmxcsr (inv) lfence mfence sfence
-    switch (modrm.reg) {
-    case 0: { // fxsave
-      DECODE(eform, ra, q_mode);
-      CheckInvalid();
-
-      // Get effective address into sr2
-      int basereg = arch_pseudo_reg_to_arch_reg[ra.mem.basereg];
-      int indexreg = arch_pseudo_reg_to_arch_reg[ra.mem.indexreg];
-      basereg = bias_by_segreg(basereg);
-      TransOp addop(OP_adda, REG_ar1, basereg, REG_imm, indexreg, (ctx.use64) ? 3 : 2, ra.mem.offset);
-      addop.extshift = ra.mem.scale;
-      this << addop;
-
-      microcode_assist(ASSIST_FXSAVE, ripstart, rip);
-      end_of_block = 1;
-      break;
-    }
-    case 2: { // ldmxcsr
-      DECODE(eform, ra, d_mode);
-      CheckInvalid();
-
-      ra.type = OPTYPE_REG;
-      ra.reg.reg = 0; // get the requested mxcsr into sr2
-      move_reg_or_mem(ra, rd, REG_ar1);
-      //
-      // LDMXCSR needs to flush the pipeline since future FP instructions will
-      // depend on its value and can't be issued out of order w.r.t the mxcsr.
-      //
-      microcode_assist(ASSIST_LDMXCSR, ripstart, rip);
-      end_of_block = 1;
-      break;
-    }
-    case 3: { // stmxcsr
-      DECODE(eform, rd, d_mode);
-      CheckInvalid();
-
-      TransOp ldp(OP_ld, REG_temp1, REG_zero, REG_imm, REG_zero, 1, (Waddr)&ctx.mxcsr); ldp.internal = 1; this << ldp;
-      result_store(REG_temp1, REG_temp0, rd);
-      break;
-    }
-    case 5: // lfence
-    case 6: // mfence
-    case 7: { // sfence
-      CheckInvalid();
-      this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
-      break;
-    }
-    default:
-      MakeInvalid();
-      break;
     }
     break;
   }

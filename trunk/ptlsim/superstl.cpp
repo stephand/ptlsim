@@ -22,6 +22,8 @@ namespace superstl {
     fd = sys_open(filename, O_RDWR | O_CREAT | ((append) ? O_APPEND : O_TRUNC), 0644);
     if (fd < 0) return false;
     setbuf(bufsize);
+    close_on_destroy = 1;
+    chain = null;
     return true;
   }
 
@@ -38,6 +40,8 @@ namespace superstl {
     if (this->fd >= 0) close();
     this->fd = fd;
     setbuf(bufsize);
+    close_on_destroy = 0;
+    chain = null;
     return ok();
   }
 
@@ -51,13 +55,22 @@ namespace superstl {
     fd = -1;
   }
 
+  void odstream::setchain(odstream* chain) {
+    this->chain = chain;
+  }
+
   int odstream::write(const void* data, int count) {
     if (!ok()) return 0;
-    if (!buf) return sys_write(fd, buf, count);
+    if (!buf) {
+      if (chain) chain->write(data, count);
+      return sys_write(fd, buf, count);
+    }
 
     byte* p = (byte*)data;
 
     int total = 0;
+
+    if (chain) chain->write(data, count);
 
     while (count) {
       int n = min(bufsize - tail, count);
@@ -82,15 +95,11 @@ namespace superstl {
   }
 
   void odstream::flush() {
+    if (chain) chain->flush();
+
     if (buf) {
       int rc = 0;
       if (tail) rc = sys_write(fd, buf, tail);
-      if (rc != tail) {
-        stringbuf sb;
-        sb << "odstream WRITE FAILED: tried to write ", tail, " bytes but only wrote ", rc, " bytes", endl;
-        sys_write(2, (char*)sb, strlen(sb));
-        asm("int3");
-      }
       tail = 0;
     }
   }
@@ -377,6 +386,7 @@ namespace superstl {
     error = (fd < 0);
     if (!ok()) return false;
     setbuf(bufsize);
+    close_on_destroy = 1;
     return true;
   }
 
@@ -386,6 +396,7 @@ namespace superstl {
     error = (fd < 0);
     if (!ok()) return false;
     setbuf(bufsize);
+    close_on_destroy = 0;
     return true;
   }
 
@@ -449,6 +460,7 @@ namespace superstl {
 
       int bytes = (head - tail);
       int n = sys_read(fd, &buf[tail], bytes);
+
       if ((bytes > 0) & (n == 0)) eos = 1; // end of stream?
       tail = addmod(tail, n);
       bufused += n;
@@ -461,7 +473,8 @@ namespace superstl {
         assert(bufused == 0);
         // buffer empty
         int bytes = bufsize;
-        int n = sys_read(fd, &buf[tail], bytes);
+        int n = sys_read(fd, &buf[0], bytes);
+
         if ((bytes > 0) & (n == 0)) eos = 1; // end of stream?
         head = 0;
         tail = addmod(head, n);
@@ -513,7 +526,9 @@ namespace superstl {
   bool idstream::getc(char& c) {
     if (!buf) return (sys_read(fd, &c, 1) == 1);
 
-    fillbuf();
+    if (!bufused)
+      fillbuf();
+
     if (!bufused) {
       assert(eos);
       error = 1;
@@ -632,8 +647,8 @@ namespace superstl {
   }
 
   template <>
-  char* dynarray<char*>::tokenize(const char* string, const char* seplist) {
-    char* pbase = strdup(string);
+  char* dynarray<char*>::tokenize(char* string, const char* seplist) {
+    char* pbase = string;
     char* p = pbase;
 
     while (*p) {

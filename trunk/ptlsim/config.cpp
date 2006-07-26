@@ -5,78 +5,89 @@
 // Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
 //
 
-#include <ptlsim.h>
-#include <datastore.h>
+#include <config.h>
 
-ostream& ConfigurationParser::printusage(ostream& os) const {
+ostream& ConfigurationParserBase::printusage(const void* baseptr, ostream& os) const {
   os << "Options are:", endl;
-  foreach (i, optioncount) {
-    if (options[i].type == OPTION_TYPE_SECTION) {
-      os << options[i].description, ":", endl;
+  ConfigurationOption* option = options;
+  while (option) {
+    void* variable = (baseptr) ? ((void*)((Waddr)baseptr + option->offset)) : null;
+    if (option->type == OPTION_TYPE_SECTION) {
+      os << option->description, ":", endl;
+      option = option->next;
       continue;
     }
-    os << "  -", padstring(options[i].option, -16), " ", options[i].description, " ";
-    if (!options[i].variable) {
-      os << endl;
-      continue;
-    }
+
+    os << "  -", padstring(option->name, -16), " ", option->description, " ";
+
     os << "[";
-    switch (options[i].type) {
+    switch (option->type) {
     case OPTION_TYPE_NONE:
       break;
     case OPTION_TYPE_W64: {
-      W64 v = *((W64*)(options[i].variable));
+      W64 v = *((W64*)(variable));
       if (v == infinity) os << "inf"; else os << v;
       break;
     }
     case OPTION_TYPE_FLOAT:
-      os << *((double*)(options[i].variable));
+      os << *((double*)(variable));
       break;
     case OPTION_TYPE_STRING:
-      os << ((*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)");
+      os << *(stringbuf*)variable;
       break;
     case OPTION_TYPE_BOOL:
-      os << ((*((W64**)(options[i].variable))) ? "enabled" : "disabled");
+      os << ((*(bool*)variable) ? "enabled" : "disabled");
       break;
     default:
       assert(false);
     }
     os << "]", endl;
+    option = option->next;
   }
   os << endl;
 
   return os;
 }
 
-int ConfigurationParser::parse(int argc, char* argv[]) {
+int ConfigurationParserBase::parse(void* baseptr, int argc, char* argv[]) {
   int i = 0;
 
   while (i < argc) {
     if ((argv[i][0] == '-') && strlen(argv[i]) > 1) {
-      char* option = &argv[i][1];
+      char* name = &argv[i][1];
       i++;
       bool found = false;
-      for (int j = 0; j < optioncount; j++) {
-        if (options[j].type == OPTION_TYPE_SECTION) continue;
-        if (strequal(option, options[j].option)) {
+
+      ConfigurationOption* option = options;
+      while (option) {
+        if (option->type == OPTION_TYPE_SECTION) {
+          option = option->next;
+          continue;
+        }
+        if (strequal(name, option->name)) {
           found = true;
-          void* variable = options[j].variable;
-          if ((options[j].type != OPTION_TYPE_NONE) && (options[j].type != OPTION_TYPE_BOOL) && (i == (argc+1))) {
+          void* variable = (void*)((Waddr)baseptr + option->offset);
+          if ((option->type != OPTION_TYPE_NONE) && (option->type != OPTION_TYPE_BOOL) && (i == (argc+1))) {
             cerr << "Warning: missing value for option '", argv[i-1], "'", endl;
             break;
           }
-          switch (options[j].type) {
+          switch (option->type) {
           case OPTION_TYPE_NONE:
             break;
           case OPTION_TYPE_W64: {
-            char* p = argv[i];
-            int len = strlen(p);
-            W64 multiplier = 1;
-            char* endp = p;
+            char* p = (i < argc) ? argv[i] : null;
+            int len = (p) ? strlen(p) : 0;
             if (!len) {
               cerr << "Warning: option ", argv[i-1], " had no argument; ignoring", endl;
               break;
             }
+
+            char buf[256];
+            strncpy(buf, p, sizeof(buf));
+            p = buf;
+
+            W64 multiplier = 1;
+            char* endp = p;
             bool isinf = (strncmp(p, "inf", 3) == 0);
             if (len > 1) {
               char& c = p[len-1];
@@ -98,25 +109,39 @@ int ConfigurationParser::parse(int argc, char* argv[]) {
             v *= multiplier;
             *((W64*)variable) = v;
             i++;
+
             break;
           }
           case OPTION_TYPE_FLOAT:
+            if (i >= argc) {
+              cerr << "Warning: option ", argv[i-1], " had no argument; ignoring", endl;
+              break;
+            }
             *((double*)variable) = atof(argv[i++]);
             break;
-          case OPTION_TYPE_STRING:
-            *((char**)variable) = argv[i++];
-            break;
           case OPTION_TYPE_BOOL:
-            *((W64*)variable) = (!(*((W64*)variable)));
+            *((bool*)variable) = (!(*((bool*)variable)));
             break;
+          case OPTION_TYPE_STRING: {
+            if (i >= argc) {
+              cerr << "Warning: option ", argv[i-1], " had no argument; ignoring", endl;
+              break;
+            }
+            stringbuf& sb = *((stringbuf*)variable);
+            sb.reset();
+            sb << argv[i++];
+            break;
+          }
           default:
             assert(false);
           }
           break;
         }
+
+        option = option->next;
       }
       if (!found) {
-        cerr << "Warning: invalid option '", ((i < argc) ? argv[i] : "<missing>"), "'", endl;
+        cerr << "Warning: invalid option '", (inrange(i-1, 0, argc-1) ? argv[i-1] : "<missing>"), "'", endl;
         i++;
       }
     } else {
@@ -124,22 +149,36 @@ int ConfigurationParser::parse(int argc, char* argv[]) {
     }
   }
 
+  cerr << flush;
+
   // no trailing arguments
   return -1;
 }
 
-ostream& ConfigurationParser::print(ostream& os) const {
+int ConfigurationParserBase::parse(void* baseptr, char* argstr) {
+  dynarray<char*> argv;
+  argv.tokenize(argstr, " ");
+  return parse(baseptr, argv.length, argv);
+}
+
+ostream& ConfigurationParserBase::print(const void* baseptr, ostream& os) const {
   os << "Active parameters:", endl;
 
-  foreach (i, optioncount) {
-    if (!options[i].variable)
+  ConfigurationOption* option = options;
+  while (option) {
+    void* variable = (baseptr) ? ((void*)((Waddr)baseptr + option->offset)) : null;
+
+    if (option->type == OPTION_TYPE_SECTION) {
+      option = option->next;
       continue;
-    os << "  -", padstring(options[i].option, -12), " ";
-    switch (options[i].type) {
+    }
+    os << "  -", padstring(option->name, -12), " ";
+    switch (option->type) {
     case OPTION_TYPE_NONE:
+    case OPTION_TYPE_SECTION:
       break;
     case OPTION_TYPE_W64: {
-      W64 v = *((W64*)(options[i].variable));
+      W64 v = *((W64*)(variable));
       if (v == 0) {
         os << 0;
       } else if (v == infinity) {
@@ -152,25 +191,23 @@ ostream& ConfigurationParser::print(ostream& os) const {
         os << v;
       }
       break;
-    } case OPTION_TYPE_FLOAT:
-      os << *((double*)(options[i].variable));
-      break;
-    case OPTION_TYPE_STRING:
-      os << ((*((void**)options[i].variable)) ? *((char**)(options[i].variable)) : "(null)");
+    }
+    case OPTION_TYPE_FLOAT:
+      os << *((double*)(variable));
       break;
     case OPTION_TYPE_BOOL:
-      os << (*((W64*)(options[i].variable)) ? "enabled" : "disabled");
+      os << (*((W64*)(variable)) ? "enabled" : "disabled");
+      break;
+    case OPTION_TYPE_STRING:
+      os << *((stringbuf*)(variable));
       break;
     default:
-      assert(false);
+      break;
     }
     os << endl;
+
+    option = option->next;
   }
 
   return os;
 }
-
-ostream& operator <<(ostream& os, const ConfigurationParser& clp) {
-  return clp.print(os);
-}
-

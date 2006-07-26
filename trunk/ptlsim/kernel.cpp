@@ -143,6 +143,15 @@ Waddr get_gs_base() {
 
 #endif // !__x86_64__
 
+int Context::write_segreg(unsigned int segid, W16 selector) {
+  // Normal userspace PTLsim: assume it's OK
+  assert(segid < SEGID_COUNT);
+
+  seg[segid].selector = selector;
+  update_shadow_segment_descriptors();
+  return 0;
+}
+
 void Context::update_shadow_segment_descriptors() {
   W64 limit = (use64) ? 0xffffffffffffffffULL : 0xffffffffULL;
 
@@ -224,7 +233,7 @@ extern "C" void assert_fail(const char *__assertion, const char *__file, unsigne
 
   if (logfile) {
     logfile << sb, flush;
-    if (use_out_of_order_core)
+    if (config.use_out_of_order_core)
       dump_ooo_state();
 
     logfile.close();
@@ -283,35 +292,47 @@ AddressSpace::AddressSpace() { }
 
 AddressSpace::~AddressSpace() { }
 
+AddressSpace::spat_t AddressSpace::allocmap() {
+#ifdef __x86_64__
+  return (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+#else 
+  return (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
+#endif
+}
+void AddressSpace::freemap(AddressSpace::spat_t top) {
+#ifdef __x86_64__
+  if (top) {
+    foreach (i, SPAT_TOPLEVEL_CHUNKS) {
+      if (top[i]) ptl_free_private_pages(top[i], SPAT_BYTES_PER_CHUNK);
+    }
+    ptl_free_private_pages(top, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  }
+#else
+  if (top) {
+    ptl_free_private_pages(top, SPAT_BYTES);
+  }
+#endif
+}
+
 void AddressSpace::reset() {
   brkbase = sys_brk(0);
   brk = brkbase;
 
-#ifdef __x86_64__
-  if (readmap) ptl_free_private_pages(readmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  if (writemap) ptl_free_private_pages(writemap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  if (execmap) ptl_free_private_pages(execmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  if (dtlbmap) ptl_free_private_pages(dtlbmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  if (itlbmap) ptl_free_private_pages(itlbmap, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  freemap(readmap);
+  freemap(writemap);
+  freemap(execmap);
+  freemap(dtlbmap);
+  freemap(itlbmap);
+  freemap(transmap);
+  freemap(dirtymap);
 
-  readmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  writemap = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  execmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  dtlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-  itlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
-#else
-  if (readmap) ptl_free_private_pages(readmap, SPAT_BYTES);
-  if (writemap) ptl_free_private_pages(writemap, SPAT_BYTES);
-  if (execmap) ptl_free_private_pages(execmap, SPAT_BYTES);
-  if (dtlbmap) ptl_free_private_pages(dtlbmap, SPAT_BYTES);
-  if (itlbmap) ptl_free_private_pages(itlbmap, SPAT_BYTES);
-
-  readmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
-  writemap = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
-  execmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
-  dtlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
-  itlbmap  = (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
-#endif
+  readmap  = allocmap();
+  writemap = allocmap();
+  execmap  = allocmap();
+  dtlbmap  = allocmap();
+  itlbmap  = allocmap();
+  transmap = allocmap();
+  dirtymap = allocmap();
 }
 
 void AddressSpace::setattr(void* start, Waddr length, int prot) {
@@ -936,6 +957,10 @@ void switch_to_native_restore_context() {
   saved_fs = ctx.seg[SEGID_FS].selector;
   saved_gs = ctx.seg[SEGID_GS].selector;
 
+  ctx.commitarf[REG_flags] = 
+    (ctx.internal_eflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF)) |
+    (ctx.commitarf[REG_flags] & (FLAG_ZAPS|FLAG_CF|FLAG_OF));
+
   ctx.fxsave(x87state);
 
   logfile << endl, "=== Preparing to switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
@@ -955,12 +980,10 @@ extern "C" void save_context_switch_to_sim() {
     ctx.commitarf[REG_rsp] += (ctx.use64) ? 8 : 4;
   }
 
-#ifdef __x86_64__
-  if (!ctx.use64) ctx.commitarf[REG_rip] &= 0xffffffff;
-#endif
+  ctx.commitarf[REG_ctx] = (Waddr)&ctx;
+  ctx.commitarf[REG_fpstack] = (Waddr)&ctx.fpstack;
 
-  logfile << endl, "=== Switching to simulation mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
-
+  ctx.internal_eflags = ctx.commitarf[REG_flags];
   ctx.commitarf[REG_flags] &= ~(FLAG_INV|FLAG_WAIT);
   ctx.seg[SEGID_CS].selector = saved_cs;
   ctx.seg[SEGID_SS].selector = saved_ss;
@@ -969,8 +992,13 @@ extern "C" void save_context_switch_to_sim() {
   ctx.seg[SEGID_FS].selector = saved_fs;
   ctx.seg[SEGID_GS].selector = saved_gs;
   ctx.update_shadow_segment_descriptors();
-
   ctx.fxrstor(x87state);
+
+#ifdef __x86_64__
+  if (!ctx.use64) ctx.commitarf[REG_rip] &= 0xffffffff;
+#endif
+
+  logfile << endl, "=== Switching to simulation mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
 
   asp.resync_with_process_maps();
 
@@ -978,13 +1006,28 @@ extern "C" void save_context_switch_to_sim() {
   thunkpage->call_code_addr = (Waddr)&thunkpage->call_within_sim_thunk;
   thunkpage->simulated = 1;
 
-  if (user_profile_only) {
-    logfile << endl, "=== Trigger reached during profile mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": starting counters ===", endl, endl, flush;
-    start_perfctrs();
-    switch_to_native_restore_context();
+  switch_to_sim();
+}
+
+void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virtaddr) {
+  Waddr rip = ctx.commitarf[REG_selfrip];
+
+  logfile << "Exception ", exception, " (", x86_exception_names[exception], ") @ rip ", (void*)(Waddr)commitarf[REG_rip], " (", total_user_insns_committed, " commits, ", sim_cycle, " cycles)", endl, flush;
+  cerr << "Exception ", exception, " (", x86_exception_names[exception], ") @ rip ", (void*)(Waddr)commitarf[REG_rip], " (", total_user_insns_committed, " commits, ", sim_cycle, " cycles)", endl, flush;
+
+  if (config.dumpcode_filename.set()) {
+    byte insnbuf[1024];
+    PageFaultErrorCode insn_pfec;
+    Waddr insn_faultaddr;
+    int valid_byte_count = copy_from_user(insnbuf, rip, sizeof(insnbuf), insn_pfec, insn_faultaddr);
+
+    logfile << "Writing ", valid_byte_count, " bytes from rip ", (void*)rip, " to ", ((char*)config.dumpcode_filename), "...", endl, flush;
+    odstream("dumpcode.dat").write(insnbuf, sizeof(insnbuf));
   }
 
-  switch_to_sim();
+  logfile << "Aborting...", endl, flush;
+  cerr << "Aborting...", endl, flush;
+  abort();
 }
 
 #ifdef __x86_64__
@@ -1853,7 +1896,7 @@ extern "C" void external_signal_callback(int sig, siginfo_t* si, void* contextp)
     if (running_in_sim_mode) {
       // Already in simulator: switch back to native mode
       if (logfile) logfile << "Switching tid ", sys_gettid(), " to native mode at cycle ", sim_cycle, ", ", total_user_insns_committed, " user commits", endl, flush;
-      if (!ptlsim_quiet) cerr << endl, "//", endl, "// Switching tid ", sys_gettid(), " to native mode at cycle ", sim_cycle, ", ", total_user_insns_committed, " user commits", endl, "//", endl, endl, flush;
+      if (!config.quiet) cerr << endl, "//", endl, "// Switching tid ", sys_gettid(), " to native mode at cycle ", sim_cycle, ", ", total_user_insns_committed, " user commits", endl, "//", endl, endl, flush;
       // Simulator loop will perform the switch on the next iteration when it detects this
       requested_switch_to_native = 1;
     } else {
@@ -1865,7 +1908,7 @@ extern "C" void external_signal_callback(int sig, siginfo_t* si, void* contextp)
       // Remove old breakpoint, if any
       remove_switch_to_sim_breakpoint();
       if (logfile) logfile << "Switching tid ", sys_gettid(), " to simulation mode at rip ", rip, endl, flush;
-      if (!ptlsim_quiet) cerr << endl, "//", endl, "// Switching tid ", sys_gettid(), " to simulation mode at rip ", rip, endl, "//", endl, endl, flush;
+      if (!config.quiet) cerr << endl, "//", endl, "// Switching tid ", sys_gettid(), " to simulation mode at rip ", rip, endl, "//", endl, endl, flush;
       set_switch_to_sim_breakpoint(rip);
       // Context switch to PTLsim takes place after the sighandler returns
     }
@@ -2056,6 +2099,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   ctx.commitarf[REG_rsp] = (Waddr)origrsp;
   ctx.commitarf[REG_rip] = (Waddr)ptlsim_ehdr->e_entry;
   ctx.commitarf[REG_flags] = 0;
+  ctx.internal_eflags = 0;
 
   ctx.seg[SEGID_CS].selector = saved_cs;
   ctx.seg[SEGID_SS].selector = saved_ss;
@@ -2067,7 +2111,12 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 
   ctx.use32 = 1;
   ctx.use64 = (ptlsim_ehdr->e_machine == EM_X86_64);
+
   ctx.fxrstor(x87state);
+
+  ctx.vcpuid = 0;
+  ctx.commitarf[REG_ctx] = (Waddr)&ctx;
+  ctx.commitarf[REG_fpstack] = (Waddr)&ctx.fpstack;
 
   //
   // Generally the true stack top can be found by rounding up to some big fraction

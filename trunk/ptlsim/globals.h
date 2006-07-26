@@ -42,6 +42,17 @@ typedef W32 Waddr;
 #include <math.h>
 #include <float.h>
 
+#define __stringify_1(x) #x
+#define stringify(x) __stringify_1(x)
+
+#define alignto(x) __attribute__ ((aligned (x)))
+#define insection(x) __attribute__ ((section (x)))
+#define packedstruct __attribute__ ((packed))
+
+#define unlikely(x) (__builtin_expect(!!(x), 0))
+#define likely(x) (__builtin_expect(!!(x), 1))
+#define isconst(x) (__builtin_constant_p(x))
+
 //
 // Asserts
 //
@@ -55,7 +66,7 @@ extern "C" void assert_fail(const char *__assertion, const char *__file, unsigne
 
 #define __CONCAT(x,y)	x ## y
 #define __STRING(x)	#x
-#define assert(expr) (__ASSERT_VOID_CAST ((expr) ? 0 : (assert_fail (__STRING(expr), __FILE__, __LINE__, __PRETTY_FUNCTION__), 0)))
+#define assert(expr) (__ASSERT_VOID_CAST ((unlikely(expr)) ? 0 : (assert_fail (__STRING(expr), __FILE__, __LINE__, __PRETTY_FUNCTION__), 0)))
 
 #define nan NAN
 #define inf INFINITY
@@ -81,7 +92,9 @@ MakeLimits(unsigned long, 0, 0xffffffff);
 
 // Null pointer to the specified object type, for computing field offsets
 template <typename T> static inline T* nullptr() { return (T*)(Waddr)0; }
+#define offsetof(T, field) ((Waddr)(&(nullptr<T>()->field)) - ((Waddr)nullptr<T>()))
 
+//#error FIXME: This does not work right when the struct is a temporary (compiler bug?) (test_refs() in cpuid.cpp)
 // Add raw data auto-casts to a structured or bitfield type 
 #define RawDataAccessors(structtype, rawtype) \
   structtype() { } \
@@ -223,6 +236,31 @@ template <typename T> inline bool x86_locked_bts(T& r, T b) { byte c; asm volati
 template <typename T> inline bool x86_locked_btr(T& r, T b) { byte c; asm volatile("lock btr %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+m" (r) : [b] "r" (b) : "memory"); return c; }
 template <typename T> inline bool x86_locked_btc(T& r, T b) { byte c; asm volatile("lock btc %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+m" (r) : [b] "r" (b) : "memory"); return c; }
 
+// This is a barrier for the compiler only, NOT the processor!
+#define barrier() asm volatile("": : :"memory")
+
+template <typename T>
+static inline T xchg(T& v, T newv) {
+	switch (sizeof(T)) {
+  case 1: asm volatile("lock xchgb %[newv],%[v]" : [v] "+m" (v), [newv] "+r" (newv) : : "memory"); break;
+  case 2: asm volatile("lock xchgw %[newv],%[v]" : [v] "+m" (v), [newv] "+r" (newv) : : "memory"); break;
+  case 4: asm volatile("lock xchgl %[newv],%[v]" : [v] "+m" (v), [newv] "+r" (newv) : : "memory"); break;
+  case 8: asm volatile("lock xchgq %[newv],%[v]" : [v] "+m" (v), [newv] "+r" (newv) : : "memory"); break;
+	}
+	return newv;
+}
+
+template <typename T>
+static inline T xadd(T& v, T incr) {
+	switch (sizeof(T)) {
+  case 1: asm volatile("lock xaddb %[incr],%[v]" : [v] "+m" (v), [incr] "+r" (incr) : : "memory"); break;
+  case 2: asm volatile("lock xaddw %[incr],%[v]" : [v] "+m" (v), [incr] "+r" (incr) : : "memory"); break;
+  case 4: asm volatile("lock xaddl %[incr],%[v]" : [v] "+m" (v), [incr] "+r" (incr) : : "memory"); break;
+  case 8: asm volatile("lock xaddq %[incr],%[v]" : [v] "+m" (v), [incr] "+r" (incr) : : "memory"); break;
+	}
+  return incr;
+}
+
 inline void prefetch(const void* x) { asm volatile("prefetcht0 (%0)" : : "r" (x)); }
 
 inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
@@ -237,6 +275,92 @@ template <int n> struct lg10 { static const int value = 1 + lg10<n/10>::value; }
 template <> struct lg10<1> { static const int value = 0; };
 template <> struct lg10<0> { static const int value = 0; };
 #define log10(v) (lg10<(v)>::value)
+
+template <bool b00,     bool b01 = 0, bool b02 = 0, bool b03 = 0,
+          bool b04 = 0, bool b05 = 0, bool b06 = 0, bool b07 = 0,
+          bool b08 = 0, bool b09 = 0, bool b10 = 0, bool b11 = 0,
+          bool b12 = 0, bool b13 = 0, bool b14 = 0, bool b15 = 0,
+          bool b16 = 0, bool b17 = 0, bool b18 = 0, bool b19 = 0,
+          bool b20 = 0, bool b21 = 0, bool b22 = 0, bool b23 = 0,
+          bool b24 = 0, bool b25 = 0, bool b26 = 0, bool b27 = 0,
+          bool b28 = 0, bool b29 = 0, bool b30 = 0, bool b31 = 0,
+          bool b32 = 0, bool b33 = 0, bool b34 = 0, bool b35 = 0,
+          bool b36 = 0, bool b37 = 0, bool b38 = 0, bool b39 = 0,
+          bool b40 = 0, bool b41 = 0, bool b42 = 0, bool b43 = 0,
+          bool b44 = 0, bool b45 = 0, bool b46 = 0, bool b47 = 0,
+          bool b48 = 0, bool b49 = 0, bool b50 = 0, bool b51 = 0,
+          bool b52 = 0, bool b53 = 0, bool b54 = 0, bool b55 = 0,
+          bool b56 = 0, bool b57 = 0, bool b58 = 0, bool b59 = 0,
+          bool b60 = 0, bool b61 = 0, bool b62 = 0, bool b63 = 0>
+struct constbits {
+  static const W64 value =
+  (((W64)b00)  <<  0) +
+  (((W64)b01)  <<  1) +
+  (((W64)b02)  <<  2) +
+  (((W64)b03)  <<  3) +
+  (((W64)b04)  <<  4) +
+  (((W64)b05)  <<  5) +
+  (((W64)b06)  <<  6) +
+  (((W64)b07)  <<  7) +
+  (((W64)b08)  <<  8) +
+  (((W64)b09)  <<  9) +
+  (((W64)b10)  << 10) +
+  (((W64)b11)  << 11) +
+  (((W64)b12)  << 12) +
+  (((W64)b13)  << 13) +
+  (((W64)b14)  << 14) +
+  (((W64)b15)  << 15) +
+  (((W64)b16)  << 16) +
+  (((W64)b17)  << 17) +
+  (((W64)b18)  << 18) +
+  (((W64)b19)  << 19) +
+  (((W64)b20)  << 20) +
+  (((W64)b21)  << 21) +
+  (((W64)b22)  << 22) +
+  (((W64)b23)  << 23) +
+  (((W64)b24)  << 24) +
+  (((W64)b25)  << 25) +
+  (((W64)b26)  << 26) +
+  (((W64)b27)  << 27) +
+  (((W64)b28)  << 28) +
+  (((W64)b29)  << 29) +
+  (((W64)b30)  << 30) +
+  (((W64)b31)  << 31) +
+  (((W64)b32)  << 32) +
+  (((W64)b33)  << 33) +
+  (((W64)b34)  << 34) +
+  (((W64)b35)  << 35) +
+  (((W64)b36)  << 36) +
+  (((W64)b37)  << 37) +
+  (((W64)b38)  << 38) +
+  (((W64)b39)  << 39) +
+  (((W64)b40)  << 40) +
+  (((W64)b41)  << 41) +
+  (((W64)b42)  << 42) +
+  (((W64)b43)  << 43) +
+  (((W64)b44)  << 44) +
+  (((W64)b45)  << 45) +
+  (((W64)b46)  << 46) +
+  (((W64)b47)  << 47) +
+  (((W64)b48)  << 48) +
+  (((W64)b49)  << 49) +
+  (((W64)b50)  << 50) +
+  (((W64)b51)  << 51) +
+  (((W64)b52)  << 52) +
+  (((W64)b53)  << 53) +
+  (((W64)b54)  << 54) +
+  (((W64)b55)  << 55) +
+  (((W64)b56)  << 56) +
+  (((W64)b57)  << 57) +
+  (((W64)b58)  << 58) +
+  (((W64)b59)  << 59) +
+  (((W64)b60)  << 60) +
+  (((W64)b61)  << 61) +
+  (((W64)b62)  << 62) +
+  (((W64)b63)  << 63);
+
+  operator W64() const { return value; }
+};
 
 extern "C" {
 #include <unistd.h>
@@ -553,17 +677,6 @@ inline bool modulo_ranges_intersect(int a0, int a1, int b0, int b1, int size) {
   (bit((W64)x, 19*3) << 19) + \
   (bit((W64)x, 20*3) << 20) + \
   (bit((W64)x, 21*3) << 21)
-
-#define __stringify_1(x) #x
-#define stringify(x) __stringify_1(x)
-
-#define alignto(x) __attribute__ ((aligned (x)))
-#define insection(x) __attribute__ ((section (x)))
-#define packedstruct __attribute__ ((packed))
-
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#define likely(x) (x) 
-#define isconst(x) __builtin_constant_p(x)
 
 #include <superstl.h>
 

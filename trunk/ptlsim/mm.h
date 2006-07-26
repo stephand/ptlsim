@@ -10,7 +10,6 @@
 #define _MM_H_
 
 #include <globals.h>
-#include <ptlhwdef.h>
 
 void* ptl_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
 void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);

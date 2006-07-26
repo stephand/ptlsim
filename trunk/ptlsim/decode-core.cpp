@@ -12,8 +12,21 @@
 
 BasicBlockCache bbcache;
 
-static const bool ENABLE_LOAD_LATENCY_ADJUSTMENT = 0;
+struct BasicBlockChunkListHashtableLinkManager {
+  static inline BasicBlockChunkList& objof(selflistlink* link) {
+    return *(BasicBlockChunkList*)(((byte*)link) - offsetof(BasicBlockChunkList, hashlink));
+  }
 
+  static inline W64& keyof(BasicBlockChunkList& obj) {
+    return obj.mfn;
+  }
+
+  static inline selflistlink& linkof(BasicBlockChunkList& obj) {
+    return obj.hashlink;
+  }
+};
+
+SelfHashtable<W64, BasicBlockChunkList, BasicBlockChunkListHashtableLinkManager, 16384> bbpages;
 CycleTimer translate_timer("translate");
 
 //
@@ -33,8 +46,10 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_x87_fpatan, assist_x87_fxtract, assist_x87_fprem1,
   assist_x87_fld80, assist_x87_fstp80, assist_ldmxcsr, assist_fxsave,
   assist_int, assist_syscall, assist_sysenter, assist_cpuid,
-  assist_invalid_opcode, assist_exec_page_fault, assist_write_segreg,
-  assist_ptlcall,
+  assist_invalid_opcode, assist_exec_page_fault, assist_gp_fault,
+  assist_write_segreg, assist_popf, assist_cld, assist_std,
+  assist_ptlcall, assist_wrmsr, assist_rdmsr, assist_wrcr, assist_rdcr,
+  assist_iret16, assist_iret32, assist_iret64,
 };
 
 const char* assist_names[ASSIST_COUNT] = {
@@ -46,11 +61,13 @@ const char* assist_names[ASSIST_COUNT] = {
   "x87_fpatan", "x87_fxtract", "x87_fprem1",
   "x87_fld80", "x87_fstp80",  "ldmxcsr", "fxsave",
   "int", "syscall", "sysenter", "cpuid",
-  "invalid_opcode", "exec_page_fault", "write_segreg",
-  "ptlcall",
+  "invalid_opcode", "exec_page_fault", "gp_fault",
+  "write_segreg", "popf", "cld", "std",
+  "ptlcall", "wrmsr", "rdmsr", "wrcr", "rdcr",
+  "iret16", "iret32", "iret64",
 };
 
-const char* x86_exception_names[EXCEPTION_x86_count] = {
+const char* x86_exception_names[256] = {
   "divide",
   "debug",
   "nmi",
@@ -71,55 +88,37 @@ const char* x86_exception_names[EXCEPTION_x86_count] = {
   "unaligned",
   "machine check",
   "sse",
+  "int15h", "int16h", "int17h",
+  "int18h", "int19h", "int1Ah", "int1Bh", "int1Ch", "int1Dh", "int1Eh", "int1Fh",
+  "int20h", "int21h", "int22h", "int23h", "int24h", "int25h", "int26h", "int27h",
+  "int28h", "int29h", "int2Ah", "int2Bh", "int2Ch", "int2Dh", "int2Eh", "int2Fh",
+  "int30h", "int31h", "int32h", "int33h", "int34h", "int35h", "int36h", "int37h",
+  "int38h", "int39h", "int3Ah", "int3Bh", "int3Ch", "int3Dh", "int3Eh", "int3Fh",
+  "int40h", "int41h", "int42h", "int43h", "int44h", "int45h", "int46h", "int47h",
+  "int48h", "int49h", "int4Ah", "int4Bh", "int4Ch", "int4Dh", "int4Eh", "int4Fh",
+  "int50h", "int51h", "int52h", "int53h", "int54h", "int55h", "int56h", "int57h",
+  "int58h", "int59h", "int5Ah", "int5Bh", "int5Ch", "int5Dh", "int5Eh", "int5Fh",
+  "int60h", "int61h", "int62h", "int63h", "int64h", "int65h", "int66h", "int67h",
+  "int68h", "int69h", "int6Ah", "int6Bh", "int6Ch", "int6Dh", "int6Eh", "int6Fh",
+  "int70h", "int71h", "int72h", "int73h", "int74h", "int75h", "int76h", "int77h",
+  "int78h", "int79h", "int7Ah", "int7Bh", "int7Ch", "int7Dh", "int7Eh", "int7Fh",
+  "int80h", "int81h", "int82h", "int83h", "int84h", "int85h", "int86h", "int87h",
+  "int88h", "int89h", "int8Ah", "int8Bh", "int8Ch", "int8Dh", "int8Eh", "int8Fh",
+  "int90h", "int91h", "int92h", "int93h", "int94h", "int95h", "int96h", "int97h",
+  "int98h", "int99h", "int9Ah", "int9Bh", "int9Ch", "int9Dh", "int9Eh", "int9Fh",
+  "intA0h", "intA1h", "intA2h", "intA3h", "intA4h", "intA5h", "intA6h", "intA7h",
+  "intA8h", "intA9h", "intAAh", "intABh", "intACh", "intADh", "intAEh", "intAFh",
+  "intB0h", "intB1h", "intB2h", "intB3h", "intB4h", "intB5h", "intB6h", "intB7h",
+  "intB8h", "intB9h", "intBAh", "intBBh", "intBCh", "intBDh", "intBEh", "intBFh",
+  "intC0h", "intC1h", "intC2h", "intC3h", "intC4h", "intC5h", "intC6h", "intC7h",
+  "intC8h", "intC9h", "intCAh", "intCBh", "intCCh", "intCDh", "intCEh", "intCFh",
+  "intD0h", "intD1h", "intD2h", "intD3h", "intD4h", "intD5h", "intD6h", "intD7h",
+  "intD8h", "intD9h", "intDAh", "intDBh", "intDCh", "intDDh", "intDEh", "intDFh",
+  "intE0h", "intE1h", "intE2h", "intE3h", "intE4h", "intE5h", "intE6h", "intE7h",
+  "intE8h", "intE9h", "intEAh", "intEBh", "intECh", "intEDh", "intEEh", "intEFh",
+  "intF0h", "intF1h", "intF2h", "intF3h", "intF4h", "intF5h", "intF6h", "intF7h",
+  "intF8h", "intF9h", "intFAh", "intFBh", "intFCh", "intFDh", "intFEh", "intFFh"
 };
-
-//
-// See page 294 of AMD System Programming Manual for a comprehensive list of exception causes
-//
-int propagate_exception_during_assist(Context& ctx, int exception, W32 errorcode, Waddr virtaddr) {
-  Waddr rip = ctx.commitarf[REG_selfrip];
-
-  stringbuf sb;
-  sb << "Exception ", exception, " (", x86_exception_names[exception], ") during assist @ rip ", (void*)rip, ": error code ";
-  if (exception == EXCEPTION_x86_page_fault) {
-    sb << PageFaultErrorCode(errorcode), " @ virtaddr ", (void*)virtaddr;
-  } else {
-    sb << "0x", hexstring(errorcode, 32);
-  }
-  sb << " (", total_user_insns_committed, " user commits, ", sim_cycle, " cycles)", endl;
-  logfile << sb, flush;
-  cerr << sb, flush;
-
-  byte insnbuf[1024];
-  PageFaultErrorCode insn_pfec;
-  Waddr insn_faultaddr;
-  int valid_byte_count = ctx.copy_from_user(insnbuf, rip, sizeof(insnbuf), insn_pfec, insn_faultaddr);
-
-  sb.reset();
-  sb << "Writing ", valid_byte_count, " bytes from rip ", (void*)rip, " to dumpcode.dat...", endl;
-  logfile << sb, flush;
-  cerr << sb, flush;
-  odstream("dumpcode.dat").write(insnbuf, sizeof(insnbuf));
-
-#ifdef PTLSIM_HYPERVISOR
-  ctx.exception_type = exception;
-
-  // Clear DPL bits for everything but page fault error code format
-  if (exception != EXCEPTION_x86_page_fault) errorcode &= 0xfff8;
-  ctx.error_code = errorcode;
-  if (exception == EXCEPTION_x86_page_fault) ctx.cr2 = virtaddr;
-
-  //++MTY TODO: Switch to kernel mode, build stack frame and vector through trap_ctxt table
-  // ctx.commitarf[REG_rip] = ...;
-  abort();
-#else
-  logfile << "Aborting...", endl, flush;
-  abort();
-#endif
-
-  // Return at new rip if it's recoverable
-  return 0;
-}
 
 W64 assist_histogram[ASSIST_COUNT];
 
@@ -314,25 +313,26 @@ const byte arch_pseudo_reg_to_arch_reg[APR_COUNT] = {
   REG_rip, REG_zero
 };
 
+#define _ 0
 static const byte onebyte_has_modrm[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
-  /* 00 */ 1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0, /* 00 */
-  /* 10 */ 1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0, /* 10 */
-  /* 20 */ 1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0, /* 20 */
-  /* 30 */ 1,1,1,1,0,0,0,0,1,1,1,1,0,0,0,0, /* 30 */
-  /* 40 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 40 */
-  /* 50 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 50 */
-  /* 60 */ 0,0,1,1,0,0,0,0,0,1,0,1,0,0,0,0, /* 60 */
-  /* 70 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 70 */
+  /* 00 */ 1,1,1,1,_,_,_,_,1,1,1,1,_,_,_,_, /* 00 */
+  /* 10 */ 1,1,1,1,_,_,_,_,1,1,1,1,_,_,_,_, /* 10 */
+  /* 20 */ 1,1,1,1,_,_,_,_,1,1,1,1,_,_,_,_, /* 20 */
+  /* 30 */ 1,1,1,1,_,_,_,_,1,1,1,1,_,_,_,_, /* 30 */
+  /* 40 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 40 */
+  /* 50 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 50 */
+  /* 60 */ _,_,1,1,_,_,_,_,_,1,_,1,_,_,_,_, /* 60 */
+  /* 70 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 70 */
   /* 80 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 80 */
-  /* 90 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 90 */
-  /* a0 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* a0 */
-  /* b0 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* b0 */
-  /* c0 */ 1,1,0,0,1,1,1,1,0,0,0,0,0,0,0,0, /* c0 */
-  /* d0 */ 1,1,1,1,0,0,0,0,1,1,1,1,1,1,1,1, /* d0 */
-  /* e0 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* e0 */
-  /* f0 */ 0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,1  /* f0 */
+  /* 90 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 90 */
+  /* a0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* a0 */
+  /* b0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* b0 */
+  /* c0 */ 1,1,_,_,1,1,1,1,_,_,_,_,_,_,_,_, /* c0 */
+  /* d0 */ 1,1,1,1,_,_,_,_,1,1,1,1,1,1,1,1, /* d0 */
+  /* e0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* e0 */
+  /* f0 */ _,_,_,_,_,_,1,1,_,_,_,_,_,_,1,1  /* f0 */
   /*       -------------------------------        */
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
 };
@@ -340,22 +340,22 @@ static const byte onebyte_has_modrm[256] = {
 static const byte twobyte_has_modrm[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
-  /* 00 */ 1,1,1,1,0,0,0,0,0,0,0,0,0,1,0,1, /* 0f */
-  /* 10 */ 1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0, /* 1f */
-  /* 20 */ 1,1,1,1,1,0,1,0,1,1,1,1,1,1,1,1, /* 2f */
-  /* 30 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 3f */
+  /* 00 */ 1,1,1,1,_,_,_,_,_,_,_,_,_,1,_,1, /* 0f */
+  /* 10 */ 1,1,1,1,1,1,1,1,1,_,_,_,_,_,_,_, /* 1f */
+  /* 20 */ 1,1,1,1,1,_,1,_,1,1,1,1,1,1,1,1, /* 2f */
+  /* 30 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 3f */
   /* 40 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 4f */
   /* 50 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 5f */
   /* 60 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 6f */
-  /* 70 */ 1,1,1,1,1,1,1,0,0,0,0,0,1,1,1,1, /* 7f */
-  /* 80 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 8f */
+  /* 70 */ 1,1,1,1,1,1,1,_,_,_,_,_,1,1,1,1, /* 7f */
+  /* 80 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 8f */
   /* 90 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 9f */
-  /* a0 */ 0,0,0,1,1,1,1,1,0,0,0,1,1,1,1,1, /* af */
-  /* b0 */ 1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1, /* bf */
-  /* c0 */ 1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0, /* cf */
+  /* a0 */ _,_,_,1,1,1,1,1,_,_,_,1,1,1,1,1, /* af */
+  /* b0 */ 1,1,1,1,1,1,1,1,_,_,1,1,1,1,1,1, /* bf */
+  /* c0 */ 1,1,1,1,1,1,1,1,_,_,_,_,_,_,_,_, /* cf */
   /* d0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* df */
   /* e0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* ef */
-  /* f0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0  /* ff */
+  /* f0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,_  /* ff */
   /*       -------------------------------        */
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
 };
@@ -363,22 +363,22 @@ static const byte twobyte_has_modrm[256] = {
 static const byte twobyte_uses_SSE_prefix[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
-  /* 00 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 0f */
-  /* 10 */ 1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0, /* 1f */
-  /* 20 */ 0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1, /* 2f */
-  /* 30 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 3f */
-  /* 40 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 4f */
+  /* 00 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 0f */
+  /* 10 */ 1,1,1,1,1,1,1,1,_,_,_,_,_,_,_,_, /* 1f */
+  /* 20 */ _,_,_,_,_,_,_,_,1,1,1,1,1,1,1,1, /* 2f */
+  /* 30 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 3f */
+  /* 40 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 4f */
   /* 50 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 5f */
   /* 60 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 6f */
-  /* 70 */ 1,1,1,1,1,1,1,0,0,0,0,0,1,1,1,1, /* 7f */
-  /* 80 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 8f */
-  /* 90 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 9f */
-  /* a0 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* af */
-  /* b0 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* bf */
-  /* c0 */ 0,0,1,0,1,1,1,0,0,0,0,0,0,0,0,0, /* cf */
+  /* 70 */ 1,1,1,1,1,1,1,_,_,_,_,_,1,1,1,1, /* 7f */
+  /* 80 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 8f */
+  /* 90 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 9f */
+  /* a0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* af */
+  /* b0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* bf */
+  /* c0 */ _,_,1,_,1,1,1,_,_,_,_,_,_,_,_,_, /* cf */
   /* d0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* df */
   /* e0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* ef */
-  /* f0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0  /* ff */
+  /* f0 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,_  /* ff */
   /*       -------------------------------        */
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
 };
@@ -389,7 +389,6 @@ static const byte twobyte_uses_SSE_prefix[256] = {
 // The expanded x86 opcodes are from 0x000 to 0x1ff,
 // i.e. normal ones and those with the 0x0f prefix:
 //
-#define _ 0
 static const byte insn_is_simple[512] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
@@ -408,7 +407,7 @@ static const byte insn_is_simple[512] = {
   /* c0 */ 1,1,1,1,_,_,1,1,1,1,_,_,_,_,_,_, /* cf */
   /* d0 */ 1,1,1,1,_,_,_,_,_,_,_,_,_,_,_,_, /* df */
   /* e0 */ _,_,_,_,_,_,_,_,1,1,_,1,_,_,_,_, /* ef */
-  /* f0 */ _,_,_,_,_,1,1,1,1,1,_,_,1,1,1,1, /* ff */
+  /* f0 */ _,_,_,_,_,1,1,1,1,1,_,_,0,0,1,1, /* ff */
   /*100 */ _,_,_,_,_,_,_,_,_,_,_,_,_,1,_,_, /*10f */
   /*110 */ _,_,_,_,_,_,_,_,1,_,_,_,_,_,_,_, /*11f */
   /*120 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /*12f */
@@ -431,6 +430,27 @@ static const byte insn_is_simple[512] = {
 #undef _
 
 static int transop_histogram[MAX_TRANSOPS_PER_USER_INSN+1];
+
+TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
+  bb.reset(rvp);
+  rip = rvp;
+  ripstart = rvp;
+  use64 = rvp.use64;
+  kernel = rvp.kernel;
+  dirflag = rvp.df;
+  byteoffset = 0;
+
+  transbufcount = 0;
+  pfec = 0;
+  faultaddr = 0;
+  prefixes = 0;
+  rex = 0;
+  modrm = 0;
+  user_insn_count = 0;
+  last_flags_update_was_atomic = 1;
+  invalid = 0;
+  end_of_block = false;
+}
 
 void TraceDecoder::put(const TransOp& transop) {
   assert(transbufcount < MAX_TRANSOPS_PER_USER_INSN);
@@ -456,27 +476,15 @@ void TraceDecoder::lastop() {
   int bytes = (rip - ripstart);
   assert(bytes <= 15);
 
-  /*
-  if (bytes > valid_byte_count) {
-    //
-    // Instruction spilled over onto an invalid page:
-    // end the BB here, as if it were too long.
-    //
-    if (bb.count > 0) bb.transops[bb.count-1].eom = 0;
-
-    assert(false);
-  }
-  */
-
   TransOp& first = transbuf[0];
   TransOp& last = transbuf[transbufcount-1];
   last.eom = 1;
 
   foreach (i, transbufcount) {
     TransOp& transop = transbuf[i];
-    if (bb.count >= MAXBBLEN) {
-      logfile << "ERROR: Too many transops (", bb.count, ") in basic block (max ", MAXBBLEN, " allowed)", endl, flush;
-      assert(bb.count < MAXBBLEN);
+    if (bb.count >= MAX_BB_UOPS) {
+      logfile << "ERROR: Too many transops (", bb.count, ") in basic block (max ", MAX_BB_UOPS, " allowed)", endl, flush;
+      assert(bb.count < MAX_BB_UOPS);
     }
 
     bool ld = isload(transop.opcode);
@@ -497,6 +505,8 @@ void TraceDecoder::lastop() {
   }
 
   bb.user_insn_count++;
+
+  bb.bytes += bytes;
 
   transbufcount = 0;
 }
@@ -526,7 +536,7 @@ bool DecodedOperand::gform_ext(TraceDecoder& state, int bytemode, int regfield, 
   case w_mode: this->reg.reg = reg16_to_uniform_reg[regfield + add]; break;
   case d_mode: this->reg.reg = reg32_to_uniform_reg[regfield + add]; break;
   case q_mode: this->reg.reg = reg64_to_uniform_reg[regfield + add]; break;
-  case m_mode: this->reg.reg = (ctx.use64) ? reg64_to_uniform_reg[regfield + add] : reg32_to_uniform_reg[regfield + add]; break;
+  case m_mode: this->reg.reg = (state.use64) ? reg64_to_uniform_reg[regfield + add] : reg32_to_uniform_reg[regfield + add]; break;
   case v_mode: case dq_mode: 
     this->reg.reg = (state.rex.mode64 | (def64 & (!state.opsize_prefix))) ? reg64_to_uniform_reg[regfield + add] : 
       ((!state.opsize_prefix) | (bytemode == dq_mode)) ? reg32_to_uniform_reg[regfield + add] :
@@ -598,8 +608,6 @@ bool DecodedOperand::iform64(TraceDecoder& state, int bytemode) {
 }
 
 bool DecodedOperand::eform(TraceDecoder& state, int bytemode) {
-  bool DEBUG = analyze_in_detail();
-
   if (state.modrm.mod == 3) {
     return gform_ext(state, bytemode, state.modrm.rm, false, true);
   }
@@ -639,7 +647,7 @@ bool DecodedOperand::eform(TraceDecoder& state, int bytemode) {
     {-1, -1, -1, -1, -1, -1, -1, -1}, // mod = 11: not possible since this is g-form
   };
 
-  mem.basereg = (ctx.use64)
+  mem.basereg = (state.use64)
     ? mod_and_rexextbase_and_rm_to_basereg_x86_64[state.modrm.mod][state.rex.extbase][state.modrm.rm]
     : mod_and_rm_to_basereg_x86[state.modrm.mod][state.modrm.rm];
 
@@ -704,7 +712,7 @@ bool DecodedOperand::eform(TraceDecoder& state, int bytemode) {
   case w_mode: mem.size = 1; break;
   case d_mode: mem.size = 2; break;
   case q_mode: mem.size = 3; break;
-  case m_mode: mem.size = (ctx.use64) ? 3 : 2; break;
+  case m_mode: mem.size = (state.use64) ? 3 : 2; break;
   case v_mode: case dq_mode: mem.size = (state.rex.mode64) ? 3 : ((!state.opsize_prefix) | (bytemode == dq_mode)) ? 2 : 1; break; // See table 1.2 (p35) of AMD64 ISA manual
   case x_mode: mem.size = 3; break;
   default: return false;
@@ -748,15 +756,6 @@ void TraceDecoder::immediate(int rdreg, int sizeshift, W64s imm, bool issigned) 
 
 int TraceDecoder::bias_by_segreg(int basereg) {
   if (prefixes & (PFX_CS|PFX_DS|PFX_ES|PFX_FS|PFX_GS|PFX_SS)) {
-#ifdef PTLSIM_HYPERVISOR
-    //++MTY TODO SMP: Get this dynamically from some context base pointer that's part of the microcode registers
-    this << TransOp(OP_mov, REG_temp6, REG_zero, REG_imm, REG_zero, 3, (W64)(Waddr)&contextof(0));
-#else
-    this << TransOp(OP_mov, REG_temp6, REG_zero, REG_imm, REG_zero, 3, (W64)(Waddr)&ctx);
-#endif
-
-    Context& refctx = *nullptr<Context>();
-
     int segid = 
       (prefixes & PFX_FS) ? SEGID_FS : 
       (prefixes & PFX_GS) ? SEGID_GS : 
@@ -767,11 +766,9 @@ int TraceDecoder::bias_by_segreg(int basereg) {
 
     assert(segid >= 0);
 
-    W64* varaddr = &refctx.seg[segid].base;
+    int varoffs = offsetof(Context, seg[segid].base);
 
-    if (logable(1)) logfile << "rip ", (void*)ripstart, ": bias by segid ", segid, ": base at ctx offset ", varaddr, " + ctx at ", &ctx, endl;
-
-    TransOp ldp(OP_ld, REG_temp6, REG_temp6, REG_imm, REG_zero, 3, (W64)(Waddr)varaddr); ldp.internal = 1; this << ldp;
+    TransOp ldp(OP_ld, REG_temp6, REG_ctx, REG_imm, REG_zero, 3, varoffs); ldp.internal = 1; this << ldp;
     this << TransOp(OP_add, REG_temp6, REG_temp6, basereg, REG_zero, 3);
     return REG_temp6;
   }
@@ -779,8 +776,20 @@ int TraceDecoder::bias_by_segreg(int basereg) {
   return basereg;
 }
 
-void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel) {
+void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool force_seg_bias) {
+  //
+  // In the address generation form used by internally generated
+  // uops, we need the full virtual address, including the segment base
+  // bias. However, technically LEA is not supposed to add the segment
+  // base, even if prefixes implying a base are applied.
+  //
+  // Therefore, any internal uses that need the full virtual address
+  // can use the special hint force_seg_bias to generate it,
+  // but not actually include any load or store uops.
+  //
   bool memop = isload(opcode) | isstore(opcode) | (opcode == OP_ld_pre);
+  force_seg_bias |= memop;
+
   int imm_bits = (memop) ? 32 : 64;
 
   int basereg = arch_pseudo_reg_to_arch_reg[memref.mem.basereg];
@@ -816,7 +825,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     // [rip + imm32]: index always is zero and scale is 1
     // This mode is only possible in x86-64 code
     basereg = REG_zero;
-    if (memop) basereg = bias_by_segreg(basereg);
+    if (force_seg_bias) basereg = bias_by_segreg(basereg);
 
     int tempreg = (memop) ? REG_temp8 : destreg;
 
@@ -830,7 +839,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     }
   } else if (indexreg == REG_zero) {
     // [ra + imm32] or [ra]
-    if (memop) basereg = bias_by_segreg(basereg);
+    if (force_seg_bias) basereg = bias_by_segreg(basereg);
     if (imm_is_not_encodable) {
       this << TransOp(OP_add, REG_temp8, basereg, REG_imm, REG_zero, 3, offset);
       basereg = REG_temp8;
@@ -843,7 +852,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     this << ldst;
   } else if (offset == 0) {
     // [ra + rb*scale] or [rb*scale]
-    if (memop) basereg = bias_by_segreg(basereg);
+    if (force_seg_bias) basereg = bias_by_segreg(basereg);
 
     int tempreg = (memop) ? REG_temp8 : destreg;
 
@@ -864,7 +873,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     }
   } else {
     // [ra + imm32 + rb*scale]
-    if (memop) basereg = bias_by_segreg(basereg);
+    if (force_seg_bias) basereg = bias_by_segreg(basereg);
 
     if (imm_is_not_encodable) {
       this << TransOp(OP_add, REG_temp8, basereg, REG_imm, REG_zero, 3, offset);
@@ -1124,7 +1133,7 @@ void TraceDecoder::decode_prefixes() {
 
   for (;;) {
     byte b = insnbytes[byteoffset];
-    W32 prefix = (ctx.use64) ? prefix_map_x86_64[b] : prefix_map_x86[b];
+    W32 prefix = (use64) ? prefix_map_x86_64[b] : prefix_map_x86[b];
     if (!prefix) break;
     if (rex) {
       // REX is ignored when followed by another prefix:
@@ -1138,26 +1147,85 @@ void TraceDecoder::decode_prefixes() {
 }
 
 void print_invalid_insns(int op, const byte* ripstart, const byte* rip, int valid_byte_count, const PageFaultErrorCode& pfec, Waddr faultaddr) {
-  //logfile << "translate: invalid opcode or decode failure at iteration ", iterations, ": ", (void*)(Waddr)op, " commits ", total_user_insns_committed, " (at ripstart ", ripstart, ", rip ", rip, "); may be speculative", endl, flush;
   if (pfec) {
-    logfile << "translate: page fault at iteration ", iterations, ", ", total_user_insns_committed, " commits: ",
-      "ripstart ", ripstart, ", rip ", rip, ": required ", (rip - ripstart), " bytes but only fetched ", valid_byte_count, " bytes; ",
+    if (logable(1)) logfile << "translate: page fault at iteration ", iterations, ", ", total_user_insns_committed, " commits: ",
+      "ripstart ", ripstart, ", rip ", rip, ": required ", (rip - ripstart), " more bytes but only fetched ", valid_byte_count, " bytes; ",
       "page fault error code: ", pfec, endl, flush;
   } else {
-    logfile << "translate: invalid opcode at iteration ", iterations, ": ", (void*)(Waddr)op, " commits ", total_user_insns_committed, " (at ripstart ", ripstart, ", rip ", rip, "); may be speculative", endl, flush;
-    if (dumpcode_filename) {
-      odstream os(dumpcode_filename);
-      os.write(ripstart, 256);
+    if (logable(1)) logfile << "translate: invalid opcode at iteration ", iterations, ": ", (void*)(Waddr)op, " commits ", total_user_insns_committed, " (at ripstart ", ripstart, ", rip ", rip, "); may be speculative", endl, flush;
+    if (!config.dumpcode_filename.empty()) {
+      byte insnbuf[256];
+      PageFaultErrorCode copypfec;
+      int valid_byte_count = contextof(0).copy_from_user(insnbuf, (Waddr)rip, sizeof(insnbuf), copypfec, faultaddr);
+      odstream os(config.dumpcode_filename);
+      os.write(insnbuf, sizeof(insnbuf));
       os.close();
     }
   }
 }
 
-// Maximum number of bytes of x86 insns in any basic block (not counting 15 bytes for possible last max length insn)
-#define MAX_USER_INSN_BB_BYTES (32760-15)    // (must fit in W16)
-
 void assist_invalid_opcode(Context& ctx) {
-  propagate_exception_during_assist(ctx, EXCEPTION_x86_invalid_opcode, 0);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+static const bool log_code_page_ops = 0;
+
+void BasicBlockCache::invalidate(BasicBlock* bb) {
+  // Fixup phys page SMC lists
+
+  BasicBlockChunkList* pagelist;
+  pagelist = bbpages.get(bb->rip.mfnlo);
+  if (logable(3) | log_code_page_ops) logfile << "Remove bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) from low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
+  assert(pagelist);
+  pagelist->remove(bb->mfnlo_loc);
+
+  int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes-1)) >> 12);
+  if (page_crossing) {
+    pagelist = bbpages.get(bb->rip.mfnhi);
+    if (logable(3) | log_code_page_ops) logfile << "Remove bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) from high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
+    assert(pagelist);
+    pagelist->remove(bb->mfnhi_loc);
+  }
+
+  remove(bb);
+  delete bb;
+}
+
+void BasicBlockCache::invalidate(const RIPVirtPhys& rvp) {
+  BasicBlock* bb = get(rvp);
+  if (!bb) return;
+  invalidate(bb);
+}
+
+int BasicBlockCache::invalidate_page(Waddr mfn) {
+  BasicBlockChunkList* pagelist = bbpages.get(mfn);
+
+  if (logable(3) | log_code_page_ops) logfile << "Invalidate page mfn ", mfn, ": pagelist ", pagelist, " has ", (pagelist ? pagelist->count() : 0), " entries", endl;
+
+  if (!pagelist) return 0;
+
+  shortptr<BasicBlock>* bblist = (shortptr<BasicBlock>*)ptl_alloc_private_pages(pagelist->count() * sizeof(shortptr<BasicBlock>));
+
+  int n = pagelist->getentries(bblist, pagelist->count());
+  assert(n == pagelist->count());
+
+  foreach (i, n) {
+    BasicBlock* bb = bblist[i];
+    if (logable(3) | log_code_page_ops) logfile << "Invalidate bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes)", endl;
+    bbcache.invalidate(bb);
+  }
+
+  ptl_free_private_pages(bblist, n * sizeof(shortptr<BasicBlock>));
+  pagelist->clear();
+  bbpages.remove(pagelist);
+
+  //smc_settrans(mfn);
+  smc_cleardirty(mfn);
+
+  delete pagelist;
+
+  return n;
 }
 
 void assist_exec_page_fault(Context& ctx) {
@@ -1173,26 +1241,36 @@ void assist_exec_page_fault(Context& ctx) {
   PageFaultErrorCode pfec = ctx.commitarf[REG_ar2];
 
 #ifdef PTLSIM_HYPERVISOR
-  LongModeLevel1PTE pte = ctx.virt_to_pte(faultaddr);
+  Level1PTE pte = ctx.virt_to_pte(faultaddr);
   bool page_now_valid = (pte.p & (!pte.nx) & ((!ctx.kernel_mode) ? pte.us : 1));
 #else
   bool page_now_valid = asp.fastcheck((byte*)faultaddr, asp.execmap);
 #endif
   if (page_now_valid) {
-    logfile << "Spurious PageFaultOnExec detected at fault rip ", (void*)(Waddr)ctx.commitarf[REG_selfrip], " with faultaddr ", (void*)faultaddr, " @ ", total_user_insns_committed, 
-    " user commits (", sim_cycle, " cycles): genuine user exception (PageFaultOnExec); aborting";
-    bbcache.remove(ctx.commitarf[REG_selfrip]);
-    bbcache.remove(faultaddr);
+    if (logable(3)) {
+      logfile << "Spurious PageFaultOnExec detected at fault rip ",
+        (void*)(Waddr)ctx.commitarf[REG_selfrip], " with faultaddr ",
+        (void*)faultaddr, " @ ", total_user_insns_committed, 
+        " user commits (", sim_cycle, " cycles)";
+    }
+    bbcache.invalidate(RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx));
+    bbcache.invalidate(RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx));
     ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
     return;
   }
 
-  propagate_exception_during_assist(ctx, EXCEPTION_x86_page_fault, pfec, faultaddr);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
+}
+
+void assist_gp_fault(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault, ctx.commitarf[REG_ar1]);
 }
 
 void TraceDecoder::invalidate() {
-  if ((ripstart - rip) > valid_byte_count) {
-    if (logable(1)) {
+  if ((rip - bb.rip) > valid_byte_count) {
+    if (logable(3)) {
       logfile << "Translation crosses into invalid page: ripstart ", (void*)ripstart, ", rip ", (void*)rip,
         ", faultaddr ", faultaddr, "; expected ", (rip - ripstart), " bytes but only got ", valid_byte_count, 
         " (next page ", (void*)(Waddr)ceil(ripstart, 4096), ")", endl;
@@ -1217,29 +1295,30 @@ void TraceDecoder::invalidate() {
 // extends onto an invalid page. Return the number
 // of valid bytes, if any.
 //
+// We limit BBs to at most MAX_BB_BYTES; this ensures
+// we can do a bulk copy of the potentially unaligned
+// instruction bytes into insnbytes once at the start,
+// rather than having to constantly do checks.
+//
 
-int TraceDecoder::fillbuf(Waddr rip) {
+int TraceDecoder::fillbuf(Context& ctx) {
   byteoffset = 0;
-  valid_byte_count = vcpuctx->copy_from_user(insnbytes, rip, 15, pfec, faultaddr, true);
-  //if (logable(1)) logfile << "Decoding rip ", (void*)rip, ": got ", valid_byte_count, " bytes", endl;
+  faultaddr = 0;
+  pfec = 0;
+  invalid = 0;
+  valid_byte_count = ctx.copy_from_user(insnbytes, bb.rip, MAX_BB_BYTES, pfec, faultaddr, true);
   return valid_byte_count;
 }
 
+//
+// Decode and translate one x86 instruction
+//
 bool TraceDecoder::translate() {
-  bool DEBUG = analyze_in_detail();
-
   opsize_prefix = 0;
   addrsize_prefix = 0;
   bool uses_sse = 0;
 
-  invalid = 0;
-  pfec = 0;
-
   ripstart = rip;
-
-  fillbuf(rip);
-
-  //logfile << "rip ", rip, ":", endl;
   decode_prefixes();
 
 #if 0
@@ -1250,9 +1329,7 @@ bool TraceDecoder::translate() {
   logfile << endl;
 #endif
 
-  if (prefixes & PFX_ADDR) {
-    addrsize_prefix = 1;
-  }
+  if (prefixes & PFX_ADDR) addrsize_prefix = 1;
 
   op = fetch1();
   bool need_modrm = onebyte_has_modrm[op];
@@ -1275,20 +1352,17 @@ bool TraceDecoder::translate() {
   }
 
   // SSE uses 0x66 prefix for an opcode extension:
-  if (!uses_sse && (prefixes & PFX_DATA)) {
-    opsize_prefix = 1;
-  }
+  if (!uses_sse && (prefixes & PFX_DATA)) opsize_prefix = 1;
 
   modrm = ModRMByte((need_modrm) ? fetch1() : 0);
 
   if (inrange(op, 0xd8, 0xdf)) {
-    //logfile << "translate x87 FP ops at rip ", (void*)ripstart, " iter ", iterations, endl;
     op = 0x600 | (lowbits(op, 3) << 4) | modrm.reg;
   }
 
   bool rc;
 
-  //logfile << "Decoding op 0x", hexstring(op, 12), " (class ", (op >> 8), ") @ ", (void*)ripstart, endl, flush;
+  // logfile << "Decoding op 0x", hexstring(op, 12), " (class ", (op >> 8), ") @ ", (void*)ripstart, endl, flush;
 
   switch (op >> 8) {
   case 0:
@@ -1301,8 +1375,6 @@ bool TraceDecoder::translate() {
     decoder_type_complex += iscomplex;
 
     if (iscomplex) rc = decode_complex();
-
-    //logfile << "rc = ", rc, "; invalid? ", invalid, endl;
 
     break;
   }
@@ -1333,9 +1405,10 @@ bool TraceDecoder::translate() {
     return false;
   } else {
     // Block did not end with a branch: do we have more room for another x86 insn?
-    if (((MAXBBLEN - bb.count) < (MAX_TRANSOPS_PER_USER_INSN*2))
-        || ((rip - ripstart) >= MAX_USER_INSN_BB_BYTES)) {
-      if (DEBUG) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
+    if (((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN))
+        || ((rip - bb.rip) >= (MAX_BB_BYTES-15))
+        || (user_insn_count >= MAX_BB_X86_INSNS)) {
+      if (logable(3)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
       // bb.rip_taken and bb.rip_not_taken were already filled out for the last instruction.
       if (!last_flags_update_was_atomic)
         this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
@@ -1364,65 +1437,81 @@ ostream& printflags(ostream& os, W64 flags) {
   return os;
 }
 
-BasicBlock* translate_one_basic_block(void* rip) {
-  bool DEBUG = analyze_in_detail();
+BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
+  RIPVirtPhys rvp(rip);
+  rvp.update(ctx);
 
-  BasicBlock** bbp = bbcache((Waddr)rip);
-  if (bbp) return *bbp;
+  BasicBlock* bb = get(rvp);
+  if (bb) return bb;
 
-  if (DEBUG) logfile << "Translating ", (void*)rip, " at ", total_user_insns_committed, " commits", endl, flush;
+  if (smc_isdirty(rvp.mfnlo))
+    invalidate_page(rvp.mfnlo);
+
+  if (smc_isdirty(rvp.mfnhi))
+    invalidate_page(rvp.mfnhi);
+
+  if (logable(3) | log_code_page_ops) logfile << "Translating ", rvp, " at ", total_user_insns_committed, " commits", endl, flush;
 
   translate_timer.start();
 
-  TraceDecoder trans;
-#ifdef PTLSIM_HYPERVISOR
-  trans.vcpuctx = &contextof(0);
-#else
-  trans.vcpuctx = &ctx;
-#endif
-  trans.reset((Waddr)rip);
+  TraceDecoder trans(rvp);
+  trans.fillbuf(ctx);
 
   for (;;) {
     //if (DEBUG) logfile << "rip ", (void*)trans.rip, ", relrip = ", (void*)(trans.rip - trans.bb.rip), endl, flush;
     if (!trans.translate()) break;
   }
 
-  BasicBlock* bb = trans.bb.clone();
+  bb = trans.bb.clone();
 
-  if (DEBUG) {
-    logfile << "=====================================================================", endl;
-    logfile << *bb, endl;
-    logfile << "End of basic block: rip ", (void*)(Waddr)trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;
+  add(bb);
+
+  BasicBlockChunkList* pagelist;
+
+  //smc_settrans(bb->rip.mfnlo);
+  smc_cleardirty(bb->rip.mfnlo);
+  pagelist = bbpages.get(bb->rip.mfnlo);
+  if (!pagelist) {
+    pagelist = new BasicBlockChunkList(bb->rip.mfnlo);
+    bbpages.add(pagelist);
   }
 
-  bbcache.add((Waddr)rip, bb);
+  pagelist->add(bb, bb->mfnlo_loc);
+  if (logable(3) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
 
-#if 0
-  // For debugging:
-  bbp = bbcache((Waddr)rip);
-  assert(bbp);
-  assert((*bbp)->rip == (Waddr)rip);
-#endif
+  int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes-1)) >> 12);
+
+  if (page_crossing) {
+    smc_cleardirty(bb->rip.mfnhi);
+    pagelist = bbpages.get(bb->rip.mfnhi);
+    if (!pagelist) {
+      pagelist = new BasicBlockChunkList(bb->rip.mfnhi);
+      bbpages.add(pagelist);
+    }
+    pagelist->add(bb, bb->mfnhi_loc);
+    if (logable(3) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
+  }
+
+  if (logable(3)) {
+    logfile << "=====================================================================", endl;
+    logfile << *bb, endl;
+    logfile << "End of basic block: rip ", trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;
+  }
 
   translate_timer.stop();
   return bb;
 }
 
-BasicBlock* translate_basic_block(void* rip) {
-  BasicBlock* root = translate_one_basic_block(rip);
-
-  return root;
-}
-
 ostream& BasicBlockCache::print(ostream& os) const {
-  dynarray<KeyValuePair<W64, BasicBlock*> >& bblist = getentries();
+  dynarray<BasicBlock*> bblist;
+  getentries(bblist);
 
   foreach (i, bblist.length) {
-    BasicBlock& bb = *bblist[i].value;
+    BasicBlock& bb = *bblist[i];
     double percent_of_total_uops = ((double)(bb.hitcount * bb.tagcount) / (double)total_uops_committed);
     double percent_of_total_bbs = ((double)(bb.hitcount) / (double)total_basic_blocks_committed);
 
-    os << "  ", (void*)(Waddr)bb.rip, ": ", 
+    os << "  ", bb.rip, ": ", 
       intstring(bb.tagcount, 4), "t ", intstring(bb.memcount - bb.storecount, 3), "ld ",
       intstring(bb.storecount, 3), "st ", intstring(bb.user_insn_count, 3), "u ",
       intstring(bb.hitcount, 10), "h ", intstring(bb.predcount, 10), "pr ",

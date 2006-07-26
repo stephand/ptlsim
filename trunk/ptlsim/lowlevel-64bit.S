@@ -37,6 +37,7 @@ ptlsim_preinit_entry:
   #
 
   fxsave x87state
+
   mov   word ptr [saved_cs],%cs
   mov   word ptr [saved_ss],%ss
   mov   word ptr [saved_ds],%ds
@@ -169,6 +170,8 @@ switch_to_native_restore_context_lowlevel:
   # %rdi = pointer to state to restore
   # %rsi = set if switching from 64-bit to 32-bit mode
 
+  fxrstor  x87state
+
   mov      %rcx,offset switch_to_native_restore_context_64_to_64
   mov      %rdx,offset switch_to_native_restore_context_64_to_32
   test     %rsi,1 # Is user thread 64-bit?
@@ -199,8 +202,6 @@ switch_to_native_restore_context_lowlevel:
   mov      %r13,[%rdi + 8*REG_rax + 8*13]
   mov      %r14,[%rdi + 8*REG_rax + 8*14]
   mov      %r15,[%rdi + 8*REG_rax + 8*15]
-
-  fxrstor  x87state
 
   mov      %fs,word ptr [saved_fs]
   mov      %gs,word ptr [saved_gs]

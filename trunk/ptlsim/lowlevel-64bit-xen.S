@@ -28,7 +28,7 @@ hypercall_page:
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
   # %rdi already points to PTLsimMonitorInfo struct
-  call ptlsim_preinit
+  call main
   int3
 
 .global get_fs
@@ -242,32 +242,6 @@ error_call_handler:
 	movq $-1,ORIG_RAX(%rsp)
 	call *%rax
 
-.macro zeroentry sym
-#	INTR_FRAME
-    movq (%rsp),%rcx
-    movq 8(%rsp),%r11
-    addq $0x10,%rsp /* skip rcx and r11 */
-	pushq $0	/* push error code/oldrax */ 
-#	CFI_ADJUST_CFA_OFFSET 8
-	pushq %rax	/* push real oldrax to the rdi slot */ 
-#	CFI_ADJUST_CFA_OFFSET 8
-	leaq  \sym(%rip),%rax
-	jmp error_entry
-#	CFI_ENDPROC
-.endm	
-
-.macro errorentry sym
-#	XCPT_FRAME
-        movq (%rsp),%rcx
-        movq 8(%rsp),%r11
-        addq $0x10,%rsp /* rsp points to the error code */
-	pushq %rax
-#	CFI_ADJUST_CFA_OFFSET 8
-	leaq  \sym(%rip),%rax
-	jmp error_entry
-#	CFI_ENDPROC
-.endm
-
 #define PTLSIM_VIRT_BASE 0x0 // base 0 (so all 32-bit offsets fit)
 #define PHYS_VIRT_BASE 0x10000000000 // (1 << 40), PML4 entry 2
 
@@ -296,7 +270,37 @@ error_call_handler:
                 				XEN_LOCKED_UNBLOCK_EVENTS(reg)	; \
     			            	XEN_PUT_VCPU_INFO(reg)
 
+error_exit:		
+	RESTORE_REST
+/*	cli */
+	XEN_BLOCK_EVENTS(%rsi)		
+	jmp retint_kernel
 
+.macro zeroentry sym
+#	INTR_FRAME
+    movq (%rsp),%rcx
+    movq 8(%rsp),%r11
+    addq $0x10,%rsp /* skip rcx and r11 */
+	pushq $0	/* push error code/oldrax */ 
+#	CFI_ADJUST_CFA_OFFSET 8
+	pushq %rax	/* push real oldrax to the rdi slot */ 
+#	CFI_ADJUST_CFA_OFFSET 8
+	leaq  \sym(%rip),%rax
+	jmp error_entry
+#	CFI_ENDPROC
+.endm	
+
+.macro errorentry sym
+#	XCPT_FRAME
+        movq (%rsp),%rcx
+        movq 8(%rsp),%r11
+        addq $0x10,%rsp /* rsp points to the error code */
+	pushq %rax
+#	CFI_ADJUST_CFA_OFFSET 8
+	leaq  \sym(%rip),%rax
+	jmp error_entry
+#	CFI_ENDPROC
+.endm
 
 ENTRY(xen_event_callback_entry)
     zeroentry hypervisor_callback2
@@ -304,13 +308,9 @@ ENTRY(xen_event_callback_entry)
 ENTRY(hypervisor_callback2)
         movq %rdi, %rsp 
 11:
-#11:     movq %gs:8,%rax
-#        incl %gs:0
-#        cmovzq %rax,%rsp         # in PTLsim, we keep the old %rsp since there is only one address space
         pushq %rdi
         call xen_event_callback 
         popq %rsp
-#       decl %gs:0
         jmp error_exit
 
 #        ALIGN
@@ -342,20 +342,10 @@ retint_restore_args:
   ##	jnz restore_all_enable_events	#        != 0 => enable event delivery
   jmp restore_all_enable_events       # force interrupts to be enabled at all times
 	XEN_PUT_VCPU_INFO(%rsi)
-  #++MTY: added this
 	#movb $0,evtchn_upcall_mask(%rsi)
 		
 	RESTORE_ARGS 0,8,0
 	HYPERVISOR_IRET 0
-
-
-
-error_exit:		
-	RESTORE_REST
-/*	cli */
-	XEN_BLOCK_EVENTS(%rsi)		
-	jmp retint_kernel
-
 
 
 ENTRY(failsafe_callback)
@@ -363,5 +353,66 @@ ENTRY(failsafe_callback)
         popq  %r11
         iretq
 
+ENTRY(coprocessor_error)
+        zeroentry do_coprocessor_error
+
+ENTRY(simd_coprocessor_error)
+        zeroentry do_simd_coprocessor_error
+
+ENTRY(device_not_available)
+        zeroentry do_device_not_available
+
+
+ENTRY(debug)
+#       INTR_FRAME
+#       CFI_ADJUST_CFA_OFFSET 8 */
+        zeroentry do_debug
+#       CFI_ENDPROC
+
+ENTRY(int3)
+#       INTR_FRAME
+#       CFI_ADJUST_CFA_OFFSET 8 */
+        zeroentry do_int3
+#       CFI_ENDPROC
+
+ENTRY(overflow)
+        zeroentry do_overflow
+
+ENTRY(bounds)
+        zeroentry do_bounds
+    
+ENTRY(invalid_op)
+        zeroentry do_invalid_op
+
+
+ENTRY(coprocessor_segment_overrun)
+        zeroentry do_coprocessor_segment_overrun
+
+ENTRY(invalid_tss)
+        errorentry do_invalid_tss
+
+ENTRY(segment_not_present)
+        errorentry do_segment_not_present
+
+/* runs on exception stack */
+ENTRY(stack_segment)
+#       XCPT_FRAME
+        errorentry do_stack_segment
+#       CFI_ENDPROC
+                    
+ENTRY(general_protection)
+        errorentry do_general_protection
+
+ENTRY(alignment_check)
+        errorentry do_alignment_check
+
+ENTRY(divide_error)
+        zeroentry do_divide_error
+
+ENTRY(spurious_interrupt_bug)
+        zeroentry do_spurious_interrupt_bug
+            
+ENTRY(page_fault)
+        errorentry do_page_fault
 
 .intel_syntax

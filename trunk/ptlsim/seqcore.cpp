@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -22,21 +22,42 @@
 
 #undef logable
 #ifdef ENABLE_LOGGING
-#define logable(level) (loglevel >= level)
+#define logable(level) (config.loglevel >= level)
 #else
 #define logable(level) (0)
 #endif
 
-extern W64 total_uops_committed;
-extern W64 total_user_insns_committed;
-extern W64 sim_cycle;
+static const byte archreg_remap_table[TRANSREG_COUNT] = {
+  REG_rax,  REG_rcx,  REG_rdx,  REG_rbx,  REG_rsp,  REG_rbp,  REG_rsi,  REG_rdi,
+  REG_r8,  REG_r9,  REG_r10,  REG_r11,  REG_r12,  REG_r13,  REG_r14,  REG_r15,
 
-namespace SequentialCore {
+  REG_xmml0,  REG_xmmh0,  REG_xmml1,  REG_xmmh1,  REG_xmml2,  REG_xmmh2,  REG_xmml3,  REG_xmmh3,
+  REG_xmml4,  REG_xmmh4,  REG_xmml5,  REG_xmmh5,  REG_xmml6,  REG_xmmh6,  REG_xmml7,  REG_xmmh7,
 
-  BasicBlock* current_basic_block = null;
-  Waddr current_basic_block_rip = 0;
-  int current_basic_block_transop_index = 0;
-  int bytes_in_current_insn = 0;
+  REG_xmml8,  REG_xmmh8,  REG_xmml9,  REG_xmmh9,  REG_xmml10,  REG_xmmh10,  REG_xmml11,  REG_xmmh11,
+  REG_xmml12,  REG_xmmh12,  REG_xmml13,  REG_xmmh13,  REG_xmml14,  REG_xmmh14,  REG_xmml15,  REG_xmmh15,
+
+  REG_fptos,  REG_fpsw,  REG_fptags,  REG_fpstack,  REG_tr4,  REG_tr5,  REG_tr6, REG_ctx,
+
+  REG_rip,  REG_flags,  REG_iflags, REG_selfrip, REG_nextrip, REG_ar1, REG_ar2, REG_zero,
+
+  REG_temp0,  REG_temp1,  REG_temp2,  REG_temp3,  REG_temp4,  REG_temp5,  REG_temp6,  REG_temp7,
+
+  // Notice how these (REG_zf, REG_cf, REG_of) are all mapped to REG_flags in an in-order processor:
+  REG_flags,  REG_flags,  REG_flags,  REG_imm,  REG_mem,  REG_temp8,  REG_temp9,  REG_temp10,
+};
+
+struct SequentialCore {
+  SequentialCore(): ctx(contextof(0)) { }
+
+  Context& ctx;
+
+  SequentialCore(Context& ctx_): ctx(ctx_) { }
+
+  BasicBlock* current_basic_block;
+  Waddr current_basic_block_rip;
+  int current_basic_block_transop_index;
+  int bytes_in_current_insn;
   int current_uop_in_macro_op;
   W64 current_uuid;
 
@@ -54,7 +75,7 @@ namespace SequentialCore {
   // Make these local to the sequential core namespace
   // to avoid confusing the other core models:
   //
-  W64 last_stats_captured_at_cycle = 0;
+  W64 last_stats_captured_at_cycle;
 
   CycleTimer ctseq;
   CycleTimer ctfetch;
@@ -106,59 +127,43 @@ namespace SequentialCore {
     ISSUE_EXCEPTION = -1,
   };
 
-  inline int check_access_alignment(W64 addr, AddressSpace::spat_t top, bool annul, int sizeshift, bool internal, int exception) {
-    if (lowbits(addr, sizeshift))
-      return EXCEPTION_UnalignedAccess;
-
-    //
-    // This load/store was the high part of an unaligned store but the actual user
-    // address did not touch the high 64 bits. Since it is perfectly legal to do
-    // an unaligned store to the very end of the page such that the next 64 bit
-    // chunk is not mapped to a valid page, we must not do any further checks:
-    //
-    if (annul | internal)
-      return 0;
-      
-    bool ok = asp.fastcheck(addr, top);
-
-    return (ok) ? 0 : exception;
-  }
-
-  int issuestore(const TransOp& uop, SFR& state, W64 ra, W64 rb, W64 rc) {
+  int issuestore(const TransOp& uop, SFR& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
     int sizeshift = uop.size;
     int aligntype = uop.cond;
     bool internal = uop.internal;
 
     Waddr rip = arf[REG_rip];
 
-    W64 raddr = ra + rb;
-    raddr &= ctx.virt_addr_mask;
-    W64 origaddr = raddr;
+    W64 addr = ra + rb;
+    //
+    // x86-64 requires virtual addresses to be canonical: if bit 47 is set, 
+    // all upper 16 bits must be set. If this is not true, we need to signal
+    // a general protection fault.
+    //
+    addr = (W64)signext64(addr, 48);
+    addr &= ctx.virt_addr_mask;
+    W64 origaddr = addr;
+    origvirt = origaddr;
     bool annul = 0;
 
     switch (aligntype) {
     case LDST_ALIGN_NORMAL:
       break;
     case LDST_ALIGN_LO:
-      raddr = floor(raddr, 8); break;
+      addr = floor(addr, 8); break;
     case LDST_ALIGN_HI:
       //
       // Is the high load ever even used? If not, don't check for exceptions;
       // otherwise we may erroneously flag page boundary conditions as invalid
       //
-      raddr = floor(raddr, 8);
-      annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == raddr);
-      raddr += 8;
+      addr = floor(addr, 8);
+      annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == addr);
+      addr += 8;
       break;
     }
 
-    W64 addr = lowbits(raddr, VIRT_ADDR_BITS);
     state.physaddr = addr >> 3;
     state.invalid = 0;
-    //
-    // Notice that datavalid is not set until both the rc operand to
-    // store is ready AND any inherited SFR data is ready to merge.
-    //
     state.datavalid = 0;
     state.addrvalid = 1;
 
@@ -182,14 +187,18 @@ namespace SequentialCore {
     bool ready;
     byte bytemask;
 
-    W64 exception = check_access_alignment(addr, asp.writemap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnWrite);
+    int exception = 0;
+    PageFaultErrorCode pfec;
 
-    if (exception) {
+    void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, 1, uop.internal, exception, pfec, pteupdate);
+
+    if unlikely (exception) {
       state.invalid = 1;
-      state.data = exception;
+      // logfile << "EXCEPTION in store: exception = ", hexstring(exception, 64), ", pfec = ", hexstring((W64)pfec, 64), endl;
+      state.data = exception | ((W64)pfec << 32);
       state.datavalid = 1;
 
-      if (exception == EXCEPTION_UnalignedAccess) {
+      if unlikely (exception == EXCEPTION_UnalignedAccess) {
         //
         // If we have an unaligned access, mark all loads and stores at this 
         // macro-op's rip as being unaligned and remove the basic block from
@@ -202,7 +211,7 @@ namespace SequentialCore {
         // to just split them once in the bbcache; this has no performance
         // effect on the cycle accurate results.
         //
-        if (logable(1)) {
+        if (logable(6)) {
           logfile << intstring(current_uuid, 20), " stalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
             "0x", hexstring(addr, 48), " size ", (1<<uop.size), " ", uop, endl;
         }
@@ -210,14 +219,21 @@ namespace SequentialCore {
         return ISSUE_REFETCH;
       }
 
-      if (logable(1)) logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop, endl;
+      if (logable(6)) logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop, endl;
 
       return ISSUE_EXCEPTION;
     }
 
+#ifdef PTLSIM_HYPERVISOR
+    if unlikely (pteupdate.ptwrite) {
+      if (logable(6)) logfile << "Store to virt ", (void*)(Waddr)origaddr, " (mfn ", (mapped_virt_to_phys(mapped) >> 12), ") was to write-protected page table page", endl;
+    }
+#endif
+
     //
     // At this point all operands are valid, so merge the data and mark the store as valid.
     //
+    state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
 
     switch (aligntype) {
     case LDST_ALIGN_NORMAL:
@@ -233,10 +249,13 @@ namespace SequentialCore {
     state.invalid = 0;
     state.data = rc;
     state.bytemask = bytemask;
-    state.datavalid = 1;
+    state.datavalid = !annul;
 
-    if (logable(1)) {
+    if (logable(6)) {
       logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop;
+#ifdef PTLSIM_HYPERVISOR
+      logfile << " (orig @ 0x", hexstring(origaddr, 64), ")";
+#endif
       if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
       logfile << endl;
     }
@@ -244,7 +263,7 @@ namespace SequentialCore {
     return ISSUE_COMPLETED;
   }
 
-  static inline W64 loaddata(void* target, int SIZESHIFT, bool SIGNEXT) {
+  static inline W64 extract_bytes(void* target, int SIZESHIFT, bool SIGNEXT) {
     W64 data;
     switch (SIZESHIFT) {
     case 0:
@@ -261,7 +280,7 @@ namespace SequentialCore {
 
   CycleTimer ctload;
 
-  int issueload(const TransOp& uop, SFR& state, W64 ra, W64 rb, W64 rc) {
+  int issueload(const TransOp& uop, SFR& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
     static const bool DEBUG = 0;
 
     int sizeshift = uop.size;
@@ -271,44 +290,52 @@ namespace SequentialCore {
 
     Waddr rip = arf[REG_rip];
 
-    W64 raddr = (aligntype == LDST_ALIGN_NORMAL) ? ra + rb : ra;
-    // if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
-    raddr &= ctx.virt_addr_mask;
-    W64 origaddr = raddr;
+    W64 addr = (aligntype == LDST_ALIGN_NORMAL) ? (ra + rb) : ra;
+    //
+    // x86-64 requires virtual addresses to be canonical: if bit 47 is set, 
+    // all upper 16 bits must be set. If this is not true, we need to signal
+    // a general protection fault.
+    //
+    addr = (W64)signext64(addr, 48);
+    addr &= ctx.virt_addr_mask;
+    W64 origaddr = addr;
+    origvirt = origaddr;
     bool annul = 0;
 
     switch (aligntype) {
     case LDST_ALIGN_NORMAL:
       break;
     case LDST_ALIGN_LO:
-      raddr = floor(raddr, 8); break;
+      addr = floor(addr, 8); break;
     case LDST_ALIGN_HI:
       //
       // Is the high load ever even used? If not, don't check for exceptions;
       // otherwise we may erroneously flag page boundary conditions as invalid
       //
-      raddr = floor(raddr, 8);
-      annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == raddr);
-      raddr += 8; 
+      addr = floor(addr, 8);
+      annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == addr);
+      addr += 8; 
       break;
     }
-
-    W64 addr = lowbits(raddr, VIRT_ADDR_BITS);
 
     state.physaddr = addr >> 3;
     state.addrvalid = 1;
     state.datavalid = 1;
     state.invalid = 0;
 
-    W64 exception = check_access_alignment(addr, asp.readmap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnRead);
+    int exception = 0;
+    PageFaultErrorCode pfec;
+    
+    void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, 0, uop.internal, exception, pfec, pteupdate);
 
-    if (exception) {
+    if unlikely (exception) {
       state.invalid = 1;
-      state.data = exception;
+      state.data = exception | ((W64)pfec << 32);
+      state.datavalid = 1;
 
-      if (exception == EXCEPTION_UnalignedAccess) {
+      if likely (exception == EXCEPTION_UnalignedAccess) {
         // (see notes above for issuestore case)
-        if (logable(1)) {
+        if (logable(6)) {
           logfile << intstring(current_uuid, 20), " ldalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
             "0x", hexstring(addr, 48), " size ", (1<<sizeshift), " ", uop, endl;
         }
@@ -321,9 +348,11 @@ namespace SequentialCore {
       return ISSUE_EXCEPTION;
     }
 
-    W64 data;
+    state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
 
-    if (aligntype == LDST_ALIGN_HI) {
+    W64 data = (annul) ? 0 : *((W64*)(Waddr)floor(signext64((Waddr)mapped, 48), 8));
+
+    if unlikely (aligntype == LDST_ALIGN_HI) {
       //
       // Concatenate the aligned data from a previous ld.lo uop provided in rb
       // with the currently loaded data D as follows:
@@ -338,31 +367,29 @@ namespace SequentialCore {
       //    XXXXXXXX
       //    ^ origaddr
       //
-      if (!annul) {
-        data = *((W64*)(Waddr)floor(addr, 8));
-      
+      if likely (!annul) {
         struct {
           W64 lo;
           W64 hi;
         } aligner;
-      
+
         aligner.lo = rb;
         aligner.hi = data;
-      
+
         W64 offset = lowbits(origaddr - floor(origaddr, 8), 4);
 
-        data = loaddata(((byte*)&aligner) + offset, sizeshift, signext);
+        data = extract_bytes(((byte*)&aligner) + offset, sizeshift, signext);
       } else {
         //
         // annulled: we need no data from the high load anyway; only use the low data
         // that was already checked for exceptions and forwarding:
         //
         W64 offset = lowbits(origaddr, 3);
-        state.data = loaddata(((byte*)&rb) + offset, sizeshift, signext);
+        state.data = extract_bytes(((byte*)&rb) + offset, sizeshift, signext);
         state.invalid = 0;
         state.datavalid = 1;
 
-        if (logable(1)) {
+        if (logable(6)) {
           logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
             "0x", hexstring(addr, 48), " was annulled (high unaligned load)", endl;
         }
@@ -370,9 +397,7 @@ namespace SequentialCore {
         return ISSUE_COMPLETED;
       }
     } else {
-      // x86-64 requires virtual addresses to be canonical: if bit 47 is set, all upper 16 bits must be set
-      W64 realaddr = (W64)signext64(addr, 48);
-      data = loaddata((void*)(Waddr)realaddr, sizeshift, signext);
+      data = extract_bytes(((byte*)&data) + lowbits(addr, 3), sizeshift, signext);
     }
 
     //
@@ -384,38 +409,18 @@ namespace SequentialCore {
     state.datavalid = 1;
     state.bytemask = 0xff;
 
-    if (logable(1)) {
+    if (logable(6)) {
       logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", "0x", hexstring(state.data, 64), "|     ", " ", uop;
+      logfile << " @ 0x", hexstring(addr, 64);
+#ifdef PTLSIM_HYPERVISOR
+      logfile << " (phys 0x", hexstring(state.physaddr << 3, 64), ")";
+#endif
       if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
       logfile << endl;
     }
 
     return ISSUE_COMPLETED;
   }
-
-  //
-  // Do we need to update REG_cf/REG_sf/REG_zf/etc. here too? Yes.
-  //
-
-  byte archreg_remap_table[TRANSREG_COUNT] = {
-    REG_rax,  REG_rcx,  REG_rdx,  REG_rbx,  REG_rsp,  REG_rbp,  REG_rsi,  REG_rdi,
-    REG_r8,  REG_r9,  REG_r10,  REG_r11,  REG_r12,  REG_r13,  REG_r14,  REG_r15,
-
-    REG_xmml0,  REG_xmmh0,  REG_xmml1,  REG_xmmh1,  REG_xmml2,  REG_xmmh2,  REG_xmml3,  REG_xmmh3,
-    REG_xmml4,  REG_xmmh4,  REG_xmml5,  REG_xmmh5,  REG_xmml6,  REG_xmmh6,  REG_xmml7,  REG_xmmh7,
-
-    REG_xmml8,  REG_xmmh8,  REG_xmml9,  REG_xmmh9,  REG_xmml10,  REG_xmmh10,  REG_xmml11,  REG_xmmh11,
-    REG_xmml12,  REG_xmmh12,  REG_xmml13,  REG_xmmh13,  REG_xmml14,  REG_xmmh14,  REG_xmml15,  REG_xmmh15,
-
-    REG_fptos,  REG_fpsw,  REG_fptags,  REG_tr3,  REG_tr4,  REG_tr5,  REG_tr6, REG_tr7,
-
-    REG_rip,  REG_flags,  REG_iflags, REG_selfrip, REG_nextrip, REG_ar1, REG_ar2, REG_zero,
-
-    REG_temp0,  REG_temp1,  REG_temp2,  REG_temp3,  REG_temp4,  REG_temp5,  REG_temp6,  REG_temp7,
-
-    // Notice how these (REG_zf, REG_cf, REG_of) are all mapped to REG_flags in an in-order processor:
-    REG_flags,  REG_flags,  REG_flags,  REG_imm,  REG_mem,  REG_temp8,  REG_temp9,  REG_temp10,
-  };
 
   void external_to_core_state() {
     foreach (i, ARCHREG_COUNT) {
@@ -438,56 +443,124 @@ namespace SequentialCore {
     core_to_external_state();
     assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
-    if (logable(1)) {
+    if (logable(6)) {
       logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ",
         (void*)(Waddr)ctx.commitarf[REG_selfrip], "; return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
         ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
     }
 
-    if (logable(1)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
+    if (logable(6)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
 
     update_assist_stats(assist);
-    if (logable(1)) logfile << "Before assist:", endl, ctx, endl;
+    if (logable(6)) {
+      logfile << "Before assist:", endl, ctx, endl;
+#ifdef PTLSIM_HYPERVISOR
+      logfile << sshinfo, endl;
+#endif
+    }
 
     assist(ctx);
 
-    if (logable(1)) {
+    if (logable(6)) {
       logfile << "Done with assist", endl;
       logfile << "New state:", endl;
-      logfile << ctx.commitarf;
+      logfile << ctx;
+#ifdef PTLSIM_HYPERVISOR
+      logfile << sshinfo;
+#endif
     }
 
     reset_fetch(ctx.commitarf[REG_rip]);
     external_to_core_state();
-
+#ifndef PTLSIM_HYPERVISOR
     if (requested_switch_to_native) {
       logfile << "PTL call requested switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
       return false;
     }
-
+#endif
     return true;
   }
 
   bool handle_exception() {
     core_to_external_state();
 
-    if (logable(1)) 
+#ifdef PTLSIM_HYPERVISOR
+    logfile << "PTL Exception ", exception_name(ctx.exception), " called from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], 
+      " at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+    //logfile << "Error code ", (void*)(Waddr)ctx.error_code, ", faulting virt addr ", (void*)(Waddr)ctx.cr2, endl;
+
+    //
+    // Map PTL internal hardware exceptions to their x86 equivalents,
+    // depending on the context. The error_code field should already
+    // be filled out.
+    //
+    switch (ctx.exception) {
+    case EXCEPTION_PageFaultOnRead:
+    case EXCEPTION_PageFaultOnWrite:
+    case EXCEPTION_PageFaultOnExec:
+      ctx.exception_type = EXCEPTION_x86_page_fault; break;
+    case EXCEPTION_FloatingPoint:
+      ctx.exception_type = EXCEPTION_x86_fpu; break;
+    default:
+      logfile << "Unsupported internal exception type ", exception_name(ctx.exception), endl, flush;
+      abort();
+    }
+
+    logfile << ctx;
+    logfile << sshinfo;
+
+    ctx.propagate_x86_exception(ctx.exception_type, ctx.error_code, ctx.cr2);
+
+    external_to_core_state();
+
+    return true;
+#else
+    if (logable(6)) 
       logfile << "Exception (", exception_name(ctx.exception), " called from ", (void*)(Waddr)ctx.commitarf[REG_rip], 
         ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
 
     stringbuf sb;
-    sb << exception_name(ctx.exception), " detected at fault rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " @ ", 
+    logfile << exception_name(ctx.exception), " detected at fault rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " @ ", 
       total_user_insns_committed, " commits (", total_uops_committed, " uops): genuine user exception (",
-      exception_name(ctx.exception), "); aborting";
-    logfile << sb, endl, flush;
-    cerr << sb, endl, flush;
+      exception_name(ctx.exception), "); aborting", endl;
+    logfile << ctx, endl;
     logfile << flush;
 
     logfile << "Aborting...", endl, flush;
-    abort();
+    cerr << "Aborting...", endl, flush;
 
+    abort();
     return false;
+#endif
   }
+
+#ifdef PTLSIM_HYPERVISOR
+  bool handle_interrupt() {
+    core_to_external_state();
+
+    if (logable(6)) {
+      logfile << "Interrupts pending at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+      logfile << "Context at interrupt:", endl;
+      logfile << ctx;
+      logfile << sshinfo;
+      logfile.flush();
+    }
+
+    ctx.event_upcall();
+
+    if (logable(6)) {
+      logfile << "After interrupt redirect:", endl;
+      logfile << ctx;
+      logfile << sshinfo;
+      logfile.flush();
+    }
+
+    reset_fetch(ctx.commitarf[REG_rip]);
+    external_to_core_state();
+
+    return true;
+  }
+#endif
 
   W64 seq_total_basic_blocks;
   W64 seq_total_uops_committed;
@@ -495,18 +568,21 @@ namespace SequentialCore {
   W64 seq_total_cycles;
 
   BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
-    BasicBlock** bb = bbcache(rip);
-    
-    if (bb) {
-      current_basic_block = *bb;
+    RIPVirtPhys rvp(rip);
+    rvp.update(ctx);
+
+    BasicBlock* bb = bbcache(rvp);
+
+    if likely (bb) {
+      current_basic_block = bb;
       current_basic_block_rip = rip;
     } else {
-      current_basic_block = translate_basic_block((byte*)rip);
+      current_basic_block = bbcache.translate(ctx, rip);
       current_basic_block_rip = rip;
       assert(current_basic_block);
       synth_uops_for_bb(*current_basic_block);
       
-      if (logable(1)) logfile << padstring("", 20), " xlate  rip ", (void*)rip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
+      if (logable(6)) logfile << padstring("", 20), " xlate  rip ", rvp, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
       bbcache_inserts++;
     }
     
@@ -519,7 +595,7 @@ namespace SequentialCore {
   // Execute one basic block sequentially
   //
 
-  int execute_sequential(BasicBlock* bb, W64 insnlimit) {
+  int execute(BasicBlock* bb, W64 insnlimit) {
     arf[REG_rip] = bb->rip;
     
     //
@@ -528,8 +604,9 @@ namespace SequentialCore {
     
     bool barrier = 0;
 
-    if (logable(1)) logfile << endl, "Sequentially executing basic block ", bb, " (rip ", (void*)(Waddr)bb->rip, ", ", bb->count, " uops), insn limit ", insnlimit, endl, flush;
-    if (!bb->synthops) synth_uops_for_bb(*bb);
+    if (logable(5)) logfile << endl, "Sequentially executing basic block ", bb, " (rip ", (void*)(Waddr)bb->rip, ", ", bb->count, " uops), insn limit ", insnlimit, endl, flush;
+
+    if unlikely (!bb->synthops) synth_uops_for_bb(*bb);
     bb->hitcount++;
 
     TransOpBuffer unaligned_ldst_buf;
@@ -543,33 +620,51 @@ namespace SequentialCore {
     seq_total_basic_blocks++;
     total_basic_blocks_committed++;
 
-    while ((uopindex < bb->count) & (user_insns < insnlimit)) {
-      if (!asp.fastcheck((byte*)(Waddr)arf[REG_rip], asp.execmap)) {
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": bogus RIP", endl;
-        ctx.exception = EXCEPTION_PageFaultOnExec;
-        return SEQEXEC_INVALIDRIP;
-      }
+    RIPVirtPhys rvp(arf[REG_rip]);
 
+    assert(bb->rip == arf[REG_rip]);
+
+    // See comment below about idempotent updates
+    W64 saved_flags = 0;
+
+    while ((uopindex < bb->count) & (user_insns < insnlimit)) {
       TransOp uop;
       uopimpl_func_t synthop = null;
 
-      if (!unaligned_ldst_buf.get(uop, synthop)) {
+      if likely (!unaligned_ldst_buf.get(uop, synthop)) {
         uop = bb->transops[uopindex];
         synthop = bb->synthops[uopindex];
       }
 
       assert(uopindex < bb->count);
 
-      if (uop.unaligned) {
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": split unaligned load or store ", uop, endl;
+      if unlikely (uop.unaligned) {
+        if (logable(6)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": split unaligned load or store ", uop, endl;
         split_unaligned(uop, unaligned_ldst_buf);
         assert(unaligned_ldst_buf.get(uop, synthop));
       }
   
-      if (uop.som) {
+      if likely (uop.som) {
         current_uop_in_macro_op = 0;
         bytes_in_current_insn = uop.bytes;
         fetch_user_insns_fetched++;
+        // Update the span of bytes to watch for SMC:
+        rvp.update(ctx, uop.bytes);
+        //
+        // Save the flags at the start of this x86 insn in
+        // case an ALU uop inside the macro-op updates the
+        // flags before all exceptions (i.e. from stores)
+        // can be detected. All other registers are updated
+        // idempotently.
+        //
+        saved_flags = arf[REG_flags];
+      }
+
+      if unlikely (smc_isdirty(rvp.mfnlo) | (smc_isdirty(rvp.mfnhi))) {
+        logfile << "Self-modifying code at rip ", rvp, " detected: mfn was dirty (invalidate and retry)", endl;
+        bbcache.invalidate_page(rvp.mfnlo);
+        if (rvp.mfnlo != rvp.mfnhi) bbcache.invalidate_page(rvp.mfnhi);
+        return SEQEXEC_SMC;
       }
 
       fetch_uops_fetched++;
@@ -600,36 +695,42 @@ namespace SequentialCore {
       
       bool refetch = 0;
 
-      if (ld|st) {
-        int status = (ld) ? issueload(uop, sfr, radata, rbdata, rcdata) : issuestore(uop, sfr, radata, rbdata, rcdata);
-        
+      PTEUpdate pteupdate = 0;
+      Waddr origvirt = 0;
+      PageFaultErrorCode pfec = 0;
+
+      // if (logable(6)) logfile << "Executing rip ", (void*)(Waddr)arf[REG_rip], ": ", uop, endl, flush;
+
+      if unlikely (ld|st) {
+        int status = (ld) ? issueload(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate) : issuestore(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate);
+
         state.reg.rddata = sfr.data;
         state.reg.rdflags = 0;
 
         if (status == ISSUE_EXCEPTION) {
-          ctx.exception = state.reg.rddata;
+          logfile << "Exception! state.reg.rddata = ", hexstring(state.reg.rddata, 64), endl;
+          ctx.exception = LO32(state.reg.rddata);
+          ctx.error_code = HI32(state.reg.rddata); // page fault error code
+#ifdef PTLSIM_HYPERVISOR
+          ctx.cr2 = origvirt;
+#endif
+          arf[REG_flags] = saved_flags;
           return SEQEXEC_EXCEPTION;
         } else if (status == ISSUE_REFETCH) {
-          if (logable(1)) {
+          if (logable(6)) {
             logfile << intstring(current_uuid, 20), " algnfx", " rip ", (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), " ", 
               uop, ": set unaligned bit for uop index ", uopindex, " at iteration ", iterations, endl;
           }
           bb->transops[uopindex].unaligned = 1;
           continue;
         }
-      } else if (br) {
+      } else if unlikely (br) {
         state.brreg.riptaken = uop.riptaken;
         state.brreg.ripseq = uop.ripseq;
         assert((void*)synthop);
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags); 
 
-        if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.fastcheck((void*)(Waddr)state.reg.rddata, asp.execmap))) {
-          if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)(Waddr)arf[REG_rip], ": bogus RIP at branch target", endl;
-          ctx.exception = EXCEPTION_PageFaultOnExec;
-          return SEQEXEC_INVALIDRIP;
-        }
-        
-        if (logable(1)) {
+        if (logable(6)) {
           stringbuf rdstr; print_value_and_flags(rdstr, state.reg.rddata, state.reg.rdflags);
           logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
           if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
@@ -640,24 +741,25 @@ namespace SequentialCore {
       } else {
         assert((void*)synthop);
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags);
-        if (state.reg.rdflags & FLAG_INV) ctx.exception = state.reg.rddata;
-        
-        if (logable(1)) {
+        if unlikely (state.reg.rdflags & FLAG_INV) ctx.exception = LO32(state.reg.rddata);
+
+        if (logable(6)) {
           stringbuf rdstr; print_value_and_flags(rdstr, state.reg.rddata, state.reg.rdflags);
           logfile << intstring(current_uuid, 20), (ctx.exception ? " except" : " issue "), " rip ", (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), " ", rdstr, " ", uop;
           if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";
           logfile << endl;
         }
 
-        if (ctx.exception) {
+        if unlikely (ctx.exception) {
           if (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
             W64 chk_recovery_rip = arf[REG_rip] + bytes_in_current_insn;
-            if (logable(1)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)arf[REG_rip], " by ", bytes_in_current_insn, " bytes to ", 
+            if (logable(6)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)arf[REG_rip], " by ", bytes_in_current_insn, " bytes to ", 
                               (void*)(Waddr)chk_recovery_rip, endl;
             current_uuid++;
             arf[REG_rip] = chk_recovery_rip;
             return SEQEXEC_SKIPBLOCK;
           } else {
+            arf[REG_flags] = saved_flags;
             return SEQEXEC_EXCEPTION;
           }
         }
@@ -672,9 +774,15 @@ namespace SequentialCore {
 
       assert(!ctx.exception);
 
-      if (st) {
-        commitstore_unlocked(sfr);
-      } else if (uop.rd != REG_zero) {
+      if unlikely (st) {
+        if (sfr.bytemask) {
+          storemask(sfr.physaddr << 3, sfr.data, sfr.bytemask);
+
+          Waddr mfn = (sfr.physaddr << 3) >> 12;
+          // NOTE: In PTLsim/X, the processor directly updates this in the physmap page tables when storemask is used:
+          smc_setdirty(mfn);
+        }
+      } else if likely (uop.rd != REG_zero) {
         arf[uop.rd] = state.reg.rddata;
         arflags[uop.rd] = state.reg.rdflags;
         
@@ -684,6 +792,8 @@ namespace SequentialCore {
           arflags[REG_flags] = arf[REG_flags];
         }
       }
+
+      if unlikely (pteupdate) ctx.update_pte_acc_dirty(origvirt, pteupdate);
 
       barrier = isclass(uop.opcode, OPCLASS_BARRIER);
 
@@ -700,50 +810,70 @@ namespace SequentialCore {
       iterations++;
       sim_cycle++;
       seq_total_cycles++;
-
-      if (logable(1) & 0) {
-        logfile << "Core State after exec:", endl;
-        logfile << ctx.commitarf;
-      }
     }
 
-    return (barrier) ? SEQEXEC_BARRIER : (insnlimit < bb->user_insn_count) ? SEQEXEC_EARLY_EXIT : SEQEXEC_OK;
+    if (barrier) return SEQEXEC_BARRIER;
+
+#ifdef PTLSIM_HYPERVISOR
+    if (inject_events()) return SEQEXEC_INTERRUPT;
+#endif
+
+    return (insnlimit < bb->user_insn_count) ? SEQEXEC_EARLY_EXIT : SEQEXEC_OK;
   }
 
-  int sequential_core_toplevel_loop() {
+  int run() {
     logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
+
+    last_stats_captured_at_cycle = 0;
+
+    if (logable(1)) {
+      logfile << "Core state at start:", endl, flush;
+      logfile << ctx;
+#ifdef PTLSIM_HYPERVISOR
+      logfile << sshinfo;
+#endif
+    }
 
     external_to_core_state();
     print_state(logfile);
     logfile << endl;
-    
-    int oldloglevel = loglevel;
-    if (start_log_at_iteration != infinity) loglevel = 0;
 
     bool exiting = false;
 
-    W64 stop_at_user_insns_limit = sequential_mode_insns;
+    int oldloglevel = config.loglevel;
+    if (config.start_log_at_iteration != infinity) config.loglevel = 0;
+
+    W64 stop_at_user_insns_limit = config.stop_at_user_insns;
 
     ctseq.start();
 
     W64 last_printed_status_at_cycle = 0;
 
-    requested_switch_to_native = 0;
+    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns_limit)) {
+#ifdef PTLSIM_HYPERVISOR
+      if (!ctx.running) {
+        sim_cycle++;
+        iterations++;
 
-    while ((iterations < stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns_limit)) {
-      if ((iterations >= start_log_at_iteration) & (!loglevel)) {
-        loglevel = oldloglevel;
-        logfile << "Start logging (level ", loglevel, ") at cycle ", sim_cycle, endl, flush;
+        inject_events();
+        if (ctx.check_events()) handle_interrupt();
+
+        continue;
+      }
+#endif
+
+      if unlikely ((iterations >= config.start_log_at_iteration) & (!config.loglevel)) {
+        config.loglevel = oldloglevel;
       }
 
       Waddr rip = arf[REG_rip];
 
-      if ((sim_cycle - last_printed_status_at_cycle) >= 200000) {
+      if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 2000000) {
         logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)rip, "), ", iterations, " basic blocks", endl, flush;
         last_printed_status_at_cycle = sim_cycle;
       }
 
-      if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
+      if unlikely ((sim_cycle - last_stats_captured_at_cycle) >= config.snapshot_cycles) {
         last_stats_captured_at_cycle = sim_cycle;
       }
 
@@ -751,19 +881,13 @@ namespace SequentialCore {
       // Fetch
       //
 
-      if (!asp.fastcheck((byte*)rip, asp.execmap)) {
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)rip, ": bogus RIP", endl;
-        ctx.exception = EXCEPTION_PageFaultOnExec;
-        if (!handle_exception()) break;
-        return false;
-      }
-
       current_basic_block = fetch_or_translate_basic_block(rip);
 
-      int result = execute_sequential(current_basic_block, (stop_at_user_insns_limit - total_user_insns_committed));
+      int result = execute(current_basic_block, (stop_at_user_insns_limit - total_user_insns_committed));
 
       switch (result) {
       case SEQEXEC_OK:
+      case SEQEXEC_SMC:
       case SEQEXEC_SKIPBLOCK:
         // no action required
         break;
@@ -781,13 +905,20 @@ namespace SequentialCore {
         exiting = (!handle_barrier());
         ctseq.start();
         break;
+#ifdef PTLSIM_HYPERVISOR
+      case SEQEXEC_INTERRUPT:
+        ctseq.stop();
+        handle_interrupt();
+        ctseq.start();
+        break;
+#endif
       default:
         assert(false);
       }
-
-      if (requested_switch_to_native) exiting = 1;
-
-      if (exiting) break;
+#ifdef PTLSIM_HYPERVISOR
+      exiting |= check_for_async_sim_break();
+#endif
+      if unlikely (exiting) break;
     }
 
     ctseq.stop();
@@ -795,10 +926,11 @@ namespace SequentialCore {
     core_to_external_state();
 
     logfile << "Exiting sequential mode at ", total_user_insns_committed, " instructions, ", total_uops_committed, " uops and ", iterations, " iterations", endl;
-    logfile << "Core State:", endl;
-    logfile << ctx.commitarf;
 
-    logfile << flush;
+    if (logable(1)) {
+      logfile << "Core State at end:", endl;
+      logfile << ctx;
+    }
 
     // Start counting from zero in out of order core (only if desired)
     // total_uops_committed = 0;
@@ -841,17 +973,19 @@ namespace SequentialCore {
   }
 };
 
+SequentialCore seqcore;
+
 int sequential_core_toplevel_loop() {
-  return SequentialCore::sequential_core_toplevel_loop();
+  return seqcore.run();
 }
 
 int execute_sequential(BasicBlock* bb) {
-  SequentialCore::external_to_core_state();
-  int rc = SequentialCore::execute_sequential(bb, bb->count);
-  SequentialCore::core_to_external_state();
+  seqcore.external_to_core_state();
+  int rc = seqcore.execute(bb, bb->count);
+  seqcore.core_to_external_state();
   return rc;
 }
 
 void seq_capture_stats(DataStoreNode& root) {
-  SequentialCore::seq_capture_stats(root);
+  seqcore.seq_capture_stats(root);
 }

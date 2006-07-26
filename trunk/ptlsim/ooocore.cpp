@@ -24,7 +24,7 @@
 
 #undef logable
 #ifdef ENABLE_LOGGING
-#define logable(level) (loglevel >= level)
+#define logable(level) (config.loglevel >= level)
 #else
 #define logable(level) (0)
 #endif
@@ -114,7 +114,7 @@ struct IssueQueue {
   }
 
   bool insert(tag_t uopid, const tag_t* operands, const tag_t* preready) {
-    if (count == size)
+    if unlikely (count == size)
       return false;
 
     int slot = count++;
@@ -511,6 +511,8 @@ struct ReorderBufferEntry: public selfqueuelink {
   W8s  cluster;
   byte fu;
   byte consumer_count;
+  PTEUpdate pteupdate;
+  Waddr origvirt;
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
   byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1;
 #else
@@ -596,8 +598,8 @@ struct ReorderBufferEntry: public selfqueuelink {
   int select_cluster();
 
   int issue();
-  int issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc, bool rcready);
-  int issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc);
+  int issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate);
+  int issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate);
   void release();
 
   W64 annul(bool keep_misspec_uop, bool return_first_annulled_rip = false);
@@ -789,7 +791,7 @@ public:
   StateList& get_state_list() const { return get_state_list(this->state); }
 
   void changestate(int newstate) {
-    if (state != PHYSREG_NONE) get_state_list(state).remove(this);
+    if likely (state != PHYSREG_NONE) get_state_list(state).remove(this);
     state = newstate;
     get_state_list(state).enqueue(this);
   }
@@ -901,7 +903,7 @@ struct PhysicalRegisterFile: public array<PhysicalRegister, MAX_PHYS_REG_FILE_SI
 
   PhysicalRegister* alloc(int r = -1) {
     PhysicalRegister* physreg = (PhysicalRegister*)((r >= 0) ? states[PHYSREG_FREE].remove(&(*this)[r]): states[PHYSREG_FREE].dequeue());
-    if (!physreg) return null;
+    if unlikely (!physreg) return null;
     physreg->state = PHYSREG_NONE;
     physreg->changestate(PHYSREG_WAITING);
     physreg->flags = FLAG_WAIT;
@@ -981,7 +983,7 @@ void print_rename_tables(ostream& os) {
 }
 
 void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand) {
-  if (loglevel <= 0) return;
+  if (config.loglevel <= 0) return;
 
   PhysicalRegister* physreg = source->physreg;
 
@@ -1046,7 +1048,7 @@ void external_to_core_state() {
 #ifdef UNIFIED_INT_FP_PHYS_REG_FILE
     int rfid = (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
 #else
-    bool fp = inrange((int)i, REG_xmml0, REG_xmmh15) | (inrange((int)i, REG_fptos, REG_tr7));
+    bool fp = inrange((int)i, REG_xmml0, REG_xmmh15) | (inrange((int)i, REG_fptos, REG_ctx));
     int rfid = (fp) ? PHYS_REG_FILE_FP : (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
 #endif
     PhysicalRegisterFile& rf = physregfiles[rfid];
@@ -1095,7 +1097,7 @@ void core_to_external_state() {
 
 template <int size, int operandcount>
 void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, operandcount>::tag_t sourceid, const bitvec<size>& mask, int operand) const {
-  if (loglevel <= 0) return;
+  if likely (!logable(1)) return;
 
   const ReorderBufferEntry* source = &ROB[sourceid];
 
@@ -1147,7 +1149,7 @@ void annul_ras_updates_in_fetchq() {
   //
   foreach_backward (fetchq, i) {
     FetchBufferEntry& fetchbuf = fetchq[i];
-    if (isbranch(fetchbuf.opcode) && (fetchbuf.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
+    if unlikely (isbranch(fetchbuf.opcode) && (fetchbuf.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
       if (logable(1)) logfile << intstring(fetchbuf.uuid, 20), " anlras rip ", (void*)(Waddr)fetchbuf.rip, ": annul RAS update still in fetchq", endl;
       branchpred.annulras(fetchbuf.predinfo);
     }
@@ -1170,24 +1172,27 @@ CycleTimer cttrans;
 W64 bbcache_inserts;
 W64 bbcache_removes;
 
-static BasicBlock* fetch_or_translate_basic_block(Waddr fetchrip) {
-  BasicBlock** bb = bbcache(fetchrip);
+static BasicBlock* fetch_or_translate_basic_block(Context& ctx, Waddr fetchrip) {
+  RIPVirtPhys rvp(fetchrip);
+  rvp.update(ctx);
+
+  BasicBlock* bb = bbcache(rvp);
   
-  if (bb) {
-    current_basic_block = *bb;
+  if likely (bb) {
+    current_basic_block = bb;
     current_basic_block_rip = fetchrip;
   } else {
     start_timer(cttrans);
-    current_basic_block = translate_basic_block((byte*)fetchrip);
+    current_basic_block = bbcache.translate(ctx, fetchrip);
     current_basic_block_rip = fetchrip;
     assert(current_basic_block);
     stop_timer(cttrans);
     
-    if (logable(1)) logfile << padstring("", 20), " xlate  rip 0x", (void*)fetchrip, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
+    if (logable(1)) logfile << padstring("", 20), " xlate  rip ", rvp, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
     bbcache_inserts++;
   }
 
-  if (!current_basic_block->synthops) synth_uops_for_bb(*current_basic_block);
+  if unlikely (!current_basic_block->synthops) synth_uops_for_bb(*current_basic_block);
   assert(current_basic_block->synthops);
   
   current_basic_block_transop_index = 0;
@@ -1251,12 +1256,12 @@ void fetch() {
 
   start_timer(ctfetch);
 
-  if (stall_frontend) {
+  if unlikely (stall_frontend) {
     if (logable(1)) logfile << padstring("", 20), " fetch  frontend stalled", endl;
     return;
   }
 
-  if (waiting_for_icache_fill) {
+  if unlikely (waiting_for_icache_fill) {
     if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": wait for icache fill", endl;
     fetch_stop_icache_miss++;
     return;
@@ -1265,14 +1270,14 @@ void fetch() {
   TransOpBuffer unaligned_ldst_buf;
 
   while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
-    if (!fetchq.remaining()) {
+    if unlikely (!fetchq.remaining()) {
       if (!fetchcount)
         if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": fetchq full", endl;
       fetch_stop_fetchq_full++;
       break;
     }
 
-    if (!asp.check((byte*)fetchrip, PROT_EXEC)) {
+    if unlikely (!asp.check((byte*)fetchrip, PROT_EXEC)) {
       if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": bogus RIP", endl;
       fetch_stop_bogus_rip++;
       break;
@@ -1281,10 +1286,10 @@ void fetch() {
     W64 req_icache_block = floor(fetchrip, ICACHE_FETCH_GRANULARITY);
     if (req_icache_block != current_icache_block) {
       bool hit = probe_icache(fetchrip);
-      if (!hit) {
+      if unlikely (!hit) {
         int missbuf = initiate_icache_miss(fetchrip);
         if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": wait for icache fill on missbuf ", missbuf, endl;
-        if (missbuf < 0) {
+        if unlikely (missbuf < 0) {
           // Try to re-allocate a miss buffer on the next cycle
           if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": icache fill missbuf full", endl;
           break;
@@ -1299,8 +1304,8 @@ void fetch() {
       fetch_hit_L1++;
     }
 
-    if ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
-      fetch_or_translate_basic_block(fetchrip);
+    if unlikely ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
+      fetch_or_translate_basic_block(ctx, fetchrip);
     }
 
     FetchBufferEntry& transop = *fetchq.alloc();
@@ -1309,7 +1314,7 @@ void fetch() {
 
     assert(current_basic_block->synthops);
 
-    if (!unaligned_ldst_buf.get(transop, synthop)) {
+    if likely (!unaligned_ldst_buf.get(transop, synthop)) {
       transop = current_basic_block->transops[current_basic_block_transop_index];
       synthop = current_basic_block->synthops[current_basic_block_transop_index];
     }
@@ -1321,7 +1326,7 @@ void fetch() {
     // Fetching continues from this buffer instead of the basic block
     // until both uops are forced into the pipeline.
     //
-    if (transop.unaligned) {
+    if unlikely (transop.unaligned) {
       if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": split unaligned load or store ", transop, endl;
       split_unaligned(transop, unaligned_ldst_buf);
       assert(unaligned_ldst_buf.get(transop, synthop));
@@ -1332,7 +1337,7 @@ void fetch() {
 
     current_basic_block_transop_index += (unaligned_ldst_buf.empty());
 
-    if (transop.som) {
+    if likely (transop.som) {
       bytes_in_current_insn = transop.bytes;
       fetch_user_insns_fetched++;
     }
@@ -1358,8 +1363,8 @@ void fetch() {
     }
 
     // Set up branches so mispredicts can be calculated correctly:
-    if (isclass(transop.opcode, OPCLASS_COND_BRANCH)) {
-      if (predrip != transop.riptaken) {
+    if unlikely (isclass(transop.opcode, OPCLASS_COND_BRANCH)) {
+      if unlikely (predrip != transop.riptaken) {
         assert(predrip == transop.ripseq);
         transop.cond = invert_cond(transop.cond);
         //
@@ -1370,10 +1375,10 @@ void fetch() {
         transop.synthop = get_synthcode_for_cond_branch(transop.opcode, transop.cond, transop.size, 0);
         swap(transop.riptaken, transop.ripseq);
       }
-    } else if (isclass(transop.opcode, OPCLASS_INDIR_BRANCH)) {
+    } else if unlikely (isclass(transop.opcode, OPCLASS_INDIR_BRANCH)) {
       transop.riptaken = predrip;
       transop.ripseq = predrip;
-    } else if (isclass(transop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
+    } else if unlikely (isclass(transop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
       assert(predrip == transop.riptaken);
     }
 
@@ -1389,13 +1394,13 @@ void fetch() {
       logfile << endl;
     }
 
-    if (transop.eom) {
+    if likely (transop.eom) {
       fetchrip += bytes_in_current_insn;
 
-      if (isbranch(transop.opcode) && (transop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET)))
+      if unlikely (isbranch(transop.opcode) && (transop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET)))
         branchpred.updateras(transop.predinfo, transop.predinfo.ripafter);
 
-      if (predrip) {
+      if unlikely (predrip) {
         // follow to target, then end fetching for this cycle if predicted taken
         bool taken = (predrip != fetchrip);
         taken_branch_count += taken;
@@ -1509,7 +1514,7 @@ W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
     (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
     (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
     (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? PHYS_REG_FILE_MASK_INT : PHYS_REG_FILE_MASK_FP) :
-    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_tr7)) ? PHYS_REG_FILE_MASK_FP :
+    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_ctx)) ? PHYS_REG_FILE_MASK_FP :
     PHYS_REG_FILE_MASK_INT;
 #endif
 }
@@ -1520,13 +1525,13 @@ void rename() {
   start_timer(ctrename);
 
   while (prepcount < FRONTEND_WIDTH) {
-    if (fetchq.empty()) {
+    if unlikely (fetchq.empty()) {
       if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename fetchq empty", endl;
       frontend_status_fetchq_empty++;
       break;
     } 
 
-    if (!ROB.remaining()) {
+    if unlikely (!ROB.remaining()) {
       if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename ROB full", endl;
       frontend_status_rob_full++;
       break;
@@ -1540,13 +1545,13 @@ void rename() {
 
     foreach (i, PHYS_REG_FILE_COUNT) {
       int reg_file_to_check = add_index_modulo(round_robin_reg_file_offset, i, PHYS_REG_FILE_COUNT);
-      if (bit(acceptable_phys_reg_files, reg_file_to_check) && physregfiles[reg_file_to_check].remaining()) {
+      if likely (bit(acceptable_phys_reg_files, reg_file_to_check) && physregfiles[reg_file_to_check].remaining()) {
         phys_reg_file = reg_file_to_check; break;
       }
     }
 
     if (phys_reg_file < 0) {
-      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename physregs full", endl;
+      if unlikely (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename physregs full", endl;
       frontend_status_physregs_full++;
       break;
     }
@@ -1555,19 +1560,19 @@ void rename() {
     bool st = isstore(fetchbuf.opcode);
     bool br = isbranch(fetchbuf.opcode);
 
-    if (ld && (loads_in_flight >= LDQ_SIZE)) {
+    if unlikely (ld && (loads_in_flight >= LDQ_SIZE)) {
       if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename ldq full", endl;
       frontend_status_ldq_full++;
       break;
     }
 
-    if (st && (stores_in_flight >= STQ_SIZE)) {
+    if unlikely (st && (stores_in_flight >= STQ_SIZE)) {
       if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename stq full", endl;
       frontend_status_stq_full++;
       break;
     }
 
-    if ((ld|st) && (!LSQ.remaining())) {
+    if unlikely ((ld|st) && (!LSQ.remaining())) {
       if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename memq full", endl;
       break;
     }
@@ -1585,7 +1590,7 @@ void rename() {
     rob.uop = transop;
     rob.entry_valid = 1;
     rob.cycles_left = FRONTEND_STAGES;
-    if (ld|st) {
+    if unlikely (ld|st) {
       rob.lsq = &lsq;
       lsq.rob = &rob;
       lsq.store = st;
@@ -1613,7 +1618,7 @@ void rename() {
       rob.operands[i]->addref(rob);
       assert(rob.operands[i]->state != PHYSREG_FREE);
 
-      if ((rob.operands[i]->state == PHYSREG_WAITING) |
+      if likely ((rob.operands[i]->state == PHYSREG_WAITING) |
           (rob.operands[i]->state == PHYSREG_BYPASS) |
           (rob.operands[i]->state == PHYSREG_WRITTEN)) {
         rob.operands[i]->rob->consumer_count = min(rob.operands[i]->rob->consumer_count + 1, 255);
@@ -1686,7 +1691,7 @@ void rename() {
       logfile << "; renamed";
     }
 
-    if (archdest_can_rename[transop.rd]) {
+    if likely (archdest_can_rename[transop.rd]) {
       if (logable(1)) logfile << " ", arch_reg_names[transop.rd], " (old r", specrrt[transop.rd]->index(), ")";
 
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
@@ -1711,7 +1716,7 @@ void rename() {
       renamed_reg = archdest_is_visible[transop.rd];
     }
 
-    if (!transop.nouserflags) {
+    if unlikely (!transop.nouserflags) {
       if (transop.setflags & SETFLAG_ZF) {
         if (logable(1)) logfile << " zf (old r", specrrt[REG_zf]->index(), ")";
         specrrt[REG_zf]->unspecref(REG_zf);
@@ -1742,7 +1747,7 @@ void rename() {
     }
 
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-    if (br) specrrt.renamed_in_this_basic_block.reset();
+    if unlikely (br) specrrt.renamed_in_this_basic_block.reset();
 #endif
 
     frontend_renamed_none += ((!renamed_reg) && (!renamed_flags));
@@ -1768,7 +1773,7 @@ int frontend() {
   start_timer(ctfrontend);
 
   foreach_list_mutable(rob_frontend_list, rob, entry, nextentry) {
-    if (rob->cycles_left <= 0) {
+    if unlikely (rob->cycles_left <= 0) {
       rob->cycles_left = -1;
       rob->changestate(rob_ready_to_dispatch_list);
     } else {
@@ -1984,7 +1989,7 @@ int ReorderBufferEntry::select_cluster() {
     foreach (i, MAX_CLUSTERS) logfile << " ", cluster_issue_queue_avail_count[i];
   }
   
-  if (!executable_on_cluster) {
+  if unlikely (!executable_on_cluster) {
     dispatch_cluster_none_avail++;
     if (logable(1)) logfile << "-> none ", endl;
     return -1;
@@ -2121,7 +2126,7 @@ bool ReorderBufferEntry::find_sources() {
     PhysicalRegister& source_physreg = *operands[operand];
     ReorderBufferEntry& source_rob = *source_physreg.rob;
 
-    if (source_physreg.state == PHYSREG_WAITING) {
+    if likely (source_physreg.state == PHYSREG_WAITING) {
       uopids[operand] = source_rob.index();
       preready[operand] = 0;
       operands_still_needed++;
@@ -2131,7 +2136,7 @@ bool ReorderBufferEntry::find_sources() {
       preready[operand] = 1;
     }
 
-    if (source_physreg.nonnull()) source_physreg.get_state_list().dispatch_source_counter++;
+    if likely (source_physreg.nonnull()) source_physreg.get_state_list().dispatch_source_counter++;
   }
 
   //
@@ -2140,7 +2145,7 @@ bool ReorderBufferEntry::find_sources() {
   // exceptions, establishes an STQ entry and gets replayed as a second phase
   // store (this time around with the rc dependency required)
   //
-  if (isstore(uop.opcode) && !load_store_second_phase) {
+  if unlikely (isstore(uop.opcode) && !load_store_second_phase) {
     preready[RC] = 1;
   }
 
@@ -2174,7 +2179,7 @@ int dispatch() {
   ReorderBufferEntry* rob;
 
   foreach_list_mutable(rob_ready_to_dispatch_list, rob, entry, nextentry) {
-    if (dispatchcount >= DISPATCH_WIDTH) break;
+    if unlikely (dispatchcount >= DISPATCH_WIDTH) break;
 
     // All operands start out as valid, then get put on wait queues if they are not actually ready.
 
@@ -2186,14 +2191,14 @@ int dispatch() {
     // we are still processing instructions in order at this point,
     // abort dispatching for this cycle.
     //
-    if (rob->cluster < 0) {
+    if unlikely (rob->cluster < 0) {
       if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " cannot dispatch (no cluster)", endl;
       continue; // try the next uop to avoid deadlock on re-dispatches
     }
 
     int operands_still_needed = rob->find_sources();
 
-    if (operands_still_needed) {
+    if likely (operands_still_needed) {
       rob->changestate(rob_dispatched_list[rob->cluster]);
     } else {
       rob->changestate(rob->get_ready_to_issue_list());
@@ -2218,9 +2223,9 @@ int dispatch() {
 
   stop_timer(ctdispatch);
 
-  if (dispatchcount) {
+  if likely (dispatchcount) {
     dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
-  } else if (!rob_ready_to_dispatch_list.empty()) {
+  } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
     dispatch_deadlock_countdown--;
     if (!dispatch_deadlock_countdown) {
       if (logable(1)) logfile << "Dispatch deadlock at cycle ", sim_cycle, ", commits ", total_user_insns_committed, ": recovering...", endl;
@@ -2285,7 +2290,7 @@ void ReorderBufferEntry::replay() {
     PhysicalRegister& source_physreg = *operands[operand];
     ReorderBufferEntry& source_rob = *source_physreg.rob;
 
-    if (source_physreg.state == PHYSREG_WAITING) {
+    if likely (source_physreg.state == PHYSREG_WAITING) {
       uopids[operand] = source_rob.index();
       preready[operand] = 0;
       operands_still_needed++;
@@ -2296,29 +2301,13 @@ void ReorderBufferEntry::replay() {
     }
   }
 
-  if (operands_still_needed) {
+  if unlikely (operands_still_needed) {
     changestate(rob_dispatched_list[cluster]);
   } else {
     changestate(get_ready_to_issue_list());
   }
 
   issueq_operation_on_cluster(cluster, replay(iqslot, uopids, preready));
-}
-
-inline int check_access_alignment(W64 addr, AddressSpace::spat_t top, bool annul, int sizeshift, bool internal, int exception) {
-  if (lowbits(addr, sizeshift))
-    return EXCEPTION_UnalignedAccess;
-
-  //
-  // This load/store was the high part of an unaligned store but the actual user
-  // address did not touch the high 64 bits. Since it is perfectly legal to do
-  // an unaligned store to the very end of the page such that the next 64 bit
-  // chunk is not mapped to a valid page, we must not do any further checks:
-  //
-  if (annul | internal)
-    return 0;
-
-  return (asp.fastcheck(addr, top)) ? 0 : exception;
 }
 
 enum {
@@ -2376,33 +2365,39 @@ W32 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
 
 W64 store_datatype_histogram[DATATYPE_COUNT];
 
-int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc, bool rcready) {
+int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate) {
   int sizeshift = uop.size;
   int aligntype = uop.cond;
   bool internal = uop.internal;
 
-  W64 raddr = ra + rb;
-  raddr &= ctx.virt_addr_mask;
-  W64 origaddr = raddr;
+  W64 addr = ra + rb;
+  //
+  // x86-64 requires virtual addresses to be canonical: if bit 47 is set, 
+  // all upper 16 bits must be set. If this is not true, we need to signal
+  // a general protection fault.
+  //
+  addr = (W64)signext64(addr, 48);
+  addr &= ctx.virt_addr_mask;
+  W64 origaddr = addr;
+  origvirt = origaddr;
   bool annul = 0;
 
   switch (aligntype) {
   case LDST_ALIGN_NORMAL:
     break;
   case LDST_ALIGN_LO:
-    raddr = floor(raddr, 8); break;
+    addr = floor(addr, 8); break;
   case LDST_ALIGN_HI:
     //
     // Is the high load ever even used? If not, don't check for exceptions;
     // otherwise we may erroneously flag page boundary conditions as invalid
     //
-    raddr = floor(raddr, 8);
-    annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == raddr);
-    raddr += 8;
+    addr = floor(addr, 8);
+    annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == addr);
+    addr += 8;
     break;
   }
 
-  W64 addr = lowbits(raddr, VIRT_ADDR_BITS);
   state.physaddr = addr >> 3;
   state.invalid = 0;
   //
@@ -2438,11 +2433,14 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   bool ready;
   byte bytemask;
 
-  W64 exception = check_access_alignment(addr, asp.writemap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnWrite);
+  int exception = 0;
+  PageFaultErrorCode pfec;
 
-  if (exception) {
+  void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, 1, uop.internal, exception, pfec, pteupdate);
+
+  if unlikely (exception) {
     state.invalid = 1;
-    state.data = exception;
+    state.data = exception | ((W64)pfec << 32);
     state.datavalid = 1;
 
     if (logable(1)) 
@@ -2450,7 +2448,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
         " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ",
         "0x", hexstring(addr, 48), ": exception ", exception_name(exception), endl;
 
-    if (exception == EXCEPTION_UnalignedAccess) {
+    if unlikely (exception == EXCEPTION_UnalignedAccess) {
       //
       // If we have an unaligned access, locate the excepting uop in the
       // basic block cache through the uop.origop pointer. Directly set
@@ -2476,6 +2474,8 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
     return ISSUE_COMPLETED;
   }
 
+  state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
+
   //
   // The STQ is then searched for the most recent prior store S to same 64-bit block. If found, U's
   // rs dependency is set to S by setting the ROB's rs field to point to the prior store's physreg
@@ -2489,7 +2489,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   foreach_backward_before(LSQ, lsq, i) {
     LoadStoreQueueEntry& stbuf = LSQ[i];
 
-    if (stbuf.store && (!stbuf.addrvalid || (stbuf.addrvalid && (stbuf.physaddr == state.physaddr)))) {
+    if unlikely (stbuf.store && (!stbuf.addrvalid || (stbuf.addrvalid && (stbuf.physaddr == state.physaddr)))) {
       assert(stbuf.rob->uop.uuid < uop.uuid);
       sfra = &stbuf;
       break;
@@ -2525,7 +2525,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   // store buffer merging in Pentium 4 and AMD K8.
   //
 
-  if (!ready) {
+  if unlikely (!ready) {
     if (logable(1)) {
       logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
         " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ",
@@ -2565,7 +2565,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
     // (see notes on Load Replay Conditions below)
     //
 
-    if ((!ldbuf.store) & ldbuf.addrvalid & (ldbuf.physaddr == state.physaddr)) {
+    if unlikely ((!ldbuf.store) & ldbuf.addrvalid & (ldbuf.physaddr == state.physaddr)) {
       //
       // Check for the extremely rare case where:
       // - load is in the ready_to_load state at the start of the simulated 
@@ -2584,14 +2584,14 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
         parallel_forwarding_match |= (load_to_store_parallel_forwarding_buffer[i] == state.physaddr);
       }
 
-      if (parallel_forwarding_match) {
+      if unlikely (parallel_forwarding_match) {
         if (logable(1)) logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
           " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ", "0x", hexstring(addr, 48), 
           " ignored parallel forwarding match with ldq ", ldbuf.index(), " (uuid ", ldbuf.rob->uop.uuid, " rob", ldbuf.rob->index(), 
           " r", ldbuf.rob->physreg->index(), ")", endl;
       }
 
-      if (parallel_forwarding_match) {
+      if unlikely (parallel_forwarding_match) {
         store_parallel_aliasing++;
         continue;
       }
@@ -2665,7 +2665,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, W64 ra, W64 rb, W
   return ISSUE_COMPLETED;
 }
 
-static inline W64 loaddata(void* target, int SIZESHIFT, bool SIGNEXT) {
+static inline W64 extract_bytes(void* target, int SIZESHIFT, bool SIGNEXT) {
   W64 data;
   switch (SIZESHIFT) {
   case 0:
@@ -2684,7 +2684,7 @@ CycleTimer ctload;
 
 W64 load_datatype_histogram[DATATYPE_COUNT];
 
-int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W64 rc) {
+int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
   //bool DEBUG = analyze_in_detail();
   static const bool DEBUG = 0;
 
@@ -2693,33 +2693,37 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   bool internal = uop.internal;
   bool signext = (uop.opcode == OP_ldx);
 
-  W64 raddr = (aligntype == LDST_ALIGN_NORMAL) ? (ra + rb) : ra;
-  // if (aligntype == LDST_ALIGN_NORMAL) raddr += (rc << uop.extshift);
-  raddr &= ctx.virt_addr_mask;
-  W64 origaddr = raddr;
+  W64 addr = (aligntype == LDST_ALIGN_NORMAL) ? (ra + rb) : ra;
+  //
+  // x86-64 requires virtual addresses to be canonical: if bit 47 is set, 
+  // all upper 16 bits must be set. If this is not true, we need to signal
+  // a general protection fault.
+  //
+  addr = (W64)signext64(addr, 48);
+  addr &= ctx.virt_addr_mask;
+  W64 origaddr = addr;
+  origvirt = origaddr;
   bool annul = 0;
 
   switch (aligntype) {
   case LDST_ALIGN_NORMAL:
     break;
   case LDST_ALIGN_LO:
-    raddr = floor(raddr, 8); break;
+    addr = floor(addr, 8); break;
   case LDST_ALIGN_HI:
     //
     // Is the high load ever even used? If not, don't check for exceptions;
     // otherwise we may erroneously flag page boundary conditions as invalid
     //
-    raddr = floor(raddr, 8);
-    annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == raddr);
-    raddr += 8; 
+    addr = floor(addr, 8);
+    annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == addr);
+    addr += 8; 
     break;
   }
 
-  W64 addr = lowbits(raddr, VIRT_ADDR_BITS);
-
   state.physaddr = addr >> 3;
-  state.addrvalid = 0;
-  state.datavalid = 0;
+  state.addrvalid = 1;
+  state.datavalid = 1;
   state.invalid = 0;
 
   load_type_aligned += ((!uop.internal) & (aligntype == LDST_ALIGN_NORMAL));
@@ -2727,9 +2731,12 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   load_type_internal += uop.internal;
   load_size[sizeshift]++;
 
-  W64 exception = check_access_alignment(addr, asp.readmap, annul, uop.size, uop.internal, EXCEPTION_PageFaultOnRead);
+  int exception = 0;
+  PageFaultErrorCode pfec;
 
-  if (exception) {
+  void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, 0, uop.internal, exception, pfec, pteupdate);
+
+  if unlikely (exception) {
     state.invalid = 1;
     state.data = exception;
     state.datavalid = 1;
@@ -2739,7 +2746,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
         " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ",
         "0x", hexstring(addr, 48), ": exception ", exception_name(exception), endl;
 
-    if (exception == EXCEPTION_UnalignedAccess) {
+    if unlikely (exception == EXCEPTION_UnalignedAccess) {
       //
       // If we have an unaligned access, locate the excepting uop in the
       // basic block cache through the uop.origop pointer. Directly set
@@ -2765,13 +2772,16 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
     return ISSUE_COMPLETED;
   }
 
+  state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
+
   //
   // For simulation purposes only, load the data immediately
   // so it is easier to track. In the hardware this obviously
   // only arrives later, but it saves us from having to copy
   // cache lines around...
   //
-  W64 data;
+
+  W64 data = (annul) ? 0 : *((W64*)(Waddr)floor(signext64((Waddr)mapped, 48), 8));
 
   LoadStoreQueueEntry* sfra = null;
 
@@ -2780,9 +2790,9 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   foreach_backward_before(LSQ, lsq, i) {
     LoadStoreQueueEntry& stbuf = LSQ[i];
 
-    if (!stbuf.store) continue;
+    if likely (!stbuf.store) continue;
 
-    if ((load_is_known_to_alias_with_store & (!stbuf.addrvalid)) || ((stbuf.physaddr == state.physaddr) & stbuf.addrvalid)) {
+    if unlikely ((load_is_known_to_alias_with_store & (!stbuf.addrvalid)) || ((stbuf.physaddr == state.physaddr) & stbuf.addrvalid)) {
       load_dependency_predicted_alias_unresolved += (load_is_known_to_alias_with_store);
       load_dependency_stq_address_match += (!load_is_known_to_alias_with_store);
       sfra = &stbuf;
@@ -2803,7 +2813,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   operands[RS] = (sfra) ? sfra->rob->physreg : &physregfiles[0][PHYS_REG_NULL];
   operands[RS]->addref(*this);
 
-  if (!ready) {
+  if unlikely (!ready) {
     //
     // Load Replay Conditions:
     //
@@ -2844,7 +2854,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
 
   state.addrvalid = 1;
 
-  if (aligntype == LDST_ALIGN_HI) {
+  if unlikely (aligntype == LDST_ALIGN_HI) {
     //
     // Concatenate the aligned data from a previous ld.lo uop provided in rb
     // with the currently loaded data D as follows:
@@ -2859,7 +2869,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
     //    XXXXXXXX
     //    ^ origaddr
     //
-    if (!annul) {
+    if likely (!annul) {
       if (sfra) {
         data = mux64(expand_8bit_to_64bit_lut[sfra->bytemask], *((W64*)(Waddr)floor(addr, 8)), sfra->data);
       } else {
@@ -2876,14 +2886,14 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
       
       W64 offset = lowbits(origaddr - floor(origaddr, 8), 4);
 
-      data = loaddata(((byte*)&aligner) + offset, sizeshift, signext);
+      data = extract_bytes(((byte*)&aligner) + offset, sizeshift, signext);
     } else {
       //
       // annulled: we need no data from the high load anyway; only use the low data
       // that was already checked for exceptions and forwarding:
       //
       W64 offset = lowbits(origaddr, 3);
-      state.data = loaddata(((byte*)&rb) + offset, sizeshift, signext);
+      state.data = extract_bytes(((byte*)&rb) + offset, sizeshift, signext);
       state.invalid = 0;
       state.datavalid = 1;
 
@@ -2897,11 +2907,11 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   } else {
     // x86-64 requires virtual addresses to be canonical: if bit 47 is set, all upper 16 bits must be set
     W64 realaddr = (W64)signext64(addr, 48);
-    if (sfra) {
-      W64 predata = mux64(expand_8bit_to_64bit_lut[sfra->bytemask], *((W64*)(Waddr)floor(realaddr, 8)), sfra->data);
-      data = loaddata(((byte*)&predata) + lowbits(addr, 3), sizeshift, signext);
+    if unlikely (sfra) {
+      W64 predata = mux64(expand_8bit_to_64bit_lut[sfra->bytemask], data, sfra->data);
+      data = extract_bytes(((byte*)&predata) + lowbits(addr, 3), sizeshift, signext);
     } else {
-      data = loaddata((void*)(Waddr)realaddr, sizeshift, signext);
+      data = extract_bytes((byte*)&data + lowbits(addr, 3), sizeshift, signext);
     }
   }
 
@@ -2920,9 +2930,9 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
   state.invalid = 0;
   state.bytemask = 0xff;
 
-  bool L1hit = (perfect_cache) ? 1 : probe_cache_and_sfr(addr, sfra, sizeshift);
+  bool L1hit = (config.perfect_cache) ? 1 : probe_cache_and_sfr(addr, sfra, sizeshift);
 
-  if (L1hit) {    
+  if likely (L1hit) {    
     cycles_left = LOADLAT;
     
     if (logable(1)) {
@@ -2971,7 +2981,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, W64 ra, W64 rb, W6
     logfile << " = 0x", hexstring(state.data, 64), " [L1 miss to LFRQ slot ", lfrqslot, "]", endl;
   }
 
-  if (lfrqslot < 0) {
+  if unlikely (lfrqslot < 0) {
     logfile << intstring(uop.uuid, 20), " load  ", " rob ", intstring(index(), -3), " ld", lsq->index(), 
       " r", intstring(physreg->index(), -3), ": LFRQ or miss buffer full; replaying", endl;
 
@@ -3008,7 +3018,7 @@ void ReorderBufferEntry::loadwakeup() {
 }
 
 W64 load_filled_callback(LoadStoreInfo lsi, W64 addr) {
-  if (lsi.info.rd == PHYS_REG_NULL)
+  if unlikely (lsi.info.rd == PHYS_REG_NULL)
     return 0; // ignore prefetches
 
   assert(lsi.info.tag < ROB_SIZE);
@@ -3063,7 +3073,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 
   // Find uop to start annulment at
   int startidx = (keep_misspec_uop) ? add_index_modulo(eomidx, +1, ROB_SIZE) : somidx;
-  if (startidx == ROB.tail) {
+  if unlikely (startidx == ROB.tail) {
     // The uop causing the mis-speculation was the only uop in the ROB:
     // no action is necessary (but in practice this is generally not possible)
     if (logable(1)) 
@@ -3091,7 +3101,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     ReorderBufferEntry& annulrob = ROB[idx];
     issueq_operation_on_cluster(annulrob.cluster, annuluop(annulrob.index()));
     annulrob.iqslot = -1;
-    if (idx == startidx) break;
+    if unlikely (idx == startidx) break;
     idx = add_index_modulo(idx, -1, ROB_SIZE);
   }
 
@@ -3160,7 +3170,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     foreach (j, MAX_OPERANDS) { annulrob.operands[j]->unref(annulrob); }
     annulrob.physreg->free();
 
-    if (isclass(annulrob.uop.opcode, OPCLASS_LOAD|OPCLASS_STORE)) {
+    if unlikely (isclass(annulrob.uop.opcode, OPCLASS_LOAD|OPCLASS_STORE)) {
       if (logable(1)) logfile << " lsq", annulrob.lsq->index();
       loads_in_flight -= (annulrob.lsq->store == 0);
       stores_in_flight -= (annulrob.lsq->store == 1);
@@ -3168,12 +3178,12 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
       LSQ.annul(annulrob.lsq);
     }
 
-    if (annulrob.lfrqslot >= 0) {
+    if unlikely (annulrob.lfrqslot >= 0) {
       if (logable(1)) logfile << " lfrq", annulrob.lfrqslot;
       annul_lfrq_slot(annulrob.lfrqslot);
     }
 
-    if (isbranch(annulrob.uop.opcode) && (annulrob.uop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
+    if unlikely (isbranch(annulrob.uop.opcode) && (annulrob.uop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
       //
       // Return Address Stack (RAS) correction:
       // Example calls and returns in pipeline
@@ -3260,7 +3270,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
   redispatch_total_trigger_uops++;
 
   // Remove from issue queue, if it was already in some issue queue
-  if (cluster >= 0) {
+  if unlikely (cluster >= 0) {
     bool found = 0;
     issueq_operation_on_cluster_with_result(cluster, found, annuluop(index()));
     if (found) {
@@ -3269,13 +3279,13 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     cluster = -1;
   }
 
-  if (lfrqslot >= 0) {
+  if unlikely (lfrqslot >= 0) {
     if (logable(1)) logfile << " [lfrqslot ", lfrqslot, "]";
     annul_lfrq_slot(lfrqslot);
     lfrqslot = -1;
   }
 
-  if (lsq) {
+  if unlikely (lsq) {
     if (logable(1)) logfile << " [lsq ", lsq->index(), "]";
     lsq->physaddr = 0;
     lsq->addrvalid = 0;
@@ -3293,7 +3303,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     }
   }
 
-  if (physreg) {
+  if likely (physreg) {
     if (logable(1)) logfile << " [physreg ", physreg->index(), "]";
     // Return physreg to state just after allocation
     physreg->data = 0;
@@ -3361,7 +3371,7 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
     //
     bool dep = (*dependent_operands) | (robidx == index()) | isstore(uop.opcode);
 
-    if (dep) {
+    if unlikely (dep) {
       count++;
       redispatch_total_dependent_uops += (robidx != index());
       depmap[reissuerob.index()] = 1;
@@ -3464,7 +3474,7 @@ int ReorderBufferEntry::issue() {
   W32 executable_on_fu = opinfo[uop.opcode].fu & clusters[cluster].fu_mask & fu_avail;
 
   // Are any FUs available in this cycle?
-  if (!executable_on_fu) {
+  if unlikely (!executable_on_fu) {
     if (logable(1)) { 
       logfile << intstring(uop.uuid, 20), " issnfu rob ", intstring(index(), -3), " no FUs available in cluster ", clusters[cluster].name, ": ",
         "fu_avail = ", bitstring(fu_avail, FU_COUNT, true), ", ",
@@ -3514,27 +3524,27 @@ int ReorderBufferEntry::issue() {
   bool br = isbranch(uop.opcode);
 
   assert(operands[RA]->ready());
-  if (uop.rb != REG_imm) assert(rb.ready());
-  if ((!st || (st && load_store_second_phase)) && (uop.rc != REG_imm)) assert(rc.ready());
-  if (!st) assert(operands[RS]->ready());
+  if likely (uop.rb != REG_imm) assert(rb.ready());
+  if likely ((!st || (st && load_store_second_phase)) && (uop.rc != REG_imm)) assert(rc.ready());
+  if likely (!st) assert(operands[RS]->ready());
 
-  if (ra.nonnull()) {
+  if likely (ra.nonnull()) {
     ra.get_state_list().issue_source_counter++;
     ra.all_consumers_sourced_from_bypass &= (ra.state == PHYSREG_BYPASS);
   }
 
-  if ((!uop.rbimm) & (rb.nonnull())) { 
+  if likely ((!uop.rbimm) & (rb.nonnull())) { 
     rb.get_state_list().issue_source_counter++;
     rb.all_consumers_sourced_from_bypass &= (rb.state == PHYSREG_BYPASS);
   }
 
-  if ((!uop.rcimm) & (rc.nonnull())) {
+  if unlikely ((!uop.rcimm) & (rc.nonnull())) {
     rc.get_state_list().issue_source_counter++;
     rc.all_consumers_sourced_from_bypass &= (rc.state == PHYSREG_BYPASS);
   }
 
   bool propagated_exception = 0;
-  if ((ra.flags | rb.flags | rc.flags) & FLAG_INV) {
+  if unlikely ((ra.flags | rb.flags | rc.flags) & FLAG_INV) {
     //
     // Invalid data propagated through operands: mark output as
     // invalid and don't even execute the uop at all.
@@ -3546,25 +3556,25 @@ int ReorderBufferEntry::issue() {
   } else {
     issue_opclass_histogram[opclassof(uop.opcode)]++;
 
-    if (ld|st) {
+    if unlikely (ld|st) {
       start_timer((ld ? ctload : ctstore));
-      int completed = (ld) ? issueload(*lsq, radata, rbdata, rcdata) : issuestore(*lsq, radata, rbdata, rcdata, operand_ready(2));
+      int completed = (ld) ? issueload(*lsq, origvirt, radata, rbdata, rcdata, pteupdate) : issuestore(*lsq, origvirt, radata, rbdata, rcdata, operand_ready(2), pteupdate);
       stop_timer((ld ? ctload : ctstore));
-      if (completed == ISSUE_MISSPECULATED) {
+      if unlikely (completed == ISSUE_MISSPECULATED) {
         issue_result_misspeculated++;
         return -1;
       }
-      if (completed == ISSUE_NEEDS_REFETCH) {
+      if unlikely (completed == ISSUE_NEEDS_REFETCH) {
         issue_result_refetch++;
         return -1;
       }
       state.reg.rddata = lsq->data;
       state.reg.rdflags = (lsq->invalid << log2(FLAG_INV)) | ((!lsq->datavalid) << log2(FLAG_WAIT));
-      if (completed == ISSUE_NEEDS_REPLAY) {
+      if unlikely (completed == ISSUE_NEEDS_REPLAY) {
         issue_result_replay++;
         return 0;
       }
-    } else if (br) {
+    } else if unlikely (br) {
       state.brreg.riptaken = uop.riptaken;
       state.brreg.ripseq = uop.ripseq;
       uop.synthop(state, radata, rbdata, rcdata, ra.flags, rb.flags, rc.flags); 
@@ -3583,7 +3593,7 @@ int ReorderBufferEntry::issue() {
   physreg->flags = state.reg.rdflags;
   physreg->data = state.reg.rddata;
 
-  if (!physreg->valid()) {
+  if unlikely (!physreg->valid()) {
     //
     // If the uop caused an exception, force it directly to the commit
     // state and not through writeback (this keeps dependencies waiting until 
@@ -3631,15 +3641,15 @@ int ReorderBufferEntry::issue() {
 
   stop_timer(ctsubexec2);
 
-  if (physreg->valid()) {
-    if (br) {
+  if likely (physreg->valid()) {
+    if unlikely (br) {
       int bptype = uop.predinfo.bptype;
 
       bool cond = bit(bptype, log2(BRANCH_HINT_COND));
       bool indir = bit(bptype, log2(BRANCH_HINT_INDIRECT));
       bool ret = bit(bptype, log2(BRANCH_HINT_RET));
         
-      if (mispredicted) {
+      if unlikely (mispredicted) {
         branchpred_cond_mispred += cond;
         branchpred_indir_mispred += (indir & !ret);
         branchpred_return_mispred += ret;
@@ -3657,7 +3667,7 @@ int ReorderBufferEntry::issue() {
         // to the correct next instruction in the ROB after
         // the branch.
         //
-        if (isclass(uop.opcode, OPCLASS_COND_BRANCH)) {
+        if likely (isclass(uop.opcode, OPCLASS_COND_BRANCH)) {
           assert(realrip == uop.ripseq);
           uop.cond = invert_cond(uop.cond);
           
@@ -3668,10 +3678,10 @@ int ReorderBufferEntry::issue() {
           //
           uop.synthop = get_synthcode_for_cond_branch(uop.opcode, uop.cond, uop.size, 0);
           swap(uop.riptaken, uop.ripseq);
-        } else if (isclass(uop.opcode, OPCLASS_INDIR_BRANCH)) {
+        } else if unlikely (isclass(uop.opcode, OPCLASS_INDIR_BRANCH)) {
           uop.riptaken = realrip;
           uop.ripseq = realrip;
-        } else if (isclass(uop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
+        } else if unlikely (isclass(uop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
           assert(realrip == uop.riptaken);
         }
 
@@ -3731,7 +3741,7 @@ static int issue(int cluster) {
     issueq_operation_on_cluster_with_result(cluster, iqslot, issue());
   
     // Is anything ready?
-    if (iqslot < 0) break;
+    if unlikely (iqslot < 0) break;
 
     int robid;
     issueq_operation_on_cluster_with_result(cluster, robid, uopof(iqslot));
@@ -3741,7 +3751,7 @@ static int issue(int cluster) {
     int rc = rob.issue();
     // Stop issuing from this cluster once something replays or has a mis-speculation
     issuecount++;
-    if (rc <= 0) break;
+    if unlikely (rc <= 0) break;
   }
 
   issue_width_histogram[cluster][min(issuecount, MAX_ISSUE_WIDTH)]++;
@@ -3776,7 +3786,7 @@ static int complete(int cluster) {
   foreach_list_mutable(rob_issued_list[cluster], rob, entry, nextentry) {
     rob->cycles_left--;
 
-    if (rob->cycles_left <= 0) {
+    if unlikely (rob->cycles_left <= 0) {
       if (logable(1)) {
         stringbuf rdstr; print_value_and_flags(rdstr, rob->physreg->data, rob->physreg->flags);
         logfile << intstring(rob->uop.uuid, 20), " complt rob ", intstring(rob->index(), -3), " on ", padstring(FU[rob->fu].name, -4), ": r", intstring(rob->physreg->index(), -3), " = ", rdstr, endl;
@@ -3810,7 +3820,7 @@ int ReorderBufferEntry::forward() {
 
   W32 targets = forward_at_cycle_lut[cluster][forward_cycle];
   foreach (i, MAX_CLUSTERS) {
-    if (!bit(targets, i)) continue;
+    if likely (!bit(targets, i)) continue;
     if (logable(1)) logfile << intstring(uop.uuid, 20), " brcast rob ", intstring(index(), -3), " from cluster ", clusters[cluster].name, " to cluster ", clusters[i].name, " on forwarding cycle ", forward_cycle, endl;
 
     issueq_operation_on_cluster(i, broadcast(index()));
@@ -3834,7 +3844,7 @@ static int transfer(int cluster) {
   foreach_list_mutable(rob_completed_list[cluster], rob, entry, nextentry) {
     rob->forward();
     rob->forward_cycle++;
-    if (rob->forward_cycle > MAX_FORWARDING_LATENCY) {
+    if unlikely (rob->forward_cycle > MAX_FORWARDING_LATENCY) {
       rob->forward_cycle = MAX_FORWARDING_LATENCY;
       rob->changestate(rob_ready_to_writeback_list[rob->cluster]);
     }
@@ -3865,7 +3875,7 @@ int writeback(int cluster) {
   start_timer(ctwriteback);
 
   foreach_list_mutable(rob_ready_to_writeback_list[cluster], rob, entry, nextentry) {
-    if (writecount >= WRITEBACK_WIDTH)
+    if unlikely (writecount >= WRITEBACK_WIDTH)
       break;
 
     //
@@ -3874,7 +3884,7 @@ int writeback(int cluster) {
     bool transient = 0;
 
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-    if (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
+    if likely (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
       transient =
         (rob->dest_renamed_before_writeback) &&
         (rob->consumer_count <= 1) &&
@@ -3984,14 +3994,14 @@ int ReorderBufferEntry::pseudocommit() {
 
   if (logable(1)) logfile << " rebuild rrt:";
 
-  if (archdest_can_commit[uop.rd]) {
+  if likely (archdest_can_commit[uop.rd]) {
     specrrt[uop.rd]->unspecref(uop.rd);
     specrrt[uop.rd] = physreg;
     specrrt[uop.rd]->addspecref(uop.rd);
     if (logable(1)) logfile << " ", arch_reg_names[uop.rd];
   }
 
-  if (!uop.nouserflags) {
+  if likely (!uop.nouserflags) {
     if (uop.setflags & SETFLAG_ZF) {
       if (logable(1)) logfile << " zf";
       specrrt[REG_zf]->unspecref(REG_zf);
@@ -4019,7 +4029,7 @@ int ReorderBufferEntry::pseudocommit() {
     logfile << endl;
   }
 
-  if (isclass(uop.opcode, OPCLASS_BARRIER))
+  if unlikely (isclass(uop.opcode, OPCLASS_BARRIER))
     return COMMIT_RESULT_BARRIER;
 
   return COMMIT_RESULT_OK;
@@ -4053,21 +4063,21 @@ int ReorderBufferEntry::commit() {
   foreach_forward_from(ROB, this, j) {
     ReorderBufferEntry& subrob = ROB[j];
 
-    if (!subrob.ready_to_commit()) {
+    if unlikely (!subrob.ready_to_commit()) {
       all_ready_to_commit = false;
       break;
     }
 
-    if (subrob.has_exception()) {
+    if unlikely (subrob.has_exception()) {
       ctx.exception = subrob.physreg->data;
       macro_op_has_exceptions = true;
       break;
     }
     
-    if (subrob.uop.eom) break;
+    if likely (subrob.uop.eom) break;
   }
 
-  if (!all_ready_to_commit) {
+  if unlikely (!all_ready_to_commit) {
     commit_result_none++;
     return COMMIT_RESULT_NONE;
   }
@@ -4086,13 +4096,13 @@ int ReorderBufferEntry::commit() {
 
   commit_opclass_histogram[opclassof(uop.opcode)]++;
 
-  if (macro_op_has_exceptions) {
+  if unlikely (macro_op_has_exceptions) {
     if (logable(1)) 
       logfile << intstring(uop.uuid, 20), " except rob ", intstring(index(), -3),
         " exception ", exception_name(ctx.exception), " [EOM #", total_user_insns_committed, "]", endl;
 
     // See notes in handle_exception():
-    if (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
+    if likely (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
       chk_recovery_rip = ctx.commitarf[REG_rip] + bytes_in_current_insn_to_commit;
       if (logable(1)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)ctx.commitarf[REG_rip],
         " by ", bytes_in_current_insn_to_commit, " bytes to ", (void*)(Waddr)chk_recovery_rip, endl;
@@ -4116,19 +4126,19 @@ int ReorderBufferEntry::commit() {
     logfile << intstring(uop.uuid, 20), " commit rob ", intstring(index(), -3);
   }
 
-  if (uop.som) { 
-    if (ctx.commitarf[REG_rip] != uop.rip) {
+  if likely (uop.som) { 
+    if unlikely (ctx.commitarf[REG_rip] != uop.rip) {
       logfile << "RIP mismatch: ctx.commitarf[REG_rip] = ", (void*)(Waddr)ctx.commitarf[REG_rip], " vs uop.rip ", (void*)(Waddr)uop.rip, endl;
       assert(ctx.commitarf[REG_rip] == uop.rip); 
     }
   }
 
-  if (archdest_can_commit[uop.rd]) {
+  if likely (archdest_can_commit[uop.rd]) {
     commitrrt[uop.rd]->uncommitref(uop.rd);
     commitrrt[uop.rd] = physreg;
     commitrrt[uop.rd]->addcommitref(uop.rd);
 
-    if (uop.rd < ARCHREG_COUNT) ctx.commitarf[uop.rd] = physreg->data;
+    if likely (uop.rd < ARCHREG_COUNT) ctx.commitarf[uop.rd] = physreg->data;
 
     physreg->rob = null;
 
@@ -4137,8 +4147,8 @@ int ReorderBufferEntry::commit() {
     }
   }
 
-  if (uop.eom) {
-    if (uop.rd == REG_rip) {
+  if likely (uop.eom) {
+    if unlikely (uop.rd == REG_rip) {
       assert(isbranch(uop.opcode));
       ctx.commitarf[REG_rip] = physreg->data;
     } else {
@@ -4148,7 +4158,7 @@ int ReorderBufferEntry::commit() {
     if (logable(1)) logfile << " [rip = ", (void*)(Waddr)ctx.commitarf[REG_rip], "]";
   }
 
-  if (!uop.nouserflags) {
+  if unlikely (!uop.nouserflags) {
     W64 flagmask = setflags_to_x86_flags[uop.setflags];
     ctx.commitarf[REG_flags] = (ctx.commitarf[REG_flags] & ~flagmask) | (physreg->flags & flagmask);
 
@@ -4163,32 +4173,37 @@ int ReorderBufferEntry::commit() {
       }
     }
 
-    if (uop.setflags & SETFLAG_ZF) {
+    if likely (uop.setflags & SETFLAG_ZF) {
       commitrrt[REG_zf]->uncommitref(REG_zf);
       commitrrt[REG_zf] = physreg;
       commitrrt[REG_zf]->addcommitref(REG_zf);
     }
-    if (uop.setflags & SETFLAG_CF) {
+    if likely (uop.setflags & SETFLAG_CF) {
       commitrrt[REG_cf]->uncommitref(REG_cf);
       commitrrt[REG_cf] = physreg;
       commitrrt[REG_cf]->addcommitref(REG_cf);
     }
-    if (uop.setflags & SETFLAG_OF) {
+    if likely (uop.setflags & SETFLAG_OF) {
       commitrrt[REG_of]->uncommitref(REG_of);
       commitrrt[REG_of] = physreg;
       commitrrt[REG_of]->addcommitref(REG_of);
     }
   }
 
-  if (st) {
-    assert(commitstore_unlocked(*lsq) == 0);
+  if unlikely (st) {
+    if (lsq->bytemask) assert(commitstore_unlocked(*lsq) == 0);
     if (logable(1)) logfile << " [mem ", (void*)(Waddr)(lsq->physaddr << 3), " = ", bytemaskstring((const byte*)&lsq->data, lsq->bytemask, 8), "]";
+  }
+
+  if unlikely (pteupdate) {
+    if (logable(1)) logfile << " [pte]";
+    ctx.update_pte_acc_dirty(origvirt, pteupdate);
   }
 
   //
   // Free physical registers, load/store queue entries, etc.
   //
-  if (ld|st) {
+  if unlikely (ld|st) {
     if (logable(1)) logfile << " [lsq ", lsq->index(), "]";
     loads_in_flight -= (lsq->store == 0);
     stores_in_flight -= (lsq->store == 1);
@@ -4199,7 +4214,7 @@ int ReorderBufferEntry::commit() {
   assert(archdest_can_commit[uop.rd]);
   assert(oldphysreg->state == PHYSREG_ARCH);
 
-  if (oldphysreg->nonnull()) {
+  if likely (oldphysreg->nonnull()) {
     if (logable(1)) {
       if (oldphysreg->referenced()) {
         logfile << " [pending free old r", oldphysreg->index(), " ref by";
@@ -4209,7 +4224,7 @@ int ReorderBufferEntry::commit() {
         logfile << " [free old r", oldphysreg->index(), "]";
       }
     }
-    if (oldphysreg->referenced()) {
+    if unlikely (oldphysreg->referenced()) {
       oldphysreg->changestate(PHYSREG_PENDINGFREE); 
       commit_freereg_pending++;
     } else  {
@@ -4218,7 +4233,7 @@ int ReorderBufferEntry::commit() {
     }
   }
 
-  if (!(br|st)) frontend_rename_consumer_count_histogram[consumer_count]++;
+  if likely (!(br|st)) frontend_rename_consumer_count_histogram[consumer_count]++;
 
   if (logable(1)) logfile << " [commit r", physreg->index(), "]";
 
@@ -4230,14 +4245,14 @@ int ReorderBufferEntry::commit() {
   // here for simplicity.
   //
   foreach (i, MAX_OPERANDS) { 
-    if ((logable(1)) & (operands[i]->nonnull())) logfile << " [unref r", operands[i]->index(), "]";
+    if unlikely ((logable(1)) & (operands[i]->nonnull())) logfile << " [unref r", operands[i]->index(), "]";
     operands[i]->unref(*this);
   }
 
   //
   // Update branch prediction
   //
-  if (isclass(uop.opcode, OPCLASS_BRANCH)) {
+  if unlikely (isclass(uop.opcode, OPCLASS_BRANCH)) {
     assert(uop.eom);
     //
     // NOTE: Technically the "branch address" refers to the rip of the *next* 
@@ -4260,7 +4275,7 @@ int ReorderBufferEntry::commit() {
     logfile << endl;
   }
 
-  if (uop.eom)
+  if likely (uop.eom)
     total_user_insns_committed++;
 
   total_uops_committed++;
@@ -4269,7 +4284,7 @@ int ReorderBufferEntry::commit() {
   reset();
   ROB.commit(*this);
 
-  if (isclass(uop.opcode, OPCLASS_BARRIER)) {
+  if unlikely (isclass(uop.opcode, OPCLASS_BARRIER)) {
     if (logable(1)) logfile << intstring(uop.uuid, 20), " commit barrier: jump to microcode address ", hexstring(uop.riptaken, 48), endl;
     commit_result_barrier++;
     return COMMIT_RESULT_BARRIER;
@@ -4293,7 +4308,7 @@ int commit() {
     StateList& statelist = physregfiles[rfid].states[PHYSREG_PENDINGFREE];
     PhysicalRegister* physreg;
     foreach_list_mutable(statelist, physreg, entry, nextentry) {
-      if (!physreg->referenced()) {
+      if unlikely (!physreg->referenced()) {
         if (logable(1)) logfile << padstring("", 20), " free   r", physreg->index(), " no longer referenced; moving to free state", endl;
         physreg->free();
         commit_freereg_recycled++;
@@ -4312,12 +4327,12 @@ int commit() {
   foreach_forward(ROB, i) {
     ReorderBufferEntry& rob = ROB[i];
 
-    if (commitcount >= COMMIT_WIDTH) break;
+    if unlikely (commitcount >= COMMIT_WIDTH) break;
     rc = rob.commit();
-    if (rc == COMMIT_RESULT_OK) {
+    if likely (rc == COMMIT_RESULT_OK) {
       commitcount++;
       last_commit_at_cycle = sim_cycle;
-      if (total_user_insns_committed >= stop_at_user_insns) {
+      if (total_user_insns_committed >= config.stop_at_user_insns) {
         stop_timer(ctcommit);
         rc = COMMIT_RESULT_STOP;
         break;
@@ -4774,7 +4789,7 @@ void check_refcounts() {
   foreach (rfid, PHYS_REG_FILE_COUNT) {
     PhysicalRegisterFile& physregs = physregfiles[rfid];
     foreach (i, physregs.size) {
-      if (physregs[i].refcount != refcounts[rfid][i]) {
+      if unlikely (physregs[i].refcount != refcounts[rfid][i]) {
         logfile << "ERROR: r", i, " refcount is ", physregs[i].refcount, " but should be ", refcounts[rfid][i], endl;
         
         foreach_forward(ROB, r) {
@@ -4811,8 +4826,8 @@ int out_of_order_core_toplevel_loop() {
   logfile << "Core State:", endl;
   logfile << ctx.commitarf;
 
-  int oldloglevel = loglevel;
-  if (start_log_at_iteration != infinity) loglevel = 0;
+  int oldloglevel = config.loglevel;
+  if (config.start_log_at_iteration != infinity) config.loglevel = 0;
 
   cttotal.start();
 
@@ -4822,14 +4837,14 @@ int out_of_order_core_toplevel_loop() {
 
   requested_switch_to_native = 0;
 
-  while ((iterations < stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns)) {
-    if ((iterations >= start_log_at_iteration) & (!loglevel)) {
-      loglevel = oldloglevel;
-      logfile << "Start logging (level ", loglevel, ") at cycle ", sim_cycle, endl, flush;
+  while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
+    if unlikely ((!config.loglevel) && (iterations >= config.start_log_at_iteration)) {
+      config.loglevel = oldloglevel;
+      logfile << "Start logging (level ", config.loglevel, ") at cycle ", sim_cycle, endl, flush;
     }
     if (logable(1)) logfile << "Cycle ", sim_cycle, ((stall_frontend) ? " (frontend stalled)" : ""), ": commit rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
 
-    if ((sim_cycle - last_commit_at_cycle) > 1024) {
+    if unlikely ((sim_cycle - last_commit_at_cycle) > 1024) {
       stringbuf sb;
       sb << "WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, 
         " user commits: no instructions have committed for ", (sim_cycle - last_commit_at_cycle),
@@ -4839,10 +4854,10 @@ int out_of_order_core_toplevel_loop() {
       break;
     }
 
-    if (lowbits(sim_cycle, 16) == 0) 
+    if unlikely (lowbits(sim_cycle, 16) == 0) 
       logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)(Waddr)ctx.commitarf[REG_rip], ")", endl, flush;
 
-    if ((sim_cycle - last_stats_captured_at_cycle) >= snapshot_cycles) {
+    if unlikely ((sim_cycle - last_stats_captured_at_cycle) >= config.snapshot_cycles) {
       ooo_capture_stats();
       last_stats_captured_at_cycle = sim_cycle;
     }
@@ -4862,30 +4877,30 @@ int out_of_order_core_toplevel_loop() {
 
     int dispatchrc = dispatch();
 
-    if ((!stall_frontend) && (dispatchrc >= 0)) {
+    if likely ((!stall_frontend) && (dispatchrc >= 0)) {
       frontend();
       rename();
       fetch();
     }
 
-    if (dispatchrc >= 0) foreach_issueq(clock());
+    if likely (dispatchrc >= 0) foreach_issueq(clock());
 
 #ifdef ENABLE_CHECKS
     // This significantly slows down simulation; only enable it if absolutely needed:
     //check_refcounts();
 #endif
 
-    if (commitrc == COMMIT_RESULT_BARRIER) {
+    if unlikely (commitrc == COMMIT_RESULT_BARRIER) {
       exiting = !handle_barrier();
-      if (exiting) break;
-    } else if (commitrc == COMMIT_RESULT_EXCEPTION) {
+      if unlikely (exiting) break;
+    } else if unlikely (commitrc == COMMIT_RESULT_EXCEPTION) {
       exiting = !handle_exception();
-      if (exiting) break;
+      if unlikely (exiting) break;
     } else if (commitrc == COMMIT_RESULT_STOP) {
       break;
     }
 
-    if (requested_switch_to_native) {
+    if unlikely (requested_switch_to_native) {
       exiting = 1;
       break;
     }

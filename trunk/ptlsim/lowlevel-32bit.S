@@ -164,6 +164,7 @@ save_context_switch_to_sim_lowlevel:
   and      %esp,-16
 
   fxsave x87state
+
   mov   word ptr [saved_cs],%cs
   mov   word ptr [saved_ss],%ss
   mov   word ptr [saved_ds],%ds
@@ -206,7 +207,6 @@ switch_to_native_restore_context_lowlevel:
   mov      %esi,[%edi + 8*REG_rax + 8*6]
 # mov      %edi,[%edi + 8*REG_rax + 8*7]              # (done at very end)
 
-  # a24-a31: REG_rip, REG_flags, REG_fpflags, REG_sseflags, REG_tr0, REG_tr1, REG_tr2, REG_zero
 # mov      %rip,[%edi + 8*REG_rip]      # (do later)
 # mov      %rflags,[%edi + 8*REG_flags] # (already done)
   # (No need to restore %tr0, %tr1, %tr2, %zero

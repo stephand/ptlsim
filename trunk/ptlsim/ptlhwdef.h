@@ -134,11 +134,11 @@
 #define REG_fptos   48
 #define REG_fpsw    49
 #define REG_fptags  50
-#define REG_tr3     51
+#define REG_fpstack 51
 #define REG_tr4     52
 #define REG_tr5     53
 #define REG_tr6     54
-#define REG_tr7     55
+#define REG_ctx     55
 #define REG_rip     56
 #define REG_flags   57
 #define REG_iflags  58
@@ -184,8 +184,12 @@ extern W64 sim_cycle;
 #include <logic.h>
 #include <config.h>
 
-#define MAX_TRANSOPS_PER_USER_INSN 16
-#define MAXBBLEN 64
+static const int MAX_BB_BYTES = 255;
+static const int MAX_BB_X86_INSNS = 63;
+static const int MAX_BB_UOPS = 63;
+static const int MAX_BB_PER_PAGE = 4096;
+
+static const int MAX_TRANSOPS_PER_USER_INSN = 16;
 
 #define LOADLAT 2 // Load unit latency, assuming fast bypass
 
@@ -194,6 +198,36 @@ extern const char* exception_names[EXCEPTION_COUNT];
 static inline const char* exception_name(W64 exception) {
   return (exception < EXCEPTION_COUNT) ? exception_names[exception] : "Unknown";
 }
+
+//
+// Uniquely identifies any translation or basic block, including
+// the context in which it was translated: x86-64 instruction set,
+// kernel vs user mode, flag values, segmentation assumptions, etc.
+//
+// Most of this information is only relevant for full system PTLsim/X.
+// The userspace PTLsin only needs the RIP, use64, df, etc.
+//
+struct Context;
+
+struct RIPVirtPhys {
+  W64 rip;
+  W64 mfnlo:28, use64:1, kernel:1, padlo:2, mfnhi:28, df:1, padhi:3;
+
+  operator W64() const { return rip; }
+
+  RIPVirtPhys() { }
+  RIPVirtPhys(W64 rip) { this->rip = rip; }
+
+  // 28 bits + 12 page offset bits = 40 bit physical addresses
+  static const Waddr INVALID = 0xfffffff;
+
+  RIPVirtPhys(Waddr rip, Waddr mfnlo, Waddr mfnhi, bool use64, bool kernelmode);
+
+  // Update use64, kernelmode, mfnlo and mfnhi by translating rip and (rip + 4095), respectively:
+  RIPVirtPhys& update(Context& ctx, int bytes = PAGE_SIZE);
+};
+
+ostream& operator <<(ostream& os, const RIPVirtPhys& rvp);
 
 //
 // Store Forwarding Register definition
@@ -387,14 +421,14 @@ struct SegmentDescriptor {
 
   void setlimit(W64 size) {
     g = (size >= (1 << 20));
-    if (g) size = ceil(size, 4096) >> 12;
+    if likely (g) size = ceil(size, 4096) >> 12;
     limit0 = lowbits(size, 16);
     limit = bits(size, 16, 4);
   }
 
   W64 getlimit() const {
     W64 size = limit0 + (limit << 16);
-    if (g) size <<= 12;
+    if likely (g) size <<= 12;
     return size;
   }
 } packedstruct;
@@ -412,8 +446,8 @@ struct SegmentDescriptorCache {
 
   SegmentDescriptorCache() { }
 
+  // NOTE: selector field must be valid already; it is not updated!
   SegmentDescriptorCache& operator =(const SegmentDescriptor& desc) {
-    selector = 0;
     present = desc.p;
     use64 = desc.l;
     use32 = desc.d;
@@ -423,6 +457,17 @@ struct SegmentDescriptorCache {
     limit = desc.getlimit();
 
     return *this;
+  }
+
+  // Make 64-bit flat
+  void flatten() {
+    present = 1;
+    use64 = 1;
+    use32 = 0;
+    supervisor = 0;
+    dpl = 3;
+    base = 0;
+    limit = 0xffffffffffffffffULL;
   }
 };
 
@@ -455,33 +500,41 @@ enum {
   EXCEPTION_x86_count           = 20,
 };
 
-extern const char* x86_exception_names[EXCEPTION_x86_count];
+extern const char* x86_exception_names[256];
 
 struct PageFaultErrorCode {
-  W64 p:1, rw:1, us:1, rsv:1, nx:1;
-  PageFaultErrorCode() { }
-  PageFaultErrorCode(W64 rawbits) { *((W64*)this) = rawbits; }
-  operator W64() const { return *((W64*)this); }
+  byte p:1, rw:1, us:1, rsv:1, nx:1, pad:3;
+  RawDataAccessors(PageFaultErrorCode, byte);
 };
 
-static inline ostream& operator <<(ostream& os, const PageFaultErrorCode& pfec) {
-  os << "[";
-  if (pfec.p) os << " not-present";
-  os << ((pfec.rw) ? " write" : " read");
-  if (pfec.us) os << " supervisor-only";
-  if (pfec.rsv) os << " reserved-bits-set";
-  if (pfec.nx) os << " not-executable";
-  os << " ]";
+ostream& operator <<(ostream& os, const PageFaultErrorCode& pfec);
 
-  return os;
-}
 
+//
+// Information needed to update a PTE on commit.
+//
+// There is also a ptwrite bit that is set whenever a page
+// table page is technically read only, but the user code
+// may attempt to store to it anyway under the assumption
+// that the hypervisor will trap the store, validate the
+// written PTE value and emulate the store as if it was
+// to a normal read-write page.
+//
+struct PTEUpdate {
+  byte a:1, d:1, ptwrite:1;
+  RawDataAccessors(PTEUpdate, byte);
+};
 
 #ifdef PTLSIM_HYPERVISOR
+
 struct TrapTarget {
-  Waddr rip;
+#ifdef __x86_64__
+  W64 rip:48, cpl:2, maskevents:1, cs:3;
+#else
+  W32 rip;
+  W16 pad;
   W16 cs;
-  W16 cpl:2, maskevents:1;
+#endif
 };
 
 union VirtAddr {
@@ -492,30 +545,35 @@ union VirtAddr {
   RawDataAccessors(VirtAddr, W64);
 };
 
-typedef struct LongModeLevel4PTE {
+typedef struct Level4PTE {
   W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1;
-  RawDataAccessors(LongModeLevel4PTE, W64);
+  RawDataAccessors(Level4PTE, W64);
 };
 
-struct LongModeLevel3PTE {
+struct Level3PTE {
   W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1;
-  RawDataAccessors(LongModeLevel3PTE, W64);
+  RawDataAccessors(Level3PTE, W64);
 };
 
-struct LongModeLevel2PTE {
+struct Level2PTE {
   W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, psz:1, mbz:1, avl:3, next:51, nx:1;
-  RawDataAccessors(LongModeLevel2PTE, W64);
+  RawDataAccessors(Level2PTE, W64);
 };
 
-struct LongModeLevel1PTE {
+struct Level1PTE {
   W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, phys:51, nx:1;
-  RawDataAccessors(LongModeLevel1PTE, W64);
+  RawDataAccessors(Level1PTE, W64);
 
-  void accum(const LongModeLevel1PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
-  void accum(const LongModeLevel2PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
-  void accum(const LongModeLevel3PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
-  void accum(const LongModeLevel4PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+  void accum(const Level1PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+  void accum(const Level2PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+  void accum(const Level3PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+  void accum(const Level4PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
 };
+
+ostream& operator <<(ostream& os, const Level1PTE& pte);
+ostream& operator <<(ostream& os, const Level2PTE& pte);
+ostream& operator <<(ostream& os, const Level3PTE& pte);
+ostream& operator <<(ostream& os, const Level4PTE& pte);
 
 struct CR0 {
   W64 pe:1, mp:1, em:1, ts:1, et:1, ne:1, res6:10, wp:1, res17:1, am:1, res19:10, nw:1, cd:1, pg:1, res32:32;
@@ -554,9 +612,26 @@ enum {
   DEBUGREG_SIZE_4 = 3,
 };
 
-LongModeLevel1PTE page_table_walk_longmode(W64 rawvirt, W64 toplevel_mfn);
-
 struct vcpu_guest_context;
+
+Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
+void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);
+
+//
+// This is the same format as Xen's vcpu_runstate_info_t
+// but solves some header file problems by placing it here.
+//
+struct RunstateInfo {
+  // VCPU's current state (RUNSTATE_*).
+  int state;
+  // When was current state entered (system time, ns)?
+  W64 state_entry_time;
+  //
+  // Time spent in each RUNSTATE_* (ns). The sum of these times is
+  // guaranteed not to drift from system time.
+  //
+  W64 time[4];
+};
 
 #endif
 
@@ -573,6 +648,7 @@ struct Context {
   W64 commitarf[64];
   int vcpuid;
   SegmentDescriptorCache seg[SEGID_COUNT];
+  W64 swapgs_base;
 
   W64 fpstack[8];
   X87ControlWord fpcw;
@@ -582,22 +658,27 @@ struct Context {
   byte use64; // depends on active CS descriptor
 
   Waddr virt_addr_mask;
+  W64 exception;
+  Waddr error_code;
+
+  W32 internal_eflags; // parts of EFLAGS that are infrequently updated
 
 #ifdef PTLSIM_HYPERVISOR
-  Waddr error_code;
   Waddr exception_type;
 
-  byte saved_upcall_mask;
-
   byte kernel_mode; // VGCF_IN_KERNEL
+  byte kernel_in_syscall; // VGCF_IN_SYSCALL
   byte i387_valid; // VGCF_I387_VALID
   byte failsafe_disables_events;
   byte syscall_disables_events;
+  byte saved_upcall_mask;
+  byte running;
 
   CR0 cr0;
   Waddr cr1, cr2, cr3;
   CR4 cr4;
   Waddr cr5, cr6, cr7;
+  Waddr kernel_ptbase_mfn, user_ptbase_mfn;
   DebugReg dr0, dr1, dr2, dr3, dr4, dr5, dr6, dr7;
   Waddr kernel_ss, kernel_sp;
 
@@ -617,33 +698,85 @@ struct Context {
 
   Waddr vm_assist;
 
+  W64 base_tsc;
+  W64 core_freq_hz;
+  double sys_time_cycles_to_nsec_coeff;
+
+  W16s virq_to_port[32];
+  W64  timer_cycle;
+  W64  poll_timer_cycle;
+
+  RunstateInfo runstate;
+  RunstateInfo* user_runstate;
+
+  static const int PTE_CACHE_SIZE = 16;
+  W64 cached_pte_virt[PTE_CACHE_SIZE];
+  Level1PTE cached_pte[PTE_CACHE_SIZE];
+
   void restorefrom(const vcpu_guest_context& ctx);
   void saveto(vcpu_guest_context& ctx);
 
-  // idx must be between 0 and 8191 (i.e. 65535 >> 3)
-  bool gdt_entry_valid(W16 idx) {
-    return (idx < gdtsize);
-  }
-
-  inline LongModeLevel1PTE virt_to_pte(W64 rawvirt) const {
-    // Do intermediate caching here
-    return page_table_walk_longmode(rawvirt, cr3 >> 12);
-  }
-
+  bool gdt_entry_valid(W16 idx);
   const SegmentDescriptor& get_gdt_entry(W16 idx);
+
+  Level1PTE virt_to_pte(W64 rawvirt) {
+    int slot = lowbits(rawvirt >> 12, log2(PTE_CACHE_SIZE));
+    if unlikely (cached_pte_virt[slot] != floor(rawvirt, PAGE_SIZE)) {
+      cached_pte_virt[slot] = floor(rawvirt, PAGE_SIZE);
+      cached_pte[slot] = page_table_walk(rawvirt, cr3 >> 12);
+    }
+    return cached_pte[slot];
+  }
+
+  // Flush the context mini-TLB and propagate flush to any core-specific TLBs
+  void flush_tlb();
+
+  void flush_tlb_virt(Waddr virtaddr) {
+    // Currently we just flush the entire TLB:
+    flush_tlb();
+  }
+  
+  void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) {
+    return page_table_acc_dirty_update(rawvirt, cr3 >> 12, update);
+  }
+
+  bool create_bounce_frame(W16 target_cs, Waddr target_rip, int action);
+
+  bool check_events() const;
+  bool event_upcall();
+  bool change_runstate(int newstate);
+#endif
+#ifndef PTLSIM_HYPERVISOR
+  void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) { }
+  void update_shadow_segment_descriptors();
 #endif
 
+  void propagate_x86_exception(byte exception, W32 errorcode = 0, Waddr virtaddr = 0);
+  void* check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate);
   int copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec = false);
   int copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr);
 
-  void update_shadow_segment_descriptors();
+  int copy_from_user(void* target, Waddr source, int bytes) {
+    PageFaultErrorCode pfec;
+    Waddr faultaddr;
+    return copy_from_user(target, source, bytes, pfec, faultaddr, false);
+  }
+
+  int copy_to_user(Waddr target, void* source, int bytes) {
+    PageFaultErrorCode pfec;
+    Waddr faultaddr;
+    return copy_to_user(target, source, bytes, pfec, faultaddr);
+  }
+
+  int write_segreg(unsigned int segid, W16 selector);
+  void reload_segment_descriptor(unsigned int segid, W16 selector);
+  void swapgs();
+  void init();
   void fxsave(FXSAVEStruct& state);
   void fxrstor(const FXSAVEStruct& state);
 
   Context() { }
 
-  //W64 use64:1;
-  W64 exception;
 
   inline void reset() {
     memset(&commitarf, 0, sizeof(commitarf));
@@ -658,7 +791,9 @@ struct Context {
 
 ostream& operator <<(ostream& os, const Context& ctx);
 
+#ifndef PTLSIM_HYPERVISOR
 extern Context ctx;
+#endif
 
 // Other flags not defined above
 enum {
@@ -1043,15 +1178,42 @@ struct BasicBlock;
 typedef void (*uopimpl_func_t)(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags);
 
 
+//
+// List of all BBs on a physical page (for SMC invalidation)
+// With 60 (or 62 on 32-bit PTLsim) 32-bit entries per page,
+// this comes out to exactly 256 bytes per chunk.
+//
+#ifdef __x86_64__
+#define BB_PTRS_PER_CHUNK 60
+#else
+#define BB_PTRS_PER_CHUNK 62
+#endif
+
+struct BasicBlockChunkList: public ChunkList<shortptr<BasicBlock>, BB_PTRS_PER_CHUNK> {
+  selflistlink hashlink;
+  W64 mfn;
+
+  BasicBlockChunkList(): ChunkList<shortptr<BasicBlock>, BB_PTRS_PER_CHUNK>() { }
+  BasicBlockChunkList(W64 mfn): ChunkList<shortptr<BasicBlock>, BB_PTRS_PER_CHUNK>() { this->mfn = mfn; }
+};
+
 struct BasicBlockBase {
-  W64 rip;
+  RIPVirtPhys rip;
+  selflistlink hashlink;
+  BasicBlockChunkList::Locator mfnlo_loc;
+  BasicBlockChunkList::Locator mfnhi_loc;
   W64 rip_taken;
   W64 rip_not_taken;
-  W16 count;
-  int refcount;
-  W64 tagcount:10, memcount:8, storecount:8, repblock:1, user_insn_count:16;
+  byte count;
+  byte bytes;
+  byte user_insn_count;
+  byte tagcount;
+  byte memcount;
+  byte storecount;
+  byte repblock:1;
   W64 usedregs;
   uopimpl_func_t* synthops;
+  int refcount;
   W32 hitcount;
   W32 predcount;
   W32 confidence;
@@ -1068,15 +1230,75 @@ struct BasicBlockBase {
 };
 
 struct BasicBlock: public BasicBlockBase {
-  TransOp transops[MAXBBLEN*2];
+  TransOp transops[MAX_BB_UOPS*2];
 
-  void reset(W64 rip = 0);
+  void reset(const RIPVirtPhys& rip);
   BasicBlock* clone();
   void free();
 };
 
 ostream& operator <<(ostream& os, const BasicBlock& bb);
 
+
+static const int BB_CACHE_SIZE = 16384;
+
+namespace superstl {
+  template <int setcount>
+  struct HashtableKeyManager<RIPVirtPhys, setcount> {
+    static inline int hash(const RIPVirtPhys& key) {
+      W64 slot = 0;
+
+      W64 rip = key.rip;
+      foreach (i, (64 / log2(setcount))+1) {
+        slot ^= rip;
+        rip >>= log2(setcount);
+      }
+#ifdef PTLSIM_HYPERVISOR
+      slot ^= key.mfnlo;
+#endif
+      return slot;
+    }
+
+    static inline bool equal(const RIPVirtPhys& a, const RIPVirtPhys& b) { return (a == b); }
+    static inline RIPVirtPhys dup(const RIPVirtPhys& key) { return key; }
+    static inline void free(RIPVirtPhys& key) { }
+  };
+};
+
+struct BasicBlockHashtableLinkManager {
+  static inline BasicBlock& objof(selflistlink* link) {
+    return *(BasicBlock*)(((byte*)link) - offsetof(BasicBlock, hashlink));
+  }
+
+  static inline RIPVirtPhys& keyof(BasicBlock& obj) {
+    return obj.rip;
+  }
+
+  static inline selflistlink& linkof(BasicBlock& obj) {
+    return obj.hashlink;
+  }
+};
+
+struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE> {
+  BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE>() { }
+
+  BasicBlock* translate(Context& ctx, Waddr rip);
+  void invalidate(const RIPVirtPhys& rvp);
+  void invalidate(BasicBlock* bb);
+  int invalidate_page(Waddr mfn);
+
+  ostream& print(ostream& os) const;
+};
+
+extern BasicBlockCache bbcache;
+
+static inline ostream& operator <<(ostream& os, const BasicBlockCache& bbcache) {
+  return bbcache.print(os);
+}
+
+//
+// Printing and information
+//
 stringbuf& nameof(stringbuf& sbname, const TransOp& uop);
 
 char* regname(int r);

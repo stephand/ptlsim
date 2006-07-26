@@ -7,7 +7,11 @@
 
 #include <globals.h>
 #include <superstl.h>
+#ifdef PTLSIM_HYPERVISOR
+#include <ptlxen.h>
+#else
 #include <kernel.h>
+#endif
 #include <mm.h>
 #include <datastore.h>
 
@@ -777,14 +781,19 @@ SlabAllocator slaballoc[SLAB_ALLOC_SLOT_COUNT];
 // Full-system PTLxen running on the bare hardware:
 //
 void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
-  return pagealloc.alloc(bytecount);
+  void* p = pagealloc.alloc(bytecount);
+  assert(p);
+  return p;
 }
 
 void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
-  return pagealloc.alloc(bytecount);
+  void* p = pagealloc.alloc(bytecount);
+  assert(p);
+  return p;
 }
 
 void ptl_free_private_pages(void* addr, Waddr bytecount) {
+  assert(addr);
   pagealloc.free(floorptr(addr, PAGE_SIZE), ceil(bytecount, PAGE_SIZE));
 }
 
@@ -932,10 +941,13 @@ void* ptl_mm_alloc(size_t bytes) {
 void ptl_mm_free(void* p) {
   SlabAllocator* sa;
 
+  static const bool DEBUG = 0;
+
   if (sa = SlabAllocator::pointer_to_slaballoc(p)) {
     //
     // From slab allocation pool: all objects on a given page are the same size
     //
+    if (DEBUG) cerr << "ptl_mm_free(", p, "): free from slab ", sa, " (size ", sa->objsize, ")", endl, flush;
     sa->free(p);
   } else {
     //
@@ -943,8 +955,13 @@ void ptl_mm_free(void* p) {
     // The word prior to the start of the block specifies
     // the block size.
     //
+
+    if (DEBUG) cerr << "ptl_mm_free(", p, "): free from gen pool (size ", flush;
+
     Waddr* pp = ((Waddr*)p)-1;
     Waddr bytes = *pp;
+
+    if (DEBUG) cerr << bytes, ")", endl, flush;
 
     genalloc.free(pp, bytes);
   }

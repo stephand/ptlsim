@@ -30,7 +30,7 @@ SVNDATE=`svn info | grep "Last Changed Date" | cut -d " " -f4`
 INCFLAGS = -I. -DBUILDHOST="`hostname -f`" -DSVNREV="$(SVNREV)" -DSVNDATE="$(SVNDATE)"
 
 ifdef PTLSIM_HYPERVISOR
-INCFLAGS += -DPTLSIM_HYPERVISOR
+INCFLAGS += -DPTLSIM_HYPERVISOR -D__XEN__
 endif
 
 ifdef __x86_64__

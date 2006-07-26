@@ -7,11 +7,10 @@
 #include <globals.h>
 #include <superstl.h>
 #include <ptlcalls.h>
+#include <config.h>
 #include <logic.h>
 
-//
-// (see linux-2.6/arch/x86_64/kernel/setup.c for details)
-//
+#include <ptlhwdef.h>
 
 union CPUVendorID {
   char text[13];
@@ -58,6 +57,30 @@ static const char* x86_ext_cap_flags[] = {
   "pat", "pse36", "pn", "clflush", "nx", "CAP21", "mmxext", "mmx",
   "fxsr", "CAP25", "CAP26", "CAP27", "CAP28", "lm", "3dnowext", "3dnow",
 };
+
+struct DescriptorTablePointer {
+  W16 bytes;
+  W64 virtaddr;
+} packedstruct;
+
+ostream& operator <<(ostream& os, const DescriptorTablePointer& dtp) {
+  return os << (void*)(Waddr)dtp.virtaddr, ", limit ", dtp.bytes, " (", (void*)(Waddr)dtp.bytes, ")";
+}
+
+static inline void sgdt(DescriptorTablePointer& p) {
+  setzero(p);
+  asm volatile("sgdt %[p]" : [p] "=m" (p) : : "memory");
+}
+
+static inline void sidt(DescriptorTablePointer& p) {
+  setzero(p);
+  asm volatile("sidt %[p]" : [p] "=m" (p) : : "memory");
+}
+
+static inline void sldt(W16& selector) {
+  selector = 0;
+  asm volatile("sldt %[selector]" : [selector] "=m" (selector) : : "memory");
+}
 
 int main(int argc, char* argv[]) {
   W32 eax, ebx, ecx, edx;
@@ -181,6 +204,19 @@ int main(int argc, char* argv[]) {
     cout << "  ITLB2M: ", tlb2m.fields.itlbsize, " in ", (tlb2m.fields.itlbways == 0xff ? tlb2m.fields.dtlbsize : tlb2m.fields.dtlbways), " ways", endl;
     cout << "  L2:     ", L2.fields.size, " KB, ", L2.fields.linesize, " bytes/line, ", L2.fields.linespertag, " lines/tag, ", way_decode[L2.fields.ways], " ways", endl;
     cout << "  EDX:    ", "0x", hexstring(edx, 32), endl;
+  }
+
+  {
+    DescriptorTablePointer gdt, idt;
+    W16 ldt;
+
+    sgdt(gdt);
+    sidt(idt);
+    sldt(ldt);
+    cout << "Descriptor Tables", endl, flush;
+    cout << "  GDT: ", gdt, endl;
+    cout << "  IDT: ", idt, endl;
+    cout << "  LDT: ", hexstring(ldt, 16), endl;
   }
 
   cout << endl;

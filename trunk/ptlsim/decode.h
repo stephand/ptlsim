@@ -10,16 +10,6 @@
 #include <ptlsim.h>
 #include <datastore.h>
 
-//
-// Uniquely identifies any translation or basic block:
-//
-struct RIPVirtPhys {
-  W64 rip;
-  W64 mfn1:28, mfn2:28, use64:1, pad:7;
-
-  RIPVirtPhys(Waddr rip, Waddr mfn1, Waddr mfn2, bool use64);
-};
-
 struct RexByte { 
   // a.k.a., b, x, r, w
   byte extbase:1, extindex:1, extreg:1, mode64:1, insnbits:4; 
@@ -60,7 +50,6 @@ static const int PFX_count     = 13;
 
 extern const char* prefix_names[PFX_count];
 
-//#define FLAGS_DEFAULT_ALU FLAG_OF|FLAG_SF|FLAG_ZF|FLAG_AF|FLAG_PF|FLAG_CF
 #define FLAGS_DEFAULT_ALU SETFLAG_ZF|SETFLAG_CF|SETFLAG_OF
 
 enum {
@@ -151,11 +140,13 @@ static inline ostream& operator <<(ostream& os, const DecodedOperand& decop) {
 
 struct TraceDecoder {
   BasicBlock bb;
-
   TransOp transbuf[MAX_TRANSOPS_PER_USER_INSN];
   int transbufcount;
 
-  byte insnbytes[16];
+  byte use64;
+  byte kernel;
+  byte dirflag;
+  byte insnbytes[MAX_BB_BYTES];
   Waddr rip;
   Waddr ripstart;
   int byteoffset;
@@ -169,38 +160,16 @@ struct TraceDecoder {
   bool invalid;
   PageFaultErrorCode pfec;
   Waddr faultaddr;
-  Context* vcpuctx;
   bool opsize_prefix;
   bool addrsize_prefix;
   bool end_of_block;
 
-  TraceDecoder(W64 rip) {
-    reset(rip);
-  }
-
-  TraceDecoder() { }
-
-  void reset(W64 rip) {
-    this->rip = rip;
-    this->ripstart = rip;
-    byteoffset = 0;
-    bb.reset(rip);
-    transbufcount = 0;
-    pfec = 0;
-    faultaddr = 0;
-    prefixes = 0;
-    rex = 0;
-    modrm = 0;
-    user_insn_count = 0;
-    last_flags_update_was_atomic = 1;
-    invalid = 0;
-    end_of_block = false;
-  }
+  TraceDecoder(const RIPVirtPhys& rvp);
 
   void decode_prefixes();
   void immediate(int rdreg, int sizeshift, W64s imm, bool issigned = true);
   int bias_by_segreg(int basereg);
-  void address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype = DATATYPE_INT, int cachelevel = 0);
+  void address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype = DATATYPE_INT, int cachelevel = 0, bool force_seg_bias = false);
   void operand_load(int destreg, const DecodedOperand& memref, int loadop = OP_ld, int datatype = 0, int cachelevel = 0);
   void result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype = 0);
   void alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
@@ -210,7 +179,7 @@ struct TraceDecoder {
   void signext_reg_or_mem(const DecodedOperand& rd, DecodedOperand& ra, int rasize, bool zeroext = false);
   void microcode_assist(int assistid, Waddr selfrip, Waddr nextrip);
 
-  int fillbuf(Waddr rip);
+  int fillbuf(Context& ctx);
   inline W64 fetch(int n) { W64 r = lowbits(*((W64*)&insnbytes[byteoffset]), n*8); rip += n; byteoffset += n; return r; }
   inline byte fetch1() { byte r = *((byte*)&insnbytes[byteoffset]); rip += 1; byteoffset += 1; return r; }
   inline W16 fetch2() { W16 r = *((W16*)&insnbytes[byteoffset]); rip += 2; byteoffset += 2; return r; }
@@ -242,7 +211,7 @@ static inline TraceDecoder& operator <<(TraceDecoder& dec, const TransOp& transo
 }
 
 #define DECODE(form, decbuf, mode) invalid |= (!decbuf.form(*this, mode));
-#define CheckInvalid() { invalid |= ((rip - ripstart) > valid_byte_count); if (invalid) { invalidate(); return false; } }
+#define CheckInvalid() { invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count); if (invalid) { invalidate(); return false; } }
 #define MakeInvalid() { invalid |= true; CheckInvalid(); }
 
 enum {
@@ -254,8 +223,10 @@ enum {
   ASSIST_X87_FPATAN, ASSIST_X87_FXTRACT, ASSIST_X87_FPREM1,
   ASSIST_FLD80, ASSIST_FSTP80, ASSIST_LDMXCSR, ASSIST_FXSAVE,
   ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
-  ASSIST_INVALID_OPCODE, ASSIST_EXEC_PAGE_FAULT,  ASSIST_WRITE_SEGREG,
-  ASSIST_PTLCALL,
+  ASSIST_INVALID_OPCODE, ASSIST_EXEC_PAGE_FAULT, ASSIST_GP_FAULT,
+  ASSIST_WRITE_SEGREG, ASSIST_POPF, ASSIST_CLD, ASSIST_STD,
+  ASSIST_PTLCALL, ASSIST_WRMSR, ASSIST_RDMSR, ASSIST_WRCR,
+  ASSIST_RDCR, ASSIST_IRET16, ASSIST_IRET32, ASSIST_IRET64,
   ASSIST_COUNT,
 };
 
@@ -283,8 +254,11 @@ const char* assist_name(assist_func_t assist) {
   return "unknown";
 }
 
-int propagate_exception_during_assist(Context& ctx, int exception, W32 errorcode, Waddr virtaddr = 0);
+int propagate_exception_during_assist(Context& ctx, byte exception, W32 errorcode, Waddr virtaddr = 0, bool intN = 0);
 
+//
+// Microcode assists
+//
 template <typename T> void assist_div(Context& ctx);
 template <typename T> void assist_idiv(Context& ctx);
 void assist_x87_fprem(Context& ctx);
@@ -312,6 +286,16 @@ void assist_sysenter(Context& ctx);
 void assist_cpuid(Context& ctx);
 void assist_invalid_opcode(Context& ctx);
 void assist_exec_page_fault(Context& ctx);
+void assist_gp_fault(Context& ctx);
 void assist_write_segreg(Context& ctx);
 void assist_ptlcall(Context& ctx);
-
+void assist_popf(Context& ctx);
+void assist_cld(Context& ctx);
+void assist_std(Context& ctx);
+void assist_wrmsr(Context& ctx);
+void assist_rdmsr(Context& ctx);
+void assist_wrcr(Context& ctx);
+void assist_rdcr(Context& ctx);
+void assist_iret16(Context& ctx);
+void assist_iret32(Context& ctx);
+void assist_iret64(Context& ctx);

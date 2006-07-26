@@ -24,8 +24,19 @@ typedef W32 Wmax;
 
 void uop_impl_bogus(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { asm("int3"); }
 
-inline W64 x86_rotr64(W64 r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r; }
-inline W64 x86_rotl64(W64 r, int n) { asm("rol %%cl,%[r]" : [r] "+r" (r) : [n] "c" (n)); return r; }
+template <typename T>
+static inline T rotr(T r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "cq" (n)); return r; }
+
+template <typename T>
+static inline T rotl(T r, int n) { asm("rol %%cl,%[r]" : [r] "+r" (r) : [n] "cq" (n)); return r; }
+
+#ifndef __x86_64__
+// Need to emulate this on 32-bit x86
+template <>
+static inline W64 rotr(W64 r, int n) {
+  return (r >> n) | (r << (64 - n));
+}
+#endif
 
 //
 // Flags generation (all but CF and OF)
@@ -215,14 +226,14 @@ void uop_impl_collcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
 }
 
 void uop_impl_movrcc(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  int flags = ra & FLAG_NOT_WAIT_INV;
+  int flags = rb & FLAG_NOT_WAIT_INV;
   state.reg.rddata = flags;
   state.reg.rdflags = flags;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_movrcc, 0);
 }
 
 void uop_impl_movccr(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  int flags = raflags;
+  int flags = rbflags;
   state.reg.rddata = flags;
   state.reg.rdflags = flags;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_movccr, 0);
@@ -446,48 +457,44 @@ make_exp_shiftop_64bit(rotcr, (abort(), rd)); // not supported in 32-bit mode be
 // Masks
 //
 
-#ifdef __x86_64__
-W64 rotr64(W64 w, int c) { return x86_rotr64(w, c); }
-#else
-W64 rotr64(W64 w, int c) {
-  return (w >> c) | (w << (64 - c));
-}
-#endif
+W64 mask_gen_lut[4][64*64]; // (((1 << mc)-1) >>> ms)
+W64 mask_bt_lut[4][64*64];  // mask[mc+ms] = 1
+W64 mask_zxt_lut[4][64*64]; // 1'[(ms+mc-1):0]
+W64 mask_sxt_lut[4][64*64]; // 1'[63:(ms+mc)]
 
-W64 mask_gen_lut[64*64]; // (((1 << mc)-1) >>> ms)
-W64 mask_bt_lut[64*64];  // mask[mc+ms] = 1
-W64 mask_zxt_lut[64*64]; // 1'[(ms+mc-1):0]
-W64 mask_sxt_lut[64*64]; // 1'[63:(ms+mc)]
+template <typename T>
+void gen_mask_uop_masks(W64* mask_gen_lut, W64* mask_bt_lut, W64* mask_zxt_lut, W64* mask_sxt_lut) {
+  int sizeshift = log2(sizeof(T));
+  int n = (1 << sizeshift) * 8;
 
-void gen_mask_uop_masks() {
-  foreach (mc, 64) {
-    foreach (ms, 64) {
-      W64 t = rotr64(bitmask(mc), ms);
+  foreach (mc, n) {
+    foreach (ms, n) {
+      W64 t = rotr<T>(bitmask(mc), ms);
       mask_gen_lut[(mc << 6) + ms] = t;
     }
   }
 
-  foreach (mc, 64) {
-    foreach (ms, 64) {
+  foreach (mc, n) {
+    foreach (ms, n) {
       W64 t = 0;
       setbit(t, (mc+ms-1));
       mask_bt_lut[(mc << 6) + ms] = t;
     }
   }
 
-  foreach (mc, 64) {
-    foreach (ms, 64) {
+  foreach (mc, n) {
+    foreach (ms, n) {
       W64 t = 0;
       for (int i = (ms+mc-1); i >= 0; i--) setbit(t, i);
       mask_zxt_lut[(mc << 6) + ms] = t;
     }
   }
 
-  foreach (mc, 64) {
-    foreach (ms, 64) {
+  foreach (mc, n) {
+    foreach (ms, n) {
       W64 t = 0;
       int limit = (ms+mc);
-      for (int i = 63; i >= limit; i--) setbit(t, i);
+      for (int i = n-1; i >= limit; i--) setbit(t, i);
       mask_sxt_lut[(mc << 6) + ms] = t;
     }
   }
@@ -497,6 +504,11 @@ void gen_mask_uop_masks() {
 
 template <int ptlopcode, typename T, int ZEROEXT, int SIGNEXT>
 void exp_op_mask(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  static const int sizeshift = log2(sizeof(T));
+  W64 shmask = bitmask(3 + sizeshift);
+  shmask = shmask | (shmask << 6) | (shmask << 12);
+  rc &= shmask;
+
   int ms = bits(rc, 0, 6);
   int mc = bits(rc, 6, 6);
   int ds = bits(rc, 12, 6);
@@ -504,34 +516,53 @@ void exp_op_mask(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbf
   int mcms = bits(rc, 0, 12);
 
   // mask_gen_lut[] = (((1 << mc)-1), ms);
-  W64 M = mask_gen_lut[mcms];
-  W64 rd = (ra & ~M) | (rotr64(rb, ds) & M);
+  W64 M = mask_gen_lut[sizeshift][mcms];
+  W64 rd = (ra & ~M) | (rotr<T>(rb, ds) & M);
 
 #if 0
   // For debugging purposes:
-  if (logable(99)) {
-    logfile << "mask (ms=", ms, " mc=", mc, " ds=", ds, "):", endl;
+  if (logable(1)) {
+    logfile << "mask [", sizeof(T), ", ", ZEROEXT, ", ", SIGNEXT, " (ms=", ms, " mc=", mc, " ds=", ds, " (mcms ", mcms, "))]:", endl;
     logfile << "  M      = ", bitstring(M, 64), endl;
-    logfile << "  rot rb = ", bitstring(rotr64(rb, ds), 64), endl;
+    logfile << "  rot rb = ", bitstring(rotr<T>(rb, ds), 64), endl;
+    logfile << "  ra     = ", hexstring(ra, 64), endl;
+    logfile << "  rb     = ", hexstring(rb, 64), endl;
+    logfile << "  rc     = ", hexstring(rc, 64), endl;
+    logfile << "  initrd = ", hexstring(rd, 64), endl;
   }
 #endif
 
   if (ZEROEXT) {
     // mask_zxt_lut[] = 1'[(ms+mc-1):0]
-    rd = rd & mask_zxt_lut[mcms];
+    rd = rd & mask_zxt_lut[sizeshift][mcms];
   } else if (SIGNEXT) {
     // mask_sxt_lut[] = 1'[63:(ms+mc)]
-    W64 sxt = (rd | mask_sxt_lut[mcms]);
-    W64 zxt = (rd & mask_zxt_lut[mcms]);
+    W64 sxt = (rd | mask_sxt_lut[sizeshift][mcms]);
+    W64 zxt = (rd & mask_zxt_lut[sizeshift][mcms]);
     // mask_zxt_lut[] = 1'[(ms+mc-1):0]
     // mask_bt_lut[] = 1'[mc+ms-1];
-    rd = (rd & mask_bt_lut[mcms]) ? sxt : zxt;
+    rd = (rd & mask_bt_lut[sizeshift][mcms]) ? sxt : zxt;
   } else {
     rd = rd;
   }
 
   state.reg.rddata = x86_merge<T>(ra, rd);
   state.reg.rdflags = x86_genflags<T>(rd);
+  bool sf = bit(state.reg.rdflags, log2(FLAG_SF));
+  //
+  // To simplify the microcode construction of the shrd instruction,
+  // the following sequence may be used:
+  //
+  // shrd rd,rs:
+  // shr  t = rd,c          
+  //      t.cf = rd[c-1] last bit shifted out
+  //      t.of = rd[63]  or whatever rd's original sign bit position was
+  // mask rd = t,rs,[ms=c, mc=c, ds=c]
+  //      rd.cf = t.cf  inherited from t
+  //      rd.of = (out.sf != t.of) i.e. did the sign bit change?
+  //
+  state.reg.rdflags |= bit(raflags, log2(FLAG_CF)) << (log2(FLAG_CF));
+  state.reg.rdflags |= (sf != bit(raflags, log2(FLAG_OF))) << (log2(FLAG_OF));
 
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, 0);
 }
@@ -640,9 +671,9 @@ template <int evaltype>
 inline bool evaluate_cond(int ra, int rb) {
   switch (evaltype) {
   case 0:  // {0, REG_zero, REG_of},   // of:               jo
-    return !!(rb & FLAG_CF);
+    return !!(rb & FLAG_OF);
   case 1:  // {0, REG_zero, REG_of},   // !of:              jno
-    return !(rb & FLAG_CF);
+    return !(rb & FLAG_OF);
   case 2:  // {0, REG_zero, REG_cf},   // cf:               jb jc jnae
     return !!(rb & FLAG_CF);
   case 3:  // {0, REG_zero, REG_cf},   // !cf:              jnb jnc jae
@@ -1376,7 +1407,11 @@ uopimpl_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, boo
 }
 
 void init_uops() {
-  gen_mask_uop_masks();
+  gen_mask_uop_masks<W8> (mask_gen_lut[0], mask_bt_lut[0], mask_zxt_lut[0], mask_sxt_lut[0]);
+  gen_mask_uop_masks<W16>(mask_gen_lut[1], mask_bt_lut[1], mask_zxt_lut[1], mask_sxt_lut[1]);
+  gen_mask_uop_masks<W32>(mask_gen_lut[2], mask_bt_lut[2], mask_zxt_lut[2], mask_sxt_lut[2]);
+  gen_mask_uop_masks<W64>(mask_gen_lut[3], mask_bt_lut[3], mask_zxt_lut[3], mask_sxt_lut[3]);
+
 }
 
 void shutdown_uops() {

@@ -45,13 +45,16 @@ struct PTLsimBootPageInfo {
   W64 mfn_count;
   W64 avail_mfn_count;
   W64 read_only_break_page;
+  W64 total_machine_pages;
 
-  struct LongModeLevel2PTE* ptl_pagedir_map;
-  struct LongModeLevel4PTE* toplevel_page_table;
-  struct LongModeLevel1PTE* ptl_pagedir;
-  struct LongModeLevel1PTE* phys_pagedir;
+  struct Level2PTE* ptl_pagedir_map;
+  struct Level4PTE* toplevel_page_table;
+  struct Level1PTE* ptl_pagedir;
+  struct Level1PTE* phys_pagedir;
+  struct Level2PTE* phys_level2_pagedir;
   struct PTLsimBootPageInfo* boot_page;
   struct shared_info* shared_info;
+  void* gdt_page;
 
   W64 ptl_pagedir_mfn_count;
   W64 phys_pagedir_mfn_count;
@@ -60,6 +63,7 @@ struct PTLsimBootPageInfo {
   mfn_t toplevel_page_table_mfn;
   mfn_t boot_page_mfn;
   mfn_t shared_info_mfn;
+  mfn_t gdt_mfn;
 };
 
 //
@@ -71,10 +75,10 @@ struct PTLsimStub {
 };
 
 #ifndef __cplusplus
-typedef struct LongModeLevel1PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, phys:51, nx:1; } LongModeLevel1PTE;
-typedef struct LongModeLevel2PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, psz:1, mbz:1, avl:3, next:51, nx:1; } LongModeLevel2PTE;
-typedef struct LongModeLevel3PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1; } LongModeLevel3PTE;
-typedef struct LongModeLevel4PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1; } LongModeLevel4PTE;
+typedef struct Level1PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, phys:51, nx:1; } Level1PTE;
+typedef struct Level2PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, psz:1, mbz:1, avl:3, next:51, nx:1; } Level2PTE;
+typedef struct Level3PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1; } Level3PTE;
+typedef struct Level4PTE { W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1; } Level4PTE;
 #endif
 
 int setup_ptlsim_space(int xc_handle, uint32_t dom, mfn_t* mfns, int count,

@@ -38,22 +38,45 @@ template void assist_idiv<W32>(Context& ctx);
 template void assist_idiv<W64>(Context& ctx);
 
 void assist_int(Context& ctx) {
-  //++MTY TODO This also applies to int3 and other arbitrary interrupts!
+  byte intid = ctx.commitarf[REG_ar1];
 #ifdef PTLSIM_HYPERVISOR
-  //++MTY TODO
-  cerr << "assist_int()", endl, flush;
-  abort();
+  // The returned rip is nextrip for explicit intN instructions:
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+  ctx.propagate_x86_exception(intid, 0);
 #else
-  handle_syscall_32bit(SYSCALL_SEMANTICS_INT80);
+  if (intid == 0x80) {
+    handle_syscall_32bit(SYSCALL_SEMANTICS_INT80);
+  } else {
+    logfile << "Unknown int 0x", hexstring(intid, 8), "; aborting", endl, flush;
+    abort();
+  }
 #endif
-  // REG_rip is filled out for us
 }
+
+#ifdef PTLSIM_HYPERVISOR
+extern void handle_xen_hypercall_assist(Context& ctx);
+
+extern void handle_syscall_assist(Context& ctx);
+#endif
 
 void assist_syscall(Context& ctx) {
 #ifdef PTLSIM_HYPERVISOR
-  //++MTY TODO
-  cerr << "assist_syscall()", endl, flush;
-  abort();
+  //
+  // SYSCALL has two distinct sets of semantics on Xen x86-64.
+  //
+  // When executed from user mode, it's a normal system call
+  // in the Linux sense, and Xen just relays control back
+  // to the guest domain's kernel.
+  //
+  // When executed from kernel mode, it's interpreted as a
+  // hypercall into Xen itself.
+  //
+
+  if (ctx.kernel_mode) {
+    handle_xen_hypercall_assist(ctx);
+  } else {
+    handle_syscall_assist(ctx);
+  }
 #else
   if (ctx.use64) {
 #ifdef __x86_64__
@@ -97,7 +120,11 @@ void assist_cpuid(Context& ctx) {
   W64& rdx = ctx.commitarf[REG_rdx];
 
   W32 func = rax;
-  logfile << "assist_cpuid: func 0x", hexstring(func, 32), " called from ", (void*)(Waddr)ctx.commitarf[REG_selfrip], ":", endl;
+  if (logable(4)) {
+    logfile << "assist_cpuid: func 0x", hexstring(func, 32), " called from ",
+      (void*)(Waddr)ctx.commitarf[REG_selfrip], ":", endl;
+  }
+
   switch (func) {
   case 0: {
     // Max avail function spec and vendor ID:
@@ -166,54 +193,204 @@ void assist_cpuid(Context& ctx) {
 }
 
 //
+// Pop from stack into flags register, with checking for reserved bits
+//
+void assist_popf(Context& ctx) {
+  W32 flags = ctx.commitarf[REG_ar1];
+  ctx.internal_eflags = flags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF);
+  ctx.commitarf[REG_flags] = flags & (FLAG_ZAPS|FLAG_CF|FLAG_OF);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+
+  // Update internal flags too (only update non-standard flags in internal_flags_bits):
+  // Equivalent to these uops:
+  // this << TransOp(OP_and, REG_temp1, REG_temp0, REG_imm, REG_zero, 2, ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
+  // TransOp stp(OP_st, REG_mem, REG_ctx, REG_imm, REG_temp1, 2, offsetof(Context, internal_eflags)); stp.internal = 1; this << stp;
+  // this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_temp0, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
+}
+
+//
+// CLD and STD must be barrier assists since a new RIPVirtPhys
+// context key may be active after the direction flag is altered.
+//
+void assist_cld(Context& ctx) {
+  ctx.internal_eflags &= ~FLAG_DF;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];  
+}
+
+void assist_std(Context& ctx) {
+  ctx.internal_eflags |= FLAG_DF;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];  
+}
+
+//
 // PTL calls
 //
 extern void assist_ptlcall(Context& ctx);
 
 void assist_write_segreg(Context& ctx) {
-  W64 rip = ctx.commitarf[REG_selfrip];
   W16 selector = ctx.commitarf[REG_ar1];
   byte segid = ctx.commitarf[REG_ar2];
-  assert(segid < SEGID_COUNT);
+
+  int exception = ctx.write_segreg(segid, selector);
+
+  if unlikely (exception) {
+    ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+    ctx.propagate_x86_exception(exception, selector);
+    return;
+  }
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_ldmxcsr(Context& ctx) {
+  //
+  // LDMXCSR needs to flush the pipeline since future FP instructions will
+  // depend on its value and can't be issued out of order w.r.t the mxcsr.
+  //
+  W32 mxcsr = (W32)ctx.commitarf[REG_ar1];
+
+  // Top bit of mxcsr archreg doubles as direction flag and other misc flags: preserve it
+  ctx.mxcsr = (ctx.mxcsr & 0xffffffff00000000ULL) | mxcsr;
+
+  // We can't have exceptions going on inside PTLsim: virtualize this feature in uopimpl code
+  // Everything else will be used by real SSE insns inside uopimpls. 
+  mxcsr |= MXCSR_EXCEPTION_DISABLE_MASK;
+  x86_set_mxcsr(mxcsr);
+
+  //
+  // Technically all FP uops should update the sticky exception bits in the mxcsr
+  // if marked as such (i.e. non-x87). Presently we don't do this, so hopefully
+  // no code checks for exception conditions in this manner. Otherwise each FP
+  // uopimpl would need to update a speculative version of the mxcsr.
+  //
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_fxsave(Context& ctx) {
+  FXSAVEStruct state;
+
+  ctx.fxsave(state);
+
+  Waddr target = ctx.commitarf[REG_ar1];
+
+  PageFaultErrorCode pfec;
+  Waddr faultaddr;
+  int bytes = ctx.copy_to_user(target, &state, sizeof(state), pfec, faultaddr);
+
+  if (bytes < sizeof(state)) {
+    ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+    ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
+    return;
+  }
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_wrmsr(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
 #ifdef PTLSIM_HYPERVISOR
-  int idx = selector >> 3; // mask out the dpl bits and turn into index
-
-  // NOTE: Technically a null selector can be loaded without a fault until its first use
-  if (!ctx.gdt_entry_valid(idx)) {
-    propagate_exception_during_assist(ctx, (segid == SEGID_SS) ? EXCEPTION_x86_stack_fault : EXCEPTION_x86_seg_not_present, selector);
-    return;
+  if (ctx.kernel_mode) {
+    abort();
+  } else {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
   }
-
-  SegmentDescriptor desc = ctx.get_gdt_entry(segid >> 3);
-
-  if (!desc.p) {
-    propagate_exception_during_assist(ctx, (segid == SEGID_SS) ? EXCEPTION_x86_stack_fault : EXCEPTION_x86_seg_not_present, selector);
-    return;
-  }
-
-  if (desc.dpl > ctx.seg[SEGID_CS].dpl) {
-    propagate_exception_during_assist(ctx, EXCEPTION_x86_gp_fault, selector);
-    return;
-  }
-
-  //++MTY TODO Do all the usual x86 checks
-
-  ctx.seg[segid].selector = selector;
-  ctx.update_shadow_segment_descriptors();
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 #else
-  // Normal userspace PTLsim
-  ctx.seg[segid].selector = selector;
-  ctx.update_shadow_segment_descriptors();
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 #endif
 }
 
-//
-// Full hidden EFLAGS/RFLAGS state
-// pushf and popf require this
-//
-W32 internal_flags_bits = 0;
+void assist_rdmsr(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+#ifdef PTLSIM_HYPERVISOR
+  if (ctx.kernel_mode) {
+    W32 msr = ctx.commitarf[REG_rcx];
+    W64 rc = 0;
+    bool invalid = 0;
+    switch (msr) {
+    case 0xc0000100:
+      rc = ctx.seg[SEGID_FS].base; break;
+    case 0xc0000101:
+      rc = ctx.seg[SEGID_GS].base; break;
+    case 0xc0000102:
+      rc = ctx.swapgs_base; break;
+    default:
+      invalid = 1; break;
+    }
+    if (invalid) {
+      ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    } else {
+      ctx.commitarf[REG_rdx] = HI32(rc);
+      ctx.commitarf[REG_rax] = LO32(rc);
+      ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+    }
+  } else {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+  }
+#else
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+#endif
+}
+
+void assist_wrcr(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_rdcr(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_iret16(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_iret32(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_iret64(Context& ctx) {
+#ifdef PTLSIM_HYPERVISOR
+  struct IRETStackFrame {
+    W64 rip, cs, rflags, rsp, ss;
+  };
+
+  IRETStackFrame frame;
+
+  PageFaultErrorCode pfec;
+  Waddr faultaddr;
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  int n = ctx.copy_from_user(&frame, (Waddr)ctx.commitarf[REG_rsp], sizeof(frame), pfec, faultaddr);
+  if (n != sizeof(frame)) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
+    return;
+  }
+
+  int exception;
+
+  if (exception = ctx.write_segreg(SEGID_SS, frame.ss)) {
+    ctx.propagate_x86_exception(exception, frame.ss & 0xfff8);
+    return;
+  }
+
+  if (exception = ctx.write_segreg(SEGID_CS, frame.cs)) {
+    ctx.propagate_x86_exception(exception, frame.cs & 0xfff8);
+    return;
+  }
+
+  ctx.commitarf[REG_rip] = frame.rip;
+  ctx.commitarf[REG_rsp] = frame.rsp;
+  ctx.internal_eflags = frame.rflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF);
+  ctx.commitarf[REG_flags] = frame.rflags & (FLAG_ZAPS|FLAG_CF|FLAG_OF);
+#else
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+#endif
+}
 
 bool TraceDecoder::decode_complex() {
   DecodedOperand rd;
@@ -328,7 +505,7 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x8c: {
-    // Special form: always return 0x63 (gs seg) for segreg while in simulation mode (used for simcalls):
+    // mov Ev,segreg
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
     CheckInvalid();
@@ -387,18 +564,18 @@ bool TraceDecoder::decode_complex() {
 
   case 0x9c: {
     // pushfw/pushfq
-    int sizeshift = (opsize_prefix) ? 1 : ((ctx.use64) ? 3 : 2);
+    int sizeshift = (opsize_prefix) ? 1 : ((use64) ? 3 : 2);
     int size = (1 << sizeshift);
     CheckInvalid();
 
     if (last_flags_update_was_atomic) {
-      this << TransOp(OP_movccr, REG_temp0, REG_zf, REG_zero, REG_zero, 3);
+      this << TransOp(OP_movccr, REG_temp0, REG_zero, REG_zf, REG_zero, 3);
     } else {
       this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
-      this << TransOp(OP_movccr, REG_temp0, REG_temp0, REG_zero, REG_zero, 3);
+      this << TransOp(OP_movccr, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
     }
 
-    TransOp ldp(OP_ld, REG_temp1, REG_zero, REG_imm, REG_zero, 2, (Waddr)&internal_flags_bits); ldp.internal = 1; this << ldp;
+    TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 2, offsetof(Context, internal_eflags)); ldp.internal = 1; this << ldp;
     this << TransOp(OP_or, REG_temp1, REG_temp1, REG_temp0, REG_zero, 2); // merge in standard flags
 
     this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
@@ -408,18 +585,30 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x9d: {
-    // popfw/popfq
-    int sizeshift = (opsize_prefix) ? 1 : ((ctx.use64) ? 3 : 2);
+    // popfw/popfd/popfq
+    int sizeshift = (opsize_prefix) ? 1 : ((use64) ? 3 : 2);
     int size = (1 << sizeshift);
     CheckInvalid();
 
-    this << TransOp(OP_ld, REG_temp0, REG_rsp, REG_zero, REG_zero, sizeshift);
+    this << TransOp(OP_ld, REG_ar1, REG_rsp, REG_zero, REG_zero, sizeshift);
     this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
-    // Update internal flags too (only update non-standard flags in internal_flags_bits):
-    this << TransOp(OP_and, REG_temp1, REG_temp0, REG_imm, REG_zero, 2, ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
-    TransOp stp(OP_st, REG_mem, REG_zero, REG_imm, REG_temp1, 2, (Waddr)&internal_flags_bits); stp.internal = 1; this << stp;
-    this << TransOp(OP_movrcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
 
+    microcode_assist(ASSIST_POPF, ripstart, rip);
+    end_of_block = 1;
+    break;
+  }
+
+  case 0xfc: { // cld
+    CheckInvalid();
+    microcode_assist(ASSIST_CLD, ripstart, rip);
+    end_of_block = 1;
+    break;
+  }
+
+  case 0xfd: { // std
+    CheckInvalid();
+    microcode_assist(ASSIST_STD, ripstart, rip);
+    end_of_block = 1;
     break;
   }
 
@@ -430,6 +619,8 @@ bool TraceDecoder::decode_complex() {
   case 0xae ... 0xaf: {
     W64 rep = (prefixes & (PFX_REPNZ|PFX_REPZ));
     int sizeshift = (!bit(op, 0)) ? 0 : (rex.mode64) ? 3 : opsize_prefix ? 1 : 2;
+    int addrsizeshift = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
+
     CheckInvalid();
 
     // only actually code if it is the very first insn in the block!
@@ -445,13 +636,15 @@ bool TraceDecoder::decode_complex() {
     } else {
       // This is the very first x86 insn in the block, so translate it as a loop!
       if (rep) {
-        TransOp chk(OP_chk_sub, REG_temp0, REG_rcx, REG_zero, REG_imm, 3, 0, (Waddr)rip);
+        TransOp chk(OP_chk_sub, REG_temp0, REG_rcx, REG_zero, REG_imm, addrsizeshift, 0, (Waddr)rip);
         chk.cond = COND_ne; // make sure rcx is not equal to zero
         chk.memid = EXCEPTION_SkipBlock; // type of exception to raise
         this << chk;
         bb.repblock = 1;
       }
-      this << TransOp(OP_bt,   REG_temp3, REG_iflags, REG_imm,   REG_zero, 3, 63);
+      int increment = (1 << sizeshift);
+      if (dirflag) increment = -increment;
+
       switch (op) {
       case 0xa4: case 0xa5: {
         // movs
@@ -482,19 +675,15 @@ bool TraceDecoder::decode_complex() {
         */
         if (rep) assert(rep == PFX_REPZ); // only rep is allowed for movs and rep == repz here
 
-        this << TransOp(OP_ld,     REG_temp0, REG_rsi,    REG_zero,  REG_zero,  sizeshift);          // ldSZ    t0 = [rsi]
-        this << TransOp(OP_st,     REG_mem,   REG_rdi,    REG_zero,  REG_temp0, sizeshift);          // stSZ    [rdi] = t0
-        TransOp    add1(OP_adda, REG_rsi,   REG_rsi,    REG_zero,  REG_temp3, 3);                  // adda  rsi = rsi,0,t1*SZ
-        TransOp    add2(OP_adda, REG_rdi,   REG_rdi,    REG_zero,  REG_temp3, 3);                  // adda  rdi = rdi,0,t1*SZ
-        add1.extshift = sizeshift;
-        add2.extshift = sizeshift;
-        this << add1;
-        this << add2;
+        this << TransOp(OP_ld,     REG_temp0, REG_rsi,    REG_zero,  REG_zero,  sizeshift);
+        this << TransOp(OP_st,     REG_mem,   REG_rdi,    REG_zero,  REG_temp0, sizeshift);
+        this << TransOp(OP_add,    REG_rsi,   REG_rsi,    REG_imm,   REG_zero,  addrsizeshift, increment);
+        this << TransOp(OP_add,    REG_rdi,   REG_rdi,    REG_imm,   REG_zero,  addrsizeshift, increment);
         if (rep) {
-          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, (ctx.use64 ? 3 : 2), 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
+          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, addrsizeshift, 1, 0, SETFLAG_ZF);
           sub.nouserflags = 1; // it still generates flags, but does not rename the user flags
           this << sub;
-          TransOp br(OP_br, REG_rip, REG_rcx, REG_zero, REG_zero, 3);
+          TransOp br(OP_br, REG_rip, REG_rcx, REG_zero, REG_zero, addrsizeshift);
           br.cond = COND_ne; // repeat while nonzero
           br.riptaken = (Waddr)ripstart;
           br.ripseq = (Waddr)rip;
@@ -504,15 +693,11 @@ bool TraceDecoder::decode_complex() {
       }
       case 0xa6: case 0xa7: {
         // cmps
-        this << TransOp(OP_ld,     REG_temp0, REG_rsi,    REG_zero,  REG_zero,  sizeshift);           // ldSZ    t0 = [rsi]
-        this << TransOp(OP_ld,     REG_temp1, REG_rdi,    REG_zero,  REG_zero,  sizeshift);           // ldSZ    t1 = [rdi]
-        TransOp    add1(OP_adda, REG_rsi,   REG_rsi,    REG_zero,  REG_temp3, 3);                   // adda  rsi = rsi,0,t1*SZ
-        TransOp    add2(OP_adda, REG_rdi,   REG_rdi,    REG_zero,  REG_temp3, 3);                   // adda  rdi = rdi,0,t1*SZ
-        add1.extshift = sizeshift;
-        add2.extshift = sizeshift;
-        this << add1;
-        this << add2;
-        this << TransOp(OP_sub,    REG_temp2, REG_temp0,  REG_temp1, REG_zero,  sizeshift, 0, 0, FLAGS_DEFAULT_ALU); // sub    t2 = t0,t1 (zco)
+        this << TransOp(OP_ld,   REG_temp0, REG_rsi,    REG_zero,  REG_zero,  sizeshift);
+        this << TransOp(OP_ld,   REG_temp1, REG_rdi,    REG_zero,  REG_zero,  sizeshift);
+        this << TransOp(OP_add,  REG_rsi,   REG_rsi,    REG_imm,   REG_zero,  addrsizeshift, increment);
+        this << TransOp(OP_add,  REG_rdi,   REG_rdi,    REG_imm,   REG_zero,  addrsizeshift, increment);
+        this << TransOp(OP_sub,  REG_temp2, REG_temp0,  REG_temp1, REG_zero,  sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
 
         if (rep) {
           /*
@@ -539,10 +724,10 @@ bool TraceDecoder::decode_complex() {
             br.nz    rip = t3,zero [loop, seq]
           */
 
-          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, (ctx.use64 ? 3 : 2), 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
+          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, addrsizeshift, 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
           sub.nouserflags = 1; // it still generates flags, but does not rename the user flags
           this << sub;
-          TransOp orxf((rep == PFX_REPZ) ? OP_ornotcc : OP_orcc, REG_temp0, REG_rcx, REG_temp2, REG_zero, (ctx.use64 ? 3 : 2), 0, 0, FLAGS_DEFAULT_ALU);
+          TransOp orxf((rep == PFX_REPZ) ? OP_ornotcc : OP_orcc, REG_temp0, REG_rcx, REG_temp2, REG_zero, (use64 ? 3 : 2), 0, 0, FLAGS_DEFAULT_ALU);
           orxf.nouserflags = 1;
           this << orxf;
           if (!last_flags_update_was_atomic) 
@@ -559,12 +744,10 @@ bool TraceDecoder::decode_complex() {
       case 0xaa: case 0xab: {
         // stos
         if (rep) assert(rep == PFX_REPZ); // only rep is allowed for movs and rep == repz here
-        this << TransOp(OP_st,   REG_mem,   REG_rdi,    REG_zero,  REG_rax, sizeshift);            // stSZ    [rdi] = rax
-        TransOp   addop(OP_adda, REG_rdi,   REG_rdi,    REG_zero,  REG_temp3, 3);                  // adda  rdi = rdi,0,t1*SZ
-        addop.extshift = sizeshift;
-        this << addop;
+        this << TransOp(OP_st,   REG_mem,   REG_rdi,    REG_zero,  REG_rax, sizeshift);
+        this << TransOp(OP_add,  REG_rdi,   REG_rdi,    REG_imm,   REG_zero, addrsizeshift, increment);
         if (rep) {
-          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, (ctx.use64 ? 3 : 2), 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
+          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, addrsizeshift, 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
           sub.nouserflags = 1; // it still generates flags, but does not rename the user flags
           this << sub;
           TransOp br(OP_br, REG_rip, REG_rcx, REG_zero, REG_zero, 3);
@@ -580,18 +763,16 @@ bool TraceDecoder::decode_complex() {
         if (rep) assert(rep == PFX_REPZ); // only rep is allowed for movs and rep == repz here
 
         if (sizeshift >= 2) {
-          this << TransOp(OP_ld,   REG_rax,   REG_rsi,    REG_zero,  REG_zero, sizeshift);           // ldSZ    rax = [rsi]
+          this << TransOp(OP_ld,   REG_rax,   REG_rsi,    REG_zero,  REG_zero, sizeshift);
         } else {
-          this << TransOp(OP_ld,   REG_temp0, REG_rsi,    REG_zero,  REG_zero, sizeshift);           // ldSZ    t0 = [rsi]
-          this << TransOp(OP_mov,  REG_rax,   REG_rax,    REG_temp0, REG_zero, sizeshift);           // move    rax = rax,t0 (size adjustment)
+          this << TransOp(OP_ld,   REG_temp0, REG_rsi,    REG_zero,  REG_zero, sizeshift);
+          this << TransOp(OP_mov,  REG_rax,   REG_rax,    REG_temp0, REG_zero, sizeshift);
         }
 
-        TransOp     addop(OP_adda, REG_rsi,   REG_rsi,    REG_zero,  REG_temp3, 3);                  // adda  rsi = rsi,0,t1*SZ
-        addop.extshift = sizeshift;
-        this << addop;
+        this << TransOp(OP_add,  REG_rsi,   REG_rsi,    REG_imm,   REG_zero, addrsizeshift, increment);
 
         if (rep) {
-          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, (ctx.use64 ? 3 : 2), 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
+          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, addrsizeshift, 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
           sub.nouserflags = 1; // it still generates flags, but does not rename the user flags
           this << sub;
           TransOp br(OP_br, REG_rip, REG_rcx, REG_zero, REG_zero, 3);
@@ -605,13 +786,11 @@ bool TraceDecoder::decode_complex() {
       case 0xae: case 0xaf: {
         // scas
         this << TransOp(OP_ld,   REG_temp1, REG_rdi,    REG_zero,  REG_zero, sizeshift);           // ldSZ    t1 = [rdi]
-        TransOp   addop(OP_adda, REG_rdi,   REG_rdi,    REG_zero,  REG_temp3, 3);                  // adda    rdi = rdi,0,t1*SZ
-        addop.extshift = sizeshift;
-        this << addop;
+        this << TransOp(OP_add,  REG_rdi,   REG_rdi,    REG_imm,   REG_zero, addrsizeshift, increment);
         this << TransOp(OP_sub,  REG_temp2, REG_temp1,  REG_rax,   REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU); // sub    t2 = t1,rax (zco)
 
         if (rep) {
-          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, (ctx.use64 ? 3 : 2), 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
+          TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, addrsizeshift, 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
           sub.nouserflags = 1; // it still generates flags, but does not rename the user flags
           this << sub;
           TransOp orxf((rep == PFX_REPZ) ? OP_ornotcc : OP_orcc, REG_temp0, REG_rcx, REG_temp2, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
@@ -662,7 +841,7 @@ bool TraceDecoder::decode_complex() {
     // int imm8
     DECODE(iform, ra, b_mode);
     CheckInvalid();
-    immediate(REG_ar1, ra.imm.imm & 0xff, 0);
+    immediate(REG_ar1, 0, ra.imm.imm & 0xff);
     microcode_assist(ASSIST_INT, ripstart, rip);
     end_of_block = 1;
     break;
@@ -670,13 +849,17 @@ bool TraceDecoder::decode_complex() {
 
   case 0xce: {
     // INTO
+    // Check OF with chk.no and raise SkipBlock exception;
+    // otherwise terminate with ASSIST_INT.
     MakeInvalid();
     break;
   }
 
   case 0xcf: {
     // IRET
-    MakeInvalid();
+    int assistid = (use64) ? (opsize_prefix ? ASSIST_IRET32 : ASSIST_IRET64) : (opsize_prefix ? ASSIST_IRET16 : ASSIST_IRET32);
+    microcode_assist(assistid, ripstart, rip);
+    end_of_block = 1;
     break;
   }
 
@@ -738,7 +921,7 @@ bool TraceDecoder::decode_complex() {
     DECODE(iform, ra, b_mode);
     CheckInvalid();
 
-    int sizeshift = (ctx.use64) ? (opsize_prefix ? 2 : 3) : (opsize_prefix ? 1 : 2);
+    int sizeshift = (use64) ? (opsize_prefix ? 2 : 3) : (opsize_prefix ? 1 : 2);
 
     TransOp testop(OP_and, REG_temp1, REG_rcx, REG_rcx, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
     testop.nouserflags = 1;
@@ -871,76 +1054,226 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
-    /*
-      case 0x120 ... 0x123:
-      // moves to/from CRx or DRx (not supported)
-      break;
-      }
-    */
+  case 0x120: { // mov reg,crN
+    DECODE(eform, rd, v_mode);
+    DECODE(gform, ra, v_mode);
+#ifdef PTLSIM_HYPERVISOR
+    if (rd.type != OPTYPE_REG) MakeInvalid();
+    CheckInvalid();
 
-  case 0x1ac ... 0x1ad: // shrd
-  case 0x1a4 ... 0x1a5: { // shld
-    // shrd imm-or-reg
+    int offset;
+
+    switch (modrm.reg) {
+    case 0: offset = offsetof(Context, cr0); break;
+    case 1: offset = offsetof(Context, cr1); break;
+    case 2: offset = offsetof(Context, cr2); break;
+    case 3: offset = offsetof(Context, cr3); break;
+    case 4: offset = offsetof(Context, cr4); break;
+    case 5: offset = offsetof(Context, cr5); break;
+    case 6: offset = offsetof(Context, cr6); break;
+    case 7: offset = offsetof(Context, cr7); break;
+    default: MakeInvalid();
+    }
+
+    TransOp ldp(OP_ld, arch_pseudo_reg_to_arch_reg[rd.reg.reg], REG_ctx, REG_imm, REG_zero, 3, offset); ldp.internal = 1; this << ldp;
+#else
+    MakeInvalid();
+#endif
+    break;
+  }
+
+  case 0x132: { // rdmsr
+    microcode_assist(ASSIST_RDMSR, ripstart, rip);
+    end_of_block = 1;
+    break;
+  };
+
+  case 0x130: { // wrmsr
+    microcode_assist(ASSIST_WRMSR, ripstart, rip);
+    end_of_block = 1;
+    break;
+  };
+
+  case 0x1a3: // bt ra,rb     101 00 011
+  case 0x1ab: // bts ra,rb    101 01 011
+  case 0x1b3: // btr ra,rb    101 10 011
+  case 0x1bb: { // btc ra,rb  101 11 011
+    // Fast decoder handles only reg forms
+    DECODE(eform, rd, v_mode);
+    DECODE(gform, ra, v_mode);
+    CheckInvalid();
+
+    static const byte x86_to_uop[4] = {OP_bt, OP_bts, OP_btr, OP_btc};
+    int opcode = x86_to_uop[bits(op, 3, 2)];
+
+    if (rd.type == OPTYPE_REG) {
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+
+      // bt has no output - just flags:
+      this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
+      break;
+    } else {
+      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+
+      rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
+      address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
+
+      this << TransOp(OP_sar, REG_temp2, rareg, REG_imm, REG_zero, 3, 3); // byte index
+      this << TransOp(OP_ld, REG_temp0, REG_temp1, REG_temp2, REG_zero, 0);
+      this << TransOp(opcode, REG_temp0, REG_temp0, rareg, REG_zero, 0, 0, 0, SETFLAG_CF);
+
+      if (opcode != OP_bt) {
+        this << TransOp(OP_st, REG_mem, REG_temp1, REG_temp2, REG_temp0, 0);
+      }
+
+      break;
+    }
+  }
+
+  case 0x1ba: { // bt|btc|btr|bts mem,imm
+    // Fast decoder handles only reg forms
+    DECODE(eform, rd, v_mode);
+    DECODE(iform, ra, b_mode);
+    if (modrm.reg < 4) MakeInvalid();
+    CheckInvalid();
+
+    static const byte x86_to_uop[4] = {OP_bt, OP_bts, OP_btr, OP_btc};
+    int opcode = x86_to_uop[lowbits(modrm.reg, 2)];
+
+    if (rd.type == OPTYPE_REG) {
+      int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+      int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+
+      // bt has no output - just flags:
+      this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, REG_imm, REG_zero, 3, ra.imm.imm, 0, SETFLAG_CF);
+      break;
+    } else {
+      rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
+      address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
+
+      this << TransOp(OP_ld, REG_temp0, REG_temp1, REG_imm, REG_zero, 0, ra.imm.imm >> 3);
+      this << TransOp(opcode, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, lowbits(ra.imm.imm, 3), 0, SETFLAG_CF);
+
+      if (opcode != OP_bt) {
+        this << TransOp(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 0, ra.imm.imm >> 3);
+      }
+
+      break;
+    }
+  }
+
+  case 0x1a4 ... 0x1a5: // shld rd,[imm|cl]
+  case 0x1ac ... 0x1ad: { // shrd rd,[imm|cl]
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
 
-    bool right = (op == 0x1ac || op == 0x1ad);
+    bool left = (op == 0x1a4 || op == 0x1a5);
 
     bool immform = (bit(op, 0) == 0);
     DecodedOperand rimm;
+    rimm.imm.imm = 0;
     if (immform) DECODE(iform, rimm, b_mode);
-
     CheckInvalid();
-    // technically it's allowed in 64-bit mode, but no compiler uses it
-    if (ctx.use64) MakeInvalid();
 
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
 
-    // low 32 bits and result in rd, high 32 bits in ra
-    if (rd.type == OPTYPE_MEM) operand_load(REG_temp1, rd);
-    int rdreg = (rd.type == OPTYPE_MEM) ? REG_temp1 : arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    if (rd.type == OPTYPE_MEM) operand_load(REG_temp4, rd);
+    int rdreg = (rd.type == OPTYPE_MEM) ? REG_temp4 : arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    int rdsize = (rd.type == OPTYPE_MEM) ? rd.mem.size : reginfo[rd.reg.reg].sizeshift;
 
-    // Form a 64-bit register to shift
+    byte imm = lowbits(rimm.imm.imm, 3 + rdsize);
 
-    // (int ms, int mc, int ds)
-    // left shift: make it like this:
-    // dddd aaaa     
-    // rotr 32
+    if (immform & (imm == 0)) {
+      // No action and no flags update
+      this << TransOp(OP_nop,   REG_temp0, REG_zero,  REG_zero,  REG_zero, 0);
+      break;
+    }
+    
+    if (!immform) {
+      if (left) {
+        //
+        // Build mask: (58 = 64-6, 52 = 64-12)
+        //
+        // Example (shift left count 3):
+        //
+        // In:  d7 d6 d5 d4 d3 d2 d1 d0   a7 a6 a5 a4 a3 a2 a1 a0
+        //      d4 d3 d2 d1 d0 -- -- -- | << c
+        //      >>> 64-c                | -- -- -- -- -- a7 a6 a5
+        //
+        // Therefore: mask (rd << c), rs, [ms=0, mc=c, ds=64-c]
+        //   ms = 0
+        //   mc = c
+        //   ds = 64-c
+        //
 
-    if (right)
-      this << TransOp(OP_maskb, REG_temp0, rdreg, rareg, REG_imm, 3, 0, MaskControlInfo(32, 32, 32)); // 63 RA RD 0
-    else this << TransOp(OP_maskb, REG_temp0, rareg, rdreg, REG_imm, 3, 0, MaskControlInfo(32, 32, 32)); // 63 RD RA 0
+        this << TransOp(OP_and,   REG_temp0, REG_rcx,   REG_imm,   REG_zero, 3, bitmask(3 + rdsize));
+        this << TransOp(OP_mov,   REG_temp2, REG_zero,  REG_imm,   REG_zero, 0, (1 << rdsize) * 8); // load inverse count (e.g. 64 - c)
+        this << TransOp(OP_sub,   REG_temp2, REG_temp2, REG_temp0, REG_zero, 0); // load inverse count (e.g. 64 - c)
+        // Form [ 64-c | c ]
+        this << TransOp(OP_maskb, REG_temp1, REG_temp0, REG_temp2, REG_imm,  3, 0, MaskControlInfo(58, 6, 58));
+        // Form [ 64-c | c | 0 ]
+        this << TransOp(OP_shl,   REG_temp1, REG_temp1, REG_imm,   REG_zero, 3, 6);
+      } else {
+        //
+        // Build mask: (58 = 64-6, 52 = 64-12)
+        // and   t0 = c,sizemask
+        // maskq t1 = t0,t0,[ms=58, mc=6, ds=58]       // build 0|c|c
+        // maskq t1 = t1,t0,[ms=52, mc=6, ds=52]       // build c|c|c
+        //
+        this << TransOp(OP_and,   REG_temp0, REG_rcx,   REG_imm,   REG_zero, 3, bitmask(3 + rdsize));
+        this << TransOp(OP_maskb, REG_temp1, REG_temp0, REG_temp0, REG_imm,  3, 0, MaskControlInfo(58, 6, 58));
+        this << TransOp(OP_maskb, REG_temp1, REG_temp1, REG_temp0, REG_imm,  3, 0, MaskControlInfo(52, 6, 52));
+      }
+    }
 
+    //
     // Collect the old flags here in case the shift count was zero:
-    this << TransOp(OP_collcc, REG_temp5, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
-
-    // Perform the double width 64-bit shift, but only set the CF flag (see below)
-    this << TransOp(right ? OP_shr : OP_shl, REG_temp0, REG_temp0, (immform) ? REG_imm : REG_rcx, REG_temp5, 3, (immform ? rimm.imm.imm : 0), 0, SETFLAG_CF);
-
-    // Put high back in low
-    if (!right) this << TransOp(OP_shr, REG_temp0, REG_temp0, REG_imm, REG_zero, 3, 32);
+    //
+    if (!immform) this << TransOp(OP_collcc,REG_temp2, REG_zf,    REG_cf,    REG_of,   3, 0, 0, FLAGS_DEFAULT_ALU);
 
     //
-    // This dummy add is used solely to generate the ZAPS flags only for 32-bit output
-    // since we can't do it correctly in the shift itself (which must have a 64-bit result).
-    // OF is special: it is only set if a sign change occurred AND the shift count was 1.
-    // The meaning of this is ambiguous so we will hope it is never used (CHECKME) and won't
-    // create problems. Apparently other chips don't implement it consistently either.
+    // To simplify the microcode construction of the shrd/shld instructions,
+    // the following sequence may be used:
     //
-    this << TransOp(OP_add, rdreg, REG_temp0, REG_zero, REG_zero, 2, 0, 0, SETFLAG_ZF|SETFLAG_OF);
+    // shrd rd,rs:
+    //
+    // shr  t = rd,c          
+    //      t.cf = rd[c-1] last bit shifted out
+    //      t.of = rd[63]  or whatever rd's original sign bit position was
+    // mask rd = t,rs,[ms=c, mc=c, ds=c]
+    //      rd.cf = t.cf  inherited from t
+    //      rd.of = (out.sf != t.of) i.e. did the sign bit change?
+    //
+    // shld rd,rs:
+    //
+    // shl  t = rd,c          
+    //      t.cf = rd[64-c] last bit shifted out
+    //      t.of = rd[63]   or whatever rd's original sign bit position was
+    // mask rd = t,rs,[ms=0, mc=c, ds=64-c]
+    //      rd.cf = t.cf  inherited from t
+    //      rd.of = (out.sf != t.of) i.e. did the sign bit change?
+    //
 
-    if (rd.type == OPTYPE_MEM) result_store(rdreg, REG_temp4, rd);
+    int shiftreg = (immform) ? REG_imm : REG_temp0;
+    int maskreg = (immform) ? REG_imm : REG_temp1;
+    int opcode = (left) ? OP_shl : OP_shr;
+    this << TransOp(opcode,   rdreg,     rdreg,     shiftreg,  REG_zero,  rdsize, imm, 0, FLAGS_DEFAULT_ALU);
+    W64 maskctl = (left) ? MaskControlInfo(0, imm, ((1 << rdsize)*8) - imm) : MaskControlInfo(imm, imm, imm);
+    this << TransOp(OP_mask,  rdreg,     rdreg,     rareg,     maskreg,   rdsize, 0, maskctl, FLAGS_DEFAULT_ALU);
 
-    // (32-bit result is complete at this point, but we still need to compute the flags)
+    if (rd.type == OPTYPE_MEM) result_store(rdreg, REG_temp5, rd);
 
-    // Collect all flags once more:
-    this << TransOp(OP_collcc, REG_temp2, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
-
-    // If the shift count was zero, never set any flags at all.
-    this << TransOp(OP_xor, REG_temp3, REG_rcx, REG_rcx, REG_zero, 0, 0, 0, FLAGS_DEFAULT_ALU);
-    TransOp selop(OP_sel, REG_temp5, REG_temp5, REG_temp2, REG_temp3, 3, 0, 0, FLAGS_DEFAULT_ALU);
-    selop.cond = COND_e;
-    this << selop;
+    //
+    // Account for no flag changes if zero shift:
+    // sub   t0 = t0,t0
+    // sel.e t0 = rd,t2,t0      [zco] (t2 = original flags)
+    //
+    if (!immform) {
+      this << TransOp(OP_and,   REG_temp0, REG_temp0, REG_temp0, REG_zero,  0,      0, 0, FLAGS_DEFAULT_ALU);
+      TransOp selop  (OP_sel,   REG_temp0, rdreg,     REG_temp2, REG_temp0, 3,      0, 0, FLAGS_DEFAULT_ALU);
+      selop.cond = COND_e; this << selop;
+    }
     break;
   };
 
@@ -1028,6 +1361,71 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
+  case 0x1c3: {
+    // movnti
+    DECODE(eform, rd, v_mode);
+    DECODE(gform, ra, v_mode);
+    CheckInvalid();
+    move_reg_or_mem(rd, ra);
+    break;
+  }
+
+  case 0x1ae: {
+    // fxsave fxrstor ldmxcsr stmxcsr (inv) lfence mfence sfence
+    switch (modrm.reg) {
+    case 0: { // fxsave
+      DECODE(eform, ra, q_mode);
+      CheckInvalid();
+
+      // Get effective address into sr2
+      int basereg = arch_pseudo_reg_to_arch_reg[ra.mem.basereg];
+      int indexreg = arch_pseudo_reg_to_arch_reg[ra.mem.indexreg];
+      basereg = bias_by_segreg(basereg);
+      TransOp addop(OP_adda, REG_ar1, basereg, REG_imm, indexreg, (use64) ? 3 : 2, ra.mem.offset);
+      addop.extshift = ra.mem.scale;
+      this << addop;
+
+      microcode_assist(ASSIST_FXSAVE, ripstart, rip);
+      end_of_block = 1;
+      break;
+    }
+    case 2: { // ldmxcsr
+      DECODE(eform, ra, d_mode);
+      CheckInvalid();
+
+      ra.type = OPTYPE_REG;
+      ra.reg.reg = 0; // get the requested mxcsr into sr2
+      move_reg_or_mem(ra, rd, REG_ar1);
+      //
+      // LDMXCSR needs to flush the pipeline since future FP instructions will
+      // depend on its value and can't be issued out of order w.r.t the mxcsr.
+      //
+      microcode_assist(ASSIST_LDMXCSR, ripstart, rip);
+      end_of_block = 1;
+      break;
+    }
+    case 3: { // stmxcsr
+      DECODE(eform, rd, d_mode);
+      CheckInvalid();
+
+      TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, mxcsr)); ldp.internal = 1; this << ldp;
+      result_store(REG_temp1, REG_temp0, rd);
+      break;
+    }
+    case 5: // lfence
+    case 6: // mfence
+    case 7: { // sfence
+      CheckInvalid();
+      this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
+      break;
+    }
+    default:
+      MakeInvalid();
+      break;
+    }
+    break;
+  }
+
   case 0x105: {
     // syscall
     // Saves return address into %rcx and jumps to MSR_LSTAR
@@ -1054,9 +1452,11 @@ bool TraceDecoder::decode_complex() {
   case 0x131: {
     // rdtsc: put result into %edx:%eax
     CheckInvalid();
-    TransOp ldp(OP_ld, REG_rdx, REG_zero, REG_imm, REG_zero, 3, (Waddr)&sim_cycle);
-    ldp.internal = 1;
-    this << ldp;
+    TransOp ldp1(OP_ld, REG_rdx, REG_zero, REG_imm, REG_zero, 3, (Waddr)&sim_cycle); ldp1.internal = 1; this << ldp1;
+#ifdef PTLSIM_HYPERVISOR
+    TransOp ldp2(OP_ld, REG_temp0, REG_ctx, REG_imm, REG_zero, 3, offsetof(Context, base_tsc)); ldp2.internal = 1; this << ldp2;
+    this << TransOp(OP_add, REG_rdx, REG_rdx, REG_temp0, REG_zero, 3);
+#endif
     this << TransOp(OP_mov, REG_rax, REG_zero, REG_rdx, REG_zero, 2);
     this << TransOp(OP_shr, REG_rdx, REG_rdx, REG_imm, REG_zero, 3, 32);
     break;

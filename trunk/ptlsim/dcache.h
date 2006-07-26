@@ -7,7 +7,7 @@
 #ifndef _DCACHE_H
 #define _DCACHE_H
 
-#include <ptlsim.h>
+#include <datastore.h>
 
 #define VIRT_ADDR_BITS 48
 #define PHYS_ADDR_BITS 40

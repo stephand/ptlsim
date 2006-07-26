@@ -9,14 +9,30 @@
 #define _CONFIG_H_
 
 #include <globals.h>
+#include <superstl.h>
 #include <stdarg.h>
 
+static const W64 infinity = limits<W64s>::max;
+
 struct ConfigurationOption {
-  char* option;
+  const char* name;
+  const char* description;
   int type;
-  bool ishex;
-  char* description;
-  void* variable;
+  int fieldsize;
+  Waddr offset;
+
+  ConfigurationOption* next;
+
+  ConfigurationOption() { }
+
+  ConfigurationOption(const char* name, const char* description, int type, Waddr offset, int fieldsize = 0) {
+    this->name = name;
+    this->description = description;
+    this->type = type;
+    this->offset = offset;
+    this->fieldsize = fieldsize;
+    this->next = null;
+  }
 };
 
 enum {
@@ -29,76 +45,70 @@ enum {
   OPTION_TYPE_SECTION = -1
 };
 
-struct ConfigurationParser {
-  const ConfigurationOption* options;
-  int optioncount;
+struct ConfigurationParserBase {
+  ConfigurationOption* options;
+  ConfigurationOption* lastoption;
 
-  ConfigurationParser(ConfigurationOption* options, int optioncount) {
-    this->options = options;
-    this->optioncount = optioncount;
+  void addentry(void* baseptr, void* field, int type, const char* name, const char* description) {
+    Waddr offset = ((Waddr)field) - ((Waddr)baseptr);
+    ConfigurationOption* option = new ConfigurationOption(name, description, type, offset);
+    if (lastoption) lastoption->next = option;
+    if (!options) options = option;
+    lastoption = option;
   }
 
-  int parse(int argc, char* argv[]);
-  ostream& printusage(ostream& os) const;
-  ostream& print(ostream& os) const;
+  ConfigurationParserBase() { options = null; lastoption = null; }
+
+  int parse(void* baseptr, int argc, char* argv[]);
+  int parse(void* baseptr, char* argstr);
+  ostream& printusage(const void* baseptr, ostream& os) const;
+  ostream& print(const void* baseptr, ostream& os) const;
 };
 
-ostream& operator <<(ostream& os, const ConfigurationParser& clp);
+template <typename T>
+struct ConfigurationParser: public T {
+  ConfigurationParserBase options;
 
-const char* get_full_exec_filename();
-void print_banner(int argc, char* argv[]);
-void print_usage(int argc, char* argv[]);
-int init_config(int argc, char** argv);
+  ConfigurationParser() { }
 
-static const W64 infinity = limits<W64s>::max;
-static const W64 MAX_CYCLE = infinity;
+  void add(W64& field, const char* name, const char* description) {
+    options.addentry(this, &field, OPTION_TYPE_W64, name, description);
+  }
 
-extern ostream logfile;
+  void add(double& field, const char* name, const char* description) {
+    options.addentry(this, &field, OPTION_TYPE_FLOAT, name, description);
+  }
 
-extern W64 ptlsim_quiet;
-extern W64 sim_cycle;
-extern W64 user_insn_commits;
-extern W64 iterations;
-extern W64 total_uops_executed;
-extern W64 total_uops_committed;
-extern W64 total_user_insns_committed;
-extern W64 total_basic_blocks_committed;
+  void add(bool& field, const char* name, const char* description) {
+    options.addentry(this, &field, OPTION_TYPE_BOOL, name, description);
+  }
 
-extern W64 loglevel;
-extern char* log_filename;
-extern W64 start_at_rip;
-extern W64 start_at_rip_repeat;
-extern W64 include_dyn_linker;
-extern W64 stop_at_iteration;
-extern W64 insns_in_last_basic_block;
-extern W64 stop_at_rip;
-extern W64 stop_at_user_insns;
-extern W64 sequential_mode_insns;
-extern W64 start_log_at_iteration;
-extern W64 start_short_log_at_iteration;
-extern W64 user_profile_only;
-extern W64 trigger_mode;
-extern W64 exit_after_fullsim;
-extern char* stats_filename;
-extern W64 snapshot_cycles;
-extern W64 flush_interval;
-extern W64 perfect_cache;
-extern char* dumpcode_filename;
-extern W64 use_out_of_order_core;
-extern W64 use_checkpoint_core;
-extern W64 pause_at_startup;
-extern W64 overshoot_and_dump;
-extern W64 dump_at_end;
+  void add(stringbuf& field, const char* name, const char* description) {
+    options.addentry(this, field, OPTION_TYPE_STRING, name, description);
+  }
+  
+  void section(const char* name) {
+    options.addentry(this, null, OPTION_TYPE_SECTION, name, name);
+  }
 
+  int parse(T& config, int argc, char* argv[]) {
+    return options.parse(&config, argc, argv);
+  }
 
-struct DataStoreNode;
-extern DataStoreNode* dsroot;
-extern W64 snapshotid;
+  int parse(T& config, char* argstr) {
+    return options.parse(&config, argstr);
+  }
 
-//inline bool analyze_in_detail() { return 0; }
-inline bool analyze_in_detail() { return (loglevel > 0); }
-inline bool shortlog() { return (iterations >= start_short_log_at_iteration); }
+  ostream& print(ostream& os, const T& config) {
+    return options.print(&config, os);
+  }
 
-#define logable(level) (loglevel >= level)
+  ostream& printusage(ostream& os, const T& config) {
+    return options.printusage(&config, os);
+  }
+
+  // Provided by user:
+  void setup();
+};
 
 #endif // _CONFIG_H_

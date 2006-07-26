@@ -31,6 +31,10 @@ namespace superstl {
   //
 
 #define stringbuf_smallbufsize 256
+  class stringbuf;
+
+  stringbuf& operator <<(stringbuf& os, const char* v);
+  stringbuf& operator <<(stringbuf& os, const char v);
 
   class stringbuf {
   public:
@@ -61,6 +65,26 @@ namespace superstl {
     void reserve(int extra);
 
     int size() const { return p - buf; }
+    bool empty() const { return (size() == 0); }
+    bool set() const { return !empty(); }
+
+    stringbuf& operator =(const char* str) {
+      if unlikely (!str) {
+        reset();
+        return *this;
+      }
+      reset(strlen(str)+1);
+      *this << str;
+      return *this;
+    }
+
+    bool operator ==(const stringbuf& s) {
+      return (strcmp(*this, s) == 0);
+    }
+
+    bool operator !=(const stringbuf& s) {
+      return (strcmp(*this, s) != 0);
+    }
 
   public:
     char smallbuf[stringbuf_smallbufsize];
@@ -68,12 +92,10 @@ namespace superstl {
     char* p;
     int length;
   };
-  
+
   //
   // Inserters
   //
-  stringbuf& operator <<(stringbuf& os, const char* v);
-  stringbuf& operator <<(stringbuf& os, const char v);
 
 #define DefineIntegerInserter(T, signedtype) \
   inline stringbuf& operator <<(stringbuf& os, const T v) { \
@@ -108,22 +130,7 @@ namespace superstl {
 #undef DefineInserter
 
   inline stringbuf& operator <<(stringbuf& os, const stringbuf& sb) {
-    //
-    // This is an exceptional case for constructs like:
-    //
-    // stringbuf& func(stringbuf& sb) { sb << "xyz" }
-    // os << func(sb);      // os is an ostream
-    //
-    // The user usually wants to take the contents of whatever was added
-    // into sb and write the whole thing to os. However, if we add to
-    // sb here, then return the entire sb, problems arise: the entire
-    // stringbuf gets printed a second time (via it being cast to char
-    // by the compiler).
-    //
-    // There is no generally workable solution to this problem, so we
-    // just warn the user to be careful if they try this.
-    //
-    abort();
+    os << ((char*)sb);
     return os;
   }
 
@@ -156,8 +163,11 @@ namespace superstl {
     byte* buf;
     int bufsize;
     int tail;
+    odstream* chain;
   public:
-    odstream() { fd = -1; buf = null; bufsize = 0; tail = 0; }
+    bool close_on_destroy;
+
+    odstream() { fd = -1; buf = null; bufsize = 0; tail = 0; close_on_destroy = 1; chain = null; }
 
     bool open(const char* filename, bool append = false, int bufsize = 65536);
 
@@ -167,8 +177,10 @@ namespace superstl {
 
     int setbuf(int bufsize);
 
+    void setchain(odstream* chain);
+
     ~odstream() {
-      close();
+      if likely (close_on_destroy) close();
     }
 
     odstream(int fd) {
@@ -439,9 +451,11 @@ namespace superstl {
 
     inline int addmod(int a, int b) { return ((a + b) & bufmask); }
 
-    inline void reset() { fd = -1; error = 0; eos = 0; head = 0; tail = 0; buf = null; bufused = 0; bufsize = 0; bufmask = 0; }
+    inline void reset() { fd = -1; error = 0; eos = 0; head = 0; tail = 0; buf = null; bufused = 0; bufsize = 0; bufmask = 0; close_on_destroy = 1; }
 
   public:
+    bool close_on_destroy;
+
     idstream() { reset(); }
 
     bool open(const char* filename, int bufsize = 65536);
@@ -463,7 +477,7 @@ namespace superstl {
     void close();
 
     ~idstream() {
-      close();
+      if likely (close_on_destroy) close();
     }
 
     bool ok() const { return (!error); }
@@ -531,13 +545,13 @@ namespace superstl {
 
   template <typename T>
   T* renew(T* p, size_t oldcount, size_t newcount) {
-    if (newcount <= oldcount) return p;
+    if unlikely (newcount <= oldcount) return p;
 
     T* pp = new T[newcount];
 
-    if (!p) assert(oldcount == 0);
+    if unlikely (!p) assert(oldcount == 0);
 
-    if (p) {
+    if likely (p) {
       memcpy(pp, p, oldcount * sizeof(T));
       delete[] p;
     }
@@ -662,6 +676,8 @@ namespace superstl {
     inline T& operator [](int i) { return data[i]; }
     inline T operator [](int i) const { return data[i]; }
 
+    operator T*() const { return data; }
+
     // NOTE: g *must* be a power of two!
     dynarray() {
       length = reserved = 0;
@@ -684,10 +700,10 @@ namespace superstl {
     }
     
     inline int capacity() const { return reserved; }
-    inline bool empty() const { return (size == 0); }
+    inline bool empty() const { return (length == 0); }
     inline void clear() { resize(0); }
     inline int size() const { return length; }
-    inline int count() const { return size(); }
+    inline int count() const { return length; }
     
     void push(const T& obj) {
       T& pushed = push();
@@ -706,19 +722,19 @@ namespace superstl {
     }   
 
     void resize(int newsize) {
-      if (newsize > length) reserve(newsize);
+      if likely (newsize > length) reserve(newsize);
       length = newsize;
     }
 
     void resize(int newsize, const T& emptyvalue) {
       int oldlength = length;
       resize(newsize);
-      if (newsize <= oldlength) return;
+      if unlikely (newsize <= oldlength) return;
       for (int i = oldlength; i < reserved; i++) { data[i] = emptyvalue; }
     }
     
     void reserve(int newsize) {
-      if (newsize <= reserved) return;
+      if unlikely (newsize <= reserved) return;
       newsize = (newsize + (granularity-1)) & ~(granularity-1);
       data = renew(data, length, newsize);
       reserved = newsize;
@@ -738,11 +754,11 @@ namespace superstl {
     }
 
     // Only works with specialization for character arrays:
-    char* tokenize(const char* string, const char* seplist) { abort(); }
+    char* tokenize(char* string, const char* seplist) { abort(); }
   };
 
   template <>
-  char* dynarray<char*>::tokenize(const char* string, const char* seplist);
+  char* dynarray<char*>::tokenize(char* string, const char* seplist);
 
   template <class T>
   inline ostream& operator <<(ostream& os, const dynarray<T>& v) {
@@ -788,7 +804,7 @@ namespace superstl {
     }
 
     void free() {
-      if (!base)
+      if unlikely (!base)
         return;
       assert(data <= endp);
       munmap(base, ((char*)endp - (char*)base) + PAGE_SIZE);
@@ -841,7 +857,7 @@ namespace superstl {
     T* reserve(int n = 1) {
       T* p = data;
       data = data + n;
-      if (data <= end)
+      if likely (data <= end)
         return p;
 
       data = p;
@@ -930,8 +946,8 @@ namespace superstl {
     listlink<T>& operator ()(T* t) { data = t; return *this; }
 
     T& unlink() {
-      if (prevnp) *prevnp = next;
-      if (next) next->prevnp = prevnp;
+      if likely (prevnp) *prevnp = next;
+      if likely (next) next->prevnp = prevnp;
       prevnp = NULL;
       next = NULL;  
       return *data;
@@ -939,7 +955,7 @@ namespace superstl {
 
     void addto(listlink<T>*& root) {
       this->next = root;
-      if (root)
+      if likely (root)
         root->prevnp = &this->next;
       root = this;
       this->prevnp = &root;
@@ -974,16 +990,16 @@ namespace superstl {
     selflistlink() { reset(); }
 
     selflistlink* unlink() {
-      if (prev) prev->next = next;
-      if (next) next->prev = prev;
+      if likely (prev) prev->next = next;
+      if likely (next) next->prev = prev;
       prev = null;
       next = null;  
       return this;
     }
 
     selflistlink* replacewith(selflistlink* newlink) {
-      if (prev) prev->next = newlink;
-      if (next) next->prev = newlink;
+      if likely (prev) prev->next = newlink;
+      if likely (next) next->prev = newlink;
       newlink->prev = prev;
       newlink->next = next;
       return newlink;
@@ -993,7 +1009,7 @@ namespace superstl {
       // THIS <-> root <-> a <-> b <-> c
       this->prev = (selflistlink*)&root;
       this->next = root;
-      if (root) root->prev = this;
+      if likely (root) root->prev = this;
       // Do not touch root->next since it might not even exist
       root = this;
     }
@@ -1053,14 +1069,14 @@ namespace superstl {
     }
 
     selfqueuelink* removehead() {
-      if (empty()) return null;
+      if unlikely (empty()) return null;
       selfqueuelink* link = next;
       link->unlink();
       return link;
     }
 
     selfqueuelink* removetail() {
-      if (empty()) return null;
+      if unlikely (empty()) return null;
       selfqueuelink* link = prev;
       link->unlink();
       return link;
@@ -1183,6 +1199,50 @@ namespace superstl {
   // index into a specific structure. This saves considerable space and
   // can allow aliasing optimizations not possible with pointers.
   //
+
+  template <typename T, typename P = W32, Waddr base = 0, int granularity = 1>
+  struct shortptr {
+    P p;
+
+    shortptr() { }
+
+    shortptr(const T& obj) {
+      *this = obj;
+    }
+
+    shortptr(const T* obj) {
+      *this = obj;
+    }
+
+    shortptr<T>& operator =(const T& obj) { 
+      index = obj.index();
+      return *this;
+    }
+
+    shortptr<T>& operator =(const T* obj) {
+      p = (P)((((Waddr)obj) - base) / granularity);
+      return *this;
+    }
+
+    T* get() const {
+      return (T*)((p * granularity) + base);
+    }
+
+    T* operator ->() const {
+      return get();
+    }
+  
+    T& operator *() const {
+      return *get();
+    }
+
+    operator T*() const { return get(); }
+  };
+
+  template <typename T, typename P, Waddr base, int granularity>
+  static inline stringbuf& operator <<(stringbuf& os, const shortptr<T, P, base, granularity>& sp) {
+    return os << (T*)sp;
+  }
   
   // null allowed:
   template <typename T>
@@ -1253,347 +1313,6 @@ namespace superstl {
     T& get(int index) const;
   };
 
-  //
-  // Convenient list iterator
-  //
-#define foreachlink(list, type, iter) \
-  for (type* iter = (type*)((list)->first); (iter != NULL); prefetch(iter->next), iter = (type*)(iter->next)) \
-
-  template <typename A, typename B>
-  struct KeyValuePair {
-    A key;
-    B value;
-  };
-
-  template <typename K, int setcount>
-  struct HashtableKeyManager {
-    static inline int hash(const K& key);
-    static inline bool equal(const K& a, const K& b);
-    static inline K dup(const K& key);
-    static inline void free(K& key);
-  };
-
-  template <typename K, typename T, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
-  class Hashtable {
-  protected:
-    struct Entry: public KeyValuePair<K, T> {
-      listlink<Entry> link;
-
-      Entry() { }
-
-      Entry(const K key, const T& value) {
-        link(this);
-        this->key = KM::dup(key);
-        this->value = value;
-      }
-
-      ~Entry() {
-        link.unlink();
-        KM::free(this->key);
-      }
-    };
-
-    listlink<Entry>* sets[setcount];
-
-    Entry* findentry(const K key) {
-      listlink<Entry>* tlink = sets[lowbits(KM::hash(key), log2(setcount))];
-      while (tlink) {
-        Entry* entry = tlink->data;
-        if (KM::equal(entry->key, key)) return entry;
-        tlink = tlink->next;
-      }
-
-      return null;
-    }
-
-  public:
-    int count;
-
-    dynarray<KeyValuePair<K, T> >& getentries() const {
-      dynarray<KeyValuePair<K, T> >& a = *(new dynarray<KeyValuePair<K, T> >(count, 1));
-      a.resize(count);
-      int n = 0;
-      foreach (i, setcount) {
-        listlink<Entry>* tlink = sets[i];
-        while (tlink) {
-          assert(n < count);
-          Entry* entry = tlink->data;
-          KeyValuePair<K, T>& kvp = a[n];
-          kvp.key = entry->key;
-          kvp.value = entry->value;
-          tlink = tlink->next;
-          n++;
-        }
-      }
-      return a;
-    }
-
-    Hashtable() {
-      count = 0;
-      foreach (i, setcount) { sets[i] = null; }
-    }
-
-    void clear() {
-      foreach (i, setcount) {
-        listlink<Entry>* tlink = sets[i];
-        while (tlink) {
-          listlink<Entry>* tnext = tlink->next;
-          delete tlink->data;
-          tlink = tnext;
-        }
-        sets[i] = null;
-      }
-      count = 0;
-    }
-
-    T* get(const K key) {
-      Entry* entry = findentry(key);
-      if (!entry) return null;
-      return &entry->value;
-    }
-
-    T* operator ()(const K key) {
-      return get(key);
-    }
-
-    T* add(const K key, const T& value) { 
-      Entry* entry = findentry(key);
-      if (entry) {
-        entry->value = value;
-        return &entry->value;
-      }
-
-      entry = new Entry(key, value);
-      entry->link.addto(sets[lowbits(KM::hash(key), log2(setcount))]);
-      count++;
-      return &entry->value;
-    }
-
-    T remove(const K key) {
-      Entry* entry = findentry(key);
-      if (!entry) return false;
-
-      T value = entry->value;
-      delete entry;
-      count--;
-      return value;
-    }
-
-    ostream& print(ostream& os) const {
-      os << "Hashtable of ", setcount, " sets containing ", count, " entries:", endl;
-      foreach (i, setcount) {
-        listlink<Entry>* tlink = sets[i];
-        if (!tlink)
-          continue;
-        os << "  Set ", i, ":", endl;
-        int n = 0;
-        while (tlink) {
-          Entry* entry = tlink->data;
-          os << "    ", entry->key, " -> ", entry->value, endl;
-          tlink = tlink->next;
-          n++;
-        }
-      }
-      return os;
-    }
-  };
-
-  template <typename K, typename T, int setcount, typename KM>
-  ostream& operator <<(ostream& os, const Hashtable<K, T, setcount, KM>& ht) {
-    return ht.print(os);
-  }
-
-  template <int setcount>
-  struct HashtableKeyManager<W64, setcount> {
-    static inline int hash(W64 key) {
-      W64 slot = 0;
-
-      foreach (i, (64 / log2(setcount))+1) {
-        slot ^= key;
-        key >>= log2(setcount);
-      }
-
-      return slot;
-    }
-
-    static inline bool equal(W64 a, W64 b) { return (a == b); }
-    static inline W64 dup(W64 key) { return key; }
-    static inline void free(W64 key) { }
-  };
-
-  template <int setcount>
-  struct HashtableKeyManager<const char*, setcount> {
-    static inline int hash(const char* key) {
-      int len = strlen(key);
-      CRC32 h;
-      foreach (i, len) { h << key[i]; }
-      return h;
-    }
-
-    static inline bool equal(const char* a, const char* b) {
-      return (strcmp(a, b) == 0);
-    }
-
-    static inline const char* dup(const char* key) {
-      return strdup(key);
-    }
-
-    static inline void free(const char* key) {
-      ::free((void*)key);
-    }
-  };
-
-  //
-  // ChunkHashtable
-  //
-  template <typename T, int entries_per_chunk>
-  struct ChunkHashtableBlock {
-    listlink< ChunkHashtableBlock<T, entries_per_chunk> > link;
-    W64 freemap;
-    T data[entries_per_chunk];
-    static const W64 ALL_FREE = (1LL << entries_per_chunk)-1LL;
-
-    ChunkHashtableBlock() {
-      link(this);
-      setzero(data);
-      freemap = ALL_FREE;
-    }
-
-    bool full() const {
-      return (freemap == 0);
-    }
-
-    bool add(const T& entry) {
-      int idx = lsbindex64(freemap);
-      if ((!freemap) || (idx >= entries_per_chunk)) return false;
-      freemap &= ~(1LL << idx);
-      data[idx] = entry;
-      return true;
-    }
-
-    T* operator ()(const T& entry) {
-      W64 match = 0;
-      foreach (i, entries_per_chunk) {
-        match |= (W64)(data[i] == entry) << (W64)i;
-      }
-      match &= ~freemap;
-      int idx = lsbindex64(match);
-      return (match) ? &data[idx] : null;
-    }
-
-    bool remove(const T& entry) {
-      T* slot = (*this)(entry);
-      if (!slot) return (freemap == ALL_FREE);
-      int idx = (slot - data); 
-      freemap |= (1LL << idx);
-      return (freemap == ALL_FREE);
-    }
-
-    void print(ostream& os) const {
-      os << "    ChunkHashtableBlock<", entries_per_chunk, ">: prev ", link.prevnp, ", next ", link.next, ", freemap ", bitstring(freemap, entries_per_chunk, true), ":", endl;
-      foreach (i, entries_per_chunk) {
-        if (!bit(freemap, i)) os << "      ", intstring(i, 2), ": ", data[i], endl;
-      }
-    }
-  };
-
-  template <typename T, int entries_per_chunk>
-  ostream& operator <<(ostream& os, ChunkHashtableBlock<T, entries_per_chunk>& chunk) {
-    chunk.print(os);
-    return os;
-  }
-
-#define ChunkHashtableBlock_fit_in_bytes(T, bytes) ((bytes - (sizeof(ChunkHashtableBlock<W64, 1>) - sizeof(W64))) / sizeof(T))
-
-  template <typename T, int setcount, int entries_per_chunk>
-  struct ChunkHashtable {
-    typedef ChunkHashtableBlock<T, entries_per_chunk> chunk_t;
-    int count;
-    listlink<chunk_t>* sets[setcount];
-
-    int setof(const T& entry); // (implement in subclasses)
-
-    void add(const T& entry) {
-      chunk_t* base = (chunk_t*)sets[setof(entry)];
-      if ((!base) || base->full()) {
-        base = new chunk_t();
-        base->link.addto(sets[setof(entry)]);
-      }
-
-      assert(base->add(entry));
-    }
-
-    void remove(const T& entry) {
-      chunk_t* chunk = (chunk_t*)sets[setof(entry)];
-      while (chunk) {
-        chunk_t* nextchunk = (chunk_t*)chunk->link.next;
-        bool empty = chunk->remove(entry);
-        if (empty) {
-          chunk->link.unlink();
-          delete chunk;
-        }
-        chunk = nextchunk;
-      }
-    }
-
-    T* operator ()(const T& entry) {
-      chunk_t* chunk = (chunk_t*)sets[setof(entry)];
-      T* found = null;
-      while (chunk) {
-        found = (*chunk)(entry);
-        if (found) break;
-        chunk = (chunk_t*)chunk->link.next;
-      }
-      return found;
-    }
-
-    ChunkHashtable() {
-      init();
-    }
-
-    void init() {
-      // Free all traces:
-      foreach (i, setcount) {
-        sets[i] = null;
-      }
-      count = 0;
-    }
-
-    void clear() {
-      foreach (i, setcount) {
-        chunk_t* chunk = (chunk_t*)sets[i];
-        while (chunk) {
-          chunk_t* nextchunk = (chunk_t*)chunk->link.next;
-          chunk->link.unlink();
-          delete chunk;
-          chunk = nextchunk;
-        }
-        sets[i] = null;
-      }
-      count = 0;
-    }
-
-    void print(ostream& os) {
-      os << "ChunkHashtable<", setcount, " sets, ", entries_per_chunk, " entries per chunk>: ", count, " entries:", endl;
-      foreach (i, setcount) {
-        if (!sets[i]) continue;
-        os << "  Set ", i, endl;
-        chunk_t* chunk = (chunk_t*)sets[i];
-        T* found = null;
-        while (chunk) {
-          os << (*chunk);
-          chunk = (chunk_t*)chunk->link.next;
-        }
-      }
-    }
-  };
-
-  template <typename T, int setcount, int entries_per_chunk>
-  ostream& operator <<(ostream& os, ChunkHashtable<T, setcount, entries_per_chunk>& cht) {
-    cht.print(os);
-    return os;
-  }
-
 #define BITS_PER_WORD ((sizeof(unsigned long) == 8) ? 64 : 32)
 #define BITVEC_WORDS(n) ((n) < 1 ? 0 : ((n) + BITS_PER_WORD - 1)/BITS_PER_WORD)
 
@@ -1643,11 +1362,11 @@ namespace superstl {
     }
 
     void shiftleftop(size_t shift) {
-      if (__builtin_expect(shift != 0, 1)) {
+      if likely (shift) {
         const size_t wshift = shift / BITS_PER_WORD;
         const size_t offset = shift % BITS_PER_WORD;
     
-        if (offset == 0) {
+        if unlikely (offset == 0) {
           for (size_t i = N - 1; i >= wshift; --i) { w[i] = w[i - wshift]; }
         } else {
           const size_t suboffset = BITS_PER_WORD - offset;
@@ -1661,12 +1380,12 @@ namespace superstl {
     }
 
     void shiftrightop(size_t shift) {
-      if (__builtin_expect(shift != 0, 1)) {
+      if likely (shift) {
         const size_t wshift = shift / BITS_PER_WORD;
         const size_t offset = shift % BITS_PER_WORD;
         const size_t limit = N - wshift - 1;
       
-        if (offset == 0) {
+        if unlikely (offset == 0) {
           for (size_t i = 0; i <= limit; ++i) { w[i] = w[i + wshift]; }
         } else {
           const size_t suboffset = BITS_PER_WORD - offset;
@@ -1725,7 +1444,7 @@ namespace superstl {
       T lm = (bitmask(n) << bitof(i));
       lw = (lw & ~lm) | ((v << i) & lm);
 
-      if ((bitof(i) + n) > BITS_PER_WORD) {
+      if unlikely ((bitof(i) + n) > BITS_PER_WORD) {
         T& hw = w[wordof(i+1)];
         T hm = (bitmask(n) >> (BITS_PER_WORD - bitof(i)));
         hw = (hw & ~hm) | ((v >> (BITS_PER_WORD - bitof(i))) & hm);
@@ -1735,7 +1454,7 @@ namespace superstl {
     void accumop(size_t i, size_t n, T v) {
       w[wordof(i)] |= (v << i);
 
-      if ((bitof(i) + n) > BITS_PER_WORD)
+      if unlikely ((bitof(i) + n) > BITS_PER_WORD)
         w[wordof(i+1)] |= (v >> (BITS_PER_WORD - bitof(i)));
     }
 
@@ -1743,7 +1462,7 @@ namespace superstl {
     size_t lsbop(size_t notfound) const {
       foreach (i, N) {
         T t = w[i];
-        if (t) return (i * BITS_PER_WORD) + __builtin_ctzl(t);
+        if likely (t) return (i * BITS_PER_WORD) + __builtin_ctzl(t);
       }
       return notfound;
     }
@@ -1752,7 +1471,7 @@ namespace superstl {
     size_t msbop(size_t notfound) const {
       for (int i = N-1; i >= 0; i--) {
         T t = w[i];
-        if (t) return (i * BITS_PER_WORD) + __builtin_clzl(t);
+        if likely (t) return (i * BITS_PER_WORD) + __builtin_clzl(t);
       }
       return notfound;
     }
@@ -1774,7 +1493,7 @@ namespace superstl {
       ++prev;
 
       // check out of bounds
-      if (prev >= N * BITS_PER_WORD)
+      if unlikely (prev >= N * BITS_PER_WORD)
         return notfound;
 
       // search first word
@@ -1784,14 +1503,14 @@ namespace superstl {
       // mask off bits below bound
       t &= (~static_cast<T>(0)) << bitof(prev);
 
-      if (t != static_cast<T>(0))
+      if likely (t != static_cast<T>(0))
         return (i * BITS_PER_WORD) + __builtin_ctzl(t);
 
       // check subsequent words
       i++;
       for ( ; i < N; i++ ) {
         t = w[i];
-        if (t != static_cast<T>(0))
+        if likely (t != static_cast<T>(0))
           return (i * BITS_PER_WORD) + __builtin_ctzl(t);
       }
       // not found, so return an indication of failure.
@@ -1846,11 +1565,11 @@ namespace superstl {
     // find the next "on" bit that follows "prev"
     size_t nextlsbop(size_t __prev, size_t notfound) const {
       ++__prev;
-      if (__prev >= ((size_t) BITS_PER_WORD))
+      if unlikely (__prev >= ((size_t) BITS_PER_WORD))
         return notfound;
 
       T x = w >> __prev;
-      if (x != 0)
+      if likely (x != 0)
         return __builtin_ctzl(x) + __prev;
       else
         return notfound;
@@ -1938,7 +1657,7 @@ namespace superstl {
       // For b[i] = x;
       inline reference& operator =(bool x) {
         // Optimized, x86-specific way:
-        if (__builtin_constant_p(x) & __builtin_constant_p(bpos)) {
+        if (isconst(x) & isconst(bpos)) {
           // Most efficient to just AND/OR with a constant mask: 
           *wp = ((x) ? (*wp | base_t::maskof(bpos)) : (*wp & (~base_t::maskof(bpos))));
         } else {
@@ -1974,7 +1693,7 @@ namespace superstl {
 
       // For b[i] = 1;
       inline reference& operator++(int postfixdummy) {
-        if (__builtin_constant_p(bpos))
+        if (isconst(bpos))
           *wp |= base_t::maskof(bpos);
         else *wp = x86_bts(*wp, bpos);
         return *this;
@@ -1982,7 +1701,7 @@ namespace superstl {
 
       // For b[i] = 0;
       inline reference& operator--(int postfixdummy) {
-        if (__builtin_constant_p(bpos))
+        if (isconst(bpos))
           *wp &= ~base_t::maskof(bpos);
         else *wp = x86_btr(*wp, bpos);
         return *this;
@@ -2038,7 +1757,7 @@ namespace superstl {
     }
 
     bitvec<N>& operator <<=(int index) {
-      if (__builtin_expect(index < N, 1)) {
+      if likely (index < N) {
         this->shiftleftop(index);
         this->sanitize();
       } else this->resetop();
@@ -2046,7 +1765,7 @@ namespace superstl {
     }
 
     bitvec<N>& operator>>=(int index) {
-      if (__builtin_expect(index < N, 1)) {
+      if likely (index < N) {
         this->shiftrightop(index);
         this->sanitize();
       } else this->resetop();
@@ -2280,6 +1999,601 @@ namespace superstl {
 #undef __builtin_ctzl
 #undef __builtin_clzl
 
+  //
+  // Convenient list iterator
+  //
+#define foreachlink(list, type, iter) \
+  for (type* iter = (type*)((list)->first); (iter != NULL); prefetch(iter->next), iter = (type*)(iter->next)) \
+
+  template <typename A, typename B>
+  struct KeyValuePair {
+    A key;
+    B value;
+  };
+
+  template <typename K, int setcount>
+  struct HashtableKeyManager {
+    static inline int hash(const K& key);
+    static inline bool equal(const K& a, const K& b);
+    static inline K dup(const K& key);
+    static inline void free(K& key);
+  };
+
+  template <typename K, typename T, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
+  class Hashtable {
+  protected:
+    struct Entry: public KeyValuePair<K, T> {
+      listlink<Entry> link;
+
+      Entry() { }
+
+      Entry(const K key, const T& value) {
+        link(this);
+        this->key = KM::dup(key);
+        this->value = value;
+      }
+
+      ~Entry() {
+        link.unlink();
+        KM::free(this->key);
+      }
+    };
+
+    listlink<Entry>* sets[setcount];
+
+    Entry* findentry(const K key) {
+      listlink<Entry>* tlink = sets[lowbits(KM::hash(key), log2(setcount))];
+      while (tlink) {
+        Entry* entry = tlink->data;
+        if likely (KM::equal(entry->key, key)) return entry;
+        tlink = tlink->next;
+      }
+
+      return null;
+    }
+
+  public:
+    int count;
+
+    dynarray<KeyValuePair<K, T> >& getentries() const {
+      dynarray<KeyValuePair<K, T> >& a = *(new dynarray<KeyValuePair<K, T> >(count, 1));
+      a.resize(count);
+      int n = 0;
+      foreach (i, setcount) {
+        listlink<Entry>* tlink = sets[i];
+        while (tlink) {
+          assert(n < count);
+          Entry* entry = tlink->data;
+          KeyValuePair<K, T>& kvp = a[n];
+          kvp.key = entry->key;
+          kvp.value = entry->value;
+          tlink = tlink->next;
+          n++;
+        }
+      }
+      return a;
+    }
+
+    Hashtable() {
+      count = 0;
+      foreach (i, setcount) { sets[i] = null; }
+    }
+
+    void clear() {
+      foreach (i, setcount) {
+        listlink<Entry>* tlink = sets[i];
+        while (tlink) {
+          listlink<Entry>* tnext = tlink->next;
+          delete tlink->data;
+          tlink = tnext;
+        }
+        sets[i] = null;
+      }
+      count = 0;
+    }
+
+    T* get(const K key) {
+      Entry* entry = findentry(key);
+      if unlikely (!entry) return null;
+      return &entry->value;
+    }
+
+    T* operator ()(const K key) {
+      return get(key);
+    }
+
+    T* add(const K key, const T& value) { 
+      Entry* entry = findentry(key);
+      if unlikely (entry) {
+        entry->value = value;
+        return &entry->value;
+      }
+
+      entry = new Entry(key, value);
+      entry->link.addto(sets[lowbits(KM::hash(key), log2(setcount))]);
+      count++;
+      return &entry->value;
+    }
+
+    bool remove(const K key, T& value) {
+      Entry* entry = findentry(key);
+      if unlikely (!entry) return false;
+
+      value = entry->value;
+      delete entry;
+      count--;
+      return true;
+    }
+
+    bool remove(const K key) {
+      T dummy;
+      return remove(key, dummy);
+    }
+
+    ostream& print(ostream& os) const {
+      os << "Hashtable of ", setcount, " sets containing ", count, " entries:", endl;
+      foreach (i, setcount) {
+        listlink<Entry>* tlink = sets[i];
+        if (!tlink)
+          continue;
+        os << "  Set ", i, ":", endl;
+        int n = 0;
+        while likely (tlink) {
+          Entry* entry = tlink->data;
+          os << "    ", entry->key, " -> ", entry->value, endl;
+          tlink = tlink->next;
+          n++;
+        }
+      }
+      return os;
+    }
+  };
+
+  template <typename K, typename T, int setcount, typename KM>
+  ostream& operator <<(ostream& os, const Hashtable<K, T, setcount, KM>& ht) {
+    return ht.print(os);
+  }
+
+  template <int setcount>
+  struct HashtableKeyManager<W64, setcount> {
+    static inline int hash(W64 key) {
+      W64 slot = 0;
+
+      foreach (i, ((setcount == 1) ? 0 : (64 / log2(setcount)))+1) {
+        slot ^= key;
+        key >>= log2(setcount);
+      }
+
+      return slot;
+    }
+
+    static inline bool equal(W64 a, W64 b) { return (a == b); }
+    static inline W64 dup(W64 key) { return key; }
+    static inline void free(W64 key) { }
+  };
+
+  template <int setcount>
+  struct HashtableKeyManager<const char*, setcount> {
+    static inline int hash(const char* key) {
+      int len = strlen(key);
+      CRC32 h;
+      foreach (i, len) { h << key[i]; }
+      return h;
+    }
+
+    static inline bool equal(const char* a, const char* b) {
+      return (strcmp(a, b) == 0);
+    }
+
+    static inline const char* dup(const char* key) {
+      return strdup(key);
+    }
+
+    static inline void free(const char* key) {
+      ::free((void*)key);
+    }
+  };
+
+  template <typename T, typename K>
+  struct SelfHashtableLinkManager {
+    static inline T& objof(selflistlink* link);
+    static inline K& keyof(T& obj);
+    static inline selflistlink& linkof(T& obj);
+    //
+    // Example:
+    //
+    // T& objof(selflistlink* link) {
+    //   return *(T*)((byte*)link) - offsetof(T, hashlink);
+    // }
+    //
+  };
+
+  template <typename K, typename T, typename LM, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
+  class SelfHashtable {
+  protected:
+    selflistlink* sets[setcount];
+  public:
+    int count;
+
+    T* get(const K& key) {
+      selflistlink* tlink = sets[lowbits(KM::hash(key), log2(setcount))];
+      while (tlink) {
+        T& obj = LM::objof(tlink);
+        if likely (KM::equal(LM::keyof(obj), key)) return &obj;
+        tlink = tlink->next;
+      }
+
+      return null;
+    }
+
+    dynarray<T*>& getentries(dynarray<T*>& a) const {
+      a.resize(count);
+      int n = 0;
+      foreach (i, setcount) {
+        selflistlink* tlink = sets[i];
+        while (tlink) {
+          assert(n < count);
+          T& obj = LM::objof(tlink);
+          a[n++] = &obj;
+          tlink = tlink->next;
+        }
+      }
+      return a;
+    }
+
+    SelfHashtable() {
+      count = 0;
+      foreach (i, setcount) { sets[i] = null; }
+    }
+
+    void clear() {
+      foreach (i, setcount) {
+        selflistlink* tlink = sets[i];
+        while (tlink) {
+          selflistlink* tnext = tlink->next;
+          tlink->unlink();
+          tlink = tnext;
+        }
+        sets[i] = null;
+      }
+      count = 0;
+    }
+
+    T* operator ()(const K& key) {
+      return get(key);
+    }
+
+    T* add(T& obj) {
+      T* oldobj = get(LM::keyof(obj));
+      if unlikely (oldobj) {
+        remove(oldobj);
+      }
+
+      if (LM::linkof(obj).linked()) return &obj;
+
+      LM::linkof(obj).addto(sets[lowbits(KM::hash(LM::keyof(obj)), log2(setcount))]);
+      count++;
+      return &obj;
+    }
+
+    T* add(T* obj) {
+      return add(*obj);
+    }
+
+    T* remove(T& obj) {
+      if (!LM::linkof(obj).linked()) return &obj;
+      LM::linkof(obj).unlink();
+      count--;
+      return &obj;
+    }
+
+    T* remove(T* obj) {
+      return remove(*obj);
+    }
+
+    ostream& print(ostream& os) const {
+      os << "Hashtable of ", setcount, " sets containing ", count, " entries:", endl;
+      foreach (i, setcount) {
+        selflistlink* tlink = sets[i];
+        if (!tlink)
+          continue;
+        os << "  Set ", i, ":", endl;
+        int n = 0;
+        while likely (tlink) {
+          T& obj = LM::objof(tlink);
+          os << "    ", LM::keyof(obj), " -> ", obj, endl;
+          tlink = tlink->next;
+          n++;
+        }
+      }
+      return os;
+    }
+  };
+
+  template <typename K, typename T, typename LM, int setcount, typename KM>
+  ostream& operator <<(ostream& os, const SelfHashtable<K, T, LM, setcount, KM>& ht) {
+    return ht.print(os);
+  }
+
+  template <typename T, int N>
+  struct ChunkList {
+    struct Chunk;
+
+    struct Chunk {
+      Chunk* next;
+      bitvec<N> freemap;
+
+      // Formula: (CHUNK_SIZE - sizeof(ChunkHeader<T>)) / sizeof(T);
+      T data[N];
+
+      Chunk() { next = null; freemap++; }
+
+      bool full() const { return (!freemap); }
+      bool empty() const { return freemap.allset(); }
+
+      int add(const T& entry) {
+        if unlikely (full()) return -1;
+        int idx = freemap.lsb();
+        freemap[idx] = 0;
+        data[idx] = entry;
+        return idx;
+      }
+
+      bool contains(T* entry) const {
+        int idx = entry - data;
+        return ((idx >= 0) & (idx < lengthof(data)));
+      }
+
+      bool remove(int idx) {
+        data[idx] = 0;
+        freemap[idx] = 1;
+
+        return true;
+      }
+
+      int getentries(T* a, int limit) const {
+        int n = 0;
+        foreach (i, lengthof(data)) {
+          if likely (!freemap[i]) {
+            if unlikely (n >= limit) return n;
+            a[n++] = data[i];
+          }
+        }
+
+        return n;
+      }
+    };
+
+    struct Locator {
+      Chunk* chunk;
+      int index;
+
+      void reset() { chunk = null; index = 0; }
+    };
+
+    Chunk* head;
+    int elemcount;
+
+    ChunkList() { head = null; elemcount = 0; }
+
+    bool add(const T& entry, Locator& hint) {
+      Chunk* chunk = head;
+
+      while (chunk) {
+        prefetch(chunk->next);
+        int index = chunk->add(entry);
+        if likely (index >= 0) {
+          hint.chunk = chunk;
+          hint.index = index;
+          elemcount++;
+          return true;
+        }
+        chunk = chunk->next;
+      }
+
+      Chunk* newchunk = new Chunk();
+      newchunk->next = head;
+      head = newchunk;
+
+      int index = newchunk->add(entry);
+      assert(index >= 0);
+
+      hint.chunk = newchunk;
+      hint.index = index;
+      elemcount++;
+
+      return true;
+    }
+
+    void remove(const Locator& locator) {
+      locator.chunk->remove(locator.index);
+      elemcount--; 
+    }
+
+    void clear() {
+      Chunk* chunk = head;
+
+      while (chunk) {
+        Chunk* next = chunk->next;
+        prefetch(next);
+        delete chunk;
+        chunk = next;
+      }
+
+      elemcount = 0;
+      head = null;
+    }
+
+    int count() { return elemcount; }
+
+    int getentries(T* a, int limit) const {
+      const Chunk* chunk = head;
+
+      int used = 0;
+
+      while (chunk) {
+        prefetch(chunk->next);
+        int n = chunk->getentries(a, limit);
+        limit -= n;
+        a += n;
+        used += n;
+        chunk = chunk->next;
+      }
+      return used;
+    }
+  };
+
+  //
+  // ChunkHashtable
+  //
+  template <typename T, int entries_per_chunk>
+  struct ChunkHashtableBlock {
+    listlink< ChunkHashtableBlock<T, entries_per_chunk> > link;
+    W64 freemap;
+    T data[entries_per_chunk];
+    static const W64 ALL_FREE = (1LL << entries_per_chunk)-1LL;
+
+    ChunkHashtableBlock() {
+      link(this);
+      setzero(data);
+      freemap = ALL_FREE;
+    }
+
+    bool full() const {
+      return (freemap == 0);
+    }
+
+    bool add(const T& entry) {
+      int idx = lsbindex64(freemap);
+      if unlikely ((!freemap) || (idx >= entries_per_chunk)) return false;
+      freemap &= ~(1LL << idx);
+      data[idx] = entry;
+      return true;
+    }
+
+    T* operator ()(const T& entry) {
+      W64 match = 0;
+      foreach (i, entries_per_chunk) {
+        match |= (W64)(data[i] == entry) << (W64)i;
+      }
+      match &= ~freemap;
+      int idx = lsbindex64(match);
+      return (match) ? &data[idx] : null;
+    }
+
+    bool remove(const T& entry) {
+      T* slot = (*this)(entry);
+      if unlikely (!slot) return (freemap == ALL_FREE);
+      int idx = (slot - data); 
+      freemap |= (1LL << idx);
+      return (freemap == ALL_FREE);
+    }
+
+    void print(ostream& os) const {
+      os << "    ChunkHashtableBlock<", entries_per_chunk, ">: prev ", link.prevnp, ", next ", link.next, ", freemap ", bitstring(freemap, entries_per_chunk, true), ":", endl;
+      foreach (i, entries_per_chunk) {
+        if (!bit(freemap, i)) os << "      ", intstring(i, 2), ": ", data[i], endl;
+      }
+    }
+  };
+
+  template <typename T, int entries_per_chunk>
+  ostream& operator <<(ostream& os, ChunkHashtableBlock<T, entries_per_chunk>& chunk) {
+    chunk.print(os);
+    return os;
+  }
+
+#define ChunkHashtableBlock_fit_in_bytes(T, bytes) ((bytes - (sizeof(ChunkHashtableBlock<W64, 1>) - sizeof(W64))) / sizeof(T))
+
+  template <typename T, int setcount, int entries_per_chunk>
+  struct ChunkHashtable {
+    typedef ChunkHashtableBlock<T, entries_per_chunk> chunk_t;
+    int count;
+    listlink<chunk_t>* sets[setcount];
+
+    int setof(const T& entry); // (implement in subclasses)
+
+    void add(const T& entry) {
+      chunk_t* base = (chunk_t*)sets[setof(entry)];
+      if unlikely ((!base) || base->full()) {
+        base = new chunk_t();
+        base->link.addto(sets[setof(entry)]);
+      }
+
+      assert(base->add(entry));
+    }
+
+    void remove(const T& entry) {
+      chunk_t* chunk = (chunk_t*)sets[setof(entry)];
+      while (chunk) {
+        chunk_t* nextchunk = (chunk_t*)chunk->link.next;
+        bool empty = chunk->remove(entry);
+        if likely (empty) {
+          chunk->link.unlink();
+          delete chunk;
+        }
+        chunk = nextchunk;
+      }
+    }
+
+    T* operator ()(const T& entry) {
+      chunk_t* chunk = (chunk_t*)sets[setof(entry)];
+      T* found = null;
+      while (chunk) {
+        found = (*chunk)(entry);
+        if unlikely (found) break;
+        chunk = (chunk_t*)chunk->link.next;
+      }
+      return found;
+    }
+
+    ChunkHashtable() {
+      init();
+    }
+
+    void init() {
+      // Free all traces:
+      foreach (i, setcount) {
+        sets[i] = null;
+      }
+      count = 0;
+    }
+
+    void clear() {
+      foreach (i, setcount) {
+        chunk_t* chunk = (chunk_t*)sets[i];
+        while (chunk) {
+          chunk_t* nextchunk = (chunk_t*)chunk->link.next;
+          chunk->link.unlink();
+          delete chunk;
+          chunk = nextchunk;
+        }
+        sets[i] = null;
+      }
+      count = 0;
+    }
+
+    void print(ostream& os) {
+      os << "ChunkHashtable<", setcount, " sets, ", entries_per_chunk, " entries per chunk>: ", count, " entries:", endl;
+      foreach (i, setcount) {
+        if unlikely (!sets[i]) continue;
+        os << "  Set ", i, endl;
+        chunk_t* chunk = (chunk_t*)sets[i];
+        T* found = null;
+        while (chunk) {
+          os << (*chunk);
+          chunk = (chunk_t*)chunk->link.next;
+        }
+      }
+    }
+  };
+
+  template <typename T, int setcount, int entries_per_chunk>
+  ostream& operator <<(ostream& os, ChunkHashtable<T, setcount, entries_per_chunk>& cht) {
+    cht.print(os);
+    return os;
+  }
+
   inline W64s expandword(const byte*& p, int type) {
     W64s v;
 
@@ -2322,7 +2636,7 @@ namespace superstl {
   inline int compressword(byte*& p, W64s v) {
     int f;
 
-    if (!v) {
+    if likely (!v) {
       f = 0;
     } else if (v >= 0) {
       if (inrange(v, 0LL, 255LL)) {
@@ -2376,7 +2690,7 @@ namespace superstl {
     inline W64 stop() {
       W64 t = rdtsc() - tstart;
 
-      if (!running) return total;
+      if unlikely (!running) return total;
 
       tstart = 0;
       total += t;

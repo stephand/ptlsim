@@ -6,86 +6,138 @@
 //
 
 #include <globals.h>
-#include <ptlsim.h>
+#include <ptlhwdef.h>
 #include <datastore.h>
 
-char* mode_subtree;
-char* mode_histogram;
-char* mode_bargraph;
-char* mode_collect;
-char* mode_collect_sum;
-char* mode_collect_average;
-char* mode_table;
+struct PTLstatsConfig {
+  stringbuf mode_subtree;
+  stringbuf mode_histogram;
+  stringbuf mode_bargraph;
+  stringbuf mode_collect;
+  stringbuf mode_collect_sum;
+  stringbuf mode_collect_average;
+  stringbuf mode_table;
 
-char* table_row_names;
-char* table_col_names;
-char* table_row_col_pattern = "%row/%col.stats";
-char* table_type_name = "text";
-W64 table_use_percents = false;
+  stringbuf table_row_names;
+  stringbuf table_col_names;
+  stringbuf table_row_col_pattern;
+  stringbuf table_type_name;
+  W64 table_use_percents;
+  
+  stringbuf graph_title;
+  double graph_width;
+  double graph_height;
+  double graph_clip_percentile;
+  W64 graph_logscale;
+  double graph_logk;
+  
+  stringbuf subtract_branch;
+  
+  W64 show_sum_of_subtrees_only;
+  
+  W64 maxdepth;
+  
+  W64 table_scale_rel_to_col;
+  W64 table_mark_highest_col;
+  
+  W64 percent_digits;
+  
+  double histogram_thresh;
+  W64 cumulative_histogram;
+  
+  W64 percent_of_toplevel;
+  
+  W64 invert_gains;
 
-char* graph_title;
-double graph_width = 300.0;
-double graph_height = 100.0;
-double graph_clip_percentile = 95.0;
-W64 graph_logscale = 0;
-double graph_logk = 100.;
-
-char* subtract_branch = null;
-
-W64 show_sum_of_subtrees_only = 0;
-
-W64 maxdepth = limits<int>::max;
-
-W64 table_scale_rel_to_col = limits<int>::max;
-W64 table_mark_highest_col = 0;
-
-W64 percent_digits = 1; // e.g. "66.7%"
-
-double histogram_thresh = 0.0001;
-W64 cumulative_histogram = 0;
-
-W64 percent_of_toplevel = 0;
-
-W64 invert_gains = 0;
-
-static ConfigurationOption optionlist[] = {
-  {null,                                 OPTION_TYPE_SECTION, 0, "Mode", null},
-  {"subtree",                            OPTION_TYPE_STRING,  0, "Subtree (specify path to node)", &mode_subtree},
-  {"collect",                            OPTION_TYPE_STRING,  0, "Collect specific statistic from multiple data stores", &mode_collect},
-  {"collectsum",                         OPTION_TYPE_STRING,  0, "Sum of same tree in all data stores", &mode_collect_sum},
-  {"collectaverage",                     OPTION_TYPE_STRING,  0, "Average of same tree in all data stores", &mode_collect_average},
-  {"histogram",                          OPTION_TYPE_STRING,  0, "Histogram of specific node (specify path to node)", &mode_histogram},
-  {"bargraph",                           OPTION_TYPE_STRING,  0, "Bargraph of one node across multiple data stores", &mode_bargraph},
-  {"table",                              OPTION_TYPE_STRING,  0, "Table of one node across multiple data stores", &mode_table},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Table or Bar Graph", null},
-  {"rows",                               OPTION_TYPE_STRING,  0, "Row names (comma separated)", &table_row_names},
-  {"cols",                               OPTION_TYPE_STRING,  0, "Column names (comma separated)", &table_col_names},
-  {"table-pattern",                      OPTION_TYPE_STRING,  0, "Pattern to convert row (%row) and column (%col) names into stats filename", &table_row_col_pattern},
-  {"tabletype",                          OPTION_TYPE_STRING,  0, "Table type (text, latex, html)", &table_type_name},
-  {"scale-relative-to-col",              OPTION_TYPE_W64,     0, "Scale all other table columns relative to specified column", &table_scale_rel_to_col},
-  {"table-percents",                     OPTION_TYPE_BOOL,    0, "Show percents (as in tree) rather than absolute values", &table_use_percents},
-  {"table-mark-highest-col",             OPTION_TYPE_BOOL,    0, "Mark highest column in each row", &table_mark_highest_col},
-  {"invert-gains",                       OPTION_TYPE_BOOL,    0, "Invert sense of gains vs losses (i.e. 1 / x)", &invert_gains},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Statistics Range", null},
-  {"subtract",                           OPTION_TYPE_STRING,  0, "Snapshot to subtract from the main snapshot", &subtract_branch},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Display Control", null},
-  {"sum-subtrees-only",                  OPTION_TYPE_BOOL,    0, "Show only the sum of subtrees in applicable nodes", &show_sum_of_subtrees_only},
-  {"maxdepth",                           OPTION_TYPE_W64,     0, "Maximum tree depth", &maxdepth},
-  {"percent-digits",                     OPTION_TYPE_W64,     0, "Precision of percentage listings in digits", &percent_digits},
-  {"percent-of-toplevel",                OPTION_TYPE_BOOL,    0, "Show percent relative to toplevel node, not parent node", &percent_of_toplevel},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Graph and Histogram Options", null},
-  {"title",                              OPTION_TYPE_STRING,  0, "Graph Title", &graph_title},
-  {"width",                              OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_width},
-  {"height",                             OPTION_TYPE_FLOAT,   0, "Width in SVG pixels", &graph_height},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Histogram Options", null},
-  {"percentile",                         OPTION_TYPE_FLOAT,   0, "Clip percentile", &graph_clip_percentile},
-  {"logscale",                           OPTION_TYPE_BOOL,    0, "Use log scale", &graph_logscale},
-  {"logk",                               OPTION_TYPE_FLOAT,   0, "Log scale constant", &graph_logk},
-  {"cumulative-histogram",               OPTION_TYPE_BOOL,    0, "Cumulative histogram", &cumulative_histogram},
-  {"histogram-thresh",                   OPTION_TYPE_FLOAT,   0, "Histogram threshold (1.0 = print nothing, 0.0 = everything)", &histogram_thresh},
-  {null,                                 OPTION_TYPE_SECTION, 0, "Bar Graph Options", null},
+  void reset();
 };
 
+void PTLstatsConfig::reset() {
+  mode_subtree.reset();
+  mode_histogram.reset();
+  mode_bargraph.reset();
+  mode_collect.reset();
+  mode_collect_sum.reset();
+  mode_collect_average.reset();
+  mode_table.reset();
+
+  table_row_names.reset();
+  table_col_names.reset();
+  table_row_col_pattern = "%row/%col.stats";
+  table_type_name = "text";
+  table_use_percents = false;
+
+  graph_title.reset();
+  graph_width = 300.0;
+  graph_height = 100.0;
+  graph_clip_percentile = 95.0;
+  graph_logscale = 0;
+  graph_logk = 100.;
+
+  subtract_branch.reset();
+
+  show_sum_of_subtrees_only = 0;
+  
+  maxdepth = limits<int>::max;
+  
+  table_scale_rel_to_col = limits<int>::max;
+  table_mark_highest_col = 0;
+  
+  percent_digits = 1; // e.g. "66.7%"
+  
+  histogram_thresh = 0.0001;
+  cumulative_histogram = 0;
+  
+  percent_of_toplevel = 0;
+  
+  invert_gains = 0;
+}
+
+PTLstatsConfig config;
+ConfigurationParser<PTLstatsConfig> configparser;
+
+template <>
+void ConfigurationParser<PTLstatsConfig>::setup() {
+  section("Mode");
+  add(mode_subtree,                     "subtree",                   "Subtree (specify path to node)");
+  add(mode_collect,                     "collect",                   "Collect specific statistic from multiple data stores");
+  add(mode_collect_sum,                 "collectsum",                "Sum of same tree in all data stores");
+  add(mode_collect_average,             "collectaverage",            "Average of same tree in all data stores");
+  add(mode_histogram,                   "histogram",                 "Histogram of specific node (specify path to node)");
+  add(mode_bargraph,                    "bargraph",                  "Bargraph of one node across multiple data stores");
+  add(mode_table,                       "table",                     "Table of one node across multiple data stores");
+
+  section("Table or Bar Graph");
+  add(table_row_names,                  "rows",                      "Row names (comma separated)");
+  add(table_col_names,                  "cols",                      "Column names (comma separated)");
+  add(table_row_col_pattern,            "table-pattern",             "Pattern to convert row (%row) and column (%col) names into stats filename");
+  add(table_type_name,                  "tabletype",                 "Table type (text, latex, html)");
+  add(table_scale_rel_to_col,           "scale-relative-to-col",     "Scale all other table columns relative to specified column");
+  add(table_use_percents,               "table-percents",            "Show percents (as in tree) rather than absolute values");
+  add(table_mark_highest_col,           "table-mark-highest-col",    "Mark highest column in each row");
+  add(invert_gains,                     "invert-gains",              "Invert sense of gains vs losses (i.e. 1 / x)");
+
+  section("Statistics Range");
+  add(subtract_branch,                  "subtract",                  "Snapshot to subtract from the main snapshot");
+
+  section("Display Control");
+  add(show_sum_of_subtrees_only,        "sum-subtrees-only",         "Show only the sum of subtrees in applicable nodes");
+  add(maxdepth,                         "maxdepth",                  "Maximum tree depth");
+  add(percent_digits,                   "percent-digits",            "Precision of percentage listings in digits");
+  add(percent_of_toplevel,              "percent-of-toplevel",       "Show percent relative to toplevel node, not parent node");
+
+  section("Graph and Histogram Options");
+  add(graph_title,                      "title",                     "Graph Title");
+  add(graph_width,                      "width",                     "Width in SVG pixels");
+  add(graph_height,                     "height",                    "Width in SVG pixels");
+
+  section("Histogram Options");
+  add(graph_clip_percentile,            "percentile",                "Clip percentile");
+  add(graph_logscale,                   "logscale",                  "Use log scale");
+  add(graph_logk,                       "logk",                      "Log scale constant");
+  add(cumulative_histogram,             "cumulative-histogram",      "Cumulative histogram");
+  add(histogram_thresh,                 "histogram-thresh",          "Histogram threshold (1.0 = print nothing, 0.0 = everything)");
+};
 
 const char* labels[] = {
   "L1hit", 
@@ -399,11 +451,11 @@ public:
 };
 
 static inline double logscale(double x) {
-  return log(1 + (x*graph_logk)) / log(1 + graph_logk);
+  return log(1 + (x*config.graph_logk)) / log(1 + config.graph_logk);
 }
 
 static inline double invlogscale(double x) {
-  return (exp(x*log(1 + graph_logk)) - 1) / graph_logk;
+  return (exp(x*log(1 + config.graph_logk)) - 1) / config.graph_logk;
 }
 
 const RGBA graph_background(225, 207, 255);
@@ -425,7 +477,7 @@ void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int 
   foreach (i, count) { 
     cum += ((double)histogram[i] / (double)total);
     maxwidth++;
-    if (cum >= (graph_clip_percentile / 100.0)) break;
+    if (cum >= (config.graph_clip_percentile / 100.0)) break;
   }
 
   double maxheight = 0;
@@ -463,7 +515,7 @@ void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int 
 
   foreach (i, maxwidth+1) {
     double x = ((double)histogram[i] / (double)total) / maxheight;
-    if (graph_logscale) x = logscale(x);
+    if (config.graph_logscale) x = logscale(x);
     double barsize = x * imageheight;
 
     if (barsize >= 0.1) svg.rectangle(i*xscale, imageheight - barsize, xscale, barsize);
@@ -483,7 +535,7 @@ void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int 
 
   for (double i = 0; i <= 1.0; i += 0.2) {
     stringbuf sb;
-    double value = (graph_logscale) ? (invlogscale(i) * maxheight * 100.0) : (i * maxheight * 100.0);
+    double value = (config.graph_logscale) ? (invlogscale(i) * maxheight * 100.0) : (i * maxheight * 100.0);
     double y = ((1.0 - i)*imageheight);
     sb << floatstring(value, 0, 0), "%";
     svg.text(sb, -0.2, y - 0.2);
@@ -751,11 +803,10 @@ static const LineAttributes linetype_allfields[fieldcount] = {
   {1, 0, {0,   255, 255, 255}, 0.10, 0.00, 0.00, 0.00, 0, {0,   0,   0,   0  }}, // L1 cache hit rate in percent
 };
 
-
 void printbanner() {
   cerr << "//  ", endl;
   cerr << "//  PTLstats: PTLsim statistics data store analysis tool", endl;
-  cerr << "//  Copyright 1999-2005 Matt T. Yourst <yourst@yourst.com>", endl;
+  cerr << "//  Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>", endl;
   cerr << "//  ", endl;
   cerr << endl;
 }
@@ -905,7 +956,7 @@ public:
 enum { TABLE_TYPE_TEXT, TABLE_TYPE_LATEX, TABLE_TYPE_HTML };
 
 bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<double>& sum_of_all_rows, dynarray< dynarray<double> >& data,
-                   const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern) {
+                   char* statname, char* rownames, char* colnames, char* row_col_pattern) {
   rowlist.tokenize(rownames, ",");
   collist.tokenize(colnames, ",");
 
@@ -928,7 +979,7 @@ bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<
       const char* replarray[2];
       replarray[0] = rowlist[row];
       replarray[1] = collist[col];
-      stringsubst(filename, table_row_col_pattern, findarray, replarray, 2);
+      stringsubst(filename, config.table_row_col_pattern, findarray, replarray, 2);
 
       idstream is(filename);
 
@@ -957,7 +1008,7 @@ bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<
   return true;
 }
 
-void create_table(ostream& os, int tabletype, const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern, int scale_relative_to_col) {
+void create_table(ostream& os, int tabletype, char* statname, char* rownames, char* colnames, char* row_col_pattern, int scale_relative_to_col) {
   dynarray<char*> rowlist;
   dynarray<char*> collist;
   dynarray<double> sum_of_all_rows;
@@ -1027,7 +1078,7 @@ void create_table(ostream& os, int tabletype, const char* statname, const char* 
 inline double px_to_pt(double px) { return px * 1.25; }
 inline double pt_to_px(double pt) { return pt / 1.25; }
 
-void create_grouped_bargraph(ostream& os, const char* statname, const char* rownames, const char* colnames, const char* row_col_pattern,
+void create_grouped_bargraph(ostream& os, char* statname, char* rownames, char* colnames, char* row_col_pattern,
                              int scale_relative_to_col, const char* title = null, double imagewidth = 300.0, double imageheight = 100.0) {
 
   static const bool show_row_labels_in_group = false;
@@ -1066,7 +1117,7 @@ void create_grouped_bargraph(ostream& os, const char* statname, const char* rown
       double first = data[i][scale_relative_to_col];
       foreach (j, collist.size()) {
         data[i][j] /= first;
-        if (invert_gains) data[i][j] = 1.0 / data[i][j];
+        if (config.invert_gains) data[i][j] = 1.0 / data[i][j];
         maxheight = max(maxheight, data[i][j]);
       }
     }
@@ -1189,8 +1240,8 @@ void create_grouped_bargraph(ostream& os, const char* statname, const char* rown
 }
 
 int main(int argc, char* argv[]) {
-
-  ConfigurationParser options(optionlist, lengthof(optionlist));
+  configparser.setup();
+  config.reset();
 
   argc--; argv++;
 
@@ -1198,34 +1249,36 @@ int main(int argc, char* argv[]) {
     printbanner();
     cerr << "Syntax is:", endl;
     cerr << "  ptlstats [-options] statsfile", endl, endl;
-    options.printusage(cerr);
+    configparser.printusage(cerr, config);
     return 1;
   }
 
-  int n = options.parse(argc, argv);
+  int n = configparser.parse(config, argc, argv);
 
-  bool no_args_needed = mode_table || mode_bargraph;
+  bool no_args_needed = config.mode_table.set() || config.mode_bargraph.set();
 
   if ((n < 0) & (!no_args_needed)) {
     printbanner();
     cerr << "ptlstats: Error: no statistics data store filename given", endl, endl;
     cerr << "Syntax is:", endl;
     cerr << "  ptlstats [-options] statsfile", endl, endl;
-    options.printusage(cerr);
+    configparser.printusage(cerr, config);
     return 1;
   }
 
   char* filename = (no_args_needed) ? null : argv[n];
 
   DataStoreNodePrintSettings printinfo;
-  printinfo.force_sum_of_subtrees_only = show_sum_of_subtrees_only;
-  printinfo.maxdepth = maxdepth;
-  printinfo.percent_digits = percent_digits;
-  printinfo.percent_of_toplevel = percent_of_toplevel;
-  printinfo.histogram_thresh = histogram_thresh;
-  printinfo.cumulative_histogram = cumulative_histogram;
+  printinfo.force_sum_of_subtrees_only = config.show_sum_of_subtrees_only;
+  printinfo.maxdepth = config.maxdepth;
+  printinfo.percent_digits = config.percent_digits;
+  printinfo.percent_of_toplevel = config.percent_of_toplevel;
+  printinfo.histogram_thresh = config.histogram_thresh;
+  printinfo.cumulative_histogram = config.cumulative_histogram;
 
-  if (mode_histogram) {
+  char* subtract_branch = (config.subtract_branch.set()) ? (char*)config.subtract_branch : null;
+
+  if (config.mode_histogram.set()) {
     idstream is(filename);
     if (!is) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
@@ -1234,72 +1287,75 @@ int main(int argc, char* argv[]) {
 
     DataStoreNode* ds = new DataStoreNode(is);
 
-    ds = ds->searchpath(mode_histogram);
+    ds = ds->searchpath(config.mode_histogram);
     
     if (!ds) {
-      cerr << "ptlstats: Error: cannot find subtree '", mode_histogram, "'", endl;
+      cerr << "ptlstats: Error: cannot find subtree '", config.mode_histogram, "'", endl;
       return 1;
     }
 
     if (!ds->histogramarray) {
-      cerr << "ptlstats: Error: subtree '", mode_histogram, "' is not a histogram array node", endl;
+      cerr << "ptlstats: Error: subtree '", config.mode_histogram, "' is not a histogram array node", endl;
       return 1;
     }
-    create_svg_of_histogram_percent_bargraph(cout, *ds, ds->count, graph_title, graph_width, graph_height);
+    create_svg_of_histogram_percent_bargraph(cout, *ds, ds->count, config.graph_title, config.graph_width, config.graph_height);
     delete ds;
-  } else if (mode_collect) {
+  } else if (config.mode_collect.set()) {
     argv += n; argc -= n;
 
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect, subtract_branch);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect, subtract_branch);
     if (!supernode) return -1;
     supernode->identical_subtrees = 0;
     supernode->print(cout, printinfo);
     delete supernode;
-  } else if (mode_collect_sum) {
+  } else if (config.mode_collect_sum.set()) {
     argv += n; argc -= n;
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_sum, subtract_branch);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect_sum, subtract_branch);
     if (!supernode) return -1;
     supernode->identical_subtrees = 1;
     DataStoreNode* sumnode = supernode->sum_of_subtrees();
-    sumnode->rename(mode_collect_sum);
+    sumnode->rename(config.mode_collect_sum);
     sumnode->print(cout, printinfo);
     delete supernode;
-  } else if (mode_collect_average) {
+  } else if (config.mode_collect_average.set()) {
     argv += n; argc -= n;
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, mode_collect_average, subtract_branch);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect_average, subtract_branch);
     if (!supernode) return -1;
     supernode->identical_subtrees = 1;
     DataStoreNode* avgnode = supernode->average_of_subtrees();
     avgnode->summable = 1;
-    avgnode->rename(mode_collect_average);
+    avgnode->rename(config.mode_collect_average);
     avgnode->print(cout, printinfo);
     delete supernode;
-  } else if (mode_table) {
-    if ((!table_row_names) | (!table_col_names)) {
+  } else if (config.mode_table.set()) {
+    if ((!config.table_row_names.set()) | (!config.table_col_names.set())) {
       cerr << "ptlstats: Error: must specify both -rows and -cols options for the table mode", endl;
       return 1;
     }
 
     int tabletype = TABLE_TYPE_TEXT;
-    if (strequal(table_type_name, "text"))
+    if (strequal(config.table_type_name, "text"))
       tabletype = TABLE_TYPE_TEXT;
-    else if (strequal(table_type_name, "latex"))
+    else if (strequal(config.table_type_name, "latex"))
       tabletype = TABLE_TYPE_LATEX;
-    else if (strequal(table_type_name, "html"))
+    else if (strequal(config.table_type_name, "html"))
       tabletype = TABLE_TYPE_HTML;
     else {
-      cerr << "ptlstats: Error: unknown table type '", table_type_name, "'", endl;
+      cerr << "ptlstats: Error: unknown table type '", config.table_type_name, "'", endl;
       return 1;
     }
 
-    create_table(cout, tabletype, mode_table, table_row_names, table_col_names, table_row_col_pattern, table_scale_rel_to_col);
-  } else if (mode_bargraph) {
-    if ((!table_row_names) | (!table_col_names)) {
+    create_table(cout, tabletype, config.mode_table, config.table_row_names, config.table_col_names,
+                 config.table_row_col_pattern, config.table_scale_rel_to_col);
+  } else if (config.mode_bargraph.set()) {
+    if ((!config.table_row_names) | (!config.table_col_names)) {
       cerr << "ptlstats: Error: must specify both -rows and -cols options for the table mode", endl;
       return 1;
     }
 
-    create_grouped_bargraph(cout, mode_bargraph, table_row_names, table_col_names, table_row_col_pattern, table_scale_rel_to_col, graph_title, graph_width, graph_height);
+    create_grouped_bargraph(cout, config.mode_bargraph, config.table_row_names, config.table_col_names,
+                            config.table_row_col_pattern, config.table_scale_rel_to_col, config.graph_title,
+                            config.graph_width, config.graph_height);
   } else {
     idstream is(filename);
     if (!is) {
@@ -1309,11 +1365,11 @@ int main(int argc, char* argv[]) {
 
     DataStoreNode* ds = new DataStoreNode(is);
 
-    if (mode_subtree) {
-      ds = ds->searchpath(mode_subtree);
+    if (config.mode_subtree) {
+      ds = ds->searchpath(config.mode_subtree);
 
       if (!ds) {
-        cerr << "ptlstats: Error: cannot find subtree '", mode_subtree, "'", endl;
+        cerr << "ptlstats: Error: cannot find subtree '", config.mode_subtree, "'", endl;
         return 1;
       }
     }
