@@ -3071,7 +3071,7 @@ bool simulate(const char* corename) {
   return 0;
 }
 
-extern "C" void main(PTLsimMonitorInfo* dummy) {
+extern "C" void ptlsim_main(PTLsimMonitorInfo* dummy) {
   ptlsim_init();
   config.reset();
   configparser.setup();

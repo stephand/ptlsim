@@ -28,7 +28,7 @@ hypercall_page:
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
   # %rdi already points to PTLsimMonitorInfo struct
-  call main
+  call ptlsim_main
   int3
 
 .global get_fs
