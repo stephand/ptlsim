@@ -1192,8 +1192,6 @@ void Context::flush_tlb() {
 }
 
 int Context::write_segreg(unsigned int segid, W16 selector) {
-  // ++MTY see xen/arch/x86/x86_64/mm.c check_descriptor(struct desc_struct *d) function for all the rules
-
   assert(segid < SEGID_COUNT);
 
   int idx = selector >> 3; // mask out the dpl bits and turn into index
@@ -1206,14 +1204,18 @@ int Context::write_segreg(unsigned int segid, W16 selector) {
     // The processor is supposed to deliver a fault (seg_not_present or stack_fault)
     // the first time the null selector is actually used.
     //
-    logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): load null segment", endl;
+    if (logable(4)) {
+      logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): load null segment", endl;
+    }
     seg[segid].selector = 0;
     reload_segment_descriptor(segid, selector);
     return 0;
   }
 
   if (!gdt_entry_valid(idx)) {
-    logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " is invalid (gdt size? ", gdtsize, ")", endl;
+    if (logable(4)) {
+      logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " is invalid (gdt size? ", gdtsize, ")", endl;
+    }
     return EXCEPTION_x86_gp_fault;
   }
 
@@ -1221,14 +1223,18 @@ int Context::write_segreg(unsigned int segid, W16 selector) {
 
   int cs_dpl = (kernel_mode) ? 0 : 3;
   if (desc.dpl < cs_dpl) {
-    logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " had incompatible DPL (desc dpl ", desc.dpl, " vs current dpl ", cs_dpl, ")", endl;
-    logfile << "  gdt entry was: ", desc, endl;
+    if (logable(4)) {
+      logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " had incompatible DPL (desc dpl ", desc.dpl, " vs current dpl ", cs_dpl, ")", endl;
+      logfile << "  gdt entry was: ", desc, endl;
+    }
     return EXCEPTION_x86_gp_fault;
   }
 
   if (!desc.p) {
-    logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " is not present", endl;
-    logfile << "  gdt entry was: ", desc, endl;
+    if (logable(4)) {
+      logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " is not present", endl;
+      logfile << "  gdt entry was: ", desc, endl;
+    }
     // return (segid == SEGID_SS) ? EXCEPTION_x86_stack_fault : EXCEPTION_x86_seg_not_present;
     // Technically this is supposed to be a seg not present fault, but x86-64 mode seems to signal a GP fault instead:
     return EXCEPTION_x86_gp_fault;
@@ -1236,15 +1242,17 @@ int Context::write_segreg(unsigned int segid, W16 selector) {
 
   reload_segment_descriptor(segid, selector);
 
-  logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " validated", endl;
-  logfile << "  gdt entry was: ", desc, endl;
+  if (logable(4)) {
+    logfile << "write_segreg(", segid, ", 0x", hexstring(selector, 16), " (idx ", idx, ")): gdt entry ", idx, " validated", endl;
+    logfile << "  gdt entry was: ", desc, endl;
+  }
 
   return 0;
 }
 
 void Context::swapgs() {
   // This is equivalent to swapgs instruction:
-  logfile << "  swapgs: update gsbase old ", (void*)(Waddr)seg[SEGID_GS].base, " => new ", (void*)(Waddr)swapgs_base, endl;
+  if (logable(4)) logfile << "  swapgs: update gsbase old ", (void*)(Waddr)seg[SEGID_GS].base, " => new ", (void*)(Waddr)swapgs_base, endl;
   W64 temp = seg[SEGID_GS].base;
   seg[SEGID_GS].base = swapgs_base;
   swapgs_base = temp;
@@ -2344,7 +2352,7 @@ void handle_xen_hypercall_assist(Context& ctx) {
     Waddr faultaddr;
     if (ctx.copy_from_user(&iretctx, ctx.commitarf[REG_rsp], sizeof(iretctx), pfec, faultaddr) != sizeof(iretctx)) { abort(); }
 
-    if (logable(3)) logfile << "IRET from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ", (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", iretctx, endl;
+    if (logable(2)) logfile << "IRET from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ", (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", iretctx, endl;
 
     if ((iretctx.cs & 3) == 3) {
       // Returning to user mode: toggle_guest_mode(v)
@@ -2425,7 +2433,7 @@ static inline bool push_on_kernel_stack(Context& ctx, Waddr& p, Waddr data) {
   Waddr faultaddr;
   p -= sizeof(data);
   bool ok = (ctx.copy_to_user((Waddr)p, &data, sizeof(data), pfec, faultaddr) == sizeof(data));
-  logfile << "  [", (void*)(Waddr)p, "] 0x", hexstring(data, 64), (ok ? "" : " (error)"), endl;
+  if (logable(4)) logfile << "  [", (void*)(Waddr)p, "] 0x", hexstring(data, 64), (ok ? "" : " (error)"), endl;
   return ok;
 }
 
@@ -2444,7 +2452,7 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
   Waddr frame = (kernel_mode) ? commitarf[REG_rsp] : kernel_sp;
   Waddr origframe = frame;
 
-  if (logable(4)) logfile << "Create bounce frame from ", (kernel_mode ? "kernel" : "user"), " rip ", 
+  if (logable(2)) logfile << "Create bounce frame from ", (kernel_mode ? "kernel" : "user"), " rip ", 
     (void*)(Waddr)commitarf[REG_rip], " to kernel rip ", (void*)(Waddr)target_rip,
     " at rsp ", (void*)(Waddr)frame, endl;
 

@@ -1450,7 +1450,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   if (smc_isdirty(rvp.mfnhi))
     invalidate_page(rvp.mfnhi);
 
-  if (logable(3) | log_code_page_ops) logfile << "Translating ", rvp, " at ", total_user_insns_committed, " commits", endl, flush;
+  if (logable(4) | log_code_page_ops) logfile << "Translating ", rvp, " at ", total_user_insns_committed, " commits", endl, flush;
 
   translate_timer.start();
 
@@ -1492,7 +1492,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
     if (logable(3) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
   }
 
-  if (logable(3)) {
+  if (logable(4)) {
     logfile << "=====================================================================", endl;
     logfile << *bb, endl;
     logfile << "End of basic block: rip ", trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;
