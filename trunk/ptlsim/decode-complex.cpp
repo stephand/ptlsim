@@ -271,7 +271,7 @@ void assist_fxsave(Context& ctx) {
 
   ctx.fxsave(state);
 
-  Waddr target = ctx.commitarf[REG_ar1];
+  Waddr target = ctx.commitarf[REG_ar1] & ctx.virt_addr_mask;
 
   PageFaultErrorCode pfec;
   Waddr faultaddr;
@@ -282,6 +282,26 @@ void assist_fxsave(Context& ctx) {
     ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
     return;
   }
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_fxrstor(Context& ctx) {
+  FXSAVEStruct state;
+
+  Waddr target = ctx.commitarf[REG_ar1] & ctx.virt_addr_mask;
+
+  PageFaultErrorCode pfec;
+  Waddr faultaddr;
+  int bytes = ctx.copy_from_user(&state, target, sizeof(state), pfec, faultaddr);
+
+  if (bytes < sizeof(state)) {
+    ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+    ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
+    return;
+  }
+
+  ctx.fxrstor(state);
+
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
@@ -1374,24 +1394,29 @@ bool TraceDecoder::decode_complex() {
     // fxsave fxrstor ldmxcsr stmxcsr (inv) lfence mfence sfence
     switch (modrm.reg) {
     case 0: { // fxsave
+      DECODE(eform, rd, q_mode);
+      CheckInvalid();
+      is_sse = 1;
+
+      address_generate_and_load_or_store(REG_ar1, REG_zero, rd, OP_add, 0, 0, true);
+      microcode_assist(ASSIST_FXSAVE, ripstart, rip);
+      end_of_block = 1;
+      break;
+    }
+    case 1: { // fxrstor
       DECODE(eform, ra, q_mode);
       CheckInvalid();
+      is_sse = 1;
 
-      // Get effective address into sr2
-      int basereg = arch_pseudo_reg_to_arch_reg[ra.mem.basereg];
-      int indexreg = arch_pseudo_reg_to_arch_reg[ra.mem.indexreg];
-      basereg = bias_by_segreg(basereg);
-      TransOp addop(OP_adda, REG_ar1, basereg, REG_imm, indexreg, (use64) ? 3 : 2, ra.mem.offset);
-      addop.extshift = ra.mem.scale;
-      this << addop;
-
-      microcode_assist(ASSIST_FXSAVE, ripstart, rip);
+      address_generate_and_load_or_store(REG_ar1, REG_zero, ra, OP_add, 0, 0, true);
+      microcode_assist(ASSIST_FXRSTOR, ripstart, rip);
       end_of_block = 1;
       break;
     }
     case 2: { // ldmxcsr
       DECODE(eform, ra, d_mode);
       CheckInvalid();
+      is_sse = 1;
 
       ra.type = OPTYPE_REG;
       ra.reg.reg = 0; // get the requested mxcsr into sr2
@@ -1407,6 +1432,7 @@ bool TraceDecoder::decode_complex() {
     case 3: { // stmxcsr
       DECODE(eform, rd, d_mode);
       CheckInvalid();
+      is_sse = 1;
 
       TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, mxcsr)); ldp.internal = 1; this << ldp;
       result_store(REG_temp1, REG_temp0, rd);
@@ -1415,6 +1441,7 @@ bool TraceDecoder::decode_complex() {
     case 5: // lfence
     case 6: // mfence
     case 7: { // sfence
+      //++MTY TODO SMP
       CheckInvalid();
       this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
       break;

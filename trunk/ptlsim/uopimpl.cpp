@@ -25,10 +25,10 @@ typedef W32 Wmax;
 void uop_impl_bogus(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { asm("int3"); }
 
 template <typename T>
-static inline T rotr(T r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "cl" (n)); return r; }
+static inline T rotr(T r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" ((byte)n)); return r; }
 
 template <typename T>
-static inline T rotl(T r, int n) { asm("rol %%cl,%[r]" : [r] "+r" (r) : [n] "cl" (n)); return r; }
+static inline T rotl(T r, int n) { asm("rol %%cl,%[r]" : [r] "+r" (r) : [n] "c" ((byte)n)); return r; }
 
 #ifndef __x86_64__
 // Need to emulate this on 32-bit x86
@@ -176,7 +176,7 @@ uopimpl_func_t mapname[4][2] = { \
   make_aluop_all_sizes(OP_ ## name, implmap_ ## name, x86_op_ ## name, (setflags));
 
 #define PRETEXT_NO_FLAGS_IN ""
-#define PRETEXT_ALL_FLAGS_IN "pushw %[rcflags]; popfw;"
+#define PRETEXT_ALL_FLAGS_IN "pushw %[rcflags]; popfw; "
 
 //make_x86_aluop_all_sizes(add, add, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
 //make_x86_aluop_all_sizes(sub, sub, ZAPS|CF|OF, PRETEXT_NO_FLAGS_IN);
@@ -395,8 +395,8 @@ template <typename T, int genflags> \
 struct name { \
   T operator ()(T ra, T rb, T rc, W16 raflags, W16 rbflags, W16 rcflags, byte& cf, byte& of) { \
     if (genflags & (SETFLAG_CF|SETFLAG_OF)) \
-      asm(pretext #opcode " %[rb],%[ra]; setc %[cf]; seto %[of]" : [ra] "+r" (ra), [cf] "=q" (cf), [of] "=q" (of) : [rb] "cl" ((byte)rb), [rcflags] "rm" (rcflags)); \
-    else asm(#opcode " %[rb],%[ra]" : [ra] "+r" (ra) : [rb] "cl" ((byte)rb) : "flags"); \
+      asm(pretext #opcode " %[rb],%[ra]; setc %[cf]; seto %[of]" : [ra] "+r" (ra), [cf] "=q" (cf), [of] "=q" (of) : [rb] "c" ((byte)rb), [rcflags] "rm" (rcflags)); \
+    else asm(#opcode " %[rb],%[ra]" : [ra] "+r" (ra) : [rb] "c" ((byte)rb) : "flags"); \
     return ra; \
   } \
 }

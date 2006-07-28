@@ -38,18 +38,57 @@ CycleTimer translate_timer("translate");
 //
 
 const assist_func_t assistid_to_func[ASSIST_COUNT] = {
-  assist_div<byte>, assist_div<W16>, assist_div<W32>, assist_div<W64>,
-  assist_idiv<byte>, assist_idiv<W16>, assist_idiv<W32>, assist_idiv<W64>,
-  assist_x87_fprem, assist_x87_fyl2xp1, assist_x87_fsqrt, assist_x87_fsincos,
-  assist_x87_frndint, assist_x87_fscale, assist_x87_fsin, assist_x87_fcos,
-  assist_x87_fxam, assist_x87_f2xm1, assist_x87_fyl2x, assist_x87_fptan,
-  assist_x87_fpatan, assist_x87_fxtract, assist_x87_fprem1,
-  assist_x87_fld80, assist_x87_fstp80, assist_ldmxcsr, assist_fxsave,
-  assist_int, assist_syscall, assist_sysenter, assist_cpuid,
-  assist_invalid_opcode, assist_exec_page_fault, assist_gp_fault,
-  assist_write_segreg, assist_popf, assist_cld, assist_std,
-  assist_ptlcall, assist_wrmsr, assist_rdmsr, assist_wrcr, assist_rdcr,
-  assist_iret16, assist_iret32, assist_iret64,
+  assist_div<byte>,
+  assist_div<W16>,
+  assist_div<W32>,
+  assist_div<W64>,
+  assist_idiv<byte>,
+  assist_idiv<W16>,
+  assist_idiv<W32>,
+  assist_idiv<W64>,
+  assist_x87_fprem,
+  assist_x87_fyl2xp1,
+  assist_x87_fsqrt,
+  assist_x87_fsincos,
+  assist_x87_frndint,
+  assist_x87_fscale,
+  assist_x87_fsin,
+  assist_x87_fcos,
+  assist_x87_fxam,
+  assist_x87_f2xm1,
+  assist_x87_fyl2x,
+  assist_x87_fptan,
+  assist_x87_fpatan,
+  assist_x87_fxtract,
+  assist_x87_fprem1,
+  assist_x87_fld80,
+  assist_x87_fstp80,
+  assist_x87_fsave,
+  assist_x87_frstor,
+  assist_x87_finit,
+  assist_x87_fclex,
+  assist_ldmxcsr,
+  assist_fxsave,
+  assist_fxrstor,
+  assist_int,
+  assist_syscall,
+  assist_sysenter,
+  assist_cpuid,
+  assist_invalid_opcode,
+  assist_exec_page_fault,
+  assist_gp_fault,
+  assist_write_segreg,
+  assist_popf,
+  assist_cld,
+  assist_std,
+  assist_ptlcall,
+  assist_wrmsr,
+  assist_rdmsr,
+  assist_wrcr,
+  assist_rdcr,
+  assist_iret16,
+  assist_iret32,
+  assist_iret64,
 };
 
 const char* assist_names[ASSIST_COUNT] = {
@@ -60,6 +99,7 @@ const char* assist_names[ASSIST_COUNT] = {
   "x87_fxam", "x87_f2xm1", "x87_fyl2x", "x87_fptan",
   "x87_fpatan", "x87_fxtract", "x87_fprem1",
   "x87_fld80", "x87_fstp80",  "ldmxcsr", "fxsave",
+  "fxrstor", "fsave", "frstor",
   "int", "syscall", "sysenter", "cpuid",
   "invalid_opcode", "exec_page_fault", "gp_fault",
   "write_segreg", "popf", "cld", "std",
@@ -75,7 +115,7 @@ const char* x86_exception_names[256] = {
   "overflow",
   "bounds",
   "invalid opcode",
-  "no coproc",
+  "fpu not avail",
   "double fault",
   "coproc overrun",
   "invalid tss",
@@ -313,7 +353,6 @@ const byte arch_pseudo_reg_to_arch_reg[APR_COUNT] = {
   REG_rip, REG_zero
 };
 
-#define _ 0
 static const byte onebyte_has_modrm[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
@@ -493,6 +532,8 @@ void TraceDecoder::lastop() {
     transop.unaligned = 0;
     transop.bytes = bytes;
     transop.index = bb.count;
+    transop.is_x87 = is_x87;
+    transop.is_sse = is_sse;
     bb.transops[bb.count++] = transop;
     if (ld|st) bb.memcount++;
     if (st) bb.storecount++;
@@ -1246,6 +1287,8 @@ void assist_exec_page_fault(Context& ctx) {
 #else
   bool page_now_valid = asp.fastcheck((byte*)faultaddr, asp.execmap);
 #endif
+  // logfile << "Exec page fault at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " (", total_user_insns_committed, " commits, ", sim_cycle, " cycles); now valid? ", page_now_valid, endl, flush;
+
   if (page_now_valid) {
     if (logable(3)) {
       logfile << "Spurious PageFaultOnExec detected at fault rip ",
@@ -1261,6 +1304,7 @@ void assist_exec_page_fault(Context& ctx) {
 
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
   ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
+  // logfile << "after propagating exec page fault: rip = ", (void*)ctx.commitarf[REG_rip], endl, flush;
 }
 
 void assist_gp_fault(Context& ctx) {
@@ -1270,7 +1314,7 @@ void assist_gp_fault(Context& ctx) {
 
 void TraceDecoder::invalidate() {
   if ((rip - bb.rip) > valid_byte_count) {
-    if (logable(3)) {
+    if (logable(3)|1) {
       logfile << "Translation crosses into invalid page: ripstart ", (void*)ripstart, ", rip ", (void*)rip,
         ", faultaddr ", faultaddr, "; expected ", (rip - ripstart), " bytes but only got ", valid_byte_count, 
         " (next page ", (void*)(Waddr)ceil(ripstart, 4096), ")", endl;
@@ -1364,6 +1408,9 @@ bool TraceDecoder::translate() {
 
   // logfile << "Decoding op 0x", hexstring(op, 12), " (class ", (op >> 8), ") @ ", (void*)ripstart, endl, flush;
 
+  is_x87 = 0;
+  is_sse = 0;
+
   switch (op >> 8) {
   case 0:
   case 1: {
@@ -1408,7 +1455,7 @@ bool TraceDecoder::translate() {
     if (((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN))
         || ((rip - bb.rip) >= (MAX_BB_BYTES-15))
         || (user_insn_count >= MAX_BB_X86_INSNS)) {
-      if (logable(3)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
+      if (logable(5)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
       // bb.rip_taken and bb.rip_not_taken were already filled out for the last instruction.
       if (!last_flags_update_was_atomic)
         this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
@@ -1477,7 +1524,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   }
 
   pagelist->add(bb, bb->mfnlo_loc);
-  if (logable(3) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
+  if (logable(4) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
 
   int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes-1)) >> 12);
 
@@ -1489,10 +1536,10 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
       bbpages.add(pagelist);
     }
     pagelist->add(bb, bb->mfnhi_loc);
-    if (logable(3) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
+    if (logable(4) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
   }
 
-  if (logable(4)) {
+  if (logable(5)) {
     logfile << "=====================================================================", endl;
     logfile << *bb, endl;
     logfile << "End of basic block: rip ", trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;

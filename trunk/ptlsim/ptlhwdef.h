@@ -49,29 +49,6 @@
 #define COND_le  14
 #define COND_nle 15
 
-//
-// Exceptions:
-// These are PTL internal exceptions, NOT x86 exceptions:
-//
-#define EXCEPTION_NoException         0
-// Exceptions causing rollbacks
-#define EXCEPTION_Propagate           1
-#define EXCEPTION_BranchMispredict    2
-#define EXCEPTION_UnalignedAccess     3
-#define EXCEPTION_PageFaultOnRead     4
-#define EXCEPTION_PageFaultOnWrite    5
-#define EXCEPTION_PageFaultOnExec     6
-#define EXCEPTION_LoadStoreAliasing   11
-#define EXCEPTION_CheckFailed         12
-#define EXCEPTION_SkipBlock           13
-#define EXCEPTION_CacheLocked         14
-#define EXCEPTION_LFRQFull            15
-#define EXCEPTION_FloatingPoint       16
-// Asynchronous exceptions
-#define EXCEPTION_Timer               17
-#define EXCEPTION_External            18
-#define EXCEPTION_COUNT               19
-
 #define ARCHREG_INT_BASE 0
 #define ARCHREG_SSE_BASE 16
 
@@ -183,6 +160,28 @@
 extern W64 sim_cycle;
 #include <logic.h>
 #include <config.h>
+
+//
+// Exceptions:
+// These are PTL internal exceptions, NOT x86 exceptions:
+//
+enum {
+  EXCEPTION_NoException = 0,
+  EXCEPTION_Propagate,
+  EXCEPTION_BranchMispredict,
+  EXCEPTION_UnalignedAccess,
+  EXCEPTION_PageFaultOnRead,
+  EXCEPTION_PageFaultOnWrite,
+  EXCEPTION_PageFaultOnExec,
+  EXCEPTION_LoadStoreAliasing,
+  EXCEPTION_CheckFailed,
+  EXCEPTION_SkipBlock,
+  EXCEPTION_CacheLocked,
+  EXCEPTION_LFRQFull,
+  EXCEPTION_FloatingPoint,
+  EXCEPTION_FloatingPointNotAvailable,
+  EXCEPTION_COUNT
+};
 
 static const int MAX_BB_BYTES = 255;
 static const int MAX_BB_X86_INSNS = 63;
@@ -484,7 +483,7 @@ enum {
   EXCEPTION_x86_overflow        = 4,
   EXCEPTION_x86_bounds          = 5,
   EXCEPTION_x86_invalid_opcode  = 6,
-  EXCEPTION_x86_no_coproc       = 7,
+  EXCEPTION_x86_fpu_not_avail   = 7,
   EXCEPTION_x86_double_fault    = 8,
   EXCEPTION_x86_coproc_overrun  = 9,
   EXCEPTION_x86_invalid_tss     = 10,
@@ -664,7 +663,7 @@ struct Context {
   W32 internal_eflags; // parts of EFLAGS that are infrequently updated
 
 #ifdef PTLSIM_HYPERVISOR
-  Waddr exception_type;
+  Waddr x86_exception;
 
   byte kernel_mode; // VGCF_IN_KERNEL
   byte kernel_in_syscall; // VGCF_IN_SYSCALL
@@ -1123,7 +1122,7 @@ enum {
 extern const char* datatype_names[DATATYPE_COUNT];
 
 struct TransOpBase {
-  W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, rbimmsz:3, rcimmsz:3, has_riptaken:1, has_ripseq:1;
+  W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, is_sse:1, is_x87:1;
   W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, datatype:4, unaligned:1, index:8;
 };
 
@@ -1166,6 +1165,8 @@ struct TransOp: public TransOpBase {
     this->cachelevel = 0;
     this->datatype = 0;
     this->unaligned = 0;
+    this->is_sse = 0;
+    this->is_x87 = 0;
     this->index = 0;
   }
 };

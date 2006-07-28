@@ -225,6 +225,39 @@ void assist_x87_fstp80(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
+void assist_x87_fsave(Context& ctx) {
+  //++MTY TODO
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_x87_frstor(Context& ctx) {
+  //++MTY TODO
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_x87_fclex(Context& ctx) {
+  X87StatusWord fpsw = ctx.commitarf[REG_fpsw];
+  fpsw.pe = 0;
+  fpsw.ue = 0;
+  fpsw.oe = 0;
+  fpsw.ze = 0;
+  fpsw.de = 0;
+  fpsw.ie = 0;
+  fpsw.sf = 0;
+  fpsw.es = 0;
+  fpsw.b = 0;
+  ctx.commitarf[REG_fpsw] = fpsw;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_x87_finit(Context& ctx) {
+  ctx.fpcw = 0x037f;
+  ctx.commitarf[REG_fpsw] = 0;
+  ctx.commitarf[REG_fptags] = 0;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
 
 //
 // FCOM and FCOMP (with pop) need to transform SSE-style flags
@@ -328,6 +361,8 @@ void check_warned_about_x87() {
 bool TraceDecoder::decode_x87() {
   DecodedOperand rd;
   DecodedOperand ra;
+
+  is_x87 = 1;
 
   switch (op) {
     //
@@ -881,6 +916,23 @@ bool TraceDecoder::decode_x87() {
     break;
   }
 
+  case 0x634: { // fclex
+    if (modrm.mod != 3) MakeInvalid();
+    CheckInvalid();
+
+    switch (modrm.rm) {
+    case 2:
+      microcode_assist(ASSIST_X87_FCLEX, ripstart, rip); break;
+    case 3:
+      microcode_assist(ASSIST_X87_FINIT, ripstart, rip); break;
+    default:
+      MakeInvalid();
+    }
+
+    end_of_block = 1;
+    break;
+  }
+
   case 0x635: // 0xdb fucomi or fld mem80
   case 0x636: // 0xdb fcomi
   case 0x637: // 0xdb fstp mem80
@@ -938,7 +990,7 @@ bool TraceDecoder::decode_x87() {
         addop.extshift = ra.mem.scale;
         this << addop;
 
-        microcode_assist((op == 0x635) ? ASSIST_FLD80 : ASSIST_FSTP80, ripstart, rip);
+        microcode_assist((op == 0x635) ? ASSIST_X87_FLD80 : ASSIST_X87_FSTP80, ripstart, rip);
         end_of_block = 1;
         break;
       } else {

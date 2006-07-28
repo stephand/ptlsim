@@ -276,6 +276,9 @@ template <> struct lg10<1> { static const int value = 0; };
 template <> struct lg10<0> { static const int value = 0; };
 #define log10(v) (lg10<(v)>::value)
 
+// For specifying easy to read arrays
+#define _ (0)
+
 template <bool b00,     bool b01 = 0, bool b02 = 0, bool b03 = 0,
           bool b04 = 0, bool b05 = 0, bool b06 = 0, bool b07 = 0,
           bool b08 = 0, bool b09 = 0, bool b10 = 0, bool b11 = 0,

@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-#define ENABLE_CHECKS
-#define ENABLE_LOGGING
+//#define ENABLE_CHECKS
+//#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -485,9 +485,10 @@ struct SequentialCore {
     core_to_external_state();
 
 #ifdef PTLSIM_HYPERVISOR
-    logfile << "PTL Exception ", exception_name(ctx.exception), " called from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], 
-      " at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
-    //logfile << "Error code ", (void*)(Waddr)ctx.error_code, ", faulting virt addr ", (void*)(Waddr)ctx.cr2, endl;
+    if (logable(4)) {
+      logfile << "PTL Exception ", exception_name(ctx.exception), " called from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], 
+        " at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
+    }
 
     //
     // Map PTL internal hardware exceptions to their x86 equivalents,
@@ -498,18 +499,22 @@ struct SequentialCore {
     case EXCEPTION_PageFaultOnRead:
     case EXCEPTION_PageFaultOnWrite:
     case EXCEPTION_PageFaultOnExec:
-      ctx.exception_type = EXCEPTION_x86_page_fault; break;
+      ctx.x86_exception = EXCEPTION_x86_page_fault; break;
+    case EXCEPTION_FloatingPointNotAvailable:
+      ctx.x86_exception = EXCEPTION_x86_fpu_not_avail; break;
     case EXCEPTION_FloatingPoint:
-      ctx.exception_type = EXCEPTION_x86_fpu; break;
+      ctx.x86_exception = EXCEPTION_x86_fpu; break;
     default:
       logfile << "Unsupported internal exception type ", exception_name(ctx.exception), endl, flush;
       abort();
     }
 
-    logfile << ctx;
-    logfile << sshinfo;
+    if (logable(4)) {
+      logfile << ctx;
+      logfile << sshinfo;
+    }
 
-    ctx.propagate_x86_exception(ctx.exception_type, ctx.error_code, ctx.cr2);
+    ctx.propagate_x86_exception(ctx.x86_exception, ctx.error_code, ctx.cr2);
 
     external_to_core_state();
 
@@ -699,16 +704,29 @@ struct SequentialCore {
       Waddr origvirt = 0;
       PageFaultErrorCode pfec = 0;
 
-      // if (logable(6)) logfile << "Executing rip ", (void*)(Waddr)arf[REG_rip], ": ", uop, endl, flush;
+      bool force_fpu_not_avail_fault = 0;
 
-      if unlikely (ld|st) {
+#ifdef PTLSIM_HYPERVISOR
+      if unlikely (uop.is_sse|uop.is_x87) {
+        force_fpu_not_avail_fault = ctx.cr0.ts | (uop.is_x87 & ctx.cr0.em);
+      }
+#endif
+      if unlikely (force_fpu_not_avail_fault) {
+        if (logable(6)) {
+          logfile << intstring(current_uuid, 20), " fpuchk", " rip ", (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), " ", 
+            uop, ": FPU not available fault", endl;
+        }
+        ctx.exception = EXCEPTION_FloatingPointNotAvailable;
+        ctx.error_code = 0;
+        arf[REG_flags] = saved_flags;
+        return SEQEXEC_EXCEPTION;
+      } else if unlikely (ld|st) {
         int status = (ld) ? issueload(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate) : issuestore(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate);
 
         state.reg.rddata = sfr.data;
         state.reg.rdflags = 0;
 
         if (status == ISSUE_EXCEPTION) {
-          logfile << "Exception! state.reg.rddata = ", hexstring(state.reg.rddata, 64), endl;
           ctx.exception = LO32(state.reg.rddata);
           ctx.error_code = HI32(state.reg.rddata); // page fault error code
 #ifdef PTLSIM_HYPERVISOR

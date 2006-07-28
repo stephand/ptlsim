@@ -163,6 +163,8 @@ struct TraceDecoder {
   bool opsize_prefix;
   bool addrsize_prefix;
   bool end_of_block;
+  bool is_x87;
+  bool is_sse;
 
   TraceDecoder(const RIPVirtPhys& rvp);
 
@@ -215,18 +217,57 @@ static inline TraceDecoder& operator <<(TraceDecoder& dec, const TransOp& transo
 #define MakeInvalid() { invalid |= true; CheckInvalid(); }
 
 enum {
-  ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64,
-  ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64,
-  ASSIST_X87_FPREM, ASSIST_X87_FYL2XP1, ASSIST_X87_FSQRT, ASSIST_X87_FSINCOS,
-  ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS,
-  ASSIST_X87_FXAM, ASSIST_X87_F2XM1, ASSIST_X87_FYL2X, ASSIST_X87_FPTAN,
-  ASSIST_X87_FPATAN, ASSIST_X87_FXTRACT, ASSIST_X87_FPREM1,
-  ASSIST_FLD80, ASSIST_FSTP80, ASSIST_LDMXCSR, ASSIST_FXSAVE,
-  ASSIST_INT, ASSIST_SYSCALL, ASSIST_SYSENTER, ASSIST_CPUID,
-  ASSIST_INVALID_OPCODE, ASSIST_EXEC_PAGE_FAULT, ASSIST_GP_FAULT,
-  ASSIST_WRITE_SEGREG, ASSIST_POPF, ASSIST_CLD, ASSIST_STD,
-  ASSIST_PTLCALL, ASSIST_WRMSR, ASSIST_RDMSR, ASSIST_WRCR,
-  ASSIST_RDCR, ASSIST_IRET16, ASSIST_IRET32, ASSIST_IRET64,
+  ASSIST_DIV8,
+  ASSIST_DIV16,
+  ASSIST_DIV32,
+  ASSIST_DIV64,
+  ASSIST_IDIV8,
+  ASSIST_IDIV16,
+  ASSIST_IDIV32,
+  ASSIST_IDIV64,
+  ASSIST_X87_FPREM,
+  ASSIST_X87_FYL2XP1,
+  ASSIST_X87_FSQRT,
+  ASSIST_X87_FSINCOS,
+  ASSIST_X87_FRNDINT,
+  ASSIST_X87_FSCALE,
+  ASSIST_X87_FSIN,
+  ASSIST_X87_FCOS,
+  ASSIST_X87_FXAM,
+  ASSIST_X87_F2XM1,
+  ASSIST_X87_FYL2X,
+  ASSIST_X87_FPTAN,
+  ASSIST_X87_FPATAN,
+  ASSIST_X87_FXTRACT,
+  ASSIST_X87_FPREM1,
+  ASSIST_X87_FLD80,
+  ASSIST_X87_FSTP80,
+  ASSIST_X87_FSAVE,
+  ASSIST_X87_FRSTOR,
+  ASSIST_X87_FINIT,
+  ASSIST_X87_FCLEX,
+  ASSIST_LDMXCSR,
+  ASSIST_FXSAVE,
+  ASSIST_FXRSTOR,
+  ASSIST_INT,
+  ASSIST_SYSCALL,
+  ASSIST_SYSENTER,
+  ASSIST_CPUID,
+  ASSIST_INVALID_OPCODE,
+  ASSIST_EXEC_PAGE_FAULT,
+  ASSIST_GP_FAULT,
+  ASSIST_WRITE_SEGREG,
+  ASSIST_POPF,
+  ASSIST_CLD,
+  ASSIST_STD,
+  ASSIST_PTLCALL,
+  ASSIST_WRMSR,
+  ASSIST_RDMSR,
+  ASSIST_WRCR,
+  ASSIST_RDCR,
+  ASSIST_IRET16,
+  ASSIST_IRET32,
+  ASSIST_IRET64,
   ASSIST_COUNT,
 };
 
@@ -278,8 +319,13 @@ void assist_x87_fxtract(Context& ctx);
 void assist_x87_fprem1(Context& ctx);
 void assist_x87_fld80(Context& ctx);
 void assist_x87_fstp80(Context& ctx);
-void assist_ldmxcsr(Context& ctx);
+void assist_x87_fsave(Context& ctx);
+void assist_x87_frstor(Context& ctx);
+void assist_x87_finit(Context& ctx);
+void assist_x87_fclex(Context& ctx);
 void assist_fxsave(Context& ctx);
+void assist_fxrstor(Context& ctx);
+void assist_ldmxcsr(Context& ctx);
 void assist_int(Context& ctx);
 void assist_syscall(Context& ctx);
 void assist_sysenter(Context& ctx);

@@ -2378,7 +2378,7 @@ void handle_xen_hypercall_assist(Context& ctx) {
 
     if (!(iretctx.flags & VGCF_IN_SYSCALL)) {
       if (logable(4)) logfile << "  Restore as interrupt, not system call", endl;
-      ctx.exception_type = 0;
+      ctx.x86_exception = 0;
       ctx.commitarf[REG_r11] = iretctx.r11;
       ctx.commitarf[REG_rcx] = iretctx.rcx;
     } else {
@@ -2541,11 +2541,14 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
 
   commitarf[REG_rip] = target_rip;
 
-  exception_type = 256; // TRAP_syscall
+  x86_exception = 256; // TRAP_syscall
   // IA32 Ref. Vol. 3: TF, VM, RF and NT flags are cleared on trap.
   commitarf[REG_flags] &= ~(FLAG_TF|FLAG_VM|FLAG_RF|FLAG_NT);
 
-  if (logable(4)) logfile << "  Done creating bounce frame at rsp ", (void*)(Waddr)commitarf[REG_rsp], endl;
+  if (logable(4)) {
+    logfile << "  Done creating bounce frame at rsp ", (void*)(Waddr)commitarf[REG_rsp], 
+      " to rip ", (void*)(Waddr)commitarf[REG_rip],  endl;
+  }
 
   return true;
 }
@@ -2556,15 +2559,17 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
 void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virtaddr) {
   assert(exception < lengthof(idt));
 
-  logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (void*)commitarf[REG_rip], ": error code ";
-  if likely (exception == EXCEPTION_x86_page_fault) {
-    logfile << PageFaultErrorCode(errorcode), " (", (void*)(Waddr)errorcode, ") @ virtaddr ", (void*)virtaddr;
-  } else {
-    logfile << "0x", hexstring(errorcode, 32);
+  if (logable(2)|1) {
+    logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (void*)commitarf[REG_rip], ": error code ";
+    if likely (exception == EXCEPTION_x86_page_fault) {
+      logfile << PageFaultErrorCode(errorcode), " (", (void*)(Waddr)errorcode, ") @ virtaddr ", (void*)virtaddr;
+    } else {
+      logfile << "0x", hexstring(errorcode, 32);
+    }
+    logfile << " (", total_user_insns_committed, " user commits, ", sim_cycle, " cycles)", endl, flush;
   }
-  logfile << " (", total_user_insns_committed, " user commits, ", sim_cycle, " cycles)", endl, flush;
 
-  exception_type = exception;
+  x86_exception = exception;
   error_code = errorcode;
 
   // Clear DPL bits for everything but page fault error code format
@@ -2575,8 +2580,19 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
     sshinfo.vcpu_info[vcpuid].arch.cr2 = virtaddr;
   }
 
+  // Avoid recursion on FPU state lazy save/restore (equivalent to clts)
+  if unlikely (exception == EXCEPTION_x86_fpu_not_avail) cr0.ts = 0;
+
   const TrapTarget& tt = idt[exception];
-  create_bounce_frame((tt.cs << 3) | 3, signext64(tt.rip, 48), TBF_EXCEPTION | TBF_EXCEPTION_ERRCODE | (tt.maskevents ? TBF_INTERRUPT : 0));
+  int flags = TBF_EXCEPTION | (tt.maskevents ? TBF_INTERRUPT : 0);
+
+  // Only [tss, seg, stack, gp, page, align] have the error code field
+  static const byte x86_exception_has_error_code[EXCEPTION_x86_count] = {_,_,_,_,_,_,_,_,_,_,1,1,1,1,1,_,_,1,_,_};
+
+  bool uses_errcode = (exception < EXCEPTION_x86_count) && x86_exception_has_error_code[exception];
+  if (uses_errcode) flags = flags | TBF_EXCEPTION_ERRCODE;
+
+  assert(create_bounce_frame((tt.cs << 3) | 3, signext64(tt.rip, 48), flags));
 }
 
 void handle_syscall_assist(Context& ctx) {
@@ -3040,17 +3056,22 @@ bool simulate(const char* corename) {
   // Debugging support code, to crash domain at specific point
   //
 
-  //Waddr patch_entry = ctx.syscall_rip; // jump to hypercall page for IRET after syscall
+  Waddr patch_entry = 0xffffffff8010b94c;
   //Waddr patch_entry = signext64(contextof(0).idt[EXCEPTION_x86_page_fault].rip, 48);
 
   byte trigger_code[] = {0x0f, 0x0b}; // ud2a
 
   PageFaultErrorCode pfec;
   Waddr faultaddr;
+  W64 oldcr3 = contextof(0).cr3;
+  contextof(0).cr3 = (contextof(0).kernel_ptbase_mfn << 12);
   int n = contextof(0).copy_to_user(patch_entry, &trigger_code, sizeof(trigger_code), pfec, faultaddr);
 
   logfile << "Copied ", n, " bytes to patch entry rip ", (void*)patch_entry, endl, flush;
 
+  contextof(0).cr3 = oldcr3;
+
+  /*
   // Force Xen to directly handle the exception:
   contextof(0).idt[EXCEPTION_x86_page_fault].rip = 0;
   contextof(0).idt[EXCEPTION_x86_page_fault].cs = 0;
@@ -3062,6 +3083,7 @@ bool simulate(const char* corename) {
   contextof(0).idt[EXCEPTION_x86_seg_not_present].cs = 0;
 
   contextof(0).failsafe_callback_rip = 0;
+  */
 #endif
 
   if (config.dumpcode_filename.set()) {

@@ -13,6 +13,8 @@ bool TraceDecoder::decode_sse() {
   DecodedOperand rd;
   DecodedOperand ra;
 
+  is_sse = 1;
+
   switch (op) {
     //
     // SSE Logical

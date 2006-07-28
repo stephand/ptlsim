@@ -233,18 +233,13 @@ const char* exception_names[EXCEPTION_COUNT] = {
   "PageRead",
   "PageWrite",
   "PageExec",
-  "(reserved)",
-  "(reserved)",
-  "(reserved)",
-  "(reserved)",
   "LdStAlias",
   "CheckFailed",
   "SkipBlock",
   "CacheLocked",
   "LFRQFull",
   "Float",
-  "Timer",
-  "External",
+  "FloatNotAvail"
 };
 
 const char* arch_reg_names[TRANSREG_COUNT] = {
@@ -754,7 +749,7 @@ ostream& operator <<(ostream& os, const Context& ctx) {
     }
   }
   os << "  Exception and Event Control:", endl;
-  os << "    exception ", intstring(ctx.exception_type, 2), "  errorcode ", hexstring(ctx.error_code, 32),
+  os << "    exception ", intstring(ctx.x86_exception, 2), "  errorcode ", hexstring(ctx.error_code, 32),
     "  saved_upcall_mask ", hexstring(ctx.saved_upcall_mask, 8), endl;
 #endif
 

@@ -29,7 +29,7 @@ void Context::restorefrom(const vcpu_guest_context& ctx) {
   commitarf[REG_flags] = ctx.user_regs.eflags & (FLAG_ZAPS|FLAG_CF|FLAG_OF);
   internal_eflags = ctx.user_regs.eflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF);
 
-  exception_type = ctx.user_regs.entry_vector;
+  x86_exception = ctx.user_regs.entry_vector;
   error_code = ctx.user_regs.error_code;
 
   kernel_mode = ((ctx.flags & VGCF_IN_KERNEL) != 0);
@@ -126,7 +126,7 @@ void Context::saveto(vcpu_guest_context& ctx) {
     (commitarf[REG_flags] & (FLAG_ZAPS|FLAG_CF|FLAG_OF)) |
     (internal_eflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
 
-  ctx.user_regs.entry_vector = exception_type;
+  ctx.user_regs.entry_vector = x86_exception;
   ctx.user_regs.error_code = error_code;
 
   ctx.flags = 0;
