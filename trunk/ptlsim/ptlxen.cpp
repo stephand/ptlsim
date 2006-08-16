@@ -1,21 +1,9 @@
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// Xen interface inside the user domain
+// Toplevel control and kernel interface to Xen inside the user domain
 //
-// Copyright 2005-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
 //
-
-/*
-
-  Log levels:
-
-  0: minimal (start and stop of simulation runs only)
-  1: hypercalls / syscalls, etc.
-  4: basic blocks and major events
-  5: all instructions
-
-
-*/
 
 #include <globals.h>
 #include <superstl.h>
@@ -23,173 +11,23 @@
 #include <mm.h>
 #include <ptlsim.h>
 
-void early_printk(const char* p);
-
-#ifdef __i386__
-struct pt_regs {
-	long ebx;
-	long ecx;
-	long edx;
-	long esi;
-	long edi;
-	long ebp;
-	long eax;
-	int  xds;
-	int  xes;
-	long orig_eax;
-	long eip;
-	int  xcs;
-	long eflags;
-	long esp;
-	int  xss;
-};
-
-ostream& operator <<(ostream& os, const pt_regs& regs) {
-  os << "  eip ", hexstring(regs.eip, 32), "  flg ", hexstring(regs.eflags, 32), "  oax ", hexstring(regs.orig_eax, 32), endl;
-  os << "  eax ", hexstring(regs.eax, 32), "  ecx ", hexstring(regs.ecx, 32), "  edx ", hexstring(regs.edx, 32), "  ebx ", hexstring(regs.ebx, 32), endl;
-  os << "  esp ", hexstring(regs.esp, 32), "  ebp ", hexstring(regs.ebp, 32), "  esi ", hexstring(regs.esi, 32), "  edi ", hexstring(regs.edi, 32), endl;
-  os << "  cs  ", hexstring(regs.xcs, 16), "  ds  ", hexstring(regs.xds, 16), "  ss  ", hexstring(regs.xss, 16), "  es  ", hexstring(regs.xds, 16), endl;
-  return os;
-}
-#elif __x86_64__
-
-struct pt_regs {
-	unsigned long r15;
-	unsigned long r14;
-	unsigned long r13;
-	unsigned long r12;
-	unsigned long rbp;
-	unsigned long rbx;
-/* arguments: non interrupts/non tracing syscalls only save upto here*/
- 	unsigned long r11;
-	unsigned long r10;	
-	unsigned long r9;
-	unsigned long r8;
-	unsigned long rax;
-	unsigned long rcx;
-	unsigned long rdx;
-	unsigned long rsi;
-	unsigned long rdi;
-	unsigned long orig_rax;
-/* end of arguments */ 	
-/* cpu exception frame or undefined */
-	unsigned long rip;
-	unsigned long cs;
-	unsigned long eflags; 
-	unsigned long rsp; 
-	unsigned long ss;
-/* top of stack page */ 
-};
-
-ostream& operator <<(ostream& os, const pt_regs& regs) {
-  os << "  rip ", hexstring(regs.rip, 64), "  flg ", hexstring(regs.eflags, 64), "  oax ", hexstring(regs.orig_rax, 64), endl;
-  os << "  rax ", hexstring(regs.rax, 64), "  rcx ", hexstring(regs.rcx, 64), "  rdx ", hexstring(regs.rdx, 64), "  rbx ", hexstring(regs.rbx, 64), endl;
-  os << "  rsp ", hexstring(regs.rsp, 64), "  rbp ", hexstring(regs.rbp, 64), "  rsi ", hexstring(regs.rsi, 64), "  rdi ", hexstring(regs.rdi, 64), endl;
-  os << "  r8  ", hexstring(regs.r8,  64), "  r9  ", hexstring(regs.r9,  64), "  r10 ", hexstring(regs.r10, 64), "  r11 ", hexstring(regs.r11, 64), endl;
-  os << "  r12 ", hexstring(regs.r12, 64), "  r13 ", hexstring(regs.r13, 64), "  r14 ", hexstring(regs.r14, 64), "  r15 ", hexstring(regs.r15, 64), endl;
-  os << "  cs  ", hexstring(regs.cs,  16), "  ss  ", hexstring(regs.ss,  16), endl;
-  return os;
-}
-#endif
+//
+// Global variables
+//
+ostream logfile;
+W64 loglevel = 0;
+W64 sim_cycle = 0;
+W64 iterations = 0;
+W64 total_uops_executed = 0;
+W64 total_uops_committed = 0;
+W64 total_user_insns_committed = 0;
+W64 total_basic_blocks_committed = 0;
 
 //
 // Xen hypercalls
 //
-
-#define __STR(x) #x
-#define STR(x) __STR(x)
-
-#define _hypercall0(type, name)			\
-({						\
-	long __res;				\
-	asm volatile (				\
-		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
-		: "=a" (__res)			\
-		:				\
-		: "memory" );			\
-	(type)__res;				\
-})
-
-#define _hypercall1(type, name, a1)				\
-({								\
-	long __res, __ign1;					\
-	asm volatile (						\
-		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
-		: "=a" (__res), "=D" (__ign1)			\
-		: "1" ((long)(a1))				\
-		: "memory" );					\
-	(type)__res;						\
-})
-
-#define _hypercall2(type, name, a1, a2)				\
-({								\
-	long __res, __ign1, __ign2;				\
-	asm volatile (						\
-		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
-		: "=a" (__res), "=D" (__ign1), "=S" (__ign2)	\
-		: "1" ((long)(a1)), "2" ((long)(a2))		\
-		: "memory" );					\
-	(type)__res;						\
-})
-
-#define _hypercall3(type, name, a1, a2, a3)			\
-({								\
-	long __res, __ign1, __ign2, __ign3;			\
-	asm volatile (						\
-		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
-		: "=a" (__res), "=D" (__ign1), "=S" (__ign2), 	\
-		"=d" (__ign3)					\
-		: "1" ((long)(a1)), "2" ((long)(a2)),		\
-		"3" ((long)(a3))				\
-		: "memory" );					\
-	(type)__res;						\
-})
-
-#define _hypercall4(type, name, a1, a2, a3, a4)			\
-({								\
-	long __res, __ign1, __ign2, __ign3;			\
-	asm volatile (						\
-		"movq %7,%%r10; "				\
-		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
-		: "=a" (__res), "=D" (__ign1), "=S" (__ign2),	\
-		"=d" (__ign3)					\
-		: "1" ((long)(a1)), "2" ((long)(a2)),		\
-		"3" ((long)(a3)), "g" ((long)(a4))		\
-		: "memory", "r10" );				\
-	(type)__res;						\
-})
-
-#define _hypercall5(type, name, a1, a2, a3, a4, a5)		\
-({								\
-	long __res, __ign1, __ign2, __ign3;			\
-	asm volatile (						\
-		"movq %7,%%r10; movq %8,%%r8; "			\
-		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
-		: "=a" (__res), "=D" (__ign1), "=S" (__ign2),	\
-		"=d" (__ign3)					\
-		: "1" ((long)(a1)), "2" ((long)(a2)),		\
-		"3" ((long)(a3)), "g" ((long)(a4)),		\
-		"g" ((long)(a5))				\
-		: "memory", "r10", "r8" );			\
-	(type)__res;						\
-})
-
-  //
-  // x86-64 hypercall conventions:
-  //
-  // Hypercall ID in %rax
-  // Return address in %rcx (SYSCALL microcode puts it there)
-  // Args in %rdi %rsi %rdx %r10 %r8 %r9 (identical to Linux syscall interface)
-  // (see arch/x86/domain.c)
-  //
-
-/*
-  Normal x86-64 userspace ABI:
-
-  Callee must preserve: rbx rsp rbp r12 r13 r14 r15
-  Args passed in:       rdi rsi rdx rcx r8 r9        (syscalls replace rcx with r10 since processor overwrites rcx)
-  Available:            rax r10 r11
-*/
+W64 ptlsim_hypercall_histogram[64];
+W64 guest_hypercall_histogram[64];
 
 static inline W64 do_xen_hypercall(W64 hypercall, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5, W64 arg6) {
   W64 rc;
@@ -347,8 +185,9 @@ int xen_shutdown_domain(int reason) {
 	return HYPERVISOR_sched_op(SCHEDOP_shutdown, &reason);
 }
 
-W64 got_upcall = 0;
-
+//
+// Event channels
+//
 #define active_evtchns(cpu,sh,idx) ((sh).evtchn_pending[idx] & ~(sh).evtchn_mask[idx])
 
 void mask_evtchn(int port) {
@@ -371,7 +210,6 @@ void unmask_evtchn(int port) {
   //
 
   if (shinfo_evtchn_pending[port] && (!(shinfo_evtchn_pending_sel(0)[port / (sizeof(unsigned long) * 8)].atomicset()))) {
-    //early_printk("unmask_evtchn: forcing evtchn callback\n");
     vcpu_info.evtchn_upcall_pending = 1;
     if (!vcpu_info.evtchn_upcall_mask) force_evtchn_callback();
   }
@@ -387,54 +225,46 @@ static inline void sti() {
   vcpu_info_t& vcpu = shinfo.vcpu_info[0];
 	vcpu.evtchn_upcall_mask = 0;
 	barrier(); // unmask then check (avoid races)
-	if (vcpu.evtchn_upcall_pending) force_evtchn_callback();
+	if (vcpu.evtchn_upcall_pending) {
+    force_evtchn_callback();
+  }
 }
 
 void clear_evtchn(int port) {
   shinfo_evtchn_pending[port].atomicclear();
 }
 
-inline W32 get_eflags() {
-  W64 eflags;
-  asm volatile("pushfq; popq %[eflags]" : [eflags] "=r" (eflags) : : "memory");
-  return eflags;
-}
-
-inline W64 get_cr3() {
-  W64 cr3;
-  asm volatile("mov %%cr3,%[cr3]" : [cr3] "=r" (cr3));
-  return cr3;
-}
-
 bool shadow_evtchn_set_pending(unsigned int port);
 int shadow_evtchn_unmask(unsigned int port);
 
-void handle_event(int port, struct pt_regs* regs) {
-  //stringbuf sb; sb << "handle_event(port ", port, ")", endl; early_printk(sb);
+W64 events_just_handled = 0;
 
+bitvec<4096> always_mask_port;
+
+void handle_event(int port) {
   // Can't use anything that makes host calls in here!
-  if (port == bootinfo.upcall_port) {
-    // Upcall 
-    //handle_ptlsim_upcall(bootinfo.upcall);
-    //bootinfo.upcall.op = PTLSIM_UPCALL_NOP;
-  } else if (port == bootinfo.hostcall_port) {
+  if likely (port == bootinfo.hostcall_port) {
     // No action: will automatically unblock and return to hostcall caller
+  } else if unlikely (port == bootinfo.upcall_port) {
+    // Upcall: check at next iteration of main loop
   } else {
     // some user port: copy to virtualized shared info page and notify simulation loop
-    // shadow_evtchn_set_pending(port);
+    if (!always_mask_port[port]) {
+      events_just_handled |= (1<<port);
+       if likely (!config.mask_interrupts) shadow_evtchn_set_pending(port);
+    }
   }
 
 	clear_evtchn(port);
 }
 
-extern "C" void xen_event_callback(struct pt_regs* regs) {
+asmlinkage void xen_event_callback(W64* regs) {
   u32                l1, l2;
   unsigned int   l1i, l2i, port;
   int            cpu = 0;
   vcpu_info_t& vcpu_info = shinfo.vcpu_info[cpu];
 
   vcpu_info.evtchn_upcall_pending = 0;
-
   l1 = xchg(vcpu_info.evtchn_pending_sel, 0UL);
 
   while (l1) {
@@ -444,13 +274,84 @@ extern "C" void xen_event_callback(struct pt_regs* regs) {
     while ((l2 = active_evtchns(cpu, shinfo, l1i))) {
       l2i = lsbindex(l2);
       l2 &= ~(1 << l2i);
-      port = (l1i << 5) + l2i; //++MTY on x86-64, shouldn't this be l1i << 6 (i.e. 64-bit per chunk)? apparently not...
-      handle_event(port, regs);
+      port = (l1i * BITS_PER_LONG) + l2i;
+      handle_event(port);
     }
+    shinfo.evtchn_pending[l1i] = 0;
   }
 }
 
-W64s synchronous_host_call(const PTLsimHostCall& call) {
+int virq_and_vcpu_to_port[NR_VIRQS][MAX_VIRT_CPUS];
+W8s port_to_vcpu[NR_EVENT_CHANNELS];
+
+int shadow_evtchn_unmask(unsigned int port) {
+  if (port >= NR_EVENT_CHANNELS) return 0;
+
+  int vcpu_to_notify = port_to_vcpu[port];
+
+  if (port_to_vcpu[port] < 0) {
+    logfile << "unmask_evtchn: port ", port, " is not bound to any VCPU", endl;
+    return 0;
+  }
+
+  // Equivalent to xen/common/event_channel.c evtchn_unmask():
+
+  if (sshinfo_evtchn_mask[port].testclear() &&
+      sshinfo_evtchn_pending[port] &&
+      (!(sshinfo_evtchn_pending_sel(vcpu_to_notify)[port / (sizeof(unsigned long) * 8)].testset()))) {
+    if (!xchg(sshinfo.vcpu_info[vcpu_to_notify].evtchn_upcall_pending, (byte)1)) {
+      if (logable(1)) logfile << "shadow_evtchn_unmask(", port, "): event delivery: making vcpu ", vcpu_to_notify, " runnable", endl;
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+bool shadow_evtchn_set_pending(unsigned int port) {
+  if (port >= 4096) return false;
+  static const bool DEBUG = 0; // cannot be set if called from event upcall interrupt handler
+  int vcpu_to_notify = port_to_vcpu[port];
+
+  if (DEBUG) logfile << "Set pending for port ", port, " mapped to vcpu ", vcpu_to_notify, ":", endl;
+
+  if unlikely (vcpu_to_notify < 0) {
+    if (DEBUG) logfile << "  Not bound to any VCPU", endl;
+    return false;
+  }
+
+  if unlikely (sshinfo_evtchn_pending[port].testset()) {
+    if (DEBUG) logfile << "  Already pending", endl;
+    return false;
+  }
+
+  bool masked = sshinfo_evtchn_mask[port];
+
+  if unlikely (masked) {
+    if (DEBUG) logfile << "  Event masked", endl;
+    return false;
+  }
+
+  if unlikely (sshinfo_evtchn_pending_sel(vcpu_to_notify)[port / (sizeof(unsigned long) * 8)].testset()) {
+    if (DEBUG) logfile << "  Event already pending in evtchn_pending_sel", endl;
+    return false;
+  }
+
+  if (DEBUG) logfile << "  Mark vcpu ", vcpu_to_notify, " events pending", endl;
+
+  if likely (!xchg(sshinfo.vcpu_info[vcpu_to_notify].evtchn_upcall_pending, (byte)1)) {
+    if (DEBUG) logfile << "  Kick vcpu", endl;
+    return true;
+  } else {
+    if (DEBUG) logfile << "  VCPU already kicked", endl;
+    return false;
+  }
+}
+
+//
+// Host calls to PTLmon
+//
+W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false) {
   stringbuf sb;
   int rc;
 
@@ -458,26 +359,25 @@ W64s synchronous_host_call(const PTLsimHostCall& call) {
   memcpy(&bootinfo.hostreq, &call, sizeof(PTLsimHostCall));
   bootinfo.hostreq.ready = 0;
 
+  // This will clear the port if a previous upcall got out of sync:
   unmask_evtchn(bootinfo.hostcall_port);
-
-#if 0
-  early_printk("Doing synchronous_host_call...\n");
-  sb.reset(); sb << "  Req:      ", 
-                "call ", bootinfo.hostreq.syscall.syscallid, ", args ",
-                bootinfo.hostreq.syscall.arg1, " ",
-                bootinfo.hostreq.syscall.arg2, " ",
-                bootinfo.hostreq.syscall.arg3, " ",
-                bootinfo.hostreq.syscall.arg4, " ",
-                bootinfo.hostreq.syscall.arg5, " ",
-                bootinfo.hostreq.syscall.arg6, endl; early_printk(sb);
-#endif
+  shinfo_evtchn_pending[bootinfo.hostcall_port] = 0;
 
   evtchn_send_t sendop;
   sendop.port = bootinfo.hostcall_port;
   rc = HYPERVISOR_event_channel_op(EVTCHNOP_send, &sendop);
 
+  //
+  // We need to block here since we need an event to clear the hostcall
+  // pending bit. However, for switching to native mode, we should NOT
+  // block, since if we race with pause() in PTLmon and lose, the domain
+  // will be in the Xen "blocked" state when setvcpucontext is called
+  // by PTLmon, but setvcpucontext does not save/restore the blocked
+  // state. Hence the target VCPU will remain blocked forever. To avoid
+  // this, we specify spin = true for these calls.
+  //
   while (!bootinfo.hostreq.ready) {
-    xen_sched_block();
+    if (!spin) xen_sched_block();
   }
 
   assert(bootinfo.hostreq.ready);
@@ -487,55 +387,44 @@ W64s synchronous_host_call(const PTLsimHostCall& call) {
 
 //
 // Switch PTLsim to native mode by swapping in context <ctx>,
-// and saving the current PTLsim within ptlmon.
+// and saving the current PTLsim context back to <ctx>.
 //
 // When this call returns (i.e. we switch back to simulation mode),
 // <ctx> is filled with the new user context we interrupted, and
 // the PTLsim register state is restored, allowing us to return
 // exactly where we left off.
 //
-// NOTE: If there are multiple VCPUs in this VM, ctx is actually
-// an *array* of contexts, one per VCPU.
-//
-int switch_to_native(Context* ctx, bool pause = false) {
+int switch_to_native(bool pause = false) {
   Context ptlctx[32];
   int rc;
 
   PTLsimHostCall call;
   call.op = PTLSIM_HOST_SWITCH_TO_NATIVE;
   call.ready = 0;
-  call.switch_to_native.guestctx = ctx;
-  call.switch_to_native.ptlctx = ptlctx;
   call.switch_to_native.pause = pause;
 
-  rc = synchronous_host_call(call);
+  // Linux kernels expect this to be re-enabled:
+	HYPERVISOR_vm_assist(VMASST_CMD_enable, VMASST_TYPE_writable_pagetables);
+
+  rc = synchronous_host_call(call, true);
   return rc;
 }
 
-int shutdown(Context* ctx, bool pause = false) {
+int shutdown(bool pause = false) {
   Context ptlctx[32];
   int rc;
 
   PTLsimHostCall call;
   call.op = PTLSIM_HOST_TERMINATE;
   call.ready = 0;
-  call.terminate.guestctx = ctx;
-  call.terminate.ptlctx = ptlctx;
   call.terminate.pause = pause;
 
-  rc = synchronous_host_call(call);
+  // Linux kernels expect this to be re-enabled:
+	HYPERVISOR_vm_assist(VMASST_CMD_enable, VMASST_TYPE_writable_pagetables);
+
+  rc = synchronous_host_call(call, true);
   // (never returns)
   return rc;
-}
-
-int query_pages(PageFrameType* pft, int count) {
-  PTLsimHostCall call;
-  call.op = PTLSIM_HOST_QUERY_PAGES;
-  call.ready = 0;
-  call.querypages.pft = pft;
-  call.querypages.count = count;
-
-  return synchronous_host_call(call);
 }
 
 //
@@ -546,11 +435,13 @@ W64 accept_upcall(char* buf, size_t count, bool blocking = 1) {
 
   call.op = PTLSIM_HOST_ACCEPT_UPCALL;
   call.ready = 0;
-  call.accept_upcall.buf = buf;
-  call.accept_upcall.count = count;
+  call.accept_upcall.buf = xferpage;
+  call.accept_upcall.count = min(count, PAGE_SIZE);
   call.accept_upcall.blocking = blocking;
 
-  return synchronous_host_call(call);
+  int rc = synchronous_host_call(call);
+  if (rc) memcpy(buf, xferpage, min(count, PAGE_SIZE));
+  return rc;
 }
 
 W64 accept_upcall_nonblocking(char* buf, size_t count) {
@@ -568,6 +459,9 @@ int complete_upcall(W64 uuid) {
   return synchronous_host_call(call);
 }
 
+//
+// Linux-like system calls passed back to dom0 via upcall mechanism
+//
 #undef declare_syscall0
 #undef declare_syscall1
 #undef declare_syscall2
@@ -599,60 +493,110 @@ int complete_upcall(W64 uuid) {
   type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
   return (type)synchronous_host_call(PTLsimHostCall(sysid, (W64)arg1, (W64)arg2, (W64)arg3, (W64)arg4, (W64)arg5, (W64)arg6)); }
 
-#ifdef __x86_64__
-
 declare_syscall3(__NR_lseek, W64, sys_seek, int, fd, W64, offset, unsigned int, origin);
 
-#else
-
-declare_syscall5(__NR__llseek, int, sys_llseek, unsigned int, fd, unsigned long, hi, unsigned long, lo, loff_t*, res, unsigned int, whence);
-
-W64 sys_seek(int fd, W64 offset, unsigned int origin) {
-  loff_t newoffs;
-  int rc = sys_llseek(fd, HI32(offset), LO32(offset), &newoffs, origin);
-  return (rc < 0) ? rc : newoffs;
+declare_syscall3(__NR_open, int, sys_open_thunk, const char*, pathname, int, flags, int, mode);
+asmlinkage int sys_open(const char* pathname, int flags, int mode) {
+  strncpy(xferpage, pathname, PAGE_SIZE);
+  return sys_open_thunk(xferpage, flags, mode);
 }
 
-#endif
-
-declare_syscall3(__NR_open, int, sys_open, const char*, pathname, int, flags, int, mode);
 declare_syscall1(__NR_close, int, sys_close, int, fd);
-declare_syscall3(__NR_read, ssize_t, sys_read, int, fd, void*, buf, size_t, count);
-declare_syscall3(__NR_write, ssize_t, sys_write, int, fd, const void*, buf, size_t, count);
-declare_syscall1(__NR_unlink, int, sys_unlink, const char*, pathname);
-declare_syscall2(__NR_rename, int, sys_rename, const char*, oldpath, const char*, newpath);
 
-declare_syscall1(__NR_exit, void, sys_exit, int, code);
-declare_syscall1(__NR_brk, void*, sys_brk, void*, p);
-declare_syscall0(__NR_fork, pid_t, sys_fork);
-declare_syscall3(__NR_execve, int, sys_execve, const char*, filename, const char**, argv, const char**, envp);
+declare_syscall3(__NR_read, ssize_t, sys_read_thunk, int, fd, void*, buf, size_t, count);
+asmlinkage ssize_t sys_read(int fd, void* buf, size_t count) {
+  char* p = (char*)buf;
+  size_t realcount = 0;
+  int rc;
+
+  while (count) {
+    rc = sys_read_thunk(fd, xferpage, min(count, PAGE_SIZE));
+    if (rc < 0) return rc;
+    memcpy(p, xferpage, rc);
+    count -= rc;
+    realcount += rc;
+    p += rc;
+    if (rc < PAGE_SIZE) break;
+  }
+
+  return realcount;
+}
+
+declare_syscall3(__NR_write, ssize_t, sys_write_thunk, int, fd, const void*, buf, size_t, count);
+
+asmlinkage ssize_t sys_write(int fd, const void* buf, size_t count) {
+  char* p = (char*)buf;
+  size_t realcount = 0;
+  int rc;
+
+  while (count) {
+    memcpy(xferpage, p, min(count, PAGE_SIZE));
+    rc = sys_write_thunk(fd, xferpage, min(count, PAGE_SIZE));
+    if (rc < 0) return rc;
+    count -= rc;
+    realcount += rc;
+    p += rc;
+    if (rc < PAGE_SIZE) break;
+  }
+
+  return realcount;
+}
+
+declare_syscall1(__NR_unlink, int, sys_unlink_thunk, const char*, pathname);
+asmlinkage int sys_unlink(const char* pathname) {
+  strncpy(xferpage, pathname, PAGE_SIZE);
+  return sys_unlink_thunk(xferpage);
+}
+
+declare_syscall2(__NR_rename, int, sys_rename_thunk, const char*, oldpath, const char*, newpath);
+asmlinkage int sys_rename(const char* oldpath, const char* newpath) {
+  strncpy(xferpage + 0, oldpath, 2048);
+  strncpy(xferpage + 2048, newpath, 2048);
+  return sys_rename_thunk(xferpage + 0, xferpage + 2048);
+}
 
 declare_syscall0(__NR_getpid, pid_t, sys_getpid);
 declare_syscall0(__NR_gettid, pid_t, sys_gettid);
-declare_syscall1(__NR_uname, int, sys_uname, struct utsname*, buf);
-declare_syscall3(__NR_readlink, int, sys_readlink, const char*, path, char*, buf, size_t, bufsiz);
 
-declare_syscall4(__NR_rt_sigaction, long, sys_rt_sigaction, int, sig, const struct sigaction*, act, struct sigaction*, oldact, size_t, sigsetsize);
+declare_syscall1(__NR_uname, int, sys_uname_thunk, struct utsname*, buf);
+asmlinkage int sys_uname(struct utsname* buf) {
+  utsname* unamebuf = (utsname*)xferpage;
+  int rc = sys_uname_thunk(unamebuf);
+  if ((!rc) && buf) memcpy(buf, unamebuf, sizeof(utsname));
+  return rc;
+}
 
-declare_syscall4(__NR_wait4, pid_t, sys_wait4, pid_t, pid, int*, status, int, options, struct rusage*, rusage);
-
-declare_syscall2(__NR_getrlimit, int, sys_getrlimit, int, resource, struct rlimit*, rlim);
+declare_syscall3(__NR_readlink, int, sys_readlink_thunk, const char*, path, char*, buf, size_t, bufsiz);
+asmlinkage int sys_readlink(const char *path, char *buf, size_t bufsiz) {
+  strncpy(xferpage + 0, path, 2048);
+  int rc = sys_readlink_thunk(xferpage + 0, xferpage + 2048, min(bufsiz, (size_t)2048));
+  if (rc >= 0) memcpy(buf, xferpage + 2048, rc);
+  return rc;
+}
 
 declare_syscall2(__NR_nanosleep, int, do_nanosleep, const timespec*, req, timespec*, rem);
 
-declare_syscall2(__NR_gettimeofday, int, sys_gettimeofday, struct timeval*, tv, struct timezone*, tz);
-declare_syscall1(__NR_time, time_t, sys_time, time_t*, t);
+asmlinkage int sys_gettimeofday(struct timeval* tv, struct timezone* tz) {
+  tv->tv_sec = shinfo.wc_sec;
+  tv->tv_usec = shinfo.wc_nsec / 1000;
+  return 0;
+}
+
+asmlinkage time_t sys_time(time_t* t) {
+  W64 sec = shinfo.wc_sec;
+  if (t) *t = sec;
+  return sec;
+}
 
 W64 sys_nanosleep(W64 nsec) {
-  timespec req;
-  timespec rem;
+  timespec* reqrem = (timespec*)xferpage;
 
-  req.tv_sec = (W64)nsec / 1000000000ULL;
-  req.tv_nsec = (W64)nsec % 1000000000ULL;
+  reqrem->tv_sec = (W64)nsec / 1000000000ULL;
+  reqrem->tv_nsec = (W64)nsec % 1000000000ULL;
 
-  do_nanosleep(&req, &rem);
+  do_nanosleep(reqrem, reqrem+1);
 
-  return ((W64)rem.tv_sec * 1000000000ULL) + (W64)rem.tv_nsec;
+  return ((W64)reqrem[1].tv_sec * 1000000000ULL) + (W64)reqrem[1].tv_nsec;
 }
 
 void* sys_mmap(void* start, size_t length, int prot, int flags, int fd, W64 offset) {
@@ -660,66 +604,357 @@ void* sys_mmap(void* start, size_t length, int prot, int flags, int fd, W64 offs
   return (void*)(Waddr)0xffffffffffffffffULL;
 }
 
-ostream logfile;
-W64 loglevel = 0;
-W64 sim_cycle = 0;
-W64 user_insn_commits = 0;
-W64 iterations = 0;
-W64 total_uops_executed = 0;
-W64 total_uops_committed = 0;
-W64 total_user_insns_committed = 0;
-W64 total_basic_blocks_committed = 0;
-//char* dumpcode_filename = null;
-
 // This is where we end up after issuing opcode 0x0f37 (undocumented x86 PTL call opcode)
 void assist_ptlcall(Context& ctx) {
-  //ctx.commitarf[REG_rax] = handle_ptlcall(ctx.commitarf[REG_sr1], ctx.commitarf[REG_rdi], ctx.commitarf[REG_rsi], ctx.commitarf[REG_rdx], ctx.commitarf[REG_rcx], ctx.commitarf[REG_r8], ctx.commitarf[REG_r9]);
+  //++MTY TODO
 }
 
 void initiate_prefetch(W64 addr, int cachelevel) {
   // (dummy for now)
 }
 
-extern "C" void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
+asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
   sb << "ptlxen: Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ")", endl;
 
+  logfile << sb, flush;
   cerr << sb, flush;
-  asm("int3");
+  asm("ud2a");
   abort();
 }
 
-void early_printk(const char* p) {
-  if (!bootinfo.startup_log_buffer_size) return;
-  int count = min((int)strlen(p), bootinfo.startup_log_buffer_size);
+//
+// Page table management
+//
+mmu_update_t mmuqueue[1024];
+int mmuqueue_count = 0;
 
-  foreach (i, count) {
-    bootinfo.startup_log_buffer[bootinfo.startup_log_buffer_tail] = p[i];
-    bootinfo.startup_log_buffer_tail = (bootinfo.startup_log_buffer_tail + 1) & (bootinfo.startup_log_buffer_size - 1);
+int do_commit_page_table_updates() {
+  static const bool DEBUG = 0;
+
+  if (DEBUG) logfile << "Page table update commit of ", mmuqueue_count, " entries:", endl, flush;
+
+  foreach (i, mmuqueue_count) {
+    mmu_update_t& mmu = mmuqueue[i];
+    W64 virt = mmu.ptr;
+
+    if likely (virt_is_inside_ptlsim(mmu.ptr)) {
+      mmu.ptr = ptl_virt_to_phys((void*)mmu.ptr);
+    } else if likely (virt_is_inside_physmap(mmu.ptr)) {
+      mmu.ptr = mapped_virt_to_phys((void*)mmu.ptr);
+    } else {
+      // invalid update
+      mmu.ptr = 0;
+    }
+
+    if (DEBUG) logfile << "  virt 0x", hexstring(virt, 64), ", phys 0x", hexstring(mmu.ptr, 64), " (mfn ", intstring(mmu.ptr >> 12, 8), 
+                 " offset ", intstring(lowbits(mmu.ptr, 12) / 8, 8), ") <= ", Level1PTE(mmu.val), endl, flush;
   }
+
+  int update_count = 0;
+  int rc = HYPERVISOR_mmu_update(mmuqueue, mmuqueue_count, &update_count, DOMID_SELF);
+
+  if (rc) {
+    logfile << "Page table update commit failed for ", mmuqueue_count, " entries (completed ", update_count, " entries):", endl, flush;
+    foreach (i, mmuqueue_count) {
+      logfile << "  phys 0x", hexstring(mmuqueue[i].ptr, 64), " (mfn ", intstring(mmuqueue[i].ptr >> 12, 8), 
+        " offset ", intstring(lowbits(mmuqueue[i].ptr, 12) / 8, 8), ") <= ", Level1PTE(mmuqueue[i].val), endl, flush;
+    }
+  }
+
+  mmuqueue_count = 0;
+
+  return rc;
 }
 
-extern "C" void xen_event_callback_entry();
-
-// Just big enough to have more than one word; rely on having no bounds checks:
-typedef bitvec<65> infinite_bitvec_t;
-
-infinite_bitvec_t* ptlsim_mfn_bitmap = null;
-
-// Update a PTE entry within PTLsim:
+// Update a PTE by its physical address
 template <typename T>
-int update_ptl_pte(T& dest, const T& src) {
+int update_phys_pte(Waddr dest, const T& src) {
 	mmu_update_t u;
-	u.ptr = (W64)ptl_virt_to_phys(&dest);
+	u.ptr = dest;
 	u.val = (W64)src;
   return HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
 }
 
-void smc_setdirty_internal(Level1PTE& pte, bool dirty) {
-  Level1PTE newpte = pte;
-  newpte.d = dirty;
-  update_ptl_pte(pte, newpte);
+int pin_page_table_page(void* virt, int level) {
+  return 0;
+  assert(inrange(level, 0, 4));
+
+  // Was it in PTLsim space?
+  mfn_t mfn = ptl_virt_to_mfn(virt);
+  if unlikely (mfn == INVALID_MFN) return -1;
+  
+  int level_to_function[5] = {MMUEXT_UNPIN_TABLE, MMUEXT_PIN_L1_TABLE, MMUEXT_PIN_L2_TABLE, MMUEXT_PIN_L3_TABLE, MMUEXT_PIN_L4_TABLE};
+  int func = level_to_function[level];
+  
+  int rc = 0;
+  mmuext_op op;
+  op.cmd = func;
+  op.arg1.mfn = mfn;
+
+  int success_count = 0;
+  return HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF);
 }
+
+int make_ptl_page_writable(void* virt, bool writable) {
+  pfn_t pfn = ptl_virt_to_pfn(virt);
+  if unlikely (pfn == INVALID_MFN) return -1;
+
+  Level1PTE& pte = bootinfo.ptl_pagedir[pfn];
+  Level1PTE temppte = pte;
+  temppte.rw = writable;
+  return update_ptl_pte(pte, temppte);
+}
+
+void unmap_phys_page(mfn_t mfn) {
+  Level1PTE& pte = bootinfo.phys_pagedir[mfn];
+  if unlikely (!pte.p) return;
+  assert(update_ptl_pte(pte, Level1PTE(0)) == 0);
+}
+
+int query_pages(page_type_t* pt, int count) {
+  mmuext_op op;
+  op.cmd = MMUEXT_QUERY_PAGES;
+  op.arg1.linear_addr = (Waddr)pt;
+  op.arg2.nr_ents = count;
+
+  int success_count = 0;
+  return HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF);
+}
+
+void unmap_phys_page(mfn_t mfn);
+
+page_type_t query_page(mfn_t mfn) {
+  unmap_phys_page(mfn);
+
+  page_type_t pt;
+  pt.in.mfn = mfn;
+
+  mmuext_op op;
+  op.cmd = MMUEXT_QUERY_PAGES;
+  op.arg1.linear_addr = (Waddr)&pt;
+  op.arg2.nr_ents = 1;
+
+  int success_count = 0;
+  assert(HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF) == 0);
+
+  return pt;
+}
+
+void query_page_and_print_type_info(mfn_t mfn) {
+  logfile << "mfn ", mfn, ": ", query_page(mfn), endl;
+}
+
+//
+// Trap and Exception Handling
+//
+asmlinkage {
+  void divide_error();
+  void debug();
+  void int3();
+  void overflow();
+  void bounds();
+  void invalid_op();
+  void device_not_available();
+  void coprocessor_segment_overrun();
+  void invalid_tss();
+  void segment_not_present();
+  void stack_segment();
+  void general_protection();
+  void page_fault();
+  void coprocessor_error();
+  void simd_coprocessor_error();
+  void alignment_check();
+  void spurious_interrupt_bug();
+  void machine_check();
+};
+
+void print_regs(ostream& os, const W64* regs) {
+  foreach (i, ARCHREG_COUNT) {
+    os << "  ", padstring(arch_reg_names[i], -6), " 0x", hexstring(regs[i], 64);
+    if ((i % 4) == (4-1)) os << endl;
+  }
+}
+
+void print_stack(ostream& os, Waddr sp) {
+  W64* p = (W64*)sp;
+
+  os << "Stack trace back from ", (void*)sp, ":", endl, flush;
+  foreach (i, 64) {
+    if ((i % 8) == 0) os << "  ", &p[i], ":";
+    os << " ", hexstring(p[i], 64);
+    if ((i % 8) == 7) os << endl;
+  }
+  os << flush;
+}
+
+asmlinkage void ptl_internal_trap(int trapid, const char* name, W64* regs) {
+  cerr << endl;
+  cerr << "PTLsim Internal Error: unhandled trap ", trapid, " (", name, "): error code ", hexstring(regs[REG_ar1], 32), endl;
+  cerr << "Registers:", endl;
+  print_regs(cerr, regs);
+  cerr << flush;
+  print_stack(cerr, regs[REG_rsp]);
+  if (logfile) logfile.flush();
+  cerr.flush();
+  cout.flush();
+
+  xen_shutdown_domain(SHUTDOWN_crash);
+}
+
+#define DO_ERROR(trapid, str, name) asmlinkage void do_##name(W64* regs) { ptl_internal_trap(trapid, str, regs); }
+
+//
+// These exceptions are not handled by PTLsim. If they occur
+// during simulation mode, something is seriously wrong.
+//
+DO_ERROR(0, "divide error", divide_error);
+DO_ERROR(3, "int3", int3);
+DO_ERROR(4, "overflow", overflow);
+DO_ERROR(5, "bounds", bounds);
+DO_ERROR(6, "invalid opcode", invalid_op);
+DO_ERROR(7, "device not available", device_not_available);
+DO_ERROR(11, "segment not present", segment_not_present);
+DO_ERROR(12, "stack segment", stack_segment);
+DO_ERROR(13, "general protection", general_protection);
+asmlinkage void do_page_fault(W64* regs);
+DO_ERROR(16, "fpu", coprocessor_error);
+DO_ERROR(19, "sse", simd_coprocessor_error);
+
+asmlinkage void xen_event_callback_entry();
+asmlinkage void divide_error_entry();
+asmlinkage void int3_entry();
+asmlinkage void overflow_entry();
+asmlinkage void bounds_entry();
+asmlinkage void invalid_op_entry();
+asmlinkage void device_not_available_entry();
+asmlinkage void segment_not_present_entry();
+asmlinkage void stack_segment_entry();
+asmlinkage void general_protection_entry();
+asmlinkage void page_fault_entry();
+asmlinkage void coprocessor_error_entry();
+asmlinkage void simd_coprocessor_error_entry();
+
+static trap_info_t trap_table[] = {
+  {  0, 0, FLAT_KERNEL_CS, (Waddr)&divide_error_entry          },
+  {  3, 0, FLAT_KERNEL_CS, (Waddr)&int3_entry                  },
+  {  4, 0, FLAT_KERNEL_CS, (Waddr)&overflow_entry              },
+  {  5, 0, FLAT_KERNEL_CS, (Waddr)&bounds_entry                },
+  {  6, 0, FLAT_KERNEL_CS, (Waddr)&invalid_op_entry            },
+  {  7, 0, FLAT_KERNEL_CS, (Waddr)&device_not_available_entry  },
+  { 11, 0, FLAT_KERNEL_CS, (Waddr)&segment_not_present_entry   },
+  { 12, 0, FLAT_KERNEL_CS, (Waddr)&stack_segment_entry         },
+  { 13, 0, FLAT_KERNEL_CS, (Waddr)&general_protection_entry    },
+  { 14, 0, FLAT_KERNEL_CS, (Waddr)&page_fault_entry            },
+  { 16, 0, FLAT_KERNEL_CS, (Waddr)&coprocessor_error_entry     },
+  { 19, 0, FLAT_KERNEL_CS, (Waddr)&simd_coprocessor_error_entry},
+  {  0, 0, 0,              0                                   }
+};
+
+//
+// Xen puts the virtualized page fault virtual address in arch.cr2
+// instead of the machine's CR2 register.
+//
+static inline Waddr read_cr2() { return shinfo.vcpu_info[0].arch.cr2; }
+
+static int page_fault_in_progress = 0;
+
+ostream& operator <<(ostream& os, const page_type_t& pagetype) {
+  static const char* page_type_names[] = {"none", "L1", "L2", "L3", "L4", "GDT", "LDT", "write"};
+  const char* page_type_name = 
+    (pagetype.out.type == PAGE_TYPE_INVALID_MFN) ? "inv" :
+    (pagetype.out.type == PAGE_TYPE_INACCESSIBLE) ? "inacc" :
+    (pagetype.out.type < lengthof(page_type_names)) ? page_type_names[pagetype.out.type] :
+    "???";
+  
+  os << padstring(page_type_name, -5), " ", (pagetype.out.pinned ? "pin" : "   "), " ",
+    intstring(pagetype.out.total_count, 5), " total, ", intstring(pagetype.out.type_count, 5), " by type";
+  return os;
+}
+
+bool force_readonly_physmap = 0;
+
+//
+// This is required before switching back to native mode, since we may have
+// read/write maps of pages that the guest kernel thinks are read-only
+// everywhere; this will cause later pin operations to fail.
+//
+// We scan the physmap L2 page table, looking for L1 pages that were filled
+// in on demand by PTLsim's page fault handler. If the present bit was set,
+// we first clear the L2 PTE's present bit, then unpin the L1 page.
+//
+void unmap_address_space() {
+  Waddr physmap_level1_pages = ceil(bootinfo.total_machine_pages, PTES_PER_PAGE) / PTES_PER_PAGE;
+
+  int n = 0;
+
+  if (logable(1)) logfile << "unmap_address_space: check ", physmap_level1_pages, " PTEs:", endl, flush;
+
+  foreach (i, physmap_level1_pages) {
+    Level2PTE& l2pte = bootinfo.phys_level2_pagedir[i];
+    if unlikely (l2pte.p) {
+      l2pte <= l2pte.P(0);
+      if (logable(1)) logfile << "  update ", intstring(n, 6), ": pte ", intstring(i, 6), " <= not present", endl;
+      n++;
+    }
+  }
+
+  commit_page_table_updates();
+}
+
+//
+// Debugging helper function to track down stray refs to a page
+//
+void find_all_mappings_of_mfn(mfn_t mfn) {
+  // Start with an empty mapping
+  unmap_address_space();
+
+  int pagetype_bytes_allocated = bootinfo.total_machine_pages * sizeof(page_type_t);
+  page_type_t* pagetypes = (page_type_t*)ptl_alloc_private_pages(pagetype_bytes_allocated);
+  assert(pagetypes);
+
+  foreach (i, bootinfo.total_machine_pages) {
+    pagetypes[i].in.mfn = i;
+  }
+
+  logfile << "Finding all mappings of mfn ", mfn, ":", endl, flush;
+  int rc = query_pages(pagetypes, bootinfo.total_machine_pages);
+  logfile << "rc = ", rc, endl, flush;
+
+  force_readonly_physmap = 1;
+
+  //
+  // Nothing so far - where's the refcount from?
+  // Print out the page table page we're trying to pin,
+  // and see if there's a problem there.
+  //
+  // Since it's an L4 pin attempt, maybe something
+  // else other than a page table is pointing to it?
+  //
+
+  foreach (i, bootinfo.total_machine_pages) {
+    const page_type_t& pt = pagetypes[i];
+
+    if (pt.out.type == PAGE_TYPE_INACCESSIBLE) continue;
+
+    if (inrange(pt.out.type, (byte)PAGE_TYPE_L1, (byte)PAGE_TYPE_L4)) {
+      const Level1PTE* pte = (const Level1PTE*)phys_to_mapped_virt(i << 12);
+      foreach (j, PTES_PER_PAGE) {
+        if (pte->mfn == mfn) {
+          logfile << "  Page table page mfn ", intstring(i, 6), " index ", intstring(j, 3), " references target mfn ", intstring(mfn, 6), ": ", *pte, endl;
+        }
+        pte++;
+      }
+    }
+  }
+
+  ptl_free_private_pages(pagetypes, pagetype_bytes_allocated);
+
+  force_readonly_physmap = 0;
+  unmap_address_space();
+}
+
+
 
 //
 // Walk the page table tree, accumulating the relevant permissions
@@ -738,15 +973,11 @@ void smc_setdirty_internal(Level1PTE& pte, bool dirty) {
 Waddr xen_m2p_map_end;
 
 Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
-  static const bool DEBUG = 0;
-
   VirtAddr virt(rawvirt);
 
   bool acc_bit_up_to_date = 0;
 
-  if (DEBUG) logfile << "page_table_walk: rawvirt ", (void*)rawvirt, ", toplevel ", (void*)toplevel_mfn, endl, flush;
-
-  if (unlikely((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end))) {
+  if unlikely ((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end)) {
     //
     // The access is inside Xen's address space. Xen will not let us even access the
     // page table entries it injects into every top-level page table page, and we
@@ -761,10 +992,8 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
     const Waddr hypervisor_space_mask = (HYPERVISOR_VIRT_END - HYPERVISOR_VIRT_START)-1;
     Waddr pseudo_phys = (HYPERVISOR_VIRT_START - PHYS_VIRT_BASE) + (rawvirt & hypervisor_space_mask);
 
-    if (DEBUG) logfile << "page_table_walk: special case (inside M2P map): pseudo_phys ", (void*)pseudo_phys, endl, flush;
-
     Level1PTE pte = 0;
-    pte.phys = pseudo_phys >> 12;
+    pte.mfn = pseudo_phys >> 12;
     pte.p = 1;
     pte.rw = 0;
     pte.us = 1;
@@ -774,27 +1003,24 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
     return pte;
   }
 
-  Level4PTE& level4 = ((Level4PTE*)(PHYS_VIRT_BASE + (toplevel_mfn << 12)))[virt.lm.level4];
-  if (DEBUG) logfile << "  level4 @ ", &level4, " (mfn ", ((((Waddr)&level4) & 0xffffffff) >> 12), ", entry ", virt.lm.level4, ")", endl, flush;
+  Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
   Level1PTE final = (W64)level4;
 
-  if (unlikely(!level4.p)) return final;
+  if unlikely (!level4.p) return final;
   acc_bit_up_to_date = level4.a;
 
-  Level3PTE& level3 = ((Level3PTE*)(PHYS_VIRT_BASE + (level4.next << 12)))[virt.lm.level3];
-  if (DEBUG) logfile << "  level3 @ ", &level3, " (mfn ", ((((Waddr)&level3) & 0xffffffff) >> 12), ", entry ", virt.lm.level3, ")", endl, flush;
+  Level3PTE& level3 = ((Level3PTE*)phys_to_mapped_virt(level4.mfn << 12))[virt.lm.level3];
   final.accum(level3);
-  if (unlikely(!level3.p)) return final;
+  if unlikely (!level3.p) return final;
   acc_bit_up_to_date &= level3.a;
 
-  Level2PTE& level2 = ((Level2PTE*)(PHYS_VIRT_BASE + (level3.next << 12)))[virt.lm.level2];
-  if (DEBUG) logfile << "  level2 @ ", &level2, " (mfn ", ((((Waddr)&level2) & 0xffffffff) >> 12), ", entry ", virt.lm.level2, ")", endl, flush;
+  Level2PTE& level2 = ((Level2PTE*)phys_to_mapped_virt(level3.mfn << 12))[virt.lm.level2];
   final.accum(level2);
   if (unlikely(!level2.p)) return final;
   acc_bit_up_to_date &= level2.a;
 
-  if (unlikely(level2.psz)) {
-    final.phys = level2.next;
+  if unlikely (level2.psz) {
+    final.mfn = level2.mfn;
     final.pwt = level2.pwt;
     final.pcd = level2.pcd;
     acc_bit_up_to_date &= level2.a;
@@ -805,13 +1031,12 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
     return final;
   }
 
-  Level1PTE& level1 = ((Level1PTE*)(PHYS_VIRT_BASE + (level2.next << 12)))[virt.lm.level1];
-  if (DEBUG) logfile << "  level1 @ ", &level1, " (mfn ", ((((Waddr)&level1) & 0xffffffff) >> 12), ", entry ", virt.lm.level1, ")", endl, flush;
+  Level1PTE& level1 = ((Level1PTE*)phys_to_mapped_virt(level2.mfn << 12))[virt.lm.level1];
   final.accum(level1);
-  if (unlikely(!level1.p)) return final;
+  if unlikely (!level1.p) return final;
   acc_bit_up_to_date &= level1.a;
 
-  final.phys = level1.phys;
+  final.mfn = level1.mfn;
   final.g = level1.g;
   final.pat = level1.pat;
   final.pwt = level1.pwt;
@@ -819,13 +1044,105 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
   final.a = acc_bit_up_to_date;
   final.d = level1.d;
 
-  if (final.phys == bootinfo.shared_info_mfn) {
-    final.phys = (Waddr)ptl_virt_to_phys(bootinfo.shadow_shinfo) >> 12;
-    if (DEBUG) logfile << "  Remap shinfo access from real mfn ", bootinfo.shared_info_mfn,
-                 " to PTLsim virtual shinfo page mfn ", final.phys, " (virt ", bootinfo.shadow_shinfo, ")", endl, flush;
+  if unlikely (final.mfn == bootinfo.shared_info_mfn) {
+    final.mfn = (Waddr)ptl_virt_to_phys(&sshinfo) >> 12;
   }
 
-  if (DEBUG) logfile << "  Final PTE for virt ", (void*)(Waddr)rawvirt, ": ", final, endl, flush;
+  return final;
+}
+
+//
+// Page table walk with debugging info:
+//
+Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG) {
+  ostream& os = logfile;
+
+  VirtAddr virt(rawvirt);
+
+  bool acc_bit_up_to_date = 0;
+
+  if (DEBUG) os << "page_table_walk: rawvirt ", (void*)rawvirt, ", toplevel ", (void*)toplevel_mfn, endl, flush;
+
+  if unlikely ((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end)) {
+    //
+    // The access is inside Xen's address space. Xen will not let us even access the
+    // page table entries it injects into every top-level page table page, and we
+    // cannot map M2P pages like we do other physical pages. Because Xen does not
+    // allow its internal page tables to be mapped by guests at all, we have to
+    // special-case these virtual addresses.
+    //
+    // We cheat by biasing the returned physical address such that we have
+    // (HYPERVISOR_VIRT_START - PHYS_VIRT_BASE) + PHYS_VIRT_BASE == HYPERVISOR_VIRT_START
+    // when other parts of PTLsim use ptl_phys_to_virt to access the memory.
+    //
+    const Waddr hypervisor_space_mask = (HYPERVISOR_VIRT_END - HYPERVISOR_VIRT_START)-1;
+    Waddr pseudo_phys = (HYPERVISOR_VIRT_START - PHYS_VIRT_BASE) + (rawvirt & hypervisor_space_mask);
+
+    if (DEBUG) os << "page_table_walk: special case (inside M2P map): pseudo_phys ", (void*)pseudo_phys, endl, flush;
+
+    Level1PTE pte = 0;
+    pte.mfn = pseudo_phys >> 12;
+    pte.p = 1;
+    pte.rw = 0;
+    pte.us = 1;
+    pte.a = 1; // don't try to update accessed bits again
+    pte.d = 0;
+
+    return pte;
+  }
+
+  Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
+  if (DEBUG) os << "  level4 @ ", &level4, " (mfn ", ((((Waddr)&level4) & 0xffffffff) >> 12), ", entry ", virt.lm.level4, ")", endl, flush;
+  Level1PTE final = (W64)level4;
+
+  if unlikely (!level4.p) return final;
+  acc_bit_up_to_date = level4.a;
+
+  Level3PTE& level3 = ((Level3PTE*)phys_to_mapped_virt(level4.mfn << 12))[virt.lm.level3];
+  if (DEBUG) os << "  level3 @ ", &level3, " (mfn ", ((((Waddr)&level3) & 0xffffffff) >> 12), ", entry ", virt.lm.level3, ")", endl, flush;
+  final.accum(level3);
+  if unlikely (!level3.p) return final;
+  acc_bit_up_to_date &= level3.a;
+
+  Level2PTE& level2 = ((Level2PTE*)phys_to_mapped_virt(level3.mfn << 12))[virt.lm.level2];
+  if (DEBUG) os << "  level2 @ ", &level2, " (mfn ", ((((Waddr)&level2) & 0xffffffff) >> 12), ", entry ", virt.lm.level2, ")", endl, flush;
+  final.accum(level2);
+  if unlikely (!level2.p) return final;
+  acc_bit_up_to_date &= level2.a;
+
+  if unlikely (level2.psz) {
+    final.mfn = level2.mfn;
+    final.pwt = level2.pwt;
+    final.pcd = level2.pcd;
+    acc_bit_up_to_date &= level2.a;
+
+    final.a = acc_bit_up_to_date;
+    final.d = level2.d;
+
+    return final;
+  }
+
+  Level1PTE& level1 = ((Level1PTE*)phys_to_mapped_virt(level2.mfn << 12))[virt.lm.level1];
+  if (DEBUG) os << "  level1 @ ", &level1, " (mfn ", ((((Waddr)&level1) & 0xffffffff) >> 12), ", entry ", virt.lm.level1, ")", endl, flush;
+  final.accum(level1);
+  if unlikely (!level1.p) return final;
+  acc_bit_up_to_date &= level1.a;
+
+  final.mfn = level1.mfn;
+  final.g = level1.g;
+  final.pat = level1.pat;
+  final.pwt = level1.pwt;
+  final.pcd = level1.pcd;
+  final.a = acc_bit_up_to_date;
+  final.d = level1.d;
+
+  if unlikely (final.mfn == bootinfo.shared_info_mfn) {
+    final.mfn = (Waddr)ptl_virt_to_phys(&sshinfo) >> 12;
+    if (DEBUG) os << "  Remap shinfo access from real mfn ", bootinfo.shared_info_mfn,
+                 " to PTLsim virtual shinfo page mfn ", final.mfn, " (virt ", &sshinfo, ")", endl, flush;
+  }
+
+  if (DEBUG) os << "  Final PTE for virt ", (void*)(Waddr)rawvirt, ": ", final, endl, flush;
 
   return final;
 }
@@ -840,55 +1157,73 @@ Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn) {
 
   if (unlikely((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end))) return 0;
 
-  Level4PTE& level4 = ((Level4PTE*)(PHYS_VIRT_BASE + (toplevel_mfn << 12)))[virt.lm.level4];
+  Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
   if (DEBUG) logfile << "  level4 @ ", &level4, " (mfn ", ((((Waddr)&level4) & 0xffffffff) >> 12), ", entry ", virt.lm.level4, ")", endl, flush;
   if (unlikely(!level4.p)) return 0;
 
-  Level3PTE& level3 = ((Level3PTE*)(PHYS_VIRT_BASE + (level4.next << 12)))[virt.lm.level3];
+  Level3PTE& level3 = ((Level3PTE*)phys_to_mapped_virt(level4.mfn << 12))[virt.lm.level3];
   if (DEBUG) logfile << "  level3 @ ", &level3, " (mfn ", ((((Waddr)&level3) & 0xffffffff) >> 12), ", entry ", virt.lm.level3, ")", endl, flush;
   if (unlikely(!level3.p)) return 0;
 
-  Level2PTE& level2 = ((Level2PTE*)(PHYS_VIRT_BASE + (level3.next << 12)))[virt.lm.level2];
+  Level2PTE& level2 = ((Level2PTE*)phys_to_mapped_virt(level3.mfn << 12))[virt.lm.level2];
   if (DEBUG) logfile << "  level2 @ ", &level2, " (mfn ", ((((Waddr)&level2) & 0xffffffff) >> 12), ", entry ", virt.lm.level2, ") [pte ", level2, "]", endl, flush;
   if (unlikely(!level2.p)) return 0;
 
   if (unlikely(level2.psz)) return ((Waddr)&level2) - PHYS_VIRT_BASE;
 
-  Level1PTE& level1 = ((Level1PTE*)(PHYS_VIRT_BASE + (level2.next << 12)))[virt.lm.level1];
+  Level1PTE& level1 = ((Level1PTE*)phys_to_mapped_virt(level2.mfn << 12))[virt.lm.level1];
   if (DEBUG) logfile << "  level1 @ ", &level1, " (mfn ", ((((Waddr)&level1) & 0xffffffff) >> 12), ", entry ", virt.lm.level1, ")", endl, flush;
 
   return ((Waddr)&level1) - PHYS_VIRT_BASE;
 }
 
+//
+// Walk the specified page table tree and update the accessed
+// (and optionally dirty) bits as we go.
+//
+// Technically this could be done transparently by just accessing
+// the specified virtual address, however we still explicitly
+// submit this as an update queue to the hypervisor since we need
+// to keep our simulated TLBs in sync.
+//
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update) {
+  static const bool DEBUG = 1;
+
   VirtAddr virt(rawvirt);
 
   if (unlikely((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end))) return;
 
-  Level4PTE& level4 = ((Level4PTE*)(PHYS_VIRT_BASE + (toplevel_mfn << 12)))[virt.lm.level4];
-  Level1PTE final = (W64)level4;
-  if (!level4.p) return;
-  if (!level4.a) level4.a = 1;
+  //++MTY CHECKME This does not seem to be getting called.
+  if (logable(5)) logfile << "Update acc/dirty bits: ", update.a, " ", update.d, " for virt ", (void*)rawvirt, endl;
 
-  Level3PTE& level3 = ((Level3PTE*)(PHYS_VIRT_BASE + (level4.next << 12)))[virt.lm.level3];
-  if (!level3.p) return;
-  if (!level3.a) level3.a = 1;
+  Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
+  if unlikely (!level4.p) return;
+  if unlikely (!level4.a) { if (DEBUG) logfile << "level4 @ ", &level4, " <= ", level4.A(1), endl; level4 <= level4.A(1); }
 
-  Level2PTE& level2 = ((Level2PTE*)(PHYS_VIRT_BASE + (level3.next << 12)))[virt.lm.level2];
-  if (!level2.p) return;
-  if (!level2.a) level2.a = 1;
+  Level3PTE& level3 = ((Level3PTE*)phys_to_mapped_virt(level4.mfn << 12))[virt.lm.level3];
+  if unlikely (!level3.p) return;
+  if unlikely (!level3.a) { if (DEBUG) logfile << "level3 @ ", &level3, " <= ", level3.A(1), endl; level3 <= level3.A(1); }
 
-  if (level2.psz) {
-    if (update.d) level2.d = 1;
+  Level2PTE& level2 = ((Level2PTE*)phys_to_mapped_virt(level3.mfn << 12))[virt.lm.level2];
+  if unlikely (!level2.p) return;
+  if unlikely (!level2.a) { if (DEBUG) logfile << "level2 @ ", &level2, " <= ", level2.A(1), endl; level2 <= level2.A(1); }
+
+  if unlikely (level2.psz) {
+    if unlikely (update.d & (!level2.d)) { if (DEBUG) logfile << "level2 @ ", &level2, " <= ", level2.D(1), endl; level2 <= level2.D(1); }
     return;
   }
 
-  Level1PTE& level1 = ((Level1PTE*)(PHYS_VIRT_BASE + (level2.next << 12)))[virt.lm.level1];
-  if (!level1.p) return;
-  if (!level1.a) level1.a = 1;
-  if (update.d) level1.d = 1;
+  Level1PTE& level1 = ((Level1PTE*)phys_to_mapped_virt(level2.mfn << 12))[virt.lm.level1];
+  if unlikely (!level1.p) return;
+  if unlikely (!level1.a) { if (DEBUG) logfile << "level1 @ ", &level1, " <= ", level1.A(1), endl; level1 <= level1.A(1); }
+  if unlikely (update.d & (!level1.d)) { if (DEBUG) logfile << "level1 @ ", &level1, " <= ", level1.D(1), endl; level1 <= level1.D(1); }
+
+  commit_page_table_updates();
 }
 
+//
+// Force PTLsim to map the specified page
+//
 byte force_internal_page_fault(Waddr phys) {
   byte z;
   void* mapped = phys_to_mapped_virt(phys);
@@ -896,29 +1231,36 @@ byte force_internal_page_fault(Waddr phys) {
   return z;
 }
 
-bool is_mfn_ptpage(Waddr mfn) {
-  if unlikely (mfn >= bootinfo.total_machine_pages) return false;
+bool is_mfn_ptpage(mfn_t mfn) {
+  if unlikely (mfn >= bootinfo.total_machine_pages) {
+    logfile << "Invalid MFN ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl, flush;
+    abort();
+  }
   Level1PTE& pte = bootinfo.phys_pagedir[mfn];
 
-  if (!pte.p) {
+  if unlikely (!pte.p) {
     //
     // The page has never been accessed before.
     // Pretend we're reading from it so PTLsim's page fault handler
     // will fault it in for us.
     //
-    /*
-    void* phys_of_page = phys_to_mapped_virt(mfn << 12);
-    logfile << "Following ptes down to ", phys_of_page, ":", endl, flush;
-    void* pte_phys_addr = (void*)(Waddr)virt_to_pte_phys_addr((W64)phys_of_page, get_cr3() >> 12);
-    logfile << "Attempt to fault in mfn ", mfn, " [pte was at phys ", flush,
-      pte_phys_addr,
-      " vs phys_pagedir[mfn] at ", flush, ptl_virt_to_phys(&pte), "]...", endl, flush;
-    */
-
     force_internal_page_fault(mfn << 12);
     if (!pte.p) {
       logfile << "PTE for mfn ", mfn, " is still not present!", endl, flush;
-      assert(false);
+      abort();
+    }
+  } else if unlikely (!pte.rw) {
+    //
+    // Try to promote to writable:
+    //
+
+    if likely (update_ptl_pte(pte, pte.W(1)) == 0) {
+      if (logable(2)) {
+        logfile << "[PTLsim Writeback Handler: promoted read-only L1 PTE for guest mfn ",
+          mfn, " to writable (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+      }
+    } else {
+      // Could not promote: really is a pinned page table page (need mmu_update hypercall to update it)
     }
   }
 
@@ -927,239 +1269,28 @@ bool is_mfn_ptpage(Waddr mfn) {
 
 W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
   W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
-  W64 result = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+  W64 merged = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
 
-  if (is_mfn_ptpage(physaddr >> 12)) {
+  if unlikely (physaddr >> 40) {
+    // Physical address is inside of PTLsim: apply directly
+    mem = merged;
+  } else if unlikely (is_mfn_ptpage(physaddr >> 12)) {
+    // MFN is pinned: force Xen to do the store for us
     mmu_update_t u;
     u.ptr = physaddr;
-    u.val = data;
-    HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);    
+    u.val = merged;
+    int rc = HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
+    if unlikely (rc) {
+      logfile << "storemask: WARNING: store to physaddr ", (void*)physaddr, " <= ", Level1PTE(data), " failed with rc ", rc, endl, flush;
+    }
   } else {
-    mem = result;
+    mem = merged;
   }
 
   return data;
 }
 
-void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
-  exception = 0;
-  pteupdate = 0;
-
-  pfec = 0;
-
-  if unlikely (lowbits(virtaddr, sizeshift)) {
-    exception = EXCEPTION_UnalignedAccess;
-    return null;
-  }
-
-  if unlikely (internal) {
-    // Directly mapped to PTL space:
-    return (void*)virtaddr;
-  }
-
-  Level1PTE pte;
-
-  pte = virt_to_pte(virtaddr);
-  
-  bool page_not_present = (!pte.p);
-  bool page_read_only = (store & (!pte.rw));
-  bool page_kernel_only = ((!kernel_mode) & (!pte.us));
-
-  if unlikely (page_not_present | page_read_only | page_kernel_only) {
-    if (logable(4)) logfile << "virt ", (void*)virtaddr, ", mfn ", pte.phys, ": store ", store, ", page_not_present ",
-      page_not_present, ", page_kernel_only ", page_kernel_only, ", page_read_only ", page_read_only, endl;
-
-    if unlikely (store && (!page_not_present) && (!page_kernel_only) &&
-                 page_read_only && is_mfn_ptpage(pte.phys)) {
-      if (logable(4)) logfile << "Page is a page table page: special semantics", endl;
-      //
-      // This is a page table page and is technically mapped read only,
-      // but the user code has attempted to store to it anyway under the
-      // assumption that the hypervisor will trap the store, validate the
-      // written PTE value and emulate the store as if it was to a normal
-      // read-write page.
-      //
-      // For PTLsim use, we set the pteupdate.ptwrite bit to indicate that
-      // special handling is needed. However, no exception is signalled.
-      //
-      pteupdate.ptwrite = 1;
-    } else {
-      exception = (store) ? EXCEPTION_PageFaultOnWrite : EXCEPTION_PageFaultOnRead;
-      pfec.p = pte.p;
-      pfec.rw = store;
-      pfec.us = (!kernel_mode);
-    }
-
-    if (exception) return null;
-  }
-
-  pteupdate.a = (!pte.a);
-  pteupdate.d = (store & (!pte.d));
-
-  return pte_to_mapped_virt(virtaddr, pte);
-}
-
-int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
-  Level1PTE pte;
-
-  int n = 0;
-
-  pfec = 0;
-  pte = virt_to_pte(source);
-  if unlikely ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = source;
-    pfec.p = pte.p;
-    pfec.nx = forexec;
-    pfec.us = (!kernel_mode);
-    return 0;
-  }
-
-  n = min(4096 - lowbits(source, 12), (Waddr)bytes);
-  memcpy(target, pte_to_mapped_virt(source, pte), n);
-
-  PTEUpdate pteupdate = 0;
-  pteupdate.a = 1;
-
-  if unlikely (!pte.a) update_pte_acc_dirty(source, pteupdate);
-
-  // All the bytes were on the first page
-  if likely (n == bytes) return n;
-
-  // Go on to second page, if present
-  pte = virt_to_pte(source + n);
-  if unlikely ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = source + n;
-    pfec.p = pte.p;
-    pfec.nx = forexec;
-    pfec.us = (!kernel_mode);
-    return n;
-  }
-
-  if (!pte.a) update_pte_acc_dirty(source + n, pteupdate);
-
-  memcpy((byte*)target + n, pte_to_mapped_virt(source + n, pte), bytes - n);
-  n = bytes;
-  return n;
-}
-
-int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
-  Level1PTE pte;
-
-  pfec = 0;
-  pte = virt_to_pte(target);
-  if unlikely ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = target;
-    pfec.p = pte.p;
-    pfec.rw = 1;
-    pfec.us = (!kernel_mode);
-    return 0;
-  }
-
-  byte* targetlo = (byte*)pte_to_mapped_virt(target, pte);
-  int nlo = min(4096 - lowbits(target, 12), (Waddr)bytes);
-
-  PTEUpdate pteupdate = 0;
-  pteupdate.a = 0;
-  pteupdate.d = 1;
-  if unlikely ((!pte.a) | (!pte.d)) update_pte_acc_dirty(target, pteupdate);
-
-  // All the bytes were on the first page
-  if likely (nlo == bytes) {
-    memcpy(targetlo, source, nlo);
-    return bytes;
-  }
-
-  // Go on to second page, if present
-  pte = virt_to_pte(target + nlo);
-  if unlikely ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
-    faultaddr = target + nlo;
-    pfec.p = pte.p;
-    pfec.rw = 1;
-    pfec.us = (!kernel_mode);
-    return nlo;
-  }
-
-  if unlikely ((!pte.a) | (!pte.d)) update_pte_acc_dirty(target + nlo, pteupdate);
-
-  memcpy(pte_to_mapped_virt(target + nlo, pte), (byte*)source + nlo, bytes - nlo);
-  memcpy(targetlo, source, nlo);
-
-  return bytes;
-}
-
-//
-// Why we need to always track both MFNs:
-// Example of ambiguity:
-//
-// - Pair of proceses (A and B)
-// - Page 1 is mapped to mfn X in both A and B
-// - Page 2 is mapped to mfn Y in A and mfn Z in B
-// - BB crosses 1-to-2 page boundary at same virt addr in both A and B
-// - Meaning of instruction is different depending only on those
-//   bytes in page 2 (mfn Y or Z)
-//
-
-RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
-  Level1PTE pte;
-  bool invalid;
-
-  use64 = ctx.use64;
-  kernel = ctx.kernel_mode;
-  df = ((ctx.internal_eflags & FLAG_DF) != 0);
-  padlo = 0;
-  padhi = 0;
-
-  pte = ctx.virt_to_pte(rip);
-  invalid = ((!pte.p) | pte.nx | ((!ctx.kernel_mode) & (!pte.us)));
-  mfnlo = (invalid) ? INVALID : pte.phys;
-  mfnhi = mfnlo;
-
-  int page_crossing = ((lowbits(rip, 12) + (bytes-1)) >> 12);
-
-  //
-  // Since table lookups only know the RIP of the target and not
-  // its size, we don't know if there is a page crossing. Hence,
-  // we always assume there is. BB translation (case above) may
-  // be more optimized, only doing this if the pages are truly
-  // different.
-  //
-  //++MTY TODO:
-  // If BBs are terminated at the first insn to cross a page,
-  // technically we could get away with only checking if the
-  // byte at rip + (15-1) would hit the next page.
-  //
-
-  if unlikely (page_crossing) {
-    pte = ctx.virt_to_pte(rip + (bytes-1));
-    invalid = ((!pte.p) | pte.nx | ((!ctx.kernel_mode) & (!pte.us)));
-    mfnhi = (invalid) ? INVALID : pte.phys;
-  }
-
-  return *this;
-}
-
-void prep_address_space() {
-  int bytes_required = ceil(bootinfo.total_machine_pages, 8) / 8;
-
-  xen_m2p_map_end = HYPERVISOR_VIRT_START + (bootinfo.total_machine_pages * sizeof(Waddr));
-
-  ptlsim_mfn_bitmap = (infinite_bitvec_t*)ptl_alloc_private_pages(bytes_required);
-  memset(ptlsim_mfn_bitmap, 0, bytes_required);
-
-  foreach (i, bootinfo.mfn_count) {
-    mfn_t mfn = bootinfo.ptl_pagedir[i].phys;
-    assert(mfn < bootinfo.total_machine_pages);
-    (*ptlsim_mfn_bitmap)[mfn] = 1;
-  }
-}
-
-static SegmentDescriptor invalid_gdt_entry;
-
-static SegmentDescriptor null_gdt_entry;
-
-static SegmentDescriptor flat_gdt_entry;
-
-  // idx must be between 0 and 8191 (i.e. 65535 >> 3)
+// idx must be between 0 and 8191 (i.e. 65535 >> 3)
 bool Context::gdt_entry_valid(W16 idx) {
   if ((idx >= FIRST_RESERVED_GDT_ENTRY) && (idx < (FIRST_RESERVED_GDT_ENTRY + (PAGE_SIZE / sizeof(SegmentDescriptor)))))
     return true;
@@ -1167,17 +1298,17 @@ bool Context::gdt_entry_valid(W16 idx) {
   return (idx < gdtsize);
 }
 
-const SegmentDescriptor& Context::get_gdt_entry(W16 idx) {
+SegmentDescriptor Context::get_gdt_entry(W16 idx) {
   // idx >>= 3; // remove GDT/LDT select bit and 2-bit DPL
 
   if (!idx)
-    return null_gdt_entry;
+    return SegmentDescriptor(0);
 
   if ((idx >> 9) == FIRST_RESERVED_GDT_PAGE)
     return *(const SegmentDescriptor*)((byte*)bootinfo.gdt_page + (lowbits(idx, 9) * 8));
 
   if (idx >= gdtsize)
-    return invalid_gdt_entry;
+    return SegmentDescriptor(0);
 
   mfn_t mfn = gdtpages[idx >> 9];
   return *(const SegmentDescriptor*)phys_to_mapped_virt((mfn << 12) + (lowbits(idx, 9) * 8));
@@ -1291,8 +1422,8 @@ void Context::reload_segment_descriptor(unsigned int segid, W16 selector) {
 //
 void Context::init() {
   flush_tlb();
-  commitarf[REG_ctx] = (Waddr)this;
-  commitarf[REG_fpstack] = (Waddr)&this->fpstack;
+  commitarf[REG_ctx] = ((Waddr)this);
+  commitarf[REG_fpstack] = ((Waddr)&this->fpstack);
 
   reload_segment_descriptor(SEGID_CS, seg[SEGID_CS].selector);
   reload_segment_descriptor(SEGID_SS, seg[SEGID_SS].selector);
@@ -1316,128 +1447,493 @@ void Context::init() {
   }
 }
 
-int pin_page_table_page(void* virt, int level) {
-  assert(inrange(level, 0, 4));
+void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
+  exception = 0;
+  pteupdate = 0;
 
-  // Was it in PTLsim space?
-  mfn_t mfn = ptl_virt_to_mfn(virt);
+  pfec = 0;
 
-  if (mfn == INVALID_MFN) return -1;
+  if unlikely (lowbits(virtaddr, sizeshift)) {
+    exception = EXCEPTION_UnalignedAccess;
+    return null;
+  }
+
+  if unlikely (internal) {
+    //
+    // Directly mapped to PTL space (microcode load/store)
+    // We need to patch in PTLSIM_VIRT_BASE since in 32-bit
+    // mode, ctx.virt_addr_mask will chop off these bits.
+    //
+    return (void*)(lowbits(virtaddr, 32) | PTLSIM_VIRT_BASE);
+  }
+
+  Level1PTE pte;
+
+  pte = virt_to_pte(virtaddr);
   
-  int level_to_function[5] = {MMUEXT_UNPIN_TABLE, MMUEXT_PIN_L1_TABLE, MMUEXT_PIN_L2_TABLE, MMUEXT_PIN_L3_TABLE, MMUEXT_PIN_L4_TABLE};
-  int func = level_to_function[level];
-  
-  int rc = 0;
+  bool page_not_present = (!pte.p);
+  bool page_read_only = (store & (!pte.rw));
+  bool page_kernel_only = ((!kernel_mode) & (!pte.us));
+
+  if unlikely (page_not_present | page_read_only | page_kernel_only) {
+    if (logable(4)) logfile << "virt ", (void*)virtaddr, ", mfn ", pte.mfn, ": store ", store, ", page_not_present ",
+      page_not_present, ", page_kernel_only ", page_kernel_only, ", page_read_only ", page_read_only, endl;
+
+    if unlikely (store && (!page_not_present) && (!page_kernel_only) &&
+                 page_read_only && is_mfn_ptpage(pte.mfn)) {
+      if (logable(4)) {
+        logfile << "Page is a page table page: special semantics", endl;
+      }
+      //
+      // This is a page table page and is technically mapped read only,
+      // but the user code has attempted to store to it anyway under the
+      // assumption that the hypervisor will trap the store, validate the
+      // written PTE value and emulate the store as if it was to a normal
+      // read-write page.
+      //
+      // For PTLsim use, we set the pteupdate.ptwrite bit to indicate that
+      // special handling is needed. However, no exception is signalled.
+      //
+      pteupdate.ptwrite = 1;
+    } else {
+      exception = (store) ? EXCEPTION_PageFaultOnWrite : EXCEPTION_PageFaultOnRead;
+      pfec.p = pte.p;
+      pfec.rw = store;
+      pfec.us = (!kernel_mode);
+    }
+
+    if (exception) return null;
+  }
+
+  pteupdate.a = (!pte.a);
+  pteupdate.d = (store & (!pte.d));
+
+  return pte_to_mapped_virt(virtaddr, pte);
+}
+
+int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
+  Level1PTE pte;
+
+  int n = 0;
+
+  pfec = 0;
+  pte = virt_to_pte(source);
+
+  if unlikely ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = source;
+    pfec.p = pte.p;
+    pfec.nx = forexec;
+    pfec.us = (!kernel_mode);
+    return 0;
+  }
+
+  n = min(4096 - lowbits(source, 12), (Waddr)bytes);
+  memcpy(target, pte_to_mapped_virt(source, pte), n);
+
+  PTEUpdate pteupdate = 0;
+  pteupdate.a = 1;
+
+  if unlikely (!pte.a) update_pte_acc_dirty(source, pteupdate);
+
+  // All the bytes were on the first page
+  if likely (n == bytes) return n;
+
+  // Go on to second page, if present
+  pte = virt_to_pte(source + n);
+  if unlikely ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = source + n;
+    pfec.p = pte.p;
+    pfec.nx = forexec;
+    pfec.us = (!kernel_mode);
+    return n;
+  }
+
+  if (!pte.a) update_pte_acc_dirty(source + n, pteupdate);
+
+  memcpy((byte*)target + n, pte_to_mapped_virt(source + n, pte), bytes - n);
+  n = bytes;
+  return n;
+}
+
+int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
+  Level1PTE pte;
+
+  pfec = 0;
+  pte = virt_to_pte(target);
+  if unlikely ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = target;
+    pfec.p = pte.p;
+    pfec.rw = 1;
+    pfec.us = (!kernel_mode);
+    return 0;
+  }
+
+  byte* targetlo = (byte*)pte_to_mapped_virt(target, pte);
+  int nlo = min(4096 - lowbits(target, 12), (Waddr)bytes);
+
+  PTEUpdate pteupdate = 0;
+  pteupdate.a = 0;
+  pteupdate.d = 1;
+  if unlikely ((!pte.a) | (!pte.d)) update_pte_acc_dirty(target, pteupdate);
+
+  // All the bytes were on the first page
+  if likely (nlo == bytes) {
+    memcpy(targetlo, source, nlo);
+    return bytes;
+  }
+
+  // Go on to second page, if present
+  pte = virt_to_pte(target + nlo);
+  if unlikely ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
+    faultaddr = target + nlo;
+    pfec.p = pte.p;
+    pfec.rw = 1;
+    pfec.us = (!kernel_mode);
+    return nlo;
+  }
+
+  if unlikely ((!pte.a) | (!pte.d)) update_pte_acc_dirty(target + nlo, pteupdate);
+
+  memcpy(pte_to_mapped_virt(target + nlo, pte), (byte*)source + nlo, bytes - nlo);
+  memcpy(targetlo, source, nlo);
+
+  return bytes;
+}
+
+//
+// Why we need to always track both MFNs:
+// Example of ambiguity:
+//
+// - Pair of proceses (A and B)
+// - Page 1 is mapped to mfn X in both A and B
+// - Page 2 is mapped to mfn Y in A and mfn Z in B
+// - BB crosses 1-to-2 page boundary at same virt addr in both A and B
+// - Meaning of instruction is different depending only on those
+//   bytes in page 2 (mfn Y or Z)
+//
+
+RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
+  Level1PTE pte;
+  bool invalid;
+
+  use64 = ctx.use64;
+  kernel = ctx.kernel_mode;
+  df = ((ctx.internal_eflags & FLAG_DF) != 0);
+  padlo = 0;
+  padhi = 0;
+
+  pte = ctx.virt_to_pte(rip);
+  invalid = ((!pte.p) | pte.nx | ((!ctx.kernel_mode) & (!pte.us)));
+  mfnlo = (invalid) ? INVALID : pte.mfn;
+  mfnhi = mfnlo;
+
+  int page_crossing = ((lowbits(rip, 12) + (bytes-1)) >> 12);
+
+  //
+  // Since table lookups only know the RIP of the target and not
+  // its size, we don't know if there is a page crossing. Hence,
+  // we always assume there is. BB translation (case above) may
+  // be more optimized, only doing this if the pages are truly
+  // different.
+  //
+  //++MTY TODO:
+  // If BBs are terminated at the first insn to cross a page,
+  // technically we could get away with only checking if the
+  // byte at rip + (15-1) would hit the next page.
+  //
+
+  if unlikely (page_crossing) {
+    pte = ctx.virt_to_pte(rip + (bytes-1));
+    invalid = ((!pte.p) | pte.nx | ((!ctx.kernel_mode) & (!pte.us)));
+    mfnhi = (invalid) ? INVALID : pte.mfn;
+  }
+
+  return *this;
+}
+
+//
+// Unmap an entire tree of physical pages rooted
+// at the specified L4 mfn. This must be done
+// before passing a pin hypercall or new_baseptr
+// hypercall up to Xen. We may have read/write
+// refs to some of these pages, which are currently
+// normal pages (updated by the guest kernel) but
+// which will become read-only page table pages
+// once Xen tries to pin the entire tree. We only
+// need to unmap L4/L3/L2 pages; L1 pages (i.e.
+// the actual data pages) are not relevant.
+// 
+// Only those pages with read/write mappings are 
+// unmapped. Levels 4/3/2 of the page table are
+// recursively traversed and unmapped from the leaves
+// on up, so we do not accidentally touch a page and
+// re-map it on our way back to the root.
+//
+static const bool debug_unmap_phys_page_tree = 1;
+
+inline void unmap_level1_page_tree(mfn_t mfn) {
+  // No need to unmap actual leaf physical pages - those are just data pages
+  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "        L1: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
+}
+
+inline void unmap_level2_page_tree(mfn_t mfn) {
+  Level2PTE* ptes = (Level2PTE*)phys_to_mapped_virt(mfn << 12);
+  foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level1_page_tree(ptes[i].mfn);
+  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "      L2: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
+}
+
+void unmap_level3_page_tree(mfn_t mfn) {
+  Level3PTE* ptes = (Level3PTE*)phys_to_mapped_virt(mfn << 12);
+  foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level2_page_tree(ptes[i].mfn);
+  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "    L3: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
+}
+
+void unmap_level4_page_tree(mfn_t mfn) {
+  Level4PTE* ptes = (Level4PTE*)phys_to_mapped_virt(mfn << 12);
+  foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level3_page_tree(ptes[i].mfn);
+  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "  L4: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
+}
+
+void unmap_phys_page_tree(mfn_t root) {
+  if (logable(1)) logfile << "Unmapping page tree starting at root mfn ", root, endl;
+  unmap_level4_page_tree(root);
+  commit_page_table_updates();
+}
+
+void smc_setdirty_internal(Level1PTE& pte, bool dirty) {
+  if (logable(5)) logfile << "smc_setdirty_internal(", &pte, " [", pte, "], dirty ", dirty, ")", endl, flush;
+  assert(update_ptl_pte(pte, pte.D(dirty)) == 0);
+}
+
+Level4PTE ptlsim_pml4_entry;
+Level4PTE physmap_pml4_entry;
+
+//
+// Build page tables for the 1:1 mapping of physical memory.
+//
+// Since we don't know which pages a domain can access until later,
+// and the accessibility may change at any time, we only build levels
+// L2 and L3, but leave L1 to be constructed on demand (we still do
+// allocate L1, we just don't fill it).
+//
+// On return, PML4 slot 508 (0xfffffe0000000000) should be set to
+// ptl_virt_to_mfn(bootinfo.phys_level3_pagedir).
+//
+void build_physmap_page_tables() {
+  static const bool DEBUG = 0;
+
+  if (DEBUG) cerr << "Building physical page map for ", bootinfo.total_machine_pages, " pages (",
+    (pages_to_kb(bootinfo.total_machine_pages) / 1024), " MB)", " of memory:", endl, flush;
+
+  Waddr physmap_level1_page_count = ceil(bootinfo.total_machine_pages, PTES_PER_PAGE) / PTES_PER_PAGE;
+
+  bootinfo.phys_pagedir = (Level1PTE*)ptl_alloc_private_pages(physmap_level1_page_count * PAGE_SIZE);
+  memset(bootinfo.phys_pagedir, 0, physmap_level1_page_count * PAGE_SIZE);
+
+  if (DEBUG) cerr << "  L1 page table at virt ", (void*)bootinfo.phys_pagedir, " (", bootinfo.total_machine_pages, " entries, ",
+    physmap_level1_page_count, " pages, ", (bootinfo.total_machine_pages * sizeof(Level1PTE)), " bytes)", endl, flush;
+
+  //
+  // Construct L2 page tables, pointing to fill-on-demand L1 tables:
+  //
+  Waddr physmap_level2_page_count = ceil(physmap_level1_page_count, PTES_PER_PAGE) / PTES_PER_PAGE;
+  bootinfo.phys_level2_pagedir = (Level2PTE*)ptl_alloc_private_pages(physmap_level2_page_count * PAGE_SIZE);
+
+  if (DEBUG) cerr << "  L2 page table at virt ", (void*)bootinfo.phys_level2_pagedir, " (", physmap_level1_page_count, " entries, ",
+    physmap_level2_page_count, " pages, ", (physmap_level1_page_count * sizeof(Level1PTE)), " bytes)", endl, flush;
+
+  foreach (i, physmap_level1_page_count) {
+    struct Level2PTE& pte = bootinfo.phys_level2_pagedir[i];
+    pte = 0;
+    pte.p = 1;  // let PTLsim fill it in on demand
+    pte.rw = 1; // sub-pages are writable unless overridden
+    pte.us = 1; // both user and supervisor (PTLsim itself will check protections)
+    pte.a = 1;  // accessed
+    pte.mfn = ptl_virt_to_mfn(bootinfo.phys_pagedir + (i * PTES_PER_PAGE));
+
+    // cerr << "    Slot ", intstring(i, 6), " = ", pte, endl, flush;
+    pte.p = 0;
+  }
+
+  // Clear out leftover slots: we may not care, but Xen will complain:
+  if ((physmap_level1_page_count & (PTES_PER_PAGE-1)) > 0) {
+    foreach (i, PTES_PER_PAGE - (physmap_level1_page_count & (PTES_PER_PAGE-1))) {
+      // cerr << "    Slot ", intstring(physmap_level1_page_count + i, 6), " is left over", endl, flush;
+      bootinfo.phys_level2_pagedir[physmap_level1_page_count + i] = 0;
+    }
+  }
+
+  //
+  // Construct L3 page table (just one page covers 2^39 bit phys addr space):
+  //
+  assert(physmap_level2_page_count < PTES_PER_PAGE);
+  bootinfo.phys_level3_pagedir = (Level3PTE*)ptl_alloc_private_page();
+
+  if (DEBUG) cerr << "  L3 page table at virt ", (void*)bootinfo.phys_level3_pagedir, " (", physmap_level2_page_count, " entries, ",
+    1, " pages, ", (physmap_level2_page_count * sizeof(Level1PTE)), " bytes)", endl, flush;
+
+  foreach (i, physmap_level2_page_count) {
+    struct Level3PTE& pte = bootinfo.phys_level3_pagedir[i];
+    pte = 0;
+    pte.p = 1;  // pre-filled
+    pte.rw = 1; // sub-pages are writable unless overridden
+    pte.us = 1; // both user and supervisor (PTLsim itself will check protections)
+    pte.a = 1;  // accessed
+
+    // Link back to L2 tables:
+    Level2PTE* ptvirt = bootinfo.phys_level2_pagedir + (i * PTES_PER_PAGE);
+    pte.mfn = ptl_virt_to_mfn(ptvirt);
+    // cerr << "    Slot ", intstring(i, 6), " = ", pte, endl, flush;
+    assert(make_ptl_page_writable(ptvirt, false) == 0);
+    // assert(pin_page_table_page(ptvirt, 2) == 0);
+  }
+
+  // Clear out leftover slots: we may not care, but Xen will complain:
+  if ((physmap_level2_page_count & (PTES_PER_PAGE-1)) > 0) {
+    foreach (i, PTES_PER_PAGE - physmap_level2_page_count) {
+      // cerr << "    Slot ", intstring(physmap_level2_page_count + i, 6), " is left over", endl;
+      bootinfo.phys_level3_pagedir[physmap_level2_page_count + i] = 0;
+    }
+  }
+
+  //
+  // Remap and pin L3 page
+  //
+  Level3PTE* ptvirt = bootinfo.phys_level3_pagedir;
+  if (DEBUG) cerr << "  Final L3 page table page at virt ", bootinfo.phys_level3_pagedir,
+    " (mfn ", ptl_virt_to_mfn(bootinfo.phys_level3_pagedir), ")", endl, flush;
+  assert(make_ptl_page_writable(ptvirt, false) == 0);
+  // assert(pin_page_table_page(ptvirt, 3) == 0);
+
+  //
+  // Build physmap PML4 entry 508:
+  //
+  physmap_pml4_entry = 0;
+  physmap_pml4_entry.p = 1;
+  physmap_pml4_entry.rw = 1;
+  physmap_pml4_entry.us = 1;
+  physmap_pml4_entry.a = 1;
+  physmap_pml4_entry.mfn = ptl_virt_to_mfn(bootinfo.phys_level3_pagedir);
+
+  //
+  // Build PTLsim PML4 entry 510:
+  //
+  ptlsim_pml4_entry = 0;
+  ptlsim_pml4_entry.p = 1;
+  ptlsim_pml4_entry.rw = 1;
+  ptlsim_pml4_entry.us = 1;
+  ptlsim_pml4_entry.a = 1;
+  ptlsim_pml4_entry.mfn = ptl_virt_to_mfn(bootinfo.ptl_level3_map);
+}
+
+//
+// Inject the PTLsim toplevel page table entries (PML 510 and PML 508)
+// into the specified user mfn. The page must already be pinned; this
+// function is called right before loading.
+//
+void inject_ptlsim_into_toplevel(mfn_t mfn, bool force = false) {
+  int rc;
+
+  Level4PTE* top = (Level4PTE*)phys_to_mapped_virt(mfn << 12);
+  int ptlsim_slot = VirtAddr(PTLSIM_VIRT_BASE).lm.level4;
+  int physmap_slot = VirtAddr(PHYS_VIRT_BASE).lm.level4;
+#if 0
+  cerr << "Inject PTLsim PML4 entries into top mfn ", mfn, " (at virt ", top, "):", endl;
+  cerr << "  top[", ptlsim_slot, "] = ", ptlsim_pml4_entry, endl;
+  cerr << "  top[", physmap_slot, "] = ", physmap_pml4_entry, endl, flush;
+#endif
+  bool needs_ptlsim_slot_update = true;
+  bool needs_physmap_slot_update = true;
+
+  if (!force) {
+    needs_ptlsim_slot_update = (top[ptlsim_slot] != ptlsim_pml4_entry);
+    needs_physmap_slot_update = (top[physmap_slot] != physmap_pml4_entry);
+  }
+
+  if (needs_ptlsim_slot_update)
+    assert(update_phys_pte((mfn << 12) + (ptlsim_slot * 8), ptlsim_pml4_entry) == 0);
+
+  if (needs_physmap_slot_update)
+    assert(update_phys_pte((mfn << 12) + (physmap_slot * 8), physmap_pml4_entry) == 0);
+}
+
+//
+// Set the real page table on the PTLsim primary VCPU.
+//
+// This automatically calls inject_ptlsim_into_toplevel(mfn)
+// to make sure we have a seamless transition. The page must
+// already be pinned on behalf of the guest.
+//
+void switch_page_table(mfn_t mfn) {
+  //return;
+
+  inject_ptlsim_into_toplevel(mfn);
+
   mmuext_op op;
-  op.cmd = func;
+  op.cmd = MMUEXT_NEW_BASEPTR;
   op.arg1.mfn = mfn;
 
   int success_count = 0;
-  return HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF);
+  assert(HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF) == 0);
 }
 
-int make_ptl_page_writable(void* virt, bool writable) {
-  pfn_t pfn = ptl_virt_to_pfn(virt);
-  if (pfn == INVALID_MFN) return -1;
-
-  Level1PTE& pte = bootinfo.ptl_pagedir[pfn];
-  Level1PTE temppte = pte;
-  temppte.rw = writable;
-  return update_ptl_pte(pte, temppte);
-}
-
-void unmap_phys_page(mfn_t mfn) {
-  Level1PTE& pte = bootinfo.phys_pagedir[mfn];
-  Level1PTE temppte = pte;
-  temppte.p = 0;
-  update_ptl_pte(pte, temppte);
-}
-
-//
-// Trap and Exception Handling
-//
-extern "C" {
-  void divide_error();
-  void debug();
-  void int3();
-  void overflow();
-  void bounds();
-  void invalid_op();
-  void device_not_available();
-  void coprocessor_segment_overrun();
-  void invalid_tss();
-  void segment_not_present();
-  void stack_segment();
-  void general_protection();
-  void page_fault();
-  void coprocessor_error();
-  void simd_coprocessor_error();
-  void alignment_check();
-  void spurious_interrupt_bug();
-  void machine_check();
-};
-
-void print_stack(ostream& os, Waddr sp) {
-  W64* p = (W64*)sp;
-
-  os << "Stack trace back from ", sp, ":", endl, flush;
-  foreach (i, 256) {
-    if ((i % 8) == 0) os << "  ", &p[i], ":";
-    os << " ", hexstring(p[i], 64);
-    if ((i % 8) == 7) os << endl;
+ostream& print_page_table_with_types(ostream& os, Level1PTE* ptes) {
+  page_type_t pagetypes[512];
+  foreach (i, 512) {
+    pagetypes[i].in.mfn = ptes[i].mfn;
   }
-  os << flush;
+
+  assert(query_pages(pagetypes, lengthof(pagetypes)) == 0);
+
+  foreach (i, 512) {
+    os << "        ", intstring(i, 3), ": ", ptes[i], " type ", pagetypes[i], endl;
+  }
+
+  return os;
 }
 
-static void do_trap(int trapnr, const char* str, struct pt_regs* regs, unsigned long error_code) {
-  cerr << endl;
-  cerr << "PTLsim Internal Error: unhandled trap ", trapnr, " (", str, "): error code ", hexstring(error_code, 32), endl;
-  cerr << "Registers:", endl;
-  cerr << *regs;
-  print_stack(cerr, regs->rsp);
-  if (logfile) logfile.flush();
-  cerr.flush();
-  cout.flush();
-
-  xen_shutdown_domain(SHUTDOWN_crash);
+inline W32 get_eflags() {
+  W64 eflags;
+  asm volatile("pushfq; popq %[eflags]" : [eflags] "=r" (eflags) : : "memory");
+  return eflags;
 }
 
-#define DO_ERROR(trapnr, str, name) \
-extern "C" void do_##name(struct pt_regs * regs, unsigned long error_code) { do_trap(trapnr, str, regs, error_code); }
+// The returned %rsp is advisory only!
+static inline void* get_rsp() {
+  W64 rsp;
+  asm volatile("mov %%rsp,%[out]" : [out] "=rm" (rsp));
+  return (void*)rsp;
+}
+
+static inline mfn_t get_cr3_mfn() {
+  Waddr cr3;
+  asm volatile("mov %%cr3,%[out]" : [out] "=r" (cr3));
+  return (cr3 >> 12);
+}
 
 //
-// These exceptions are not handled by PTLsim. If they occur
-// during simulation mode, there is something seriously wrong.
+// Page fault handling logic:
 //
-DO_ERROR(0, "divide error", divide_error);
-DO_ERROR(3, "int3", int3);
-DO_ERROR(4, "overflow", overflow);
-DO_ERROR(5, "bounds", bounds);
-DO_ERROR(6, "invalid operand", invalid_op);
-DO_ERROR(7, "device not available", device_not_available);
-DO_ERROR(9, "coprocessor segment overrun", coprocessor_segment_overrun);
-DO_ERROR(10, "invalid TSS", invalid_tss);
-DO_ERROR(11, "segment not present", segment_not_present);
-DO_ERROR(12, "stack segment", stack_segment);
-DO_ERROR(13, "general protection", general_protection);
-DO_ERROR(16, "fpu", coprocessor_error);
-DO_ERROR(17, "alignment check", alignment_check);
-DO_ERROR(18, "machine check", machine_check);
-DO_ERROR(19, "sse", simd_coprocessor_error);
-
-static inline Waddr read_cr2() { return shinfo.vcpu_info[0].arch.cr2; }
-
+// By default, PTLsim maps physical pages as writable the first time
+// they are referenced. Since we call unmap_address_space() before
+// passing through any hypercalls that could collide with our now
+// removed writable mappings, this is not a problem.
 //
-// ++MTY IMPORTANT: when we emulate a page fault, we can't just set the virtual CR2.
-// Instead, we also set it in sshinfo.arch.cr2 = <value> - THIS is where the OS
-// reads it from (shadow shared info page), since mov to-from-cr2 is privileged.
+// If Xen refuses to update the physmap PTE with a writable mapping,
+// this means some live page table is pinning it to read-only. In
+// this case, for loads at least, we simply make it a read only
+// mapping, which is always allowed.
 //
-// sshinfo.vcpu_info[ctx.vcpuid].arch.cr2 = virtaddr;
-//
-
-static int page_fault_in_progress = 0;
-
-extern "C" void do_page_fault(struct pt_regs* regs, unsigned long error_code) {
+asmlinkage void do_page_fault(W64* regs) {
+  static const bool force_page_fault_logging = 0;
   int rc;
   Waddr faultaddr = read_cr2();
   //
@@ -1445,166 +1941,89 @@ extern "C" void do_page_fault(struct pt_regs* regs, unsigned long error_code) {
   // that means we faulted in pagetable walk. Continuing here would cause
   // a recursive fault.
   //
-  if (page_fault_in_progress) {
-    cerr << "PTLsim Internal Error: recursive page fault @ rip ", (void*)regs->rip, " while accessing ", (void*)faultaddr, " (error code ", (void*)(Waddr)error_code, ")", endl, flush;
+  PageFaultErrorCode pfec = regs[REG_ar1];
+
+  if unlikely (page_fault_in_progress) {
+    cerr << "PTLsim Internal Error: recursive page fault @ rip ", (void*)regs[REG_rip], " while accessing ", (void*)faultaddr, " (error code ", pfec, ")", endl, flush;
     cerr << "Registers:", endl;
-    cerr << *regs, endl;
-    print_stack(cerr, regs->rsp);
+    print_regs(cerr, regs);
+    print_stack(cerr, regs[REG_rsp]);
+    cerr.flush();
+    logfile.flush();
     xen_shutdown_domain(SHUTDOWN_crash);
   }
 
   page_fault_in_progress = 1;
 
-  if (inrange(faultaddr, (Waddr)PHYS_VIRT_BASE, (Waddr)(((PHYS_VIRT_BASE + bootinfo.total_machine_pages) * PAGE_SIZE) - 1))) {
+  if likely (inrange(faultaddr, PHYS_VIRT_BASE, (PHYS_VIRT_BASE + ((Waddr)bootinfo.total_machine_pages * PAGE_SIZE) - 1))) {
     mfn_t mfn = (faultaddr - (Waddr)PHYS_VIRT_BASE) >> 12;
-    // cerr << "Mapping previously unmapped physical mfn ", mfn, "...", endl, flush;
-
     int level2_slot_index = mfn / PTES_PER_PAGE;
-    // cerr << "Level 2 slot index: ", level2_slot_index, endl, flush;
-
     Level2PTE& l2pte = bootinfo.phys_level2_pagedir[level2_slot_index];
-
     Level1PTE& l1pte = bootinfo.phys_pagedir[mfn];
 
-    if (!l2pte.p) {
+    if unlikely (!l2pte.p) {
+      //
+      // Level 2 PTE was not present: either this is the first
+      // access or it was fast cleared by unmap_address_space().
+      // In any case, re-establish it after clearing any old
+      // PTEs from the corresponding L1 page.
+      //
       Level1PTE* l1page = floorptr(&l1pte, PAGE_SIZE);
-
-      // logfile << "Unpin L1 page table page at ", l1page, " (mfn ", ptl_virt_to_mfn(l1page), ")", "...", endl, flush;
-      // logfile << "Current value at start of page: ", l1page[0], endl, flush;
-
-      pin_page_table_page(l1page, 0); // (may not even be pinned yet)
       assert(make_ptl_page_writable(l1page, 1) == 0);
       ptl_zero_private_page(l1page);
       assert(make_ptl_page_writable(l1page, 0) == 0);
-      assert(pin_page_table_page(l1page, 1) == 0);
 
-      // logfile << "Marking L2 PTE ", level2_slot_index, " (for L1 mfn ", l2pte.next, ")", " present...", endl, flush;
-      Level2PTE l2temp = l2pte;
-      l2temp.p = 1;
-      assert(update_ptl_pte(l2pte, l2temp) == 0);
+      assert(update_ptl_pte(l2pte, l2pte.P(1)) == 0);
 
-      if (logable(1)) logfile << "[PTLsim Page Fault Handler] ", (void*)faultaddr, ": added L2 PTE ", level2_slot_index, " (L1 mfn ", l2pte.next, ") to PTLsim physmap", endl;
+      if (logable(2) | force_page_fault_logging) {
+        logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ",
+          (void*)faultaddr, ": added L2 PTE slot ", level2_slot_index, " (L1 mfn ",
+          l2pte.mfn, ") to PTLsim physmap", endl;
+      }
     }
 
+    //
+    // Page was not present: try to map the page read-write
+    //
     Level1PTE pte = 0;
     pte.p = 1;
-    pte.rw = 1; // assume it's read/write first
+    pte.rw = 1;
     pte.us = 1;
-    pte.phys = mfn;
+    pte.mfn = mfn;
+    
+    rc = (force_readonly_physmap) ? -EINVAL : update_ptl_pte(l1pte, pte);
 
-    rc = update_ptl_pte(l1pte, pte);
-
-    if (rc) {
+    if unlikely (rc) {
+      //
       // It's a special page and must be marked read-only:
+      //
       pte.rw = 0;
       rc = update_ptl_pte(l1pte, pte);
-
+      
       if (rc) {
-        cerr << "ERROR: Cannot map mfn ", mfn, " (for virt ", (void*)faultaddr, ") into the address space! Does it belong to the domain?", endl, flush;
-        abort();
+        logfile << "ERROR: Cannot map mfn ", mfn, " (for virt ", (void*)faultaddr, ") into the address space (requested from rip ", (void*)regs[REG_rip], "). Does it belong to the domain?", endl;
+        logfile << "Stopped at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+        logfile << flush;
+        cerr << flush;
+        xen_shutdown_domain(SHUTDOWN_crash);
       }
 
-      if (logable(1)) logfile << "[PTLsim Page Fault Handler] ", (void*)faultaddr, ": added read-only L1 PTE at ", &l1pte, " for guest mfn ", mfn, endl;
+      if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
     } else {
-      if (logable(1)) logfile << "[PTLsim Page Fault Handler] ", (void*)faultaddr, ": added L1 PTE at ", &l1pte, " for guest mfn ", mfn, endl;
+      if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
     }
   } else {
-    cerr << "PTLsim Internal Error: page fault @ rip ", (void*)regs->rip, " while accessing ", (void*)faultaddr, " (error code ", (void*)(Waddr)error_code, ")", endl;
+    cerr << "PTLsim Internal Error: page fault @ rip ", (void*)regs[REG_rip], " while accessing ", (void*)faultaddr, " (error code ", pfec, "); rsp ", get_rsp(), endl;
     cerr << "Registers:", endl;
-    cerr << *regs, endl;
-    print_stack(cerr, regs->rsp);
-    abort();
+    print_regs(cerr, regs);
+    print_stack(cerr, regs[REG_rsp]);
+    cerr.flush();
+    logfile.flush();
+    xen_shutdown_domain(SHUTDOWN_crash);
+    asm("ud2a");
   }
 
-  // Return
   page_fault_in_progress = 0;
-}
-
-extern "C" void do_debug(struct pt_regs* regs) {
-#define TF_MASK 0x100
-  regs->eflags &= ~TF_MASK;
-  do_trap(EXCEPTION_x86_debug, "debug", regs, 0);
-}
-
-extern "C" void do_spurious_interrupt_bug(struct pt_regs* regs) { }
-
-/*
- * Submit a virtual IDT to the hypervisor. This consists of tuples
- * (interrupt vector, privilege ring, CS:EIP of handler).
- * The 'privilege ring' field specifies the least-privileged ring that
- * can trap to that vector using a software-interrupt instruction (INT).
- */
-static trap_info_t trap_table[] = {
-  {  0, 0, FLAT_KERNEL_CS, (Waddr)&divide_error                },
-  {  1, 0, FLAT_KERNEL_CS, (Waddr)&debug                       },
-  {  3, 3, FLAT_KERNEL_CS, (Waddr)&int3                        },
-  {  4, 3, FLAT_KERNEL_CS, (Waddr)&overflow                    },
-  {  5, 3, FLAT_KERNEL_CS, (Waddr)&bounds                      },
-  {  6, 0, FLAT_KERNEL_CS, (Waddr)&invalid_op                  },
-  {  7, 0, FLAT_KERNEL_CS, (Waddr)&device_not_available        },
-  {  9, 0, FLAT_KERNEL_CS, (Waddr)&coprocessor_segment_overrun },
-  { 10, 0, FLAT_KERNEL_CS, (Waddr)&invalid_tss                 },
-  { 11, 0, FLAT_KERNEL_CS, (Waddr)&segment_not_present         },
-  { 12, 0, FLAT_KERNEL_CS, (Waddr)&stack_segment               },
-  { 13, 0, FLAT_KERNEL_CS, (Waddr)&general_protection          },
-  { 14, 0, FLAT_KERNEL_CS, (Waddr)&page_fault                  },
-  { 15, 0, FLAT_KERNEL_CS, (Waddr)&spurious_interrupt_bug      },
-  { 16, 0, FLAT_KERNEL_CS, (Waddr)&coprocessor_error           },
-  { 17, 0, FLAT_KERNEL_CS, (Waddr)&alignment_check             },
-  { 19, 0, FLAT_KERNEL_CS, (Waddr)&simd_coprocessor_error      },
-  {  0, 0, 0,              0                                   }
-};
-
-//
-// This is required before switching back to native mode, since we may have
-// read/write maps of pages that the guest kernel thinks are read-only
-// everywhere; this will cause later pin operations to fail.
-//
-// We scan the physmap L2 page table, looking for L1 pages that were filled
-// in on demand by PTLsim's page fault handler. If the present bit was set,
-// we first clear the L2 PTE's present bit, then unpin the L1 page.
-//
-void unmap_address_space() {
-  Waddr physmap_level1_pages = ceil(bootinfo.total_machine_pages, PTES_PER_PAGE) / PTES_PER_PAGE;
-	mmu_update_t* updates = (mmu_update_t*)ptl_alloc_private_pages(physmap_level1_pages * sizeof(mmu_update_t));
-  mmuext_op_t* unpins = (mmuext_op_t*)ptl_alloc_private_pages(physmap_level1_pages * sizeof(mmuext_op_t));
-
-  int n = 0;
-
-  logfile << "unmap_address_space: check ", physmap_level1_pages, " PTEs:", endl, flush;
-
-  foreach (i, physmap_level1_pages) {
-    Level2PTE& l2pte = bootinfo.phys_level2_pagedir[i];
-    if (l2pte.p) {
-      assert(n < physmap_level1_pages);
-      updates[n].ptr = (W64)ptl_virt_to_phys(&l2pte);
-      Level2PTE newpte = l2pte;
-      newpte.p = 0;
-      updates[n].val = newpte;
-
-      unpins[n].cmd = MMUEXT_UNPIN_TABLE;
-      unpins[n].arg1.mfn = newpte.next;
-      logfile << "  update ", intstring(n, 6), ": pte ", intstring(i, 6), " <= ", (Level2PTE)newpte, endl;
-      n++;
-    }
-  }
-
-  logfile << flush;
-
-  int update_count;
-  int rc;
-
-  update_count = 0;
-  rc = HYPERVISOR_mmu_update(updates, n, &update_count, DOMID_SELF);
-
-  logfile << "  mmu_update: updated ", update_count, " out of ", n, " L2 PTEs (rc ", rc, ")", endl, flush;
-
-  update_count = 0;
-  rc = HYPERVISOR_mmuext_op(unpins, n, &update_count, DOMID_SELF);
-  logfile << "  mmuext_unpin: updated ", update_count, " out of ", n, " L2 PTEs (rc ", rc, ")", endl, flush;
-
-	ptl_free_private_pages(updates, physmap_level1_pages * sizeof(mmu_update_t));
-  ptl_free_private_pages(unpins, physmap_level1_pages * sizeof(mmuext_op_t));
 }
 
 //
@@ -1620,75 +2039,6 @@ static const char* hypercall_names[] = {
   "event_channel_op", "physdev_op"
 };
 
-int virq_and_vcpu_to_port[NR_VIRQS][MAX_VIRT_CPUS];
-W8s port_to_vcpu[NR_EVENT_CHANNELS];
-
-int shadow_evtchn_unmask(unsigned int port) {
-  if (port >= NR_EVENT_CHANNELS) return 0;
-
-  int vcpu_to_notify = port_to_vcpu[port];
-
-  if (port_to_vcpu[port] < 0) {
-    logfile << "unmask_evtchn: port ", port, " is not bound to any VCPU", endl;
-    return 0;
-  }
-
-  // Equivalent to xen/common/event_channel.c evtchn_unmask():
-
-  if (sshinfo_evtchn_mask[port].testclear() &&
-      sshinfo_evtchn_pending[port] &&
-      (!(sshinfo_evtchn_pending_sel(vcpu_to_notify)[port / (sizeof(unsigned long) * 8)].testset()))) {
-    // vcpu_mark_events_pending(v);
-
-    if (!xchg(sshinfo.vcpu_info[vcpu_to_notify].evtchn_upcall_pending, (byte)1)) {
-      logfile << "shadow_evtchn_unmask(", port, "): event delivery: making vcpu ", vcpu_to_notify, " runnable", endl;
-      // vcpu_kick(v);
-      return 1;
-    }
-  }
-
-  return 0;
-}
-
-bool shadow_evtchn_set_pending(unsigned int port) {
-  int vcpu_to_notify = port_to_vcpu[port];
-
-  logfile << "Set pending for port ", port, " mapped to vcpu ", vcpu_to_notify, ":", endl;
-
-  if unlikely (vcpu_to_notify < 0) {
-    logfile << "  Not bound to any VCPU", endl;
-    return false;
-  }
-
-  if unlikely (sshinfo_evtchn_pending[port].testset()) {
-    logfile << "  Already pending", endl;
-    return false;
-  }
-
-  bool masked = sshinfo_evtchn_mask[port];
-
-  if unlikely (masked) {
-    logfile << "  Event masked", endl;
-    return false;
-  }
-
-  if unlikely (sshinfo_evtchn_pending_sel(vcpu_to_notify)[port / (sizeof(unsigned long) * 8)].testset()) {
-    logfile << "  Event already pending in evtchn_pending_sel", endl;
-    return false;
-  }
-
-  logfile << "  Mark vcpu ", vcpu_to_notify, " events pending", endl;
-
-  // ++MTY Do we have to check if any VCPU is polling too?
-
-  if likely (!xchg(sshinfo.vcpu_info[vcpu_to_notify].evtchn_upcall_pending, (byte)1)) {
-    logfile << "  Kick vcpu", endl;
-    return true;
-  } else {
-    logfile << "  VCPU already kicked", endl;
-    return false;
-  }
-}
 
 #ifdef __x86_64__
 #define GUEST_KERNEL_RPL 3
@@ -1715,12 +2065,28 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   // Args in %rdi %rsi %rdx %r10 %r8 %r9 (identical to Linux syscall interface)
   // (see arch/x86/domain.c)
   //
+  // Normal x86-64 userspace ABI:
+  //
+  // Callee must preserve: rbx rsp rbp r12 r13 r14 r15
+  // Args passed in:       rdi rsi rdx rcx r8 r9        (syscalls replace rcx with r10 since processor overwrites rcx)
+  // Available:            rax r10 r11
+  //
 
-  logfile << "hypercall: ", hypercallid, " (", ((hypercallid < lengthof(hypercall_names)) ? hypercall_names[hypercallid] : "???"), 
-    ") on vcpu ", ctx.vcpuid, " from ", (void*)ctx.commitarf[REG_rip], " args (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
-    (void*)arg5, ", ", (void*)arg6, ") at cycle ", iterations, " (", total_user_insns_committed, " commits)", endl, flush;
+  static const bool force_hypercall_logging = 0;
+  bool debug = logable(1) | force_hypercall_logging;
 
-  W64 rc;
+  if (debug) {
+    logfile << "hypercall: ", hypercallid, " (", ((hypercallid < lengthof(hypercall_names)) ? hypercall_names[hypercallid] : "???"), 
+      ") on vcpu ", ctx.vcpuid, " from ", (void*)ctx.commitarf[REG_rip], " ", flush;
+    // Get real return address from stack, above push of %rcx and %r11
+    void* real_retaddr;
+    int stackn = ctx.copy_from_user(&real_retaddr, (ctx.commitarf[REG_rsp] + 8*2), 8);
+    logfile << "real ret addr "; if (stackn) logfile << real_retaddr; else logfile << "<unknown>";
+    logfile << " args (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
+      (void*)arg5, ", ", (void*)arg6, ") at cycle ", iterations, " (", total_user_insns_committed, " commits)", endl, flush;
+  }
+
+  W64s rc;
 
   PageFaultErrorCode pfec;
   Waddr faultaddr;
@@ -1762,9 +2128,24 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       int n = ctx.copy_from_user(&req, (Waddr)&reqp[i], sizeof(mmu_update_t), pfec, faultaddr);
       if (n < sizeof(mmu_update_t)) break;
       mfn_t mfn = req.ptr >> 12;
-      if (mfn >= bootinfo.total_machine_pages) continue;
+      if (mfn >= bootinfo.total_machine_pages) {
+        if (debug) logfile << "  mfn out of range (", bootinfo.total_machine_pages, ")", endl, flush;
+        continue;
+      }
 
-      logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", (Level1PTE)req.val, endl, flush;
+      //
+      // If we're updating an L4/L3/L2 page and the new PTE data specifies
+      // a page we currently have mapped read/write, we must unmap it first
+      // since Xen will not let the page table page reference it otherwise.
+      //
+      // The actual mfn we're modifying must already be a page table page;
+      // hence we would only have a read only mapping of it anyway.
+      //
+
+      Level1PTE newpte(req.val);
+      if (newpte.p) unmap_phys_page(newpte.mfn);
+
+      if (debug) logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", (Level1PTE)req.val, endl, flush;
 
       int update_count;
       rc = HYPERVISOR_mmu_update(&req, 1, &update_count, arg4);
@@ -1790,10 +2171,6 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     // __HYPERVISOR_set_callbacks only needed during boot
 
   case __HYPERVISOR_fpu_taskswitch: {
-    //
-    //++MTY TODO: All commits to FPU or SSE state MUST check the TS flag in CR0.
-    // If TS is set, the processor must take a device_not_available exception!
-    //
     ctx.cr0.ts = arg1;
     rc = 0;
     break;
@@ -1825,28 +2202,48 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     // __HYPERVISOR_multicall handled elsewhere
 
   case __HYPERVISOR_update_va_mapping: {
-    //
-    // This is just a simplified version of mmu_update, using the current page table base.
-    // We need to emulate it since PTLsim has its own page tables in effect.
-    //
     Waddr va = arg1;
     Waddr ptephys = virt_to_pte_phys_addr(va, ctx.cr3 >> 12);
     if (!ptephys) {
-      logfile << "hypercall: update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12), ": cannot resolve PTE address", endl, flush;
+      if (debug) logfile << "hypercall: update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12), ": cannot resolve PTE address", endl, flush;
       rc = -EINVAL;
       break;
     }
 
+    Waddr flags = arg3;
+
+    if (debug) logfile << "hypercall: update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12),
+      " -> pte @ phys ", (void*)ptephys, ") <= ", Level1PTE(arg2), ", flags ", (void*)(Waddr)flags,
+      " (flushtype ", (flags & UVMF_FLUSHTYPE_MASK), ")", endl, flush;
+
+    if (flags & ~UVMF_FLUSHTYPE_MASK) {
+      Waddr* flush_bitmap_ptr = (Waddr*)(flags & ~UVMF_FLUSHTYPE_MASK);
+      // pointer was specified: get it and thunk the address
+      Waddr flush_bitmap;
+      if (ctx.copy_from_user(&flush_bitmap, (Waddr)flush_bitmap_ptr, sizeof(flush_bitmap)) != sizeof(flush_bitmap)) {
+        if (debug) logfile << "hypercall: update_va_mapping: va ", (void*)va, "; flush bitmap ptr ", flush_bitmap_ptr, " not accessible", endl, flush;
+        rc = -EFAULT;
+        break;
+      }
+      flags = (((Waddr)&flush_bitmap) & ~UVMF_FLUSHTYPE_MASK) | (flags & UVMF_FLUSHTYPE_MASK);
+      if (debug) logfile << "Copied flush bitmap ", bitstring(flush_bitmap, 64, true), "; new flags ", hexstring(flags, 64), endl, flush;
+    }
+
+    int targetmfn = Level1PTE(arg2).mfn;
+
+    if (debug) logfile << "  Old PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), endl, flush;
+
+    rc = HYPERVISOR_update_va_mapping(va, arg2, arg3);
+    /*
+    // Can also be converted to an mmu_update call if we don't have PTLsim in the same
+    // address space as the guest. Currently this is not necessary:
     mmu_update_t u;
     u.ptr = ptephys;
     u.val = arg2;
     rc = HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
+    */
 
-    Waddr flags = arg3;
-
-    logfile << "hypercall: update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12),
-      " -> pte @ phys ", (void*)ptephys, ") <= ", Level1PTE(arg2), ", flags ", (void*)(Waddr)flags,
-      " (flushtype ", (flags & UVMF_FLUSHTYPE_MASK), ") => rc ", rc, endl, flush;
+    if (debug) logfile << "  New PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), " (rc ", rc, ")", endl, flush;
 
     if (flags & UVMF_FLUSHTYPE_MASK) {
       foreach (i, bootinfo.vcpu_count) {
@@ -1875,12 +2272,12 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       //
       ctx.timer_cycle = ctx.base_tsc + sim_cycle + timer_interrupt_period_in_cycles;
 
-      logfile << "hypercall: set_timer_op: timeout ", trigger_nsecs_since_boot, " nsec since boot = ", 
+      if (debug) logfile << "hypercall: set_timer_op: timeout ", trigger_nsecs_since_boot, " nsec since boot = ", 
         ctx.timer_cycle, " cycles since boot (", trigger_cycles_in_future, " cycles in future = ",
         (trigger_nsecs_since_boot - sshinfo.vcpu_info[0].time.system_time), " nsec in future)", endl;
     } else {
       ctx.timer_cycle = infinity;
-      logfile << "hypercall: set_timer_op: cancel timer", endl;
+      if (debug) logfile << "hypercall: set_timer_op: cancel timer", endl;
     }
     rc = 0;
     break;
@@ -1933,18 +2330,21 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         // has its own page table in effect, we need to do the virt->PTE-to-modify mapping
         // ourselves, replace the host_addr field and add in the GNTMAP_contains_pte flag.
         //
+        //++MTY NOTE: This is no longer required since we cohabitate the same virtual
+        // address space as the real page table base at all times.
+        //
       case GNTTABOP_map_grant_ref: {
         getreq(gnttab_map_grant_ref);
-        logfile << "GNTTABOP_map_grant_ref(host_addr ", (void*)(Waddr)req.host_addr, ", flags ", req.flags,
+        if (debug) logfile << "GNTTABOP_map_grant_ref(host_addr ", (void*)(Waddr)req.host_addr, ", flags ", req.flags,
           ", ref ", req.ref, ", dom ", req.dom, ")", endl;
-        logfile << "map_grant_ref is not supported yet!", endl;
+        if (debug) logfile << "map_grant_ref is not supported yet!", endl;
         abort();
       }
       case GNTTABOP_unmap_grant_ref: {
         getreq(gnttab_map_grant_ref);
-        logfile << "GNTTABOP_unmap_grant_ref(host_addr ", (void*)(Waddr)req.host_addr,
+        if (debug) logfile << "GNTTABOP_unmap_grant_ref(host_addr ", (void*)(Waddr)req.host_addr,
           ", dev_bus_addr ", (void*)(Waddr)req.dev_bus_addr, ", handle ", (void*)(Waddr)req.handle, ")", endl, flush;
-        logfile << "unmap_grant_ref is not supported yet!", endl;
+        if (debug) logfile << "unmap_grant_ref is not supported yet!", endl;
         abort();
       }
       case GNTTABOP_setup_table: {
@@ -1953,10 +2353,10 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         unsigned long frames[4]; // on x86 and x86-64, NR_GRANT_FRAMES is always 1<<2 == 4
         int framecount = min(req.nr_frames, (W32)lengthof(frames));
         req.frame_list.p = frames;
-        logfile << "GNTTABOP_setup_table(dom ", req.dom, ", nr_frames ", req.nr_frames, ", frame_list ", orig_frame_list, ")", endl, flush;
+        if (debug) logfile << "GNTTABOP_setup_table(dom ", req.dom, ", nr_frames ", req.nr_frames, ", frame_list ", orig_frame_list, ")", endl, flush;
         rc = HYPERVISOR_grant_table_op(GNTTABOP_setup_table, &req, 1);
         req.frame_list.p = orig_frame_list;
-        logfile << "  Frames:"; foreach (i, framecount) { logfile << " ", frames[i]; }; logfile << ", status ", req.status, endl, flush;
+        if (debug) { logfile << "  Frames:"; foreach (i, framecount) { logfile << " ", frames[i]; }; logfile << ", status ", req.status, endl, flush; }
         assert(ctx.copy_to_user((Waddr)orig_frame_list, &frames, framecount * sizeof(unsigned long), pfec, faultaddr) == (framecount * sizeof(unsigned long)));
         putreq(gnttab_setup_table);
         arg2 += sizeof(req);
@@ -1965,7 +2365,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       case GNTTABOP_transfer: {
         getreq(gnttab_transfer);
         ctx.flush_tlb();
-        logfile << "GNTTABOP_transfer(mfn ", req.mfn, ", domid ", req.domid, ", ref ", req.ref, ")", endl, flush;
+        if (debug) logfile << "GNTTABOP_transfer(mfn ", req.mfn, ", domid ", req.domid, ", ref ", req.ref, ")", endl, flush;
         unmap_phys_page(req.mfn);
         rc = HYPERVISOR_grant_table_op(GNTTABOP_transfer, &req, 1);
         putreq(gnttab_transfer);
@@ -1973,7 +2373,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         break;
       }
       default: {
-        logfile << "hypercall: grant_table_op: unknown op ", arg1, endl, flush;
+        if (debug) logfile << "hypercall: grant_table_op: unknown op ", arg1, endl, flush;
         rc = -EINVAL;
         abort();
         break;
@@ -1998,7 +2398,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       vcpu_register_runstate_memory_area req;
       if (ctx.copy_from_user(&req, (Waddr)arg3, sizeof(req), pfec, faultaddr) != sizeof(req)) { rc = -EFAULT; break; }
       if (arg2 >= bootinfo.vcpu_count) { rc = -EINVAL; break; }
-      logfile << "hypercall: vcpu_op: register_runstate_memory_area: registered virt ", req.addr.v, " for runstate info on vcpu ", arg2, endl, flush;
+      if (debug) logfile << "hypercall: vcpu_op: register_runstate_memory_area: registered virt ", req.addr.v, " for runstate info on vcpu ", arg2, endl, flush;
       // Since this is virtual, we need to check it every time we "reschedule" the VCPU:
       contextof(arg2).user_runstate = (RunstateInfo*)req.addr.v;
 
@@ -2013,7 +2413,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       break;
     }
     default:
-      logfile << "hypercall: vcpu_op ", arg1, " not implemented!", endl, flush;
+      if (debug) logfile << "hypercall: vcpu_op ", arg1, " not implemented!", endl, flush;
       abort();
     }
 
@@ -2054,7 +2454,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       break;
     }
     default:
-      logfile << "hypercall: set_segment_base: unknown segment id ", arg1, endl;
+      if (debug) logfile << "hypercall: set_segment_base: unknown segment id ", arg1, endl;
       abort();
     }
 
@@ -2078,27 +2478,52 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       case MMUEXT_PIN_L3_TABLE:
       case MMUEXT_PIN_L4_TABLE:
       case MMUEXT_UNPIN_TABLE: {
-        mfn_t mfn = req.arg1.mfn >> 12;
+        mfn_t mfn = req.arg1.mfn;
         if (mfn >= bootinfo.total_machine_pages) continue;
 
         //
         // Unmap the requisite pages from our physmap since we may be making them read only.
         // It will be remapped by the PTLsim page fault handler on demand.
         //
-        unmap_phys_page(mfn);
-        logfile << "hypercall: mmuext_op: unmap mfn ", mfn, " (pin/unpin operation ", req.cmd, ")", endl, flush;
+        const Level1PTE* pinptes = (Level1PTE*)phys_to_mapped_virt(mfn << 12);
+        Level1PTE pte0 = pinptes[0];
+
+        if (debug) logfile << "hypercall: mmuext_op: map/unmap mfn ", mfn, " (pin/unpin operation ", req.cmd, ")", endl, flush;
+
+        if (req.cmd != MMUEXT_UNPIN_TABLE) {
+          // Unmapping only required when pinning, not unpinning
+          // It's actually more efficient to just unmap everything:
+          // constant time (1 L2 page scan) for systems with only a
+          // few GB of physical memory:
+          // (slower) unmap_phys_page_tree(mfn);
+          unmap_address_space();
+        }
 
         int update_count = 0;
         rc = HYPERVISOR_mmuext_op(&req, 1, &update_count, arg4);
+
+        if (rc) {
+          logfile << "  mmuext_op rc was ", rc, endl, flush;
+          page_type_t pagetype = query_page(mfn);
+          logfile << "Page type for mfn ", mfn, ": ", pagetype, endl, flush;
+          abort(); // so we don't overflow xen dmesg
+          unmap_address_space();
+          find_all_mappings_of_mfn(mfn);
+          logfile << "Actual page to pin (mfn ", mfn, "): ", endl, flush;
+          print_page_table_with_types(logfile, (Level1PTE*)phys_to_mapped_virt(mfn << 12));
+        }
+
         total_updates += update_count;
         break;
       }
       case MMUEXT_NEW_BASEPTR: {
-        logfile << "hypercall: mmuext_op: new kernel baseptr is mfn ",
+        if (debug) logfile << "hypercall: mmuext_op: new kernel baseptr is mfn ",
           req.arg1.mfn, " on vcpu ", ctx.vcpuid, ")", endl, flush;
+        unmap_phys_page(req.arg1.mfn);
         ctx.kernel_ptbase_mfn = req.arg1.mfn;
         ctx.cr3 = ctx.kernel_ptbase_mfn << 12;
         ctx.flush_tlb();
+        switch_page_table(ctx.kernel_ptbase_mfn);
         total_updates++;
         rc = 0;
         break;
@@ -2106,7 +2531,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       case MMUEXT_TLB_FLUSH_LOCAL:
       case MMUEXT_INVLPG_LOCAL: {
         bool single = (req.cmd == MMUEXT_INVLPG_LOCAL);
-        logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " local (vcpu ", ctx.vcpuid, ") @ ",
+        if (debug) logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " local (vcpu ", ctx.vcpuid, ") @ ",
           (void*)(Waddr)req.arg1.linear_addr, endl, flush;
         if (single)
           ctx.flush_tlb_virt(req.arg1.linear_addr);
@@ -2121,7 +2546,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         int n = ctx.copy_from_user(&vcpumask, (Waddr)req.arg2.vcpumask, sizeof(vcpumask), pfec, faultaddr);
         if (n != sizeof(vcpumask)) { rc = -EFAULT; break; }
         bool single = (req.cmd == MMUEXT_INVLPG_MULTI);
-        logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " multi (mask ", 
+        if (debug) logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " multi (mask ", 
           bitstring(vcpumask, bootinfo.vcpu_count), " @ ", (void*)(Waddr)req.arg1.linear_addr, endl, flush;
         if (single) {
           foreach (i, bootinfo.vcpu_count) {
@@ -2139,7 +2564,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       case MMUEXT_TLB_FLUSH_ALL:
       case MMUEXT_INVLPG_ALL: {
         bool single = (req.cmd == MMUEXT_INVLPG_ALL);
-        logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " all @ ",
+        if (debug) logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " all @ ",
           (void*)(Waddr)req.arg1.linear_addr, endl, flush;
         if (single) {
           foreach (i, bootinfo.vcpu_count) contextof(i).flush_tlb_virt(req.arg1.linear_addr);
@@ -2151,7 +2576,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         break;
       }
       case MMUEXT_FLUSH_CACHE: {
-        logfile << "hypercall: mmuext_op: flush_cache on vcpu ", ctx.vcpuid, endl, flush;
+        if (debug) logfile << "hypercall: mmuext_op: flush_cache on vcpu ", ctx.vcpuid, endl, flush;
         total_updates++;
         rc = 0;
         break;
@@ -2160,7 +2585,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         ctx.ldtvirt = req.arg1.linear_addr;
         ctx.ldtsize = req.arg2.nr_ents;
 
-        logfile << "hypercall: mmuext_op: set_ldt to virt ", (void*)(Waddr)ctx.ldtvirt, " with ",
+        if (debug) logfile << "hypercall: mmuext_op: set_ldt to virt ", (void*)(Waddr)ctx.ldtvirt, " with ",
           ctx.ldtsize, " entries on vcpu ", ctx.vcpuid, endl, flush;
 
         total_updates++;
@@ -2168,7 +2593,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         break;
       }
       case MMUEXT_NEW_USER_BASEPTR: { // (x86-64 only)
-        logfile << "hypercall: mmuext_op: new user baseptr is mfn ",
+        if (debug) logfile << "hypercall: mmuext_op: new user baseptr is mfn ",
           req.arg1.mfn, " on vcpu ", ctx.vcpuid, ")", endl, flush;
         ctx.user_ptbase_mfn = req.arg1.mfn;
         //
@@ -2185,7 +2610,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         break;
       }
       default:
-        logfile << "hypercall: mmuext_op: unknown op ", req.cmd, endl, flush;
+        if (debug) logfile << "hypercall: mmuext_op: unknown op ", req.cmd, endl, flush;
         rc = -EINVAL;
         abort();
         break;
@@ -2204,7 +2629,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     switch (arg1) {
     case SCHEDOP_yield: {
       // Take no action: under PTLsim, the guest VCPU appears to run continuously
-      logfile << "hypercall: sched_op: yield VCPU ", ctx.vcpuid, endl, flush;
+      if (debug) logfile << "hypercall: sched_op: yield VCPU ", ctx.vcpuid, endl, flush;
       break;
     }
     case SCHEDOP_block: {
@@ -2216,7 +2641,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       //
       // Xen implicitly unmasks events when we do this. 
       // 
-      logfile << "hypercall: sched_op: blocking VCPU ", ctx.vcpuid, endl, flush;
+      if (debug) logfile << "hypercall: sched_op: blocking VCPU ", ctx.vcpuid, endl, flush;
       ctx.change_runstate(RUNSTATE_blocked);
       sshinfo.vcpu_info[ctx.vcpuid].evtchn_upcall_mask = 0;
       break;
@@ -2238,14 +2663,20 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 #define doreq(type) case EVTCHNOP_##type: { getreq(evtchn_##type); rc = HYPERVISOR_event_channel_op(arg1, &req); putreq(evtchn_##type); break; }
 
     switch (arg1) {
-      doreq(alloc_unbound);
-      doreq(bind_interdomain);
-      doreq(bind_pirq);
-      doreq(bind_ipi);
-      doreq(close);
-      doreq(send);
-      doreq(status);
-      doreq(bind_vcpu);
+    case EVTCHNOP_alloc_unbound: {
+      getreq(evtchn_alloc_unbound);
+      rc = HYPERVISOR_event_channel_op(arg1, &req);
+      if (debug) logfile << "hypercall: evtchn_alloc_unbound {dom = ", req.dom, ", remote_dom = ", req.remote_dom, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+      putreq(evtchn_alloc_unbound);
+      break;
+    }
+    case EVTCHNOP_bind_interdomain: {
+      getreq(evtchn_bind_interdomain);
+      rc = HYPERVISOR_event_channel_op(arg1, &req);
+      if (debug) logfile << "hypercall: evtchn_bind_interdomain {remote_dom = ", req.remote_dom, ", remote_port = ", req.remote_port, "} => {local_port = ", req.local_port, "}", ", rc ", rc, endl;
+      putreq(evtchn_bind_interdomain);
+      break;
+    }
     case EVTCHNOP_bind_virq: {
       //
       // PTLsim needs to monitor attempts to bind the VIRQ_TIMER interrupt so we can
@@ -2253,15 +2684,60 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       //
       getreq(evtchn_bind_virq);
       rc = HYPERVISOR_event_channel_op(arg1, &req);
+
+      if (debug) logfile << "hypercall: evtchn_bind_virq {virq = ", req.virq, ", vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+
       if (rc == 0) {
-        logfile << "EVTCHNOP_bind_virq: bound virq ", req.virq, " on vcpu ", req.vcpu, " -> port ", req.port, endl, flush;
         assert(req.vcpu < bootinfo.vcpu_count);
         assert(req.virq < lengthof(contextof(req.vcpu).virq_to_port));
         contextof(req.vcpu).virq_to_port[req.virq] = req.port;
         assert(req.port < NR_EVENT_CHANNELS);
         port_to_vcpu[req.port] = req.vcpu;
+        // PTLsim generates its own timer interrupts
+        if (req.virq == VIRQ_TIMER) {
+          if (debug) logfile << "Assigned timer VIRQ ", req.virq, " on VCPU ", req.vcpu, " to port ", req.port, endl;
+          mask_evtchn(req.port);
+          always_mask_port[req.port] = 1;
+        }
       }
       putreq(evtchn_bind_virq);
+      break;
+    }
+    case EVTCHNOP_bind_ipi: {
+      getreq(evtchn_bind_ipi);
+      rc = HYPERVISOR_event_channel_op(arg1, &req);
+      if (debug) logfile << "hypercall: evtchn_bind_ipi {vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+      if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
+      putreq(evtchn_bind_ipi);
+      break;
+    }
+    case EVTCHNOP_close: {
+      getreq(evtchn_close);
+      rc = HYPERVISOR_event_channel_op(arg1, &req);
+      if (debug) logfile << "hypercall: evtchn_close {port = ", req.port, "}", ", rc ", rc, endl;
+      putreq(evtchn_close);
+      break;
+    }
+    case EVTCHNOP_send: {
+      getreq(evtchn_send);
+      rc = HYPERVISOR_event_channel_op(arg1, &req);
+      if (debug) logfile << "hypercall: evtchn_send {port = ", req.port, "}", ", rc ", rc, endl;
+      putreq(evtchn_send);
+      break;
+    }
+    case EVTCHNOP_status: {
+      getreq(evtchn_status);
+      rc = HYPERVISOR_event_channel_op(arg1, &req);
+      if (debug) logfile << "hypercall: evtchn_status {...}", ", rc ", rc, endl;
+      putreq(evtchn_status);
+      break;
+    }
+    case EVTCHNOP_bind_vcpu: {
+      getreq(evtchn_bind_vcpu);
+      rc = HYPERVISOR_event_channel_op(arg1, &req);
+      if (debug) logfile << "hypercall: evtchn_bind_vcpu {port = ", req.port, ", vcpu = ", req.vcpu, "}", ", rc ", rc, endl;
+      if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
+      putreq(evtchn_bind_vcpu);
       break;
     }
     case EVTCHNOP_unmask: {
@@ -2270,7 +2746,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       // virtual shinfo page, and potentially simulate an upcall.
       //
       getreq(evtchn_unmask);
-      logfile << "hypercall: event_channel_op: unmask port ", req.port, endl;
+      if (debug) logfile << "hypercall: evtchn_unmask {port = ", req.port, "}, rc ", rc, endl;
       shadow_evtchn_unmask(req.port);
       rc = 0;
       putreq(evtchn_unmask);
@@ -2286,11 +2762,11 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     // __HYPERVISOR_physdev_op not needed in domU
 
   default:
-    logfile << "Cannot handle hypercall ", hypercallid, "!", endl, flush;
+    if (debug) logfile << "Cannot handle hypercall ", hypercallid, "!", endl, flush;
     abort();
   }
 
-  logfile << "  Returning rc ", rc, endl, flush;
+  if (debug) logfile << "  Returning rc ", rc, endl, flush;
 
   return rc;
 }
@@ -2335,7 +2811,7 @@ void handle_xen_hypercall_assist(Context& ctx) {
       PageFaultErrorCode pfec;
 
       if (ctx.copy_from_user(&req, reqp, sizeof(req), pfec, faultaddr) != sizeof(req)) {
-        ctx.commitarf[REG_rax] = -EFAULT;
+        ctx.commitarf[REG_rax] = (W64)(-EFAULT);
         return;
       }
 
@@ -2352,11 +2828,12 @@ void handle_xen_hypercall_assist(Context& ctx) {
     Waddr faultaddr;
     if (ctx.copy_from_user(&iretctx, ctx.commitarf[REG_rsp], sizeof(iretctx), pfec, faultaddr) != sizeof(iretctx)) { abort(); }
 
-    if (logable(2)) logfile << "IRET from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ", (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", iretctx, endl;
+    if (logable(2)) logfile << "IRET from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ", (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", iretctx, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl, flush;
 
-    if ((iretctx.cs & 3) == 3) {
+    if likely ((iretctx.cs & 3) == 3) {
       // Returning to user mode: toggle_guest_mode(v)
       assert(ctx.kernel_mode);
+      iretctx.rflags = (iretctx.rflags & ~FLAG_IOPL) | (0x3 << 12);
       ctx.kernel_mode = 0;
       ctx.cr3 = ctx.user_ptbase_mfn << 12;
       ctx.flush_tlb();
@@ -2366,7 +2843,9 @@ void handle_xen_hypercall_assist(Context& ctx) {
 
     ctx.commitarf[REG_rip] = iretctx.rip;
     ctx.reload_segment_descriptor(SEGID_CS, iretctx.cs | 3);
-    ctx.commitarf[REG_flags] = (iretctx.rflags & ~(FLAG_IOPL|FLAG_VM)) | FLAG_IF;
+    // Set IF and IOPL=3 in flags
+    ctx.internal_eflags = (iretctx.rflags & ~(FLAG_IOPL|FLAG_VM)) | FLAG_IF;
+    ctx.commitarf[REG_flags] = ctx.internal_eflags & (FLAG_ZAPS|FLAG_CF|FLAG_OF);
     ctx.commitarf[REG_rsp] = iretctx.rsp;
     ctx.reload_segment_descriptor(SEGID_SS, iretctx.ss | 3);
     //
@@ -2395,6 +2874,8 @@ void handle_xen_hypercall_assist(Context& ctx) {
     int rc = handle_xen_hypercall(ctx, hypercallid, arg1, arg2, arg3, arg4, arg5, arg6);
     ctx.commitarf[REG_rax] = rc;
   }
+
+  if likely (hypercallid <= lengthof(guest_hypercall_histogram)) guest_hypercall_histogram[hypercallid]++;
 
   if (ctx.check_events()) {
     if (logable(4)) logfile << "Events pending on vcpu ", ctx.vcpuid, " after hypercall", endl;
@@ -2489,14 +2970,16 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
   byte& upcallmask = sshinfo.vcpu_info[vcpuid].evtchn_upcall_mask;
 
   // Prepare flags to be saved:
-  W64 saved_flags = commitarf[REG_flags];
+  W64 saved_flags = 
+    (commitarf[REG_flags] & (FLAG_ZAPS|FLAG_CF|FLAG_OF)) |
+    (internal_eflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
   saved_upcall_mask = upcallmask;
   W64 cs_and_upcallmask = ((W64)upcallmask << 32) | (W64)guest_cs;
   assignbit(saved_flags, log2(FLAG_IF), !upcallmask);
 
   // Update flags for handler:
   upcallmask = ((action & TBF_INTERRUPT) != 0);
-  assignbit(commitarf[REG_flags], log2(FLAG_IF), !upcallmask);
+  assignbit(internal_eflags, log2(FLAG_IF), !upcallmask);
 
   if (logable(4)) logfile << "  Set upcallmask = 0x", hexstring(upcallmask, 8), endl;
 
@@ -2543,7 +3026,8 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
 
   x86_exception = 256; // TRAP_syscall
   // IA32 Ref. Vol. 3: TF, VM, RF and NT flags are cleared on trap.
-  commitarf[REG_flags] &= ~(FLAG_TF|FLAG_VM|FLAG_RF|FLAG_NT);
+  internal_eflags &= ~(FLAG_TF|FLAG_VM|FLAG_RF|FLAG_NT|FLAG_IOPL);
+  internal_eflags |= (1 << 12); // virtual IOPL = 1 (kernel)
 
   if (logable(4)) {
     logfile << "  Done creating bounce frame at rsp ", (void*)(Waddr)commitarf[REG_rsp], 
@@ -2559,7 +3043,7 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
 void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virtaddr) {
   assert(exception < lengthof(idt));
 
-  if (logable(2)|1) {
+  if (logable(2)) {
     logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (void*)commitarf[REG_rip], ": error code ";
     if likely (exception == EXCEPTION_x86_page_fault) {
       logfile << PageFaultErrorCode(errorcode), " (", (void*)(Waddr)errorcode, ") @ virtaddr ", (void*)virtaddr;
@@ -2635,7 +3119,12 @@ void init_virqs() {
   foreach (i, bootinfo.vcpu_count) {
     Context& ctx = contextof(i);
 
-    const vcpu_time_info_t& timeinfo = sshinfo.vcpu_info[ctx.vcpuid].time;
+    vcpu_time_info_t& timeinfo = sshinfo.vcpu_info[ctx.vcpuid].time;
+
+    if (config.pseudo_real_time_clock) {
+      timeinfo.tsc_timestamp = 0;
+      timeinfo.system_time = 0;
+    }
 
     ctx.core_freq_hz = get_core_freq_hz(timeinfo);
 
@@ -2654,17 +3143,32 @@ void init_virqs() {
     ctx.running = 1;
   }
 
-  initial_realtime_info.wc_sec = sshinfo.wc_sec;
-  initial_realtime_info.wc_nsec = sshinfo.wc_nsec;
+  if (config.pseudo_real_time_clock) {
+    initial_realtime_info.wc_sec = sshinfo.wc_sec;
+    initial_realtime_info.wc_nsec = sshinfo.wc_nsec;
+  } else {
+    initial_realtime_info.wc_sec = 0;
+    initial_realtime_info.wc_nsec = 0;
+  }
 
   double timer_period_sec = 1. / ((double)config.timer_interrupt_freq_hz);
   timer_interrupt_period_in_cycles = contextof(0).core_freq_hz / config.timer_interrupt_freq_hz;
   timer_interrupt_last_sent_at_cycle = 0;
 
-  memset(port_to_vcpu, 0xff, sizeof(port_to_vcpu));
+  memset(port_to_vcpu, 0, sizeof(port_to_vcpu)); // by default, route to vcpu 0
 
   logfile << "  Timer VIRQ ", VIRQ_TIMER, " will be delivered every 1/", config.timer_interrupt_freq_hz,
     " sec = every ", timer_interrupt_period_in_cycles, " cycles", endl;
+
+  always_mask_port.reset();
+
+  // Let PTLsim see all events even if the guest masks them...
+  setzero(shinfo.evtchn_mask);
+
+  if (logable(1)) {
+    logfile << "Current shared info:", endl, shinfo, endl;
+    logfile << "Current shadow shared info:", endl, sshinfo, endl;
+  }
 }
 
 //
@@ -2672,7 +3176,7 @@ void init_virqs() {
 // This should be called before virq 
 //
 void update_time() {
-  if (logable(4)) {
+  if (logable(5)) {
     logfile << "Update virtual real time at cycle ", sim_cycle, " (", total_user_insns_committed, " commits):", endl;
     logfile << "  Global simulation TSC:              ", intstring(sim_cycle, 20), endl;
   }
@@ -2681,20 +3185,30 @@ void update_time() {
     Context& ctx = contextof(i);
     vcpu_time_info_t& timeinfo = sshinfo.vcpu_info[ctx.vcpuid].time;
     timeinfo.tsc_timestamp = ctx.base_tsc + sim_cycle;
-    timeinfo.system_time = (W64)(timeinfo.tsc_timestamp * ctx.sys_time_cycles_to_nsec_coeff);
+    timeinfo.system_time = (config.realtime) ? shinfo.vcpu_info[0].time.system_time : (W64)(timeinfo.tsc_timestamp * ctx.sys_time_cycles_to_nsec_coeff);
     timeinfo.version &= ~1ULL; // bit 0 == 0 means update all done
-    if (logable(4)) logfile << "  VCPU ", i, " base TSC:                    ", intstring(ctx.base_tsc, 20), endl;
+    if (logable(5)) logfile << "  VCPU ", i, " base TSC:                    ", intstring(ctx.base_tsc, 20), endl;
   }
 
-  W64 initial_nsecs_since_epoch = (initial_realtime_info.wc_sec * 1000000000ULL) +
-    initial_realtime_info.wc_nsec;
-  W64 nsecs_since_boot = sshinfo.vcpu_info[0].time.system_time;
-  W64 nsecs_since_epoch = initial_nsecs_since_epoch + nsecs_since_boot;
+  W64 initial_nsecs_since_epoch;
+  W64 nsecs_since_boot;
+  W64 nsecs_since_epoch;
 
-  sshinfo.wc_sec = nsecs_since_epoch / 1000000000ULL;
-  sshinfo.wc_nsec = nsecs_since_epoch % 1000000000ULL;
+  if likely (config.realtime) {
+    sshinfo.wc_sec = shinfo.wc_sec;
+    sshinfo.wc_nsec = shinfo.wc_nsec;
+  } else {
+    // Simulated time dilation
+    initial_nsecs_since_epoch = (initial_realtime_info.wc_sec * 1000000000ULL) +
+      initial_realtime_info.wc_nsec;
+    nsecs_since_boot = sshinfo.vcpu_info[0].time.system_time;
+    nsecs_since_epoch = initial_nsecs_since_epoch + nsecs_since_boot;
+    
+    sshinfo.wc_sec = nsecs_since_epoch / 1000000000ULL;
+    sshinfo.wc_nsec = nsecs_since_epoch % 1000000000ULL;
+  }
 
-  if (logable(4)) {
+  if (logable(5)) {
     logfile << "Wallclock time:", endl;
     logfile << "  Nanoseconds since boot:             ", intstring(nsecs_since_boot, 20), endl;
     logfile << "  Nanoseconds since epoch:            ", intstring(nsecs_since_epoch, 20), endl;
@@ -2759,10 +3273,26 @@ bool deliver_timer_interrupt_to_vcpu(int vcpuid, bool forced) {
   return ctx.check_events();
 }
 
+W64 inject_counter = 0;
+
 int inject_events() {
   //
-  // Timer interrupts
+  // Process events by polling: we are CPU-bound anyway
+  // and this allows us to have more control over forwarding
+  // events to the guest.
   //
+  if unlikely (xchg(shinfo.vcpu_info[0].evtchn_upcall_pending, (byte)0)) {
+    xen_event_callback(0);
+  }
+
+  W64 evmask;
+  if unlikely (evmask = xchg(events_just_handled, 0ULL)) {
+    logfile << "Just got external events: ", bitstring(evmask, 64, true), endl;
+    logfile << "cycle ", sim_cycle, ": sshinfo.evtchn_pending ", bitstring(sshinfo.evtchn_pending[0], 32, true), endl;
+    logfile << "cycle ", sim_cycle, ": sshinfo.evtchn_mask    ", bitstring(sshinfo.evtchn_mask[0], 32, true), endl;
+    logfile << "cycle ", sim_cycle, ": vcpu pending ", sshinfo.vcpu_info[0].evtchn_upcall_pending, ", mask ", sshinfo.vcpu_info[0].evtchn_upcall_mask, endl;
+    logfile.flush();
+  }
 
   W64 delta = sim_cycle - timer_interrupt_last_sent_at_cycle;
 
@@ -2841,9 +3371,14 @@ static inline void load_gs(W16 selector) {
   asm volatile("mov %[selector],%%fs" : : [selector] "r" (selector) : "memory");
 }
 
+
+// Just big enough to have more than one word; rely on having no bounds checks:
+typedef bitvec<65> infinite_bitvec_t;
+
+infinite_bitvec_t* ptlsim_mfn_bitmap = null;
+
 void backup_and_reopen_logfile() {
   if (config.log_filename) {
-    // cerr << "Logging to ", config.log_filename, "...", endl, flush;
     if (logfile) logfile.close();
     stringbuf oldname;
     oldname << config.log_filename, ".backup"; // assert fails here
@@ -2852,6 +3387,13 @@ void backup_and_reopen_logfile() {
     logfile.open(config.log_filename);
   }
 }
+
+static inline void ptlsim_init_fail(W64 marker) {
+  asm("mov %[marker],%%rax\n"
+      "ud2a\n" : : [marker] "r" (marker));
+}
+
+extern Waddr xen_m2p_map_end;
 
 void ptlsim_init() {
   stringbuf sb;
@@ -2862,8 +3404,6 @@ void ptlsim_init() {
   bootinfo.startup_log_buffer = startup_log_buffer;
   bootinfo.startup_log_buffer_tail = 0;
   bootinfo.startup_log_buffer_size = lengthof(startup_log_buffer);
-
-  early_printk("PTLsim/Xen initializing...\n");
 
   //
   // Initialize the page pools and memory management
@@ -2885,60 +3425,128 @@ void ptlsim_init() {
   bindreq.remote_port = bootinfo.monitor_hostcall_port;
   rc = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain, &bindreq);
 
-  if (rc < 0) {
-    stringbuf sb; sb << "ptlxen: Cannot connect to dom0 hostcall port ", bootinfo.monitor_hostcall_port, "; aborting", endl;
-    early_printk(sb);
-    return;
-  }
+  if (rc < 0) ptlsim_init_fail(3);
 
   bootinfo.hostcall_port = bindreq.local_port;
 
   bindreq.remote_dom = 0; // dom0
   bindreq.remote_port = bootinfo.monitor_upcall_port;
   rc = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain, &bindreq);
-
-  if (rc < 0) {
-    stringbuf sb; sb << "ptlxen: Cannot connect to dom0 upcall port ", bootinfo.monitor_upcall_port, "; aborting", endl;
-    early_printk(sb);
-    return;
-  }
+  if (rc < 0) ptlsim_init_fail(4);
 
   bootinfo.upcall_port = bindreq.local_port;
 
-  sb.reset(); sb << "ptlxen: Connected hostcall_port ", bootinfo.hostcall_port, ", upcall_port ", bootinfo.upcall_port, endl;
-  early_printk(sb);
-
   rc = HYPERVISOR_set_callbacks((Waddr)xen_event_callback_entry, 0, 0);
+  if (rc < 0) ptlsim_init_fail(5);
 
+  //
+  // Set up our trap table
+  //
+  rc = HYPERVISOR_set_trap_table(trap_table);
+  if (rc < 0) ptlsim_init_fail(6);
+
+  //
+  // PTLsim must be explicitly aware of which pages are page table pages;
+  // we can't get sloppy here or Xen may silently disconnect dirty pages
+  // for revalidation. Since we directly walk page tables, we will think
+  // the guest itself did this, and erroneous exceptions will ensue.
+  //
+	rc = HYPERVISOR_vm_assist(VMASST_CMD_disable, VMASST_TYPE_writable_pagetables);
+  if (rc < 0) ptlsim_init_fail(7);
+
+  //
+  // Make page at base of stack read-only (guard against overflows):
+  //
+  make_ptl_page_writable((byte*)bootinfo.stack_top - bootinfo.stack_size, 0);
+
+  //
+  // Enable upcalls
+  //
+  // We leave events disabled most of the time, since
+  // sched_block atomically enables events anyway.
+  //
+  cli();
   clear_evtchn(bootinfo.hostcall_port);
   clear_evtchn(bootinfo.upcall_port);
-
-  // Enable upcalls:
-  sti();
   barrier();
-
-  // Unmask the control port
   unmask_evtchn(bootinfo.hostcall_port);
   unmask_evtchn(bootinfo.upcall_port);
 
-  prep_address_space();
-
-  assert(HYPERVISOR_set_trap_table(trap_table) == 0);
-
-	HYPERVISOR_vm_assist(VMASST_CMD_enable, VMASST_TYPE_writable_pagetables);
-
-  // Disable boot logging
-  bootinfo.startup_log_buffer_size = 0;
+  //
+  // From this point forward, we can make hostcalls to PTLmon
+  //
 
   //
-  // At this point we can start making host requests
+  // Call all C++ constructors
   //
   call_global_constuctors();
 
+  //
+  // Set up the bitmap of which MFNs belong to PTLsim itself
+  //
+  int bytes_required = ceil(bootinfo.total_machine_pages, 8) / 8;
+
+  xen_m2p_map_end = HYPERVISOR_VIRT_START + (bootinfo.total_machine_pages * sizeof(Waddr));
+
+  ptlsim_mfn_bitmap = (infinite_bitvec_t*)ptl_alloc_private_pages(bytes_required);
+  memset(ptlsim_mfn_bitmap, 0, bytes_required);
+
+  foreach (i, bootinfo.mfn_count) {
+    mfn_t mfn = bootinfo.ptl_pagedir[i].mfn;
+    assert(mfn < bootinfo.total_machine_pages);
+    (*ptlsim_mfn_bitmap)[mfn] = 1;
+  }
+
+  //
+  // Copy GDT template page from hypervisor
+  //
+  bootinfo.gdt_page = ptl_alloc_private_page();
+  bootinfo.gdt_mfn = ptl_virt_to_mfn(bootinfo.gdt_page);
+
+  mmuext_op_t mmuextop;  
+  mmuextop.cmd = MMUEXT_GET_GDT_TEMPLATE;
+  mmuextop.arg1.linear_addr = (unsigned long)bootinfo.gdt_page;
+  mmuextop.arg2.nr_ents = PAGE_SIZE;
+  int opcount = 1;
+  assert(HYPERVISOR_mmuext_op(&mmuextop, opcount, &opcount, DOMID_SELF) == 0);
+  if (rc < 0) ptlsim_init_fail(6);
+
+  //
+  // Bring up the rest of the PTLsim subsystems:
+  //
+  config.reset();
+  configparser.setup();
+
+  init_uops();
+  init_translate();
+
+  //
+  // Build the physical memory map page tables, inject
+  // PTLsim into the virtual address space of the guest
+  // domain, then switch to this page table base.
+  //
+  build_physmap_page_tables();
+  inject_ptlsim_into_toplevel(bootinfo.toplevel_page_table_mfn, true);
+  switch_page_table(contextof(0).cr3 >> 12);
+
+  //
+  // Initialize the non-trivial parts of the VCPU contexts.
+  // This must go AFTER physical memory is accessible since
+  // we're refilling descriptor caches and TLBs here.
+  //
+  foreach (i, bootinfo.vcpu_count) {
+    Context& ctx = contextof(i);
+    ctx.vcpuid = i;
+    ctx.init();
+  }
+
+  // Tell PTLmon we're now up and running
   bootinfo.ptlsim_state = PTLSIM_STATE_RUNNING;
 }
 
-stringbuf current_log_filename;
+void print_meminfo_line(ostream& os, const char* name, W64 pages) {
+  os << "  ", padstring(name, -20), intstring(pages, 10), " pages, ", intstring(pages_to_kb(pages), 10), " KB", endl;
+}
 
 void print_sysinfo(ostream& os) {
   xen_capabilities_info_t xen_caps = "";
@@ -2947,14 +3555,10 @@ void print_sysinfo(ostream& os) {
   HYPERVISOR_xen_version(XENVER_platform_parameters, &xen_params);
   HYPERVISOR_xen_version(XENVER_capabilities, &xen_caps);
 
-  Waddr total_machine_pages = HYPERVISOR_memory_op(XENMEM_maximum_ram_page, NULL);
-  assert(total_machine_pages > 0);
-
   Waddr xen_hypervisor_start_va = xen_params.virt_start;
 
   os << "System Information:", endl;
   os << "  Running on hypervisor version ", xen_caps, endl;
-  os << "  Total machine physical pages ", total_machine_pages, " (", ((total_machine_pages * PAGE_SIZE) / 1024), " KB host physical memory)", endl;
   os << "  Xen is mapped at virtual address ", (void*)(Waddr)xen_hypervisor_start_va, endl;
   os << "  PTLsim is running across ", bootinfo.vcpu_count, " VCPUs:", endl;
 
@@ -2962,15 +3566,33 @@ void print_sysinfo(ostream& os) {
     const vcpu_time_info_t& timeinfo = shinfo.vcpu_info[i].time;
     os << "    VCPU ", i, ": ", (get_core_freq_hz(timeinfo) / 1000000), " MHz", endl;
   }
+
+  os << "Memory Layout:", endl;
+  print_meminfo_line(os, "System:",          bootinfo.total_machine_pages);
+  print_meminfo_line(os, "Domain:",          bootinfo.max_pages);
+  print_meminfo_line(os, "PTLsim reserved:", bootinfo.mfn_count);
+  print_meminfo_line(os, "Page Tables:",     bootinfo.mfn_count - bootinfo.avail_mfn_count);
+  print_meminfo_line(os, "PTLsim image:",    ((Waddr)bootinfo.heap_start - PTLSIM_VIRT_BASE) / 4096);
+  print_meminfo_line(os, "Heap:",            ((Waddr)bootinfo.heap_end - (Waddr)bootinfo.heap_start) / 4096);
+  print_meminfo_line(os, "Stack:",           bootinfo.stack_size / 4096);
+  os << "Interfaces:", endl;
+  os << "  Shared info mfn:    ", intstring(bootinfo.shared_info_mfn, 10), endl;
+  os << "  Shadow shinfo mfn:  ", intstring(ptl_virt_to_mfn(&sshinfo), 10), endl;
+  os << "  Start info mfn:     ", intstring(bootinfo.start_info_mfn, 10), endl;
+  os << "  Store mfn;          ", intstring(bootinfo.store_mfn, 10), ", event channel ", intstring(bootinfo.store_evtchn, 4), endl;
+  os << "  Console mfn:        ", intstring(bootinfo.console_mfn, 10), ", event channel ", intstring(bootinfo.console_evtchn, 4), endl;
+  os << "  PTLsim hostcall:    ", padstring("", 10), "  event channel ", intstring(bootinfo.hostcall_port, 4), endl;
+  os << "  PTLsim upcall:      ", padstring("", 10), "  event channel ", intstring(bootinfo.upcall_port, 4), endl;
+
   os << endl;
 }
+
+stringbuf current_log_filename;
 
 W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
   // This needs to be static because string parameters point into here:
   static char reqstr[4096];
   static bool first_time = true;
-
-  // Clear it: we will check ourselves
 
   int rc;
   logfile << "PTLsim: waiting for request (", (blocking ? "blocking" : "non-blocking"), ")...", endl, flush;
@@ -3000,6 +3622,8 @@ W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
     if (!config.quiet) {
       print_banner(cerr);
       print_sysinfo(cerr);
+
+      cerr << "PTLsim is now waiting for a command.", endl, flush;
     }
     print_banner(logfile);
     print_sysinfo(logfile);
@@ -3046,17 +3670,36 @@ bool simulate(const char* corename) {
   logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
 
   sim_cycle = 0;
+
   init_virqs();
   update_time();
 
+  /*
+  Waddr physmap_level1_page_count = ceil(bootinfo.total_machine_pages, PTES_PER_PAGE) / PTES_PER_PAGE;
+  logfile << "Pages comprising PTLsim physmap L1 pagedir (", physmap_level1_page_count, " L1 pages):", endl;
+  foreach (i, physmap_level1_page_count) {
+    if ((i % 8) == 0) logfile << " ";
+    logfile << " ", bootinfo.phys_level2_pagedir[i].mfn;
+    if ((i % 8) == 7) logfile << endl;
+  }
+  logfile << endl, flush;
+  */
+
   sequential_core_toplevel_loop();
+
+  logfile << "Hypercall usage:", endl;
+  logfile << "  ", padstring("Hypercall", -40), " ", padstring("Total", 10), " ", padstring("Guest", 10), endl;
+  foreach (i, lengthof(hypercall_names)) {
+    logfile << "  ", padstring(hypercall_names[i], -40), " ",
+      intstring(ptlsim_hypercall_histogram[i], 10), " ", intstring(guest_hypercall_histogram[i], 10), endl;
+  }
 
 #if 0
   //
   // Debugging support code, to crash domain at specific point
   //
 
-  Waddr patch_entry = 0xffffffff8010b94c;
+  Waddr patch_entry = 0xffffffff8xxxxxxx;
   //Waddr patch_entry = signext64(contextof(0).idt[EXCEPTION_x86_page_fault].rip, 48);
 
   byte trigger_code[] = {0x0f, 0x0b}; // ud2a
@@ -3101,21 +3744,10 @@ bool simulate(const char* corename) {
   return 0;
 }
 
-extern "C" void ptlsim_main(PTLsimMonitorInfo* dummy) {
+int main(int argc, char** argv) {
   ptlsim_init();
-  config.reset();
-  configparser.setup();
-
-  init_uops();
-  init_translate();
 
   bool first_time = true;
-
-  foreach (i, bootinfo.vcpu_count) {
-    Context& ctx = contextof(i);
-    ctx.vcpuid = i;
-    ctx.init();
-  }
 
   for (;;) {
     W64 requuid = handle_upcall(config);
@@ -3137,7 +3769,6 @@ extern "C" void ptlsim_main(PTLsimMonitorInfo* dummy) {
       logfile << "Final context:", endl, contextof(0), flush;
       logfile << "Final shared info page:", endl, sshinfo, endl, flush;
 
-      //++MTY TODO: also use VCPUOP_get_registered_runstate_memory_area
       foreach (i, bootinfo.vcpu_count) {
         Context& ctx = contextof(i);
         if (ctx.user_runstate) {
@@ -3154,8 +3785,8 @@ extern "C" void ptlsim_main(PTLsimMonitorInfo* dummy) {
       logfile << flush;
 
       if (kill)
-        shutdown(bootinfo.ctx, pause);
-      else switch_to_native(bootinfo.ctx, pause);
+        shutdown(pause);
+      else switch_to_native(pause);
 
       foreach (i, bootinfo.vcpu_count) {
         Context& ctx = contextof(i);
@@ -3169,4 +3800,5 @@ extern "C" void ptlsim_main(PTLsimMonitorInfo* dummy) {
 
   // We should never get here!
   abort();
+  return 0;
 }

@@ -52,6 +52,7 @@ typedef W32 Waddr;
 #define unlikely(x) (__builtin_expect(!!(x), 0))
 #define likely(x) (__builtin_expect(!!(x), 1))
 #define isconst(x) (__builtin_constant_p(x))
+#define asmlinkage extern "C"
 
 //
 // Asserts
@@ -62,7 +63,12 @@ typedef W32 Waddr;
 #  define __ASSERT_VOID_CAST (void)
 #endif
 
-extern "C" void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) __attribute__ ((__noreturn__));
+asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) __attribute__ ((__noreturn__));
+
+// For embedded debugging use only:
+static inline void assert_fail_trap(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
+  asm("ud2a" : : "a" (__assertion), "b" (__file), "c" (__line), "d" (__function));
+}
 
 #define __CONCAT(x,y)	x ## y
 #define __STRING(x)	#x
@@ -365,7 +371,7 @@ struct constbits {
   operator W64() const { return value; }
 };
 
-extern "C" {
+asmlinkage {
 #include <unistd.h>
 #include <sys/types.h>
 #include <ctype.h>

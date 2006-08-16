@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Hardware Definitions
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _PTLHWDEF_H
@@ -544,29 +544,75 @@ union VirtAddr {
   RawDataAccessors(VirtAddr, W64);
 };
 
+#define DefinePTESetField(T, func, field) inline T func(W64 val) const { T pte(*this); pte.field = val; return pte; }
+
 typedef struct Level4PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, mfn:51, nx:1;
   RawDataAccessors(Level4PTE, W64);
+
+  DefinePTESetField(Level4PTE, P, p);
+  DefinePTESetField(Level4PTE, W, rw);
+  DefinePTESetField(Level4PTE, U, us);
+  DefinePTESetField(Level4PTE, WT, pwt);
+  DefinePTESetField(Level4PTE, CD, pcd);
+  DefinePTESetField(Level4PTE, A, a);
+  DefinePTESetField(Level4PTE, NX, nx);
+  DefinePTESetField(Level4PTE, AVL, avl);
+  DefinePTESetField(Level4PTE, MFN, mfn);
 };
 
 struct Level3PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, next:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, mfn:51, nx:1;
   RawDataAccessors(Level3PTE, W64);
+
+  DefinePTESetField(Level3PTE, P, p);
+  DefinePTESetField(Level3PTE, W, rw);
+  DefinePTESetField(Level3PTE, U, us);
+  DefinePTESetField(Level3PTE, WT, pwt);
+  DefinePTESetField(Level3PTE, CD, pcd);
+  DefinePTESetField(Level3PTE, A, a);
+  DefinePTESetField(Level3PTE, NX, nx);
+  DefinePTESetField(Level3PTE, AVL, avl);
+  DefinePTESetField(Level3PTE, MFN, mfn);
 };
 
 struct Level2PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, psz:1, mbz:1, avl:3, next:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, psz:1, mbz:1, avl:3, mfn:51, nx:1;
   RawDataAccessors(Level2PTE, W64);
+
+  DefinePTESetField(Level2PTE, P, p);
+  DefinePTESetField(Level2PTE, W, rw);
+  DefinePTESetField(Level2PTE, U, us);
+  DefinePTESetField(Level2PTE, WT, pwt);
+  DefinePTESetField(Level2PTE, CD, pcd);
+  DefinePTESetField(Level2PTE, A, a);
+  DefinePTESetField(Level2PTE, D, d);
+  DefinePTESetField(Level2PTE, PSZ, psz);
+  DefinePTESetField(Level2PTE, NX, nx);
+  DefinePTESetField(Level2PTE, AVL, avl);
+  DefinePTESetField(Level2PTE, MFN, mfn);
 };
 
 struct Level1PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, phys:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, mfn:51, nx:1;
   RawDataAccessors(Level1PTE, W64);
 
   void accum(const Level1PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
   void accum(const Level2PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
   void accum(const Level3PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
   void accum(const Level4PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
+
+  DefinePTESetField(Level1PTE, P, p);
+  DefinePTESetField(Level1PTE, W, rw);
+  DefinePTESetField(Level1PTE, U, us);
+  DefinePTESetField(Level1PTE, WT, pwt);
+  DefinePTESetField(Level1PTE, CD, pcd);
+  DefinePTESetField(Level1PTE, A, a);
+  DefinePTESetField(Level1PTE, D, d);
+  DefinePTESetField(Level1PTE, G, g);
+  DefinePTESetField(Level1PTE, NX, nx);
+  DefinePTESetField(Level1PTE, AVL, avl);
+  DefinePTESetField(Level1PTE, MFN, mfn);
 };
 
 ostream& operator <<(ostream& os, const Level1PTE& pte);
@@ -640,10 +686,13 @@ struct RunstateInfo {
 // all relevant control registers, MSRs, x87 FP state, exception
 // and interrupt vectors, Xen-specific data and so forth.
 //
+// The ContextBase structure must be less than 4096 bytes (1 page);
+// the actual Context structure rounds the size up to a page
+//
 // PTLsim cores will need to define other per-VCPU structures to
 // hold their internal state.
 //
-struct Context {
+struct ContextBase {
   W64 commitarf[64];
   int vcpuid;
   SegmentDescriptorCache seg[SEGID_COUNT];
@@ -711,44 +760,18 @@ struct Context {
   static const int PTE_CACHE_SIZE = 16;
   W64 cached_pte_virt[PTE_CACHE_SIZE];
   Level1PTE cached_pte[PTE_CACHE_SIZE];
-
-  void restorefrom(const vcpu_guest_context& ctx);
-  void saveto(vcpu_guest_context& ctx);
-
-  bool gdt_entry_valid(W16 idx);
-  const SegmentDescriptor& get_gdt_entry(W16 idx);
-
-  Level1PTE virt_to_pte(W64 rawvirt) {
-    int slot = lowbits(rawvirt >> 12, log2(PTE_CACHE_SIZE));
-    if unlikely (cached_pte_virt[slot] != floor(rawvirt, PAGE_SIZE)) {
-      cached_pte_virt[slot] = floor(rawvirt, PAGE_SIZE);
-      cached_pte[slot] = page_table_walk(rawvirt, cr3 >> 12);
-    }
-    return cached_pte[slot];
-  }
-
-  // Flush the context mini-TLB and propagate flush to any core-specific TLBs
-  void flush_tlb();
-
-  void flush_tlb_virt(Waddr virtaddr) {
-    // Currently we just flush the entire TLB:
-    flush_tlb();
-  }
-  
-  void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) {
-    return page_table_acc_dirty_update(rawvirt, cr3 >> 12, update);
-  }
-
-  bool create_bounce_frame(W16 target_cs, Waddr target_rip, int action);
-
-  bool check_events() const;
-  bool event_upcall();
-  bool change_runstate(int newstate);
 #endif
-#ifndef PTLSIM_HYPERVISOR
-  void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) { }
-  void update_shadow_segment_descriptors();
-#endif
+
+
+  inline void reset() {
+    memset(&commitarf, 0, sizeof(commitarf));
+    exception = 0;
+  }
+};
+
+// Round up to a full page:
+struct Context: public ContextBase {
+  byte padding[PAGE_SIZE - sizeof(ContextBase)];
 
   void propagate_x86_exception(byte exception, W32 errorcode = 0, Waddr virtaddr = 0);
   void* check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate);
@@ -776,16 +799,45 @@ struct Context {
 
   Context() { }
 
+#ifdef PTLSIM_HYPERVISOR
+  void restorefrom(const vcpu_guest_context& ctx);
+  void saveto(vcpu_guest_context& ctx);
 
-  inline void reset() {
-    memset(&commitarf, 0, sizeof(commitarf));
-    exception = 0;
+  bool gdt_entry_valid(W16 idx);
+  SegmentDescriptor get_gdt_entry(W16 idx);
+
+  Level1PTE virt_to_pte(W64 rawvirt) {
+
+    int slot = lowbits(rawvirt >> 12, log2(PTE_CACHE_SIZE));
+    if unlikely (cached_pte_virt[slot] != floor(rawvirt, PAGE_SIZE)) {
+      cached_pte_virt[slot] = floor(rawvirt, PAGE_SIZE);
+      cached_pte[slot] = page_table_walk(rawvirt, cr3 >> 12);
+    }
+    return cached_pte[slot];
+    // return page_table_walk(rawvirt, cr3 >> 12); // do not use mini-TLB
   }
 
-  void complete();
-  bool commit();
-  void rollback();
-  void restart();
+  // Flush the context mini-TLB and propagate flush to any core-specific TLBs
+  void flush_tlb();
+
+  void flush_tlb_virt(Waddr virtaddr) {
+    // Currently we just flush the entire TLB:
+    flush_tlb();
+  }
+  
+  void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) {
+    return page_table_acc_dirty_update(rawvirt, cr3 >> 12, update);
+  }
+
+  bool create_bounce_frame(W16 target_cs, Waddr target_rip, int action);
+
+  bool check_events() const;
+  bool event_upcall();
+  bool change_runstate(int newstate);
+#else
+  void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) { }
+  void update_shadow_segment_descriptors();
+#endif
 };
 
 ostream& operator <<(ostream& os, const Context& ctx);
@@ -1190,12 +1242,23 @@ typedef void (*uopimpl_func_t)(IssueState& state, W64 ra, W64 rb, W64 rc, W16 ra
 #define BB_PTRS_PER_CHUNK 62
 #endif
 
-struct BasicBlockChunkList: public ChunkList<shortptr<BasicBlock>, BB_PTRS_PER_CHUNK> {
+// We don't have this defined outside the PTLsim build process:
+#ifdef PTLSIM_PUBLIC_ONLY
+#define PTLSIM_VIRT_BASE 0
+#endif
+
+#ifdef PTLSIM_HYPERVISOR
+typedef shortptr<BasicBlock, W32, PTLSIM_VIRT_BASE> BasicBlockPtr;
+#else
+typedef shortptr<BasicBlock> BasicBlockPtr;
+#endif
+
+struct BasicBlockChunkList: public ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK> {
   selflistlink hashlink;
   W64 mfn;
 
-  BasicBlockChunkList(): ChunkList<shortptr<BasicBlock>, BB_PTRS_PER_CHUNK>() { }
-  BasicBlockChunkList(W64 mfn): ChunkList<shortptr<BasicBlock>, BB_PTRS_PER_CHUNK>() { this->mfn = mfn; }
+  BasicBlockChunkList(): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { }
+  BasicBlockChunkList(W64 mfn): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { this->mfn = mfn; }
 };
 
 struct BasicBlockBase {

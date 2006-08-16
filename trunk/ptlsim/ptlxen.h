@@ -12,7 +12,7 @@
 #include <globals.h>
 #include <superstl.h>
 
-extern "C" {  
+asmlinkage {  
 #include <xen-types.h>
 #include <xen/xen.h>
 #include <xen/dom0_ops.h>
@@ -43,16 +43,33 @@ static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_B
 #define bootinfo (*((PTLsimMonitorInfo*)getbootinfo()))
 #define shinfo (*((shared_info_t*)(Waddr)PTLSIM_SHINFO_PAGE_VIRT_BASE))
 
+#define xferpage ((char*)(PTLSIM_XFER_PAGE_VIRT_BASE))
+
 #define shinfo_evtchn_pending (*((bitvec<4096>*)&shinfo.evtchn_pending))
 #define shinfo_evtchn_mask (*((bitvec<4096>*)&shinfo.evtchn_mask))
 #define shinfo_evtchn_pending_sel(vcpuid) (*((bitvec<64>*)&shinfo.vcpu_info[vcpuid].evtchn_pending_sel))
 
-#define sshinfo (*(bootinfo.shadow_shinfo))
+#define sshinfo (*((shared_info_t*)PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE))
 #define sshinfo_evtchn_pending (*((bitvec<4096>*)&sshinfo.evtchn_pending))
 #define sshinfo_evtchn_mask (*((bitvec<4096>*)&sshinfo.evtchn_mask))
 #define sshinfo_evtchn_pending_sel(vcpuid) (*((bitvec<64>*)&sshinfo.vcpu_info[vcpuid].evtchn_pending_sel))
 
 #endif
+
+// In dom0, PTLmon runs in userspace so it can't mmap at the real address.
+#define PTLSIM_PSEUDO_VIRT_BASE 0x10000000
+
+template <typename T>
+static inline T ptlcore_ptr_to_ptlmon_ptr(T p) {
+  if (!p) return p;
+  return (T)((((Waddr)p) - PTLSIM_VIRT_BASE) + PTLSIM_PSEUDO_VIRT_BASE);
+}
+
+template <typename T>
+static inline T ptlmon_ptr_to_ptlcore_ptr(T p) {
+  if (!p) return p;
+  return (T)((((Waddr)p) - PTLSIM_PSEUDO_VIRT_BASE) + PTLSIM_VIRT_BASE);
+}
 
 struct PageFrameType {
   Waddr mfn:28, type:3, pin:1;
@@ -161,12 +178,6 @@ enum {
   PTLSIM_HOST_TERMINATE,
 
   //
-  // Query the pages belonging to the domain
-  // and their respective types
-  //
-  PTLSIM_HOST_QUERY_PAGES,
-
-  //
   // Notify external waiters that the current simulation
   // phase is complete, i.e. PTLsim has returned to
   // waiting for a request, so parameters may be updated
@@ -199,13 +210,9 @@ struct PTLsimHostCall {
       bool blocking;
     } accept_upcall;
     struct {
-      Context* guestctx;
-      Context* ptlctx;
       bool pause;
     } switch_to_native;
     struct {
-      Context* guestctx;
-      Context* ptlctx;
       bool pause;
     } terminate;
     struct {
@@ -254,8 +261,6 @@ struct PTLsimMonitorInfo: public PTLsimBootPageInfo {
   int monitor_hostcall_port;
   int upcall_port;
   int monitor_upcall_port;
-  int argc;
-  char** argv;
   byte* stack_top;
   int stack_size;
   byte* heap_start;
@@ -263,8 +268,14 @@ struct PTLsimMonitorInfo: public PTLsimBootPageInfo {
   int vcpu_count;
   int max_pages;
   int total_machine_pages;
-  Context* ctx;
-  shared_info_t* shadow_shinfo;
+  //Context* ctx;
+  //shared_info_t* shadow_shinfo;
+  struct Level1PTE* phys_pagedir;
+  struct Level2PTE* phys_level2_pagedir;
+  struct Level3PTE* phys_level3_pagedir;
+  W64 phys_pagedir_mfn_count;
+  void* gdt_page;
+  mfn_t gdt_mfn;
   byte* startup_log_buffer;
   int startup_log_buffer_tail;
   int startup_log_buffer_size;
@@ -278,26 +289,39 @@ ostream& print_page_table(ostream& os, Level1PTE* ptes, W64 baseaddr);
 Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);
 
-static inline Context& contextof(int vcpu) { return bootinfo.ctx[vcpu]; }
+#define contextbase ((Context*)PTLSIM_CTX_PAGE_VIRT_BASE)
+
+static inline Context& contextof(int vcpu) {
+  return contextbase[vcpu];
+}
 
 static inline void* phys_to_mapped_virt(W64 rawphys) {
   return (void*)signext64(PHYS_VIRT_BASE + rawphys, 48);
 }
 
-static inline void* ptl_virt_to_phys(void* p) {
+static inline W64 ptl_virt_to_phys(void* p) {
   Waddr virt = (Waddr)p;
 
   assert(inrange(virt, (Waddr)PTLSIM_VIRT_BASE, (Waddr)(PTLSIM_VIRT_BASE + ((PAGE_SIZE*bootinfo.mfn_count)-1))));
-  return (void*)((bootinfo.ptl_pagedir[(virt - PTLSIM_VIRT_BASE) >> 12].phys << 12) + lowbits(virt, 12));
+  return ((bootinfo.ptl_pagedir[(virt - PTLSIM_VIRT_BASE) >> 12].mfn << 12) + lowbits(virt, 12));
 }
 
+//
+// Notice that we have carefully arranged PTLSIM_VIRT_BASE
+// to be PHYS_VIRT_BASE + (1<<40). This means that a mapped
+// physical address inside PTLsim will be in the format:
+// 0x100xxxxxxxx, i.e. if bit 40 is set, the physical address
+// is not in the guest-visible DRAM but in PTLsim space.
+//
 static inline W64 mapped_virt_to_phys(void* rawvirt) {
-  return ((Waddr)lowbits((Waddr)rawvirt, 48)) - PHYS_VIRT_BASE;
+  return (Waddr)rawvirt - PHYS_VIRT_BASE;
 }
+
+Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn);
 
 static inline void* pte_to_mapped_virt(W64 rawvirt, const Level1PTE& pte) {
   if unlikely (!pte.p) return null;
-  return phys_to_mapped_virt((pte.phys << 12) + lowbits(rawvirt, 12));
+  return phys_to_mapped_virt((pte.mfn << 12) + lowbits(rawvirt, 12));
 }
 
 static inline pfn_t ptl_virt_to_pfn(void* p) {
@@ -310,11 +334,30 @@ static inline mfn_t ptl_virt_to_mfn(void* p) {
   pfn_t pfn = ptl_virt_to_pfn(p);
   if unlikely (pfn == INVALID_MFN) return (mfn_t)INVALID_MFN;
 
-  return bootinfo.ptl_pagedir[pfn].phys;
+  return bootinfo.ptl_pagedir[pfn].mfn;
 }
 
+template <typename T>
+int update_phys_pte(Waddr dest, const T& src);
+
+// Update a PTE entry within PTLsim:
+template <typename T>
+int update_ptl_pte(T& dest, const T& src) {
+  return update_phys_pte((Waddr)ptl_virt_to_phys(&dest), src);
+}
+
+static inline W64 pages_to_kb(W64 pages) {
+  return (pages * 4096) / 1024;
+}
+
+//
+// Store writeback and commit
+//
 W64 storemask(Waddr physaddr, W64 data, byte bytemask);
 
+//
+// Self modifying code support
+//
 static inline bool smc_isdirty(Waddr mfn) {
   // MFN (2^28)-1 is INVALID_MFN as stored in RIPVirtPhys:
   if unlikely (mfn >= bootinfo.total_machine_pages) return false;
@@ -341,32 +384,75 @@ static inline void smc_cleardirty(Waddr mfn) {
 int inject_events();
 bool check_for_async_sim_break();
 
+extern mmu_update_t mmuqueue[1024];
+extern int mmuqueue_count;
+
+int do_commit_page_table_updates();
+
+static inline int commit_page_table_updates() {
+  int rc = 0;
+  if likely (mmuqueue_count) rc = do_commit_page_table_updates();
+  return rc;
+}
+
+template <typename T>
+T add_page_table_update(T& target, const T& source) {
+  if unlikely (mmuqueue_count >= lengthof(mmuqueue)) {
+    commit_page_table_updates();
+  }
+
+  mmu_update_t& mmu = mmuqueue[mmuqueue_count++];
+  mmu.ptr = (W64)&target;
+  mmu.val = source;
+  return source;
+}
+
+static inline Level1PTE operator <=(Level1PTE& target, Level1PTE source) {
+  return add_page_table_update(target, source);
+}
+
+static inline Level2PTE operator <=(Level2PTE& target, Level2PTE source) {
+  return add_page_table_update(target, source);
+}
+
+static inline Level3PTE operator <=(Level3PTE& target, Level3PTE source) {
+  return add_page_table_update(target, source);
+}
+
+static inline Level4PTE operator <=(Level4PTE& target, Level4PTE source) {
+  return add_page_table_update(target, source);
+}
+
 #endif
 
 //
 // Subset of system calls available under PTLsim/Xen:
 //
 extern "C" {
+  // These require pointer thunking, but all pointers are read-only:
   int sys_open(const char* pathname, int flags, int mode);
-  int sys_close(int fd);
-  ssize_t sys_read(int fd, void* buf, size_t count);
   ssize_t sys_write(int fd, const void* buf, size_t count);
-  ssize_t sys_fdatasync(int fd);
-  W64 sys_seek(int fd, W64 offset, unsigned int origin);
   int sys_unlink(const char* pathname);
   int sys_rename(const char* oldpath, const char* newpath);
+  // These require pointer thunking, but some pointers are writable.
+  // Thereis generally only one writable pointer per call.
+  ssize_t sys_read(int fd, void* buf, size_t count);
   int sys_readlink(const char *path, char *buf, size_t bufsiz);
-  W64 sys_nanosleep(W64 nsec);
-
   struct utsname;
   int sys_uname(struct utsname* buf);
-  
+  // These are artificially implemented with Xen hypercalls or references:
+  int sys_gettimeofday(struct timeval* tv, struct timezone* tz);
+  time_t sys_time(time_t* t);
+  W64 sys_nanosleep(W64 nsec);
+  // These access no pointers:
+  int sys_close(int fd);
+  ssize_t sys_fdatasync(int fd);
+  W64 sys_seek(int fd, W64 offset, unsigned int origin);
+
   void* malloc(size_t size) __attribute__((__malloc__));
   void free(void* ptr);
   char* getenv(const char* name);
 
-  int sys_gettimeofday(struct timeval* tv, struct timezone* tz);
-  time_t sys_time(time_t* t);
 };
 
 // 
@@ -387,6 +473,7 @@ struct PTLsimConfig {
   stringbuf log_filename;
   W64 loglevel;
   W64 start_log_at_iteration;
+  W64 start_log_at_rip;
   bool log_ptlsim_boot;
   bool log_on_console;
 
@@ -400,6 +487,7 @@ struct PTLsimConfig {
   W64 stop_at_iteration;
   W64 stop_at_rip;
   W64 insns_in_last_basic_block;
+  W64 stop_at_user_insns_relative;
   W64 flush_interval;
 
   // Event tracing
@@ -411,6 +499,8 @@ struct PTLsimConfig {
   W64 core_freq_hz;
   W64 timer_interrupt_freq_hz;
   bool pseudo_real_time_clock;
+  bool realtime;
+  bool mask_interrupts;
 
   // Other info
   stringbuf dumpcode_filename;
@@ -429,5 +519,95 @@ ostream& operator <<(ostream& os, const PTLsimConfig& config);
 ostream& operator <<(ostream& os, const shared_info& si);
 
 void print_banner(ostream& os);
+
+//
+// Xen hypercalls
+//
+
+#define __STR(x) #x
+#define STR(x) __STR(x)
+
+extern W64 ptlsim_hypercall_histogram[64];
+
+#define _hypercall0(type, name)			\
+({						\
+	long __res;				\
+  ptlsim_hypercall_histogram[__HYPERVISOR_##name]++; \
+	asm volatile (				\
+		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
+		: "=a" (__res)			\
+		:				\
+		: "memory" );			\
+	(type)__res;				\
+})
+
+#define _hypercall1(type, name, a1)				\
+({								\
+	long __res, __ign1;					\
+  ptlsim_hypercall_histogram[__HYPERVISOR_##name]++; \
+	asm volatile (						\
+		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
+		: "=a" (__res), "=D" (__ign1)			\
+		: "1" ((long)(a1))				\
+		: "memory" );					\
+	(type)__res;						\
+})
+
+#define _hypercall2(type, name, a1, a2)				\
+({								\
+	long __res, __ign1, __ign2;				\
+  ptlsim_hypercall_histogram[__HYPERVISOR_##name]++; \
+	asm volatile (						\
+		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
+		: "=a" (__res), "=D" (__ign1), "=S" (__ign2)	\
+		: "1" ((long)(a1)), "2" ((long)(a2))		\
+		: "memory" );					\
+	(type)__res;						\
+})
+
+#define _hypercall3(type, name, a1, a2, a3)			\
+({								\
+	long __res, __ign1, __ign2, __ign3;			\
+  ptlsim_hypercall_histogram[__HYPERVISOR_##name]++; \
+	asm volatile (						\
+		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
+		: "=a" (__res), "=D" (__ign1), "=S" (__ign2), 	\
+		"=d" (__ign3)					\
+		: "1" ((long)(a1)), "2" ((long)(a2)),		\
+		"3" ((long)(a3))				\
+		: "memory" );					\
+	(type)__res;						\
+})
+
+#define _hypercall4(type, name, a1, a2, a3, a4)			\
+({								\
+	long __res, __ign1, __ign2, __ign3;			\
+  ptlsim_hypercall_histogram[__HYPERVISOR_##name]++; \
+	asm volatile (						\
+		"movq %7,%%r10; "				\
+		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
+		: "=a" (__res), "=D" (__ign1), "=S" (__ign2),	\
+		"=d" (__ign3)					\
+		: "1" ((long)(a1)), "2" ((long)(a2)),		\
+		"3" ((long)(a3)), "g" ((long)(a4))		\
+		: "memory", "r10" );				\
+	(type)__res;						\
+})
+
+#define _hypercall5(type, name, a1, a2, a3, a4, a5)		\
+({								\
+	long __res, __ign1, __ign2, __ign3;			\
+  ptlsim_hypercall_histogram[__HYPERVISOR_##name]++; \
+	asm volatile (						\
+		"movq %7,%%r10; movq %8,%%r8; "			\
+		"call hypercall_page + ("STR(__HYPERVISOR_##name)" * 32)"\
+		: "=a" (__res), "=D" (__ign1), "=S" (__ign2),	\
+		"=d" (__ign3)					\
+		: "1" ((long)(a1)), "2" ((long)(a2)),		\
+		"3" ((long)(a3)), "g" ((long)(a4)),		\
+		"g" ((long)(a5))				\
+		: "memory", "r10", "r8" );			\
+	(type)__res;						\
+})
 
 #endif // _PTLXEN_H_

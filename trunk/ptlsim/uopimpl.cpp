@@ -22,7 +22,7 @@ typedef W64 Wmax;
 typedef W32 Wmax;
 #endif
 
-void uop_impl_bogus(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { asm("int3"); }
+// void uop_impl_bogus(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { asm("int3"); }
 
 template <typename T>
 static inline T rotr(T r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" ((byte)n)); return r; }

@@ -10,6 +10,7 @@
 #include <config.h>
 #include <logic.h>
 
+#define PTLSIM_PUBLIC_ONLY
 #include <ptlhwdef.h>
 
 union CPUVendorID {
@@ -85,6 +86,11 @@ static inline void sldt(W16& selector) {
 int main(int argc, char* argv[]) {
   W32 eax, ebx, ecx, edx;
   W32 maxfuncs;
+
+  {
+    cout << "Context size: ", sizeof(Context), endl, flush;
+    return 0;
+  }
 
   {
     cout << "Function 0:", endl;

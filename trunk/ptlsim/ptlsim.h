@@ -150,6 +150,7 @@ struct PTLsimConfig {
   stringbuf log_filename;
   W64 loglevel;
   W64 start_log_at_iteration;
+  W64 start_log_at_rip;
 
   // Statistics Database
   stringbuf stats_filename;

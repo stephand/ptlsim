@@ -10,28 +10,29 @@ SEARCH_DIR("/usr/x86_64-suse-linux/lib64"); SEARCH_DIR("/usr/local/lib64"); SEAR
 }*/
 SECTIONS
 {
-  /* This is at 2^40 bytes, the maximum physical address space supported by current x86-64 implementations */
-  /* . = 0x0000010000000000; */
-
-  . = 0x0000000000000000;
-
-  /* . = 0x0000010000000000 + SIZEOF_HEADERS; */
-
-  /* . = 0x0000000000000800; */
-
+  /* Start at PML4(510): */
+  . = 0xffffff0000000000;
   .bootpage       : { *(.bootpage) }
 
-  . = 0x0000000000001000;
-
+  . = 0xffffff0000001000;
   .hypercall      : { *(.hypercall) }
 
-  . = 0x0000000000002000;
-
+  . = 0xffffff0000002000;
   .shinfo      : { *(.shinfo) }
 
-  . = 0x0000000000004000;
+  . = 0xffffff0000003000;
+  .sshinfo     : { *(.sshinfo) }
 
-  PROVIDE (__executable_start = 0x0000000000004000);
+  . = 0xffffff0000004000;
+  .xfer        : { *(.xfer) }
+
+  . = 0xffffff0000005000;
+  .ctx         : { *(.ctx)  }
+
+  /* Skip 32 VCPU context pages */
+  . = 0xffffff0000025000;
+
+  PROVIDE (__executable_start = 0xffffff0000004000);
 
   .interp         : { *(.interp) }
   .hash           : { *(.hash) }

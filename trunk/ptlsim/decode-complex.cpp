@@ -372,34 +372,50 @@ void assist_iret32(Context& ctx) {
   ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 }
 
+extern bool force_synchronous_streams;
+
+struct IRETStackFrame {
+  W64 rip, cs, rflags, rsp, ss;
+};
+
+static inline ostream& operator <<(ostream& os, const IRETStackFrame& iretctx) {
+  os << "cs:rip ", (void*)iretctx.cs, ":", (void*)iretctx.rip,
+    ", ss:rsp ", (void*)iretctx.ss, ":", (void*)iretctx.rsp,
+    ", rflags ", (void*)iretctx.rflags;
+  return os;
+}
+
 void assist_iret64(Context& ctx) {
 #ifdef PTLSIM_HYPERVISOR
-  struct IRETStackFrame {
-    W64 rip, cs, rflags, rsp, ss;
-  };
-
   IRETStackFrame frame;
 
   PageFaultErrorCode pfec;
   Waddr faultaddr;
 
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
   int n = ctx.copy_from_user(&frame, (Waddr)ctx.commitarf[REG_rsp], sizeof(frame), pfec, faultaddr);
-  if (n != sizeof(frame)) {
+  if unlikely (n != sizeof(frame)) {
     ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
     return;
   }
 
   int exception;
 
-  if (exception = ctx.write_segreg(SEGID_SS, frame.ss)) {
+  if unlikely (exception = ctx.write_segreg(SEGID_SS, frame.ss)) {
     ctx.propagate_x86_exception(exception, frame.ss & 0xfff8);
     return;
   }
 
-  if (exception = ctx.write_segreg(SEGID_CS, frame.cs)) {
+  if unlikely (exception = ctx.write_segreg(SEGID_CS, frame.cs)) {
     ctx.propagate_x86_exception(exception, frame.cs & 0xfff8);
     return;
+  }
+
+  if (logable(5)) {
+    logfile << "IRET64 from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ",
+      (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", frame, " (", sim_cycle, " cycles, ",
+      total_user_insns_committed, " commits)", endl;
   }
 
   ctx.commitarf[REG_rip] = frame.rip;
@@ -526,12 +542,17 @@ bool TraceDecoder::decode_complex() {
 
   case 0x8c: {
     // mov Ev,segreg
-    DECODE(eform, rd, v_mode);
-    DECODE(gform, ra, v_mode);
+    DECODE(eform, rd, w_mode);
+    DECODE(gform, ra, w_mode);
     CheckInvalid();
-    ra.type = OPTYPE_IMM;
-    ra.imm.imm = 0x63;
-    move_reg_or_mem(rd, ra, REG_temp7);
+
+    // Same encoding as order in SEGID_xxx: ES CS SS DS FS GS - - (last two are invalid)
+    if (modrm.reg >= 6) MakeInvalid();
+
+    int rdreg = (rd.type == OPTYPE_MEM) ? REG_temp0 : arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    TransOp ldp(OP_ld, rdreg, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, seg[modrm.reg].selector)); ldp.internal = 1; this << ldp;
+
+    if (rd.type == OPTYPE_MEM) result_store(rdreg, REG_temp5, rd);
     break;
   }
 

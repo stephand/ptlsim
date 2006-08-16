@@ -1214,12 +1214,12 @@ namespace superstl {
       *this = obj;
     }
 
-    shortptr<T>& operator =(const T& obj) { 
+    shortptr<T, P, base, granularity>& operator =(const T& obj) { 
       index = obj.index();
       return *this;
     }
 
-    shortptr<T>& operator =(const T* obj) {
+    shortptr<T, P, base, granularity>& operator =(const T* obj) {
       p = (P)((((Waddr)obj) - base) / granularity);
       return *this;
     }

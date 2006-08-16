@@ -45,6 +45,10 @@ CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16 -fno-
 CFLAGS32BIT = 
 endif
 
+ifdef PTLSIM_HYPERVISOR
+CFLAGS += -fpic
+endif
+
 BASEOBJS = superstl.o config.o mathlib.o syscalls.o
 STDOBJS = glibc.o
 
@@ -139,6 +143,7 @@ ifdef __x86_64__
 ifdef PTLSIM_HYPERVISOR
 ptlsim: ptlmon.o ptlxen.bin.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o ptlmon.lds Makefile
 	g++ $(CFLAGS) ptlmon.o ptlxen.bin.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -Wl,-T,ptlmon.lds -static -o ptlsim
+	chmod a+rx ptlsim
 else
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
 	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`

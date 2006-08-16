@@ -6,8 +6,9 @@
 //
 
 #include <globals.h>
-#include <ptlhwdef.h>
 #include <datastore.h>
+#define PTLSIM_PUBLIC_ONLY
+#include <ptlhwdef.h>
 
 struct PTLstatsConfig {
   stringbuf mode_subtree;

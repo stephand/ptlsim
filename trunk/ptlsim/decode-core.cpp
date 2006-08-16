@@ -92,19 +92,57 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
 };
 
 const char* assist_names[ASSIST_COUNT] = {
-  "div8",  "div16",  "div32",  "div64",
-  "idiv8", "idiv16", "idiv32", "idiv64",
-  "x87_fprem", "x87_fyl2xp1", "x87_fsqrt", "x87_fsincos",
-  "x87_frndint", "x87_fscale", "x87_fsin", "x87_fcos",
-  "x87_fxam", "x87_f2xm1", "x87_fyl2x", "x87_fptan",
-  "x87_fpatan", "x87_fxtract", "x87_fprem1",
-  "x87_fld80", "x87_fstp80",  "ldmxcsr", "fxsave",
-  "fxrstor", "fsave", "frstor",
-  "int", "syscall", "sysenter", "cpuid",
-  "invalid_opcode", "exec_page_fault", "gp_fault",
-  "write_segreg", "popf", "cld", "std",
-  "ptlcall", "wrmsr", "rdmsr", "wrcr", "rdcr",
-  "iret16", "iret32", "iret64",
+  "div8",
+  "div16",
+  "div32",
+  "div64",
+  "idiv8",
+  "idiv16",
+  "idiv32",
+  "idiv64",
+  "x87_fprem",
+  "x87_fyl2xp1",
+  "x87_fsqrt",
+  "x87_fsincos",
+  "x87_frndint",
+  "x87_fscale",
+  "x87_fsin",
+  "x87_fcos",
+  "x87_fxam",
+  "x87_f2xm1",
+  "x87_fyl2x",
+  "x87_fptan",
+  "x87_fpatan",
+  "x87_fxtract",
+  "x87_fprem1",
+  "x87_fld80",
+  "x87_fstp80",
+  "fsave",
+  "frstor",
+  "finit",
+  "fclex",
+  "ldmxcsr",
+  "fxsave",
+  "fxrstor",
+  "int",
+  "syscall",
+  "sysenter",
+  "cpuid",
+  "invalid_opcode",
+  "exec_page_fault",
+  "gp_fault",
+  "write_segreg",
+  "popf",
+  "cld",
+  "std",
+  "ptlcall",
+  "wrmsr",
+  "rdmsr",
+  "wrcr",
+  "rdcr",
+  "iret16",
+  "iret32",
+  "iret64",
 };
 
 const char* x86_exception_names[256] = {
@@ -128,7 +166,7 @@ const char* x86_exception_names[256] = {
   "unaligned",
   "machine check",
   "sse",
-  "int15h", "int16h", "int17h",
+  "int14h", "int15h", "int16h", "int17h",
   "int18h", "int19h", "int1Ah", "int1Bh", "int1Ch", "int1Dh", "int1Eh", "int1Fh",
   "int20h", "int21h", "int22h", "int23h", "int24h", "int25h", "int26h", "int27h",
   "int28h", "int29h", "int2Ah", "int2Bh", "int2Ch", "int2Dh", "int2Eh", "int2Fh",
@@ -239,9 +277,15 @@ void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
     lo.size = 3; // always load 64-bit word
     hi.rb = REG_temp4;
   } else {
-    assert(st);
+    //
     // For stores, expand     st sfrd = [ra+rb],rc    =>   st.lo sfrd1 = [ra+rb],rc    and    st.hi sfrd2 = [ra+rb],rc
-    // (no action: all done above)
+    //
+    // Make sure high part issues first in program order, so if there is
+    // a page fault on the high page it overlaps, this will be triggered
+    // before the low part overwrites memory.
+    //
+    lo.cond = LDST_ALIGN_HI;
+    hi.cond = LDST_ALIGN_LO;
   }
 }
 
@@ -1166,7 +1210,7 @@ void TraceDecoder::microcode_assist(int assistid, Waddr selfrip, Waddr nextrip) 
 }
 
 //
-// Core Translator
+// Core Decoder
 //
 void TraceDecoder::decode_prefixes() {
   prefixes = 0;
@@ -1246,7 +1290,7 @@ int BasicBlockCache::invalidate_page(Waddr mfn) {
 
   if (!pagelist) return 0;
 
-  shortptr<BasicBlock>* bblist = (shortptr<BasicBlock>*)ptl_alloc_private_pages(pagelist->count() * sizeof(shortptr<BasicBlock>));
+  BasicBlockPtr* bblist = (BasicBlockPtr*)ptl_alloc_private_pages(pagelist->count() * sizeof(BasicBlockPtr));
 
   int n = pagelist->getentries(bblist, pagelist->count());
   assert(n == pagelist->count());
@@ -1257,7 +1301,7 @@ int BasicBlockCache::invalidate_page(Waddr mfn) {
     bbcache.invalidate(bb);
   }
 
-  ptl_free_private_pages(bblist, n * sizeof(shortptr<BasicBlock>));
+  ptl_free_private_pages(bblist, n * sizeof(BasicBlockPtr));
   pagelist->clear();
   bbpages.remove(pagelist);
 
@@ -1287,8 +1331,6 @@ void assist_exec_page_fault(Context& ctx) {
 #else
   bool page_now_valid = asp.fastcheck((byte*)faultaddr, asp.execmap);
 #endif
-  // logfile << "Exec page fault at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " (", total_user_insns_committed, " commits, ", sim_cycle, " cycles); now valid? ", page_now_valid, endl, flush;
-
   if (page_now_valid) {
     if (logable(3)) {
       logfile << "Spurious PageFaultOnExec detected at fault rip ",
@@ -1304,7 +1346,6 @@ void assist_exec_page_fault(Context& ctx) {
 
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
   ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
-  // logfile << "after propagating exec page fault: rip = ", (void*)ctx.commitarf[REG_rip], endl, flush;
 }
 
 void assist_gp_fault(Context& ctx) {
@@ -1485,6 +1526,11 @@ ostream& printflags(ostream& os, W64 flags) {
 }
 
 BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
+  if (rip == config.start_log_at_rip) {
+    // Force logging to start here
+    config.start_log_at_iteration = sim_cycle - 1;
+  }
+
   RIPVirtPhys rvp(rip);
   rvp.update(ctx);
 
@@ -1497,7 +1543,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   if (smc_isdirty(rvp.mfnhi))
     invalidate_page(rvp.mfnhi);
 
-  if (logable(4) | log_code_page_ops) logfile << "Translating ", rvp, " at ", total_user_insns_committed, " commits", endl, flush;
+  if (logable(5) | log_code_page_ops) logfile << "Translating ", rvp, " at ", total_user_insns_committed, " commits", endl, flush;
 
   translate_timer.start();
 
@@ -1524,7 +1570,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   }
 
   pagelist->add(bb, bb->mfnlo_loc);
-  if (logable(4) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
+  if (logable(5) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
 
   int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes-1)) >> 12);
 

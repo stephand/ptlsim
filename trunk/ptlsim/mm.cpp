@@ -1006,11 +1006,11 @@ DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root) {
   return root;
 }
 
-extern "C" void* malloc(size_t size) {
+asmlinkage void* malloc(size_t size) {
   return ptl_mm_alloc(size);
 }
 
-extern "C" void free(void* ptr) {
+asmlinkage void free(void* ptr) {
   ptl_mm_free(ptr);
 }
 

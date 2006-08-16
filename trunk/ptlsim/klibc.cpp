@@ -1959,26 +1959,29 @@ char* strndup(const char *s, size_t n) {
   return p;
 }
 
-void abort() {
+extern ostream logfile;
+
+extern "C" void abort() {
   cout.flush();
   cerr.flush();
-  asm("int3");
-  for (;;) { }
+  if (logfile) logfile.flush();
+  asm("ud2a");
+  for (;;) { asm("nop"); }
 }
 
 #ifdef __USE_EXTERN_INLINES
 extern "C" double __strtod_internal(const char* __nptr, char **__endptr, int group) {
-  asm("int3"); // FP not supported
+  for (;;) { asm("nop"); } // FP not supported
   return 0;
 }
 #else
 extern "C" double strtod(const char* s, char **endp) {
-  asm("int3"); // FP not supported
+  for (;;) { asm("nop"); } // FP not supported
   return 0;
 }
 
 extern "C" double atof(const char* s) {
-  asm("int3"); // FP not supported
+  for (;;) { asm("nop"); } // FP not supported
   return 0;
 }
 #endif

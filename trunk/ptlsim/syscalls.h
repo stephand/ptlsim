@@ -64,13 +64,9 @@ extern "C" {
 };
 
 #ifdef INLINED_SYSCALLS
-#define asmlinkage static inline
+#define syslinkage static inline
 #else
-#ifdef __cplusplus
-#define asmlinkage extern "C"
-#else
-#define asmlinkage
-#endif
+#define syslinkage extern "C"
 #endif
 
 #ifdef __x86_64__
@@ -80,31 +76,31 @@ extern "C" {
 #define __syscall_clobber "r11","rcx","memory" 
 #define __syscall "syscall"
 
-#define declare_syscall0(sysid,type,name) asmlinkage type name(void) { long __res; asm volatile \
+#define declare_syscall0(sysid,type,name) syslinkage type name(void) { long __res; asm volatile \
   (__syscall : "=a" (__res) : "0" (sysid) : __syscall_clobber ); __syscall_return(type,__res); }
 
-#define declare_syscall1(sysid,type,name,type1,arg1) asmlinkage type name(type1 arg1) { long __res; asm volatile \
+#define declare_syscall1(sysid,type,name,type1,arg1) syslinkage type name(type1 arg1) { long __res; asm volatile \
   (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)) : __syscall_clobber ); __syscall_return(type,__res); }
 
-#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) asmlinkage type name(type1 arg1,type2 arg2) { long __res; asm volatile \
+#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) syslinkage type name(type1 arg1,type2 arg2) { long __res; asm volatile \
   (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)) : __syscall_clobber ); __syscall_return(type,__res); }
 
-#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) asmlinkage type name(type1 arg1,type2 arg2,type3 arg3) { \
+#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) syslinkage type name(type1 arg1,type2 arg2,type3 arg3) { \
   long __res; asm volatile (__syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), "d" ((long)(arg3)) : \
   __syscall_clobber); __syscall_return(type,__res); }
 
 #define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
-  asmlinkage type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) { \
+  syslinkage type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) { \
   long __res; asm volatile ("movq %5,%%r10 ;" __syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), \
   "d" ((long)(arg3)),"g" ((long)(arg4)) : __syscall_clobber,"r10" ); __syscall_return(type,__res); }
 
 #define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5) \
-  asmlinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) { long __res; asm volatile ("movq %5,%%r10 ; movq %6,%%r8 ; " __syscall \
+  syslinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) { long __res; asm volatile ("movq %5,%%r10 ; movq %6,%%r8 ; " __syscall \
   : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), "d" ((long)(arg3)),"g" ((long)(arg4)),"g" ((long)(arg5)) : \
   __syscall_clobber,"r8","r10"); __syscall_return(type,__res); }
 
 #define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5,type6,arg6) \
-  asmlinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { long __res; asm volatile \
+  syslinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { long __res; asm volatile \
   ("movq %5,%%r10 ; movq %6,%%r8 ; movq %7,%%r9 ; " __syscall : "=a" (__res) : "0" (sysid),"D" ((long)(arg1)),"S" ((long)(arg2)), \
    "d" ((long)(arg3)), "g" ((long)(arg4)), "g" ((long)(arg5)), "g" ((long)(arg6)) : __syscall_clobber,"r8","r10","r9" ); __syscall_return(type,__res); }
 
@@ -375,31 +371,30 @@ extern "C" {
 #undef __syscall_return
 #define __syscall_return(type, res) return (type)(res);
 
-#define declare_syscall0(sysid,type,name) asmlinkage type name(void) { long __res; asm volatile ("int $0x80" \
+#define declare_syscall0(sysid,type,name) syslinkage type name(void) { long __res; asm volatile ("int $0x80" \
   : "=a" (__res) : "0" (sysid)); __syscall_return(type,__res); }
 
-#define declare_syscall1(sysid,type,name,type1,arg1) asmlinkage type name(type1 arg1) { long __res; \
+#define declare_syscall1(sysid,type,name,type1,arg1) syslinkage type name(type1 arg1) { long __res; \
   asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1))); __syscall_return(type,__res); }
 
-#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) asmlinkage type name(type1 arg1,type2 arg2) { \
+#define declare_syscall2(sysid,type,name,type1,arg1,type2,arg2) syslinkage type name(type1 arg1,type2 arg2) { \
   long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2))); __syscall_return(type,__res); }
 
-#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) asmlinkage type name(type1 arg1,type2 arg2,type3 arg3) { \
+#define declare_syscall3(sysid,type,name,type1,arg1,type2,arg2,type3,arg3) syslinkage type name(type1 arg1,type2 arg2,type3 arg3) { \
   long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3))); __syscall_return(type,__res); }
 
-#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) asmlinkage type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
+#define declare_syscall4(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) syslinkage type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
   { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4))); \
   __syscall_return(type,__res); }
 
-#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5) asmlinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
+#define declare_syscall5(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5) syslinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
   { long __res; asm volatile ("int $0x80" : "=a" (__res) : "0" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5))); \
   __syscall_return(type,__res); }
 
 #define declare_syscall6(sysid,type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, type5,arg5,type6,arg6) \
-  asmlinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
-  long __res; asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; pop %%ebp" : "=a" (__res) \
-	: "i" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5)), \
-  "0" ((long)(arg6))); __syscall_return(type,__res); }
+  syslinkage type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5,type6 arg6) { \
+  long __res = arg6; asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; pop %%ebp" : "+a" (__res) \
+	: "i" (sysid),"b" ((long)(arg1)),"c" ((long)(arg2)), "d" ((long)(arg3)),"S" ((long)(arg4)),"D" ((long)(arg5))); __syscall_return(type,__res); }
 
 #define __NR_restart_syscall      0
 #define __NR_exit		  1

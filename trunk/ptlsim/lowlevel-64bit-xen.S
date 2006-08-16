@@ -25,11 +25,15 @@
 hypercall_page:
 .previous
 
+.extern main
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
   # %rdi already points to PTLsimMonitorInfo struct
-  call ptlsim_main
-  int3
+  xor  %edi,%edi # no argc
+  xor  %esi,%esi # no argv[]
+  call main
+1:  
+  jmp 1b
 
 .global get_fs
 get_fs:
@@ -44,11 +48,6 @@ get_gs:
   ret
 
 .extern got_upcall
-
-#define __HYPERVISOR_iret                 23 /* x86 only */
-
-.att_syntax
-#define ENTRY(X) .globl X ; X :
 
 #define __ASSEMBLY__
 #include <xen/xen.h>
@@ -82,168 +81,8 @@ get_gs:
 #define TRAP_simd_error       19
 #define TRAP_deferred_nmi     31
 
-
-/* Offsets into shared_info_t. */                
-#define evtchn_upcall_pending		/* 0 */
-#define evtchn_upcall_mask		1
-
-NMI_MASK = 0x80000000
-
-#define RDI 112
-#define ORIG_RAX 120       /* + error_code */ 
-#define EFLAGS 144
-
-#define REST_SKIP 6*8			
-.macro SAVE_REST
-	subq $REST_SKIP,%rsp
-#	CFI_ADJUST_CFA_OFFSET	REST_SKIP
-	movq %rbx,5*8(%rsp) 
-#	CFI_REL_OFFSET	rbx,5*8
-	movq %rbp,4*8(%rsp) 
-#	CFI_REL_OFFSET	rbp,4*8
-	movq %r12,3*8(%rsp) 
-#	CFI_REL_OFFSET	r12,3*8
-	movq %r13,2*8(%rsp) 
-#	CFI_REL_OFFSET	r13,2*8
-	movq %r14,1*8(%rsp) 
-#	CFI_REL_OFFSET	r14,1*8
-	movq %r15,(%rsp) 
-#	CFI_REL_OFFSET	r15,0*8
-.endm		
-
-
-.macro RESTORE_REST
-	movq (%rsp),%r15
-#	CFI_RESTORE r15
-	movq 1*8(%rsp),%r14
-#	CFI_RESTORE r14
-	movq 2*8(%rsp),%r13
-#	CFI_RESTORE r13
-	movq 3*8(%rsp),%r12
-#	CFI_RESTORE r12
-	movq 4*8(%rsp),%rbp
-#	CFI_RESTORE rbp
-	movq 5*8(%rsp),%rbx
-#	CFI_RESTORE rbx
-	addq $REST_SKIP,%rsp
-#	CFI_ADJUST_CFA_OFFSET	-(REST_SKIP)
-.endm
-
-
-#define ARG_SKIP 9*8
-.macro RESTORE_ARGS skiprax=0,addskip=0,skiprcx=0,skipr11=0,skipr8910=0,skiprdx=0
-	.if \skipr11
-	.else
-	movq (%rsp),%r11
-#	CFI_RESTORE r11
-	.endif
-	.if \skipr8910
-	.else
-	movq 1*8(%rsp),%r10
-#	CFI_RESTORE r10
-	movq 2*8(%rsp),%r9
-#	CFI_RESTORE r9
-	movq 3*8(%rsp),%r8
-#	CFI_RESTORE r8
-	.endif
-	.if \skiprax
-	.else
-	movq 4*8(%rsp),%rax
-#	CFI_RESTORE rax
-	.endif
-	.if \skiprcx
-	.else
-	movq 5*8(%rsp),%rcx
-#	CFI_RESTORE rcx
-	.endif
-	.if \skiprdx
-	.else
-	movq 6*8(%rsp),%rdx
-#	CFI_RESTORE rdx
-	.endif
-	movq 7*8(%rsp),%rsi
-#	CFI_RESTORE rsi
-	movq 8*8(%rsp),%rdi
-#	CFI_RESTORE rdi
-	.if ARG_SKIP+\addskip > 0
-	addq $ARG_SKIP+\addskip,%rsp
-#	CFI_ADJUST_CFA_OFFSET	-(ARG_SKIP+\addskip)
-	.endif
-.endm	
-
-
-.macro HYPERVISOR_IRET flag
-#    testb $3,1*8(%rsp)    /* Don't need to do that in Mini-os, as */
-#	jnz   2f               /* there is no userspace? */
-	testl $NMI_MASK,2*8(%rsp)
-	jnz   2f
-
-#	testb $1,(xen_features+XENFEAT_supervisor_mode_kernel)
-#	jnz   1f
-
-	/* Direct iret to kernel space. Correct CS and SS. */
-	orb   $3,1*8(%rsp)
-	orb   $3,4*8(%rsp)
-1:	iretq
-
-2:	/* Slow iret via hypervisor. */
-	andl  $~NMI_MASK, 16(%rsp)
-	pushq $\flag
-	jmp  hypercall_page + (__HYPERVISOR_iret * 32)
-.endm
-
-/*
- * Exception entry point. This expects an error code/orig_rax on the stack
- * and the exception handler in %rax.	
- */ 		  				
-ENTRY(error_entry)
-#	_frame RDI
-	/* rdi slot contains rax, oldrax contains error code */
-	cld	
-	subq  $14*8,%rsp
-#	CFI_ADJUST_CFA_OFFSET	(14*8)
-	movq %rsi,13*8(%rsp)
-#	CFI_REL_OFFSET	rsi,RSI
-	movq 14*8(%rsp),%rsi	/* load rax from rdi slot */
-	movq %rdx,12*8(%rsp)
-#	CFI_REL_OFFSET	rdx,RDX
-	movq %rcx,11*8(%rsp)
-#	CFI_REL_OFFSET	rcx,RCX
-	movq %rsi,10*8(%rsp)	/* store rax */ 
-#	CFI_REL_OFFSET	rax,RAX
-	movq %r8, 9*8(%rsp)
-#	CFI_REL_OFFSET	r8,R8
-	movq %r9, 8*8(%rsp)
-#	CFI_REL_OFFSET	r9,R9
-	movq %r10,7*8(%rsp)
-#	CFI_REL_OFFSET	r10,R10
-	movq %r11,6*8(%rsp)
-#	CFI_REL_OFFSET	r11,R11
-	movq %rbx,5*8(%rsp) 
-#	CFI_REL_OFFSET	rbx,RBX
-	movq %rbp,4*8(%rsp) 
-#	CFI_REL_OFFSET	rbp,RBP
-	movq %r12,3*8(%rsp) 
-#	CFI_REL_OFFSET	r12,R12
-	movq %r13,2*8(%rsp) 
-#	CFI_REL_OFFSET	r13,R13
-	movq %r14,1*8(%rsp) 
-#	CFI_REL_OFFSET	r14,R14
-	movq %r15,(%rsp) 
-#	CFI_REL_OFFSET	r15,R15
-#if 0        
-/*	cmpl $__KERNEL_CS,CS(%rsp)
-	je  error_kernelspace */
-#endif        
-error_call_handler:
-	movq %rdi, RDI(%rsp)            
-	movq %rsp,%rdi
-	movq ORIG_RAX(%rsp),%rsi	# get error code 
-	movq $-1,ORIG_RAX(%rsp)
-	call *%rax
-
-#define PTLSIM_VIRT_BASE 0x0 // base 0 (so all 32-bit offsets fit)
-#define PHYS_VIRT_BASE 0x10000000000 // (1 << 40), PML4 entry 2
+#define PTLSIM_VIRT_BASE 0xffffff0000000000 // PML4 entry 510
+#define PHYS_VIRT_BASE   0xfffffe0000000000 // PML4 entry 509 (enough for 2^39 bytes physical RAM)
 
 #define PTLSIM_BOOT_PAGE_PFN 0
 #define PTLSIM_BOOT_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_BOOT_PAGE_PFN * 4096))
@@ -255,164 +94,201 @@ error_call_handler:
 #define PTLSIM_SHINFO_PAGE_PFN 2
 #define PTLSIM_SHINFO_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_SHINFO_PAGE_PFN * 4096))
 
-#define XEN_GET_VCPU_INFO(reg)	movq PTLSIM_SHINFO_PAGE_VIRT_BASE,reg
-#define XEN_PUT_VCPU_INFO(reg)
-#define XEN_PUT_VCPU_INFO_fixup
-#define XEN_LOCKED_BLOCK_EVENTS(reg) movb $1,evtchn_upcall_mask(reg)
-#define XEN_LOCKED_UNBLOCK_EVENTS(reg) movb $0,evtchn_upcall_mask(reg)
-#define XEN_TEST_PENDING(reg)	testb $0xFF,evtchn_upcall_pending(reg)
+#define PTLSIM_XFER_PAGE_PFN 3
+#define PTLSIM_XFER_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_XFER_PAGE_PFN * 4096))
 
-#define XEN_BLOCK_EVENTS(reg)	XEN_GET_VCPU_INFO(reg)			; \
-                    			XEN_LOCKED_BLOCK_EVENTS(reg)	; \
-    				            XEN_PUT_VCPU_INFO(reg)
+#define offsetof_evtchn_upcall_pending 0
+#define offsetof_evtchn_upcall_mask    1
 
-#define XEN_UNBLOCK_EVENTS(reg)	XEN_GET_VCPU_INFO(reg)			; \
-                				XEN_LOCKED_UNBLOCK_EVENTS(reg)	; \
-    			            	XEN_PUT_VCPU_INFO(reg)
+/*
+ * Event upcall stack frame:
+ *
+ * 6:  ss
+ * 5:  rsp
+ * 4:  flags
+ * 3:  cs_and_upcall_mask
+ * 2:  rip
+ * 1:  r11
+ * 0:  rcx
+ */
 
-error_exit:		
-	RESTORE_REST
-/*	cli */
-	XEN_BLOCK_EVENTS(%rsi)		
-	jmp retint_kernel
+/*
+ * Exception with error code stack frame: 
+ *
+ * 7:  ss
+ * 6:  rsp
+ * 5:  flags
+ * 4:  cs_and_upcall_mask
+ * 3:  rip
+ * 2:  error_code
+ * 1:  r11
+ * 0:  rcx
+ */
 
-.macro zeroentry sym
-#	INTR_FRAME
-    movq (%rsp),%rcx
-    movq 8(%rsp),%r11
-    addq $0x10,%rsp /* skip rcx and r11 */
-	pushq $0	/* push error code/oldrax */ 
-#	CFI_ADJUST_CFA_OFFSET 8
-	pushq %rax	/* push real oldrax to the rdi slot */ 
-#	CFI_ADJUST_CFA_OFFSET 8
-	leaq  \sym(%rip),%rax
-	jmp error_entry
-#	CFI_ENDPROC
-.endm	
+.macro save_regs HAS_ERROR_CODE
+  mov   %rcx,[%rsp + 0*8]
+  mov   %r11,[%rsp + 1*8]
+  sub   %rsp,(8*64)
+  mov   [%rsp + 8*REG_rax],%rax
+  mov   [%rsp + 8*REG_rcx],%rcx
+  mov   [%rsp + 8*REG_rdx],%rdx
+  mov   [%rsp + 8*REG_rbx],%rbx
+  mov   [%rsp + 8*REG_rsp],%rsp
+  mov   [%rsp + 8*REG_rbp],%rbp
+  mov   [%rsp + 8*REG_rsi],%rsi
+  mov   [%rsp + 8*REG_rdi],%rdi
+  mov   [%rsp + 8*REG_r8],%r8
+  mov   [%rsp + 8*REG_r9],%r9
+  mov   [%rsp + 8*REG_r10],%r10
+  mov   [%rsp + 8*REG_r11],%r11
+  mov   [%rsp + 8*REG_r12],%r12
+  mov   [%rsp + 8*REG_r13],%r13
+  mov   [%rsp + 8*REG_r14],%r14
+  mov   [%rsp + 8*REG_r15],%r15
+  lea   %rbp,[%rsp+(8*64) + (8*2)]
 
-.macro errorentry sym
-#	XCPT_FRAME
-        movq (%rsp),%rcx
-        movq 8(%rsp),%r11
-        addq $0x10,%rsp /* rsp points to the error code */
-	pushq %rax
-#	CFI_ADJUST_CFA_OFFSET 8
-	leaq  \sym(%rip),%rax
-	jmp error_entry
-#	CFI_ENDPROC
+.if (\HAS_ERROR_CODE)
+  # Save %error (%ar1)
+  mov   %rax,[%rbp]
+  mov   [%rsp + 8*REG_ar1],%rax
+  add   %rbp,8
+.endif
+  # Save %rip
+  mov   %rax,[%rbp + 8*0]
+  mov   [%rsp + 8*REG_rip],%rax
+  # Skip cs and upcall mask (+1)
+  # Save %flags
+  mov   %rax,[%rbp + 8*2]
+  mov   [%rsp + 8*REG_flags],%rax
+  # Save %rsp
+  mov   %rax,[%rbp + 8*3]
+  mov   [%rsp + 8*REG_rsp],%rax
+  # Skip ss (+4)
+  # Make %rdi (call argument 1) point to saved context
+  mov   %rdi,%rsp
 .endm
 
-ENTRY(xen_event_callback_entry)
-    zeroentry hypervisor_callback2
+.macro restore_regs_and_iret HAS_ERROR_CODE
+  mov   %rax,[%rsp + 8*REG_rax]
+# mov   %rcx,[%rsp + 8*REG_rcx]
+  mov   %rdx,[%rsp + 8*REG_rdx]
+  mov   %rbx,[%rsp + 8*REG_rbx]
+# mov   %rsp,[%rsp + 8*REG_rsp]
+  mov   %rbp,[%rsp + 8*REG_rbp]
+  mov   %rsi,[%rsp + 8*REG_rsi]
+  mov   %rdi,[%rsp + 8*REG_rdi]
+  mov   %r8,[%rsp + 8*REG_r8]
+  mov   %r9,[%rsp + 8*REG_r9]
+  mov   %r10,[%rsp + 8*REG_r10]
+# mov   %r11,[%rsp + 8*REG_r11] (do later)
+  mov   %r12,[%rsp + 8*REG_r12]
+  mov   %r13,[%rsp + 8*REG_r13]
+  mov   %r14,[%rsp + 8*REG_r14]
+  mov   %r15,[%rsp + 8*REG_r15]
+  add   %rsp,(8*64)
 
-ENTRY(hypervisor_callback2)
-        movq %rdi, %rsp 
-11:
-        pushq %rdi
-        call xen_event_callback 
-        popq %rsp
-        jmp error_exit
+  # Transfer evtchn_upcall_mask = ~saved_rflags.IF
+  test  word ptr [%rsp + 2*8],(1 << 9)
+  mov   %rcx,(PTLSIM_SHINFO_PAGE_VIRT_BASE + offsetof_evtchn_upcall_mask)
+  setz  byte ptr [%rcx]
 
-#        ALIGN
-restore_all_enable_events:  
-	XEN_UNBLOCK_EVENTS(%rsi)        # %rsi is already set up...
+  pop   %rcx
+  pop   %r11
+.if (\HAS_ERROR_CODE)
+  # Skip pushed error code
+  add   %rsp,8
+.endif
+  #
+  # Direct iret to kernel space: no need to switch page tables
+  # back to user base, but we do need to correct CS and SS.
+  #
+	or    byte ptr [%rsp + 1*8],3
+	or    byte ptr [%rsp + 4*8],3
+  iretq
+.endm
 
-scrit:	/**** START OF CRITICAL REGION ****/
-	XEN_TEST_PENDING(%rsi)
-	jnz  14f			# process more events if necessary...
-	XEN_PUT_VCPU_INFO(%rsi)
-        RESTORE_ARGS 0,8,0
-        HYPERVISOR_IRET 0
-        
-14:	XEN_LOCKED_BLOCK_EVENTS(%rsi)
-	XEN_PUT_VCPU_INFO(%rsi)
-	SAVE_REST
-        movq %rsp,%rdi                  # set the argument again
-	jmp  11b
-ecrit:  /**** END OF CRITICAL REGION ****/
+#
+# Do not actually do any processing here: defer event
+# handling until the next iteration of the main loop,
+# so we can selectively forward events to the guest.
+#
+.global xen_event_callback_entry
+.extern event_upcall_pending
+xen_event_callback_entry:
+  or    byte ptr [%rsp + (2+1)*8],3
+  or    byte ptr [%rsp + (2+4)*8],3
+  pop   %rcx
+  pop   %r11
+  iretq
 
+.global divide_error_entry
+divide_error_entry:
+  save_regs 0
+  call do_divide_error
+  restore_regs_and_iret 0
 
-retint_kernel:
-retint_restore_args:
-  # movl EFLAGS-REST_SKIP(%rsp), %eax
-	# shr $9, %eax			# EAX[0] == IRET_EFLAGS.IF (generally is set: allow interrupts)
-	XEN_GET_VCPU_INFO(%rsi)
-	# andb evtchn_upcall_mask(%rsi),%al
-  # andb $1,%al			# EAX[0] == IRET_EFLAGS.IF & event_mask
-  ##	jnz restore_all_enable_events	#        != 0 => enable event delivery
-  jmp restore_all_enable_events       # force interrupts to be enabled at all times
-	XEN_PUT_VCPU_INFO(%rsi)
-	#movb $0,evtchn_upcall_mask(%rsi)
-		
-	RESTORE_ARGS 0,8,0
-	HYPERVISOR_IRET 0
+.global int3_entry
+int3_entry:
+  save_regs 0
+  call do_int3
+  restore_regs_and_iret 0
 
+.global overflow_entry
+overflow_entry:
+  save_regs 0
+  call do_overflow
+  restore_regs_and_iret 0
 
-ENTRY(failsafe_callback)
-        popq  %rcx
-        popq  %r11
-        iretq
+.global bounds_entry
+bounds_entry:
+  save_regs 0
+  call do_bounds
+  restore_regs_and_iret 0
 
-ENTRY(coprocessor_error)
-        zeroentry do_coprocessor_error
+.global invalid_op_entry
+invalid_op_entry:
+  save_regs 0
+  call do_invalid_op
+  restore_regs_and_iret 0
 
-ENTRY(simd_coprocessor_error)
-        zeroentry do_simd_coprocessor_error
+.global device_not_available_entry
+device_not_available_entry:
+  save_regs 0
+  call do_device_not_available
+  restore_regs_and_iret 0
 
-ENTRY(device_not_available)
-        zeroentry do_device_not_available
+.global segment_not_present_entry
+segment_not_present_entry:
+  save_regs 1
+  call do_segment_not_present
+  restore_regs_and_iret 1
 
+.global stack_segment_entry
+stack_segment_entry:
+  save_regs 1
+  call do_stack_segment
+  restore_regs_and_iret 1
 
-ENTRY(debug)
-#       INTR_FRAME
-#       CFI_ADJUST_CFA_OFFSET 8 */
-        zeroentry do_debug
-#       CFI_ENDPROC
+.global general_protection_entry
+general_protection_entry:
+  save_regs 1
+  call do_general_protection
+  restore_regs_and_iret 1
 
-ENTRY(int3)
-#       INTR_FRAME
-#       CFI_ADJUST_CFA_OFFSET 8 */
-        zeroentry do_int3
-#       CFI_ENDPROC
+.global page_fault_entry
+page_fault_entry:
+  save_regs 1
+  call do_page_fault
+  restore_regs_and_iret 1
 
-ENTRY(overflow)
-        zeroentry do_overflow
+.global coprocessor_error_entry
+coprocessor_error_entry:
+  save_regs 0
+  call do_coprocessor_error
+  restore_regs_and_iret 0
 
-ENTRY(bounds)
-        zeroentry do_bounds
-    
-ENTRY(invalid_op)
-        zeroentry do_invalid_op
-
-
-ENTRY(coprocessor_segment_overrun)
-        zeroentry do_coprocessor_segment_overrun
-
-ENTRY(invalid_tss)
-        errorentry do_invalid_tss
-
-ENTRY(segment_not_present)
-        errorentry do_segment_not_present
-
-/* runs on exception stack */
-ENTRY(stack_segment)
-#       XCPT_FRAME
-        errorentry do_stack_segment
-#       CFI_ENDPROC
-                    
-ENTRY(general_protection)
-        errorentry do_general_protection
-
-ENTRY(alignment_check)
-        errorentry do_alignment_check
-
-ENTRY(divide_error)
-        zeroentry do_divide_error
-
-ENTRY(spurious_interrupt_bug)
-        zeroentry do_spurious_interrupt_bug
-            
-ENTRY(page_fault)
-        errorentry do_page_fault
-
-.intel_syntax
+.global simd_coprocessor_error_entry
+simd_coprocessor_error_entry:
+  save_regs 0
+  call do_simd_coprocessor_error
+  restore_regs_and_iret 0

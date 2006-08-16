@@ -29,6 +29,7 @@ void PTLsimConfig::reset() {
   log_filename = "ptlsim.log";
   loglevel = 0;
   start_log_at_iteration = infinity;
+  start_log_at_rip = 0xffffffffffffffffULL;
 
   // Statistics Database
   stats_filename.reset();

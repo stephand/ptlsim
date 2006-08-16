@@ -125,6 +125,7 @@ void Context::saveto(vcpu_guest_context& ctx) {
   ctx.user_regs.eflags = 
     (commitarf[REG_flags] & (FLAG_ZAPS|FLAG_CF|FLAG_OF)) |
     (internal_eflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
+  ctx.user_regs.eflags = (ctx.user_regs.eflags & ~FLAG_IOPL) | ((kernel_mode ? 1 : 3) << 12);
 
   ctx.user_regs.entry_vector = x86_exception;
   ctx.user_regs.error_code = error_code;
@@ -204,7 +205,7 @@ ostream& operator <<(ostream& os, const Level1PTE& pte) {
     os << ((pte.pwt) ? "wt  " : "-   ");
     os << ((pte.pcd) ? "cd  " : "-   ");
     os << ((pte.g) ? "gbl " : "-   ");
-    os << " phys 0x", hexstring((W64)pte.phys << 12, 40), " mfn ", intstring(pte.phys, 10);
+    os << " phys 0x", hexstring((W64)pte.mfn << 12, 40), " mfn ", intstring(pte.mfn, 10);
   } else {
     os << "(not present)";
   }
@@ -222,7 +223,7 @@ ostream& operator <<(ostream& os, const Level2PTE& pte) {
     os << ((pte.pwt) ? "wt  " : "-   ");
     os << ((pte.pcd) ? "cd  " : "-   ");
     os << ((pte.psz) ? "psz " : "-   ");
-    os << " next 0x", hexstring((W64)pte.next << 12, 40), " mfn ", intstring(pte.next, 10);
+    os << " next 0x", hexstring((W64)pte.mfn << 12, 40), " mfn ", intstring(pte.mfn, 10);
   } else {
     os << "(not present)";
   }
@@ -240,7 +241,7 @@ ostream& operator <<(ostream& os, const Level3PTE& pte) {
     os << ((pte.pwt) ? "wt  " : "-   ");
     os << ((pte.pcd) ? "cd  " : "-   ");
     os << "    ";
-    os << " next 0x", hexstring((W64)pte.next << 12, 40), " mfn ", intstring(pte.next, 10);
+    os << " next 0x", hexstring((W64)pte.mfn << 12, 40), " mfn ", intstring(pte.mfn, 10);
   } else {
     os << "(not present)";
   }
@@ -258,7 +259,7 @@ ostream& operator <<(ostream& os, const Level4PTE& pte) {
     os << ((pte.pwt) ? "wt  " : "-   ");
     os << ((pte.pcd) ? "cd  " : "-   ");
     os << "    ";
-    os << " next 0x", hexstring((W64)pte.next << 12, 40), " mfn ", intstring(pte.next, 10);
+    os << " next 0x", hexstring((W64)pte.mfn << 12, 40), " mfn ", intstring(pte.mfn, 10);
   } else {
     os << "(not present)";
   }
@@ -273,7 +274,7 @@ ostream& print_page_table(ostream& os, Level1PTE* ptes, W64 baseaddr) {
 
   foreach (i, 512) {
     virt.lm.level1 = i;
-    os << "        ", hexstring(virt, 64), " -> ", ptes[i], endl;
+    os << "        ", intstring(i, 3), ": ", hexstring(virt, 64), " -> ", ptes[i], endl;
   }
 
   return os;
@@ -310,7 +311,7 @@ ostream& operator <<(ostream& os, const shared_info& si) {
 }
 
 void PTLsimConfig::reset() {
-  domain = -1;
+  domain = (W64)(-1);
   run = 0;
   native = 0;
   pause = 0;
@@ -324,6 +325,7 @@ void PTLsimConfig::reset() {
   log_filename = "logfile";
   loglevel = 0;
   start_log_at_iteration = infinity;
+  start_log_at_rip = 0xffffffffffffffffULL;
   log_ptlsim_boot = 0;
   log_on_console = 0;
 
@@ -334,6 +336,7 @@ void PTLsimConfig::reset() {
   stop_at_user_insns = infinity;
   stop_at_iteration = infinity;
   stop_at_rip = 0xffffffffffffffffULL;
+  stop_at_user_insns_relative = infinity;
   insns_in_last_basic_block = 65536;
   flush_interval = infinity;
   dumpcode_filename = "test.dat";
@@ -343,8 +346,10 @@ void PTLsimConfig::reset() {
   event_trace_replay_filename.reset();
 
   core_freq_hz = 0;
-  timer_interrupt_freq_hz = 100;
+  timer_interrupt_freq_hz = 1000;
   pseudo_real_time_clock = 0;
+  realtime = 0;
+  mask_interrupts = 0;
 
   console_mfn = 0;
 }
@@ -366,13 +371,13 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   section("Simulation Control");
 
   add(core_name,                    "core",                 "Run using specified core (-sim <corename>)");
-  //{"clockadj",                           OPTION_TYPE_W64,     0, "Clock adjustment factor (slowdown) for interrupts, DMAs and timers", &clock_adj_factor},
 
   section("Logging Control");
   add(quiet,                        "quiet",                "Do not print PTLsim system information banner");
   add(log_filename,                 "logfile",              "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
   add(loglevel,                     "loglevel",             "Log level (0 to 99)");
   add(start_log_at_iteration,       "startlog",             "Start logging after iteration <starlog>");
+  add(start_log_at_rip,             "startlogrip",          "Start logging after first translation of basic block starting at rip");
   add(log_on_console,               "consolelog",           "Replicate log file messages to console");
   add(log_ptlsim_boot,              "bootlog",              "Log PTLsim early boot and injection process (for debugging)");
 
@@ -390,6 +395,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(stop_at_user_insns,           "stopinsns",            "Stop after executing <stopinsns> user instructions");
   add(stop_at_iteration,            "stop",                 "Stop after <stop> cycles");
   add(stop_at_rip,                  "stoprip",              "Stop before rip <stoprip> is translated for the first time");
+  add(stop_at_user_insns_relative,  "stopinsns-rel",        "Stop after executing <stopinsns-rel> user instructions relative to start of current run");
   add(insns_in_last_basic_block,    "bbinsns",              "In final basic block, only translate <bbinsns> user instructions");
   add(flush_interval,               "flushevery",           "Flush the pipeline every N committed instructions");
 
@@ -397,7 +403,10 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(core_freq_hz,                 "corefreq",             "Core clock frequency in Hz (default uses host system frequency)");
   add(timer_interrupt_freq_hz,      "timerfreq",            "Timer interrupt frequency in Hz");
   add(pseudo_real_time_clock,       "pseudo-rtc",           "Real time clock always starts at time saved in checkpoint");
+  add(realtime,                     "realtime",             "Operate in real time: no time dilation (not accurate for I/O intensive workloads!)");
+  add(mask_interrupts,              "maskints",             "Mask all interrupts (required for guaranteed deterministic behavior)");
 
+  section("Miscellaneous");
   add(dumpcode_filename,            "dumpcode",             "Save page of user code at final rip to file <dumpcode>");
   add(console_mfn,                  "console-mfn",          "Track the specified Xen console MFN");
 };

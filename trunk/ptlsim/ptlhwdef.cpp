@@ -712,6 +712,7 @@ ostream& operator <<(ostream& os, const Context& ctx) {
   os << "    32/64:     ", ((ctx.use64) ? "64-bit x86-64" : "32-bit x86"), endl;
   os << "    x87 state: ", ((ctx.i387_valid) ? "valid" : "invalid"), endl;
   os << "    Event dis: ", ((ctx.syscall_disables_events) ? " syscall" : ""), ((ctx.failsafe_disables_events) ? " failsafe" : ""), endl;
+  os << "    IntEFLAGS: ", hexstring(ctx.internal_eflags, 32), " (df ", ((ctx.internal_eflags & FLAG_DF) != 0), ")", endl;
 #endif
   os << "  Segment Registers:", endl;
   os << "    cs ", ctx.seg[SEGID_CS], endl;

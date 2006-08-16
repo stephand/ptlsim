@@ -11,7 +11,7 @@
 #include <superstl.h>
 
 // For debugging of messages before crashes:
-//#define FORCE_SYNCHRONOUS_STREAMS
+bool force_synchronous_streams = false;
 
 namespace superstl {
   //
@@ -60,8 +60,8 @@ namespace superstl {
   }
 
   int odstream::write(const void* data, int count) {
-    if (!ok()) return 0;
-    if (!buf) {
+    if unlikely (!ok()) return 0;
+    if unlikely (!buf) {
       if (chain) chain->write(data, count);
       return sys_write(fd, buf, count);
     }
@@ -70,7 +70,7 @@ namespace superstl {
 
     int total = 0;
 
-    if (chain) chain->write(data, count);
+    if unlikely (chain) chain->write(data, count);
 
     while (count) {
       int n = min(bufsize - tail, count);
@@ -80,24 +80,22 @@ namespace superstl {
       count -= n;
       total += n;
       p += n;
-      if (!n) {
+      if unlikely (!n) {
         // buffer full
         assert(sys_write(fd, buf, tail) == tail);
         tail = 0;
       }
     }
 
-#ifdef FORCE_SYNCHRONOUS_STREAMS
-    flush();
-#endif
+    if unlikely (force_synchronous_streams) flush();
 
     return total;
   }
 
   void odstream::flush() {
-    if (chain) chain->flush();
+    if unlikely (chain) chain->flush();
 
-    if (buf) {
+    if likely (buf) {
       int rc = 0;
       if (tail) rc = sys_write(fd, buf, tail);
       tail = 0;

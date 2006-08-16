@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -127,14 +127,19 @@ struct SequentialCore {
     ISSUE_EXCEPTION = -1,
   };
 
-  int issuestore(const TransOp& uop, SFR& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
+  //
+  // Address generation common to both loads and stores
+  //
+  template <int STORE>
+  void* addrgen(const TransOp& uop, SFR& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul) {
     int sizeshift = uop.size;
     int aligntype = uop.cond;
     bool internal = uop.internal;
+    bool signext = (uop.opcode == OP_ldx);
 
     Waddr rip = arf[REG_rip];
 
-    W64 addr = ra + rb;
+    addr = (STORE) ? (ra + rb) : ((aligntype == LDST_ALIGN_NORMAL) ? (ra + rb) : ra);
     //
     // x86-64 requires virtual addresses to be canonical: if bit 47 is set, 
     // all upper 16 bits must be set. If this is not true, we need to signal
@@ -142,9 +147,8 @@ struct SequentialCore {
     //
     addr = (W64)signext64(addr, 48);
     addr &= ctx.virt_addr_mask;
-    W64 origaddr = addr;
-    origvirt = origaddr;
-    bool annul = 0;
+    origaddr = addr;
+    annul = 0;
 
     switch (aligntype) {
     case LDST_ALIGN_NORMAL:
@@ -158,14 +162,14 @@ struct SequentialCore {
       //
       addr = floor(addr, 8);
       annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == addr);
-      addr += 8;
+      addr += 8; 
       break;
     }
 
     state.physaddr = addr >> 3;
     state.invalid = 0;
-    state.datavalid = 0;
     state.addrvalid = 1;
+    state.datavalid = 0;
 
     //
     // Special case: if no part of the actual user load/store falls inside
@@ -184,45 +188,80 @@ struct SequentialCore {
     // for high stores as described in this scenario.
     //
 
-    bool ready;
-    byte bytemask;
+    exception = 0;
 
-    int exception = 0;
-    PageFaultErrorCode pfec;
+    void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, STORE, uop.internal, exception, pfec, pteupdate);
+    return mapped;
+  }
 
-    void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, 1, uop.internal, exception, pfec, pteupdate);
+  //
+  // Handle exceptions common to both loads and stores
+  //
+  template <bool STORE>
+  int handle_common_exceptions(const TransOp& uop, SFR& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec) {
+    if likely (!exception) return ISSUE_COMPLETED;
 
-    if unlikely (exception) {
-      state.invalid = 1;
-      // logfile << "EXCEPTION in store: exception = ", hexstring(exception, 64), ", pfec = ", hexstring((W64)pfec, 64), endl;
-      state.data = exception | ((W64)pfec << 32);
-      state.datavalid = 1;
+    int aligntype = uop.cond;
 
-      if unlikely (exception == EXCEPTION_UnalignedAccess) {
-        //
-        // If we have an unaligned access, mark all loads and stores at this 
-        // macro-op's rip as being unaligned and remove the basic block from
-        // the bbcache so it gets retranslated with properly split loads
-        // and stores after we resume fetching.
-        //
-        // As noted elsewhere, the bbcache is for simulator purposes only;
-        // the real hardware would detect unaligned uops in the fetch stage
-        // and split them up on the fly. For simulation, it's more efficient
-        // to just split them once in the bbcache; this has no performance
-        // effect on the cycle accurate results.
-        //
-        if (logable(6)) {
-          logfile << intstring(current_uuid, 20), " stalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
-            "0x", hexstring(addr, 48), " size ", (1<<uop.size), " ", uop, endl;
-        }
+    state.invalid = 1;
+    state.data = exception | ((W64)pfec << 32);
+    state.datavalid = 1;
 
-        return ISSUE_REFETCH;
+    if likely (exception == EXCEPTION_UnalignedAccess) {
+      //
+      // If we have an unaligned access, mark all loads and stores at this 
+      // macro-op's rip as being unaligned and remove the basic block from
+      // the bbcache so it gets retranslated with properly split loads
+      // and stores after we resume fetching.
+      //
+      // As noted elsewhere, the bbcache is for simulator purposes only;
+      // the real hardware would detect unaligned uops in the fetch stage
+      // and split them up on the fly. For simulation, it's more efficient
+      // to just split them once in the bbcache; this has no performance
+      // effect on the cycle accurate results.
+      //
+      if (logable(6)) {
+        logfile << intstring(current_uuid, 20), (STORE ? " stalgn" : " ldalgn"), " rip ",
+          (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), "  ",
+          "0x", hexstring(addr, 48), " size ", (1<<uop.size), " ", uop, endl;
       }
 
-      if (logable(6)) logfile << intstring(current_uuid, 20), " store ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop, endl;
-
-      return ISSUE_EXCEPTION;
+      return ISSUE_REFETCH;
     }
+
+    if unlikely (((exception == EXCEPTION_PageFaultOnRead) | (exception == EXCEPTION_PageFaultOnWrite)) && (aligntype == LDST_ALIGN_HI)) {
+      //
+      // If we have a page fault on an unaligned access, and this is the high
+      // half (ld.hi / st.hi) of that access, the page fault address recorded
+      // in CR2 must be at the very first byte of the second page the access
+      // overlapped onto (otherwise the kernel will repeatedly fault in the
+      // first page, even though that one is already present.
+      //
+      origaddr = addr;
+    }
+
+    if (logable(6)) {
+      logfile << intstring(current_uuid, 20), (STORE ? " store " : " load  "), " rip ",
+        (void*)(Waddr)arf[REG_rip], ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop, endl;
+    }
+
+    return ISSUE_EXCEPTION;
+  }
+
+  int issuestore(const TransOp& uop, SFR& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
+    int status;
+    Waddr rip = arf[REG_rip];
+    int sizeshift = uop.size;
+    int aligntype = uop.cond;
+
+    Waddr addr;
+    int exception = 0;
+    PageFaultErrorCode pfec;
+    bool annul;
+
+    void* mapped = addrgen<1>(uop, state, origaddr, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
+
+    if unlikely ((status = handle_common_exceptions<0>(uop, state, origaddr, addr, exception, pfec)) != ISSUE_COMPLETED) return status;
 
 #ifdef PTLSIM_HYPERVISOR
     if unlikely (pteupdate.ptwrite) {
@@ -234,6 +273,9 @@ struct SequentialCore {
     // At this point all operands are valid, so merge the data and mark the store as valid.
     //
     state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
+
+    bool ready;
+    byte bytemask;
 
     switch (aligntype) {
     case LDST_ALIGN_NORMAL:
@@ -280,73 +322,20 @@ struct SequentialCore {
 
   CycleTimer ctload;
 
-  int issueload(const TransOp& uop, SFR& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
-    static const bool DEBUG = 0;
-
+  int issueload(const TransOp& uop, SFR& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
+    int status;
+    Waddr rip = arf[REG_rip];
     int sizeshift = uop.size;
     int aligntype = uop.cond;
-    bool internal = uop.internal;
     bool signext = (uop.opcode == OP_ldx);
-
-    Waddr rip = arf[REG_rip];
-
-    W64 addr = (aligntype == LDST_ALIGN_NORMAL) ? (ra + rb) : ra;
-    //
-    // x86-64 requires virtual addresses to be canonical: if bit 47 is set, 
-    // all upper 16 bits must be set. If this is not true, we need to signal
-    // a general protection fault.
-    //
-    addr = (W64)signext64(addr, 48);
-    addr &= ctx.virt_addr_mask;
-    W64 origaddr = addr;
-    origvirt = origaddr;
-    bool annul = 0;
-
-    switch (aligntype) {
-    case LDST_ALIGN_NORMAL:
-      break;
-    case LDST_ALIGN_LO:
-      addr = floor(addr, 8); break;
-    case LDST_ALIGN_HI:
-      //
-      // Is the high load ever even used? If not, don't check for exceptions;
-      // otherwise we may erroneously flag page boundary conditions as invalid
-      //
-      addr = floor(addr, 8);
-      annul = (floor(origaddr + ((1<<sizeshift)-1), 8) == addr);
-      addr += 8; 
-      break;
-    }
-
-    state.physaddr = addr >> 3;
-    state.addrvalid = 1;
-    state.datavalid = 1;
-    state.invalid = 0;
-
+    Waddr addr;
     int exception = 0;
     PageFaultErrorCode pfec;
-    
-    void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, 0, uop.internal, exception, pfec, pteupdate);
+    bool annul;
 
-    if unlikely (exception) {
-      state.invalid = 1;
-      state.data = exception | ((W64)pfec << 32);
-      state.datavalid = 1;
+    void* mapped = addrgen<0>(uop, state, origaddr, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
-      if likely (exception == EXCEPTION_UnalignedAccess) {
-        // (see notes above for issuestore case)
-        if (logable(6)) {
-          logfile << intstring(current_uuid, 20), " ldalgn", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ",
-            "0x", hexstring(addr, 48), " size ", (1<<sizeshift), " ", uop, endl;
-        }
-
-        return ISSUE_REFETCH;
-      }
-
-      logfile << intstring(current_uuid, 20), " load  ", " rip ", (void*)rip, ":", intstring(current_uop_in_macro_op, -2), "  ", state, " ", uop, endl;
-
-      return ISSUE_EXCEPTION;
-    }
+    if unlikely ((status = handle_common_exceptions<0>(uop, state, origaddr, addr, exception, pfec)) != ISSUE_COMPLETED) return status;
 
     state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
 
@@ -574,6 +563,7 @@ struct SequentialCore {
 
   BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
     RIPVirtPhys rvp(rip);
+
     rvp.update(ctx);
 
     BasicBlock* bb = bbcache(rvp);
@@ -609,7 +599,7 @@ struct SequentialCore {
     
     bool barrier = 0;
 
-    if (logable(5)) logfile << endl, "Sequentially executing basic block ", bb, " (rip ", (void*)(Waddr)bb->rip, ", ", bb->count, " uops), insn limit ", insnlimit, endl, flush;
+    if (logable(5)) logfile << "Sequentially executing basic block ", bb->rip, " (", bb->count, " uops), insn limit ", insnlimit, endl, flush;
 
     if unlikely (!bb->synthops) synth_uops_for_bb(*bb);
     bb->hitcount++;
@@ -635,6 +625,10 @@ struct SequentialCore {
     while ((uopindex < bb->count) & (user_insns < insnlimit)) {
       TransOp uop;
       uopimpl_func_t synthop = null;
+
+      if unlikely (arf[REG_rip] == config.stop_at_rip) {
+        return SEQEXEC_EARLY_EXIT;
+      }
 
       if likely (!unaligned_ldst_buf.get(uop, synthop)) {
         uop = bb->transops[uopindex];
@@ -795,9 +789,7 @@ struct SequentialCore {
       if unlikely (st) {
         if (sfr.bytemask) {
           storemask(sfr.physaddr << 3, sfr.data, sfr.bytemask);
-
           Waddr mfn = (sfr.physaddr << 3) >> 12;
-          // NOTE: In PTLsim/X, the processor directly updates this in the physmap page tables when storemask is used:
           smc_setdirty(mfn);
         }
       } else if likely (uop.rd != REG_zero) {
@@ -861,13 +853,11 @@ struct SequentialCore {
     int oldloglevel = config.loglevel;
     if (config.start_log_at_iteration != infinity) config.loglevel = 0;
 
-    W64 stop_at_user_insns_limit = config.stop_at_user_insns;
-
     ctseq.start();
 
     W64 last_printed_status_at_cycle = 0;
 
-    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < stop_at_user_insns_limit)) {
+    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
 #ifdef PTLSIM_HYPERVISOR
       if (!ctx.running) {
         sim_cycle++;
@@ -901,7 +891,7 @@ struct SequentialCore {
 
       current_basic_block = fetch_or_translate_basic_block(rip);
 
-      int result = execute(current_basic_block, (stop_at_user_insns_limit - total_user_insns_committed));
+      int result = execute(current_basic_block, (config.stop_at_user_insns - total_user_insns_committed));
 
       switch (result) {
       case SEQEXEC_OK:
