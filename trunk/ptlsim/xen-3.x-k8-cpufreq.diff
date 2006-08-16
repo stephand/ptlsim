@@ -1,0 +1,248 @@
+diff -r 840f33e54054 xen/arch/x86/time.c
+--- a/xen/arch/x86/time.c	Sat Jun 17 01:45:45 2006
++++ b/xen/arch/x86/time.c	Wed Jul 26 02:59:00 2006
+@@ -4,7 +4,9 @@
+  * Per-CPU time calibration and management.
+  * 
+  * Copyright (c) 2002-2005, K A Fraser
+- * 
++ *
++ * CPU frequency scaling support: Matt T. Yourst <yourst@yourst.com> 
++ *
+  * Portions from Linux are:
+  * Copyright (c) 1991, 1992, 1995  Linus Torvalds
+  */
+@@ -85,6 +87,15 @@
+ static inline u32 div_frac(u32 dividend, u32 divisor)
+ {
+     u32 quotient, remainder;
++
++    if (divisor == dividend) {
++        return 0xffffffff; /* a.k.a. 0.99999, as close as we can */
++    }
++
++    if (!divisor) {
++        return 0; /* avoid divide-by-zero at all costs */
++    }
++
+     ASSERT(dividend < divisor);
+     __asm__ ( 
+         "divl %4"
+@@ -914,6 +925,141 @@
+     setup_irq(0, &irq0);
+ }
+ 
++/*
++ * Frequency Scaling Support
++ *
++ * These functions are called from emulate_privileged_op
++ * in response to the MSR writes that control core frequency
++ * and voltage on various CPU types.
++ *
++ * We identify only those writes that alter the frequency
++ * itself (i.e. between raising or lowering the voltage
++ * appropriately) and make sure that the requested frequency
++ * is different from the current frequency. In this case
++ * we read the appropriate status MSR until the frequency
++ * stabilizes, then recalibrate all hypervisor timing
++ * variables to the new frequency as indicated in the MSR.
++ *
++ * The frequency change is effective on the CPU this code
++ * is called on: it's the responsibility of the guest OS
++ * to only write the virtual MSR on the target CPU context.
++ *
++ * No modifications to the guest OS cpufreq drivers are
++ * needed as long as support is provided below for the
++ * corresponding CPU type.
++ */
++
++/*
++ * AMD Athlon 64 / Opteron Support (from powernow-k8 driver):
++ */
++
++/*
++ * According to the AMD manuals, the following formula
++ * always converts an FID to the actual frequency,
++ * based on increments of 100 MHz (200 MHz steps):
++ *
++ *   mhz = 800 + 100*fid
++ *
++ * Technically the BIOS is supposed to provide this
++ * table (so matching voltages can be found), but
++ * the frequency part is fixed for all K8 cores,
++ * so we just hard code the following formula:
++ */
++static inline int k8_fid_to_mhz(int fid) {
++    return 800 + 100*fid;
++}
++
++int handle_k8_fidvid_status_msr_read(u32* lo, u32* hi) {
++    /* This will return -1 if the processor isn't a K8: */
++    return rdmsr_safe(MSR_FIDVID_STATUS, *lo, *hi);
++}
++
++static int k8_fidvid_wait(void) {
++	u32 lo, hi;
++	u32 i = 0;
++
++    DPRINTK("k8_fidvid_wait: waiting for frequency and voltage to stabilize...");
++
++	do {
++        if (i++ > 10000) {
++            printk("k8_vidfid_wait: Excessive wait time for vid/fid to stabilize\n");
++            return -1;
++		}
++        rdmsr_safe(MSR_FIDVID_STATUS, lo, hi);
++	} while (lo & MSR_S_LO_CHANGE_PENDING);
++
++    DPRINTK("OK: new fid %d\n", lo & MSR_S_LO_CHANGE_PENDING);
++
++    return lo & MSR_S_LO_CURRENT_FID;
++}
++
++#if 0
++#undef DPRINTK
++#define DPRINTK printk
++#endif
++
++int handle_k8_fidvid_ctl_msr_write(u32 lo, u32 hi) {
++    int rc;
++    u32 oldlo, oldhi;
++    int oldfid, newfid;
++    int mhz;
++    unsigned int cpu = smp_processor_id();
++    s_time_t now;
++
++    DPRINTK("fidvid_ctl: requested msr write 0x%08x:0x%08x\n", hi, lo);
++
++    rc = rdmsr_safe(MSR_FIDVID_STATUS, oldlo, oldhi);
++    /* This will return -1 if the processor isn't a K8: */
++    if (rc) return rc;
++
++    oldfid = (oldlo & MSR_S_LO_CURRENT_FID);
++    newfid = (lo & MSR_C_LO_NEW_FID);
++
++    if (oldfid != newfid) {
++        DPRINTK("fidvid_ctl: moving from old fid %d to new fid %d\n", oldfid, newfid);
++    } else {
++        DPRINTK("fidvid_ctl: same fid %d\n", oldfid);
++    }
++
++    DPRINTK("fidvid_ctl: writing MSR 0x%08x with 0x%08x:0x%08x...\n", MSR_FIDVID_CTL, hi, lo);
++
++    rc = wrmsr_safe(MSR_FIDVID_CTL, lo, hi);
++    if (rc) return rc;
++
++    if (oldfid == newfid) return 0;
++
++    /* Only do the stabilization wait if we're changing the frequency */
++    /* For voltage changes, the OS will do this itself */
++
++    newfid = k8_fidvid_wait();
++    /* excessive wait? abort the change and let guest kernel figure it out */
++    if (newfid < 0) return 0;
++
++    DPRINTK("fidvid_ctl: recalibrating TSC...");
++
++    mhz = k8_fid_to_mhz(newfid);
++    DPRINTK("%d MHz\n", mhz);
++
++    cpu_khz = mhz * 1000;
++    set_time_scale(&cpu_time[smp_processor_id()].tsc_scale, (u64)mhz * 1000000ULL);
++
++    DPRINTK("fidvid_ctl: resetting timestamps...");
++
++    rdtscll(cpu_time[cpu].local_tsc_stamp);
++    now = read_platform_stime();
++
++    cpu_time[cpu].stime_master_stamp = now;
++    cpu_time[cpu].stime_local_stamp  = now;
++
++    DPRINTK("fidvid_ctl: recalibrating timers...");
++
++    local_time_calibration(NULL);
++    __update_vcpu_system_time(current);
++    DPRINTK("OK\n");
++
++    return 0;
++}
++
+ void send_timer_event(struct vcpu *v)
+ {
+     send_guest_vcpu_virq(v, VIRQ_TIMER);
+diff -r 840f33e54054 xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Sat Jun 17 01:45:45 2006
++++ b/xen/arch/x86/traps.c	Wed Jul 26 02:59:00 2006
+@@ -1221,6 +1238,16 @@
+                 ((u64)regs->edx << 32) | regs->eax;
+             break;
+ #endif
++        case MSR_FIDVID_CTL: {
++            extern int handle_k8_fidvid_ctl_msr_write(u32 lo, u32 hi);
++            /* domU is never allowed to mess with core frequencies and voltages */
++            if (!IS_PRIV(current->domain))
++                break;
++            if (handle_k8_fidvid_ctl_msr_write(regs->eax, regs->edx))
++                goto fail;
++            break;
++        }
++
+         default:
+             if ( (rdmsr_safe(regs->ecx, l, h) != 0) ||
+                  (regs->eax != l) || (regs->edx != h) )
+@@ -1252,6 +1279,14 @@
+             if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
+                 goto fail;
+             break;
++
++        case MSR_FIDVID_STATUS: {
++            extern int handle_k8_fidvid_status_msr_read(u32* lo, u32* hi);
++            if (handle_k8_fidvid_status_msr_read((u32*)&regs->eax, (u32*)&regs->edx))
++                goto fail;
++            break;
++        }
++
+         default:
+             /* Everyone can read the MSR space. */
+             /*DPRINTK("Domain attempted RDMSR %p.\n", _p(regs->ecx));*/
+diff -r 840f33e54054 xen/include/asm-x86/msr.h
+--- a/xen/include/asm-x86/msr.h	Sat Jun 17 01:45:45 2006
++++ b/xen/include/asm-x86/msr.h	Wed Jul 26 02:59:00 2006
+@@ -137,6 +137,37 @@
+ #define EFER_LMA (1<<_EFER_LMA)
+ #define EFER_NX (1<<_EFER_NX)
+ #define EFER_SVME (1<<_EFER_SVME)
++
++/* Model Specific Registers for K8 p-state transitions. MSRs are 64-bit. For */
++/* writes (wrmsr - opcode 0f 30), the register number is placed in ecx, and   */
++/* the value to write is placed in edx:eax. For reads (rdmsr - opcode 0f 32), */
++/* the register number is placed in ecx, and the data is returned in edx:eax. */
++
++#define MSR_FIDVID_CTL      0xc0010041
++#define MSR_FIDVID_STATUS   0xc0010042
++
++/* Field definitions within the FID VID Low Control MSR : */
++#define MSR_C_LO_INIT_FID_VID     0x00010000
++#define MSR_C_LO_NEW_VID          0x00003f00
++#define MSR_C_LO_NEW_FID          0x0000003f
++#define MSR_C_LO_VID_SHIFT        8
++
++/* Field definitions within the FID VID High Control MSR : */
++#define MSR_C_HI_STP_GNT_TO 	  0x000fffff
++
++/* Field definitions within the FID VID Low Status MSR : */
++#define MSR_S_LO_CHANGE_PENDING   0x80000000   /* cleared when completed */
++#define MSR_S_LO_MAX_RAMP_VID     0x3f000000
++#define MSR_S_LO_MAX_FID          0x003f0000
++#define MSR_S_LO_START_FID        0x00003f00
++#define MSR_S_LO_CURRENT_FID      0x0000003f
++
++/* Field definitions within the FID VID High Status MSR : */
++#define MSR_S_HI_MIN_WORKING_VID  0x3f000000
++#define MSR_S_HI_MAX_WORKING_VID  0x003f0000
++#define MSR_S_HI_START_VID        0x00003f00
++#define MSR_S_HI_CURRENT_VID      0x0000003f
++#define MSR_C_HI_STP_GNT_BENIGN	  0x00000001
+ 
+ /* Intel MSRs. Some also available on other CPUs */
+ #define MSR_IA32_PLATFORM_ID	0x17

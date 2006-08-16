@@ -1,0 +1,718 @@
+diff -r ea04335d238b tools/libxc/Makefile
+--- a/tools/libxc/Makefile	Thu Aug  3 18:45:14 2006
++++ b/tools/libxc/Makefile	Wed Aug 16 04:26:29 2006
+@@ -31,6 +31,7 @@
+ GUEST_SRCS-y += xg_private.c
+ GUEST_SRCS-$(CONFIG_POWERPC) += xc_ppc_linux_build.c
+ GUEST_SRCS-$(CONFIG_X86) += xc_linux_build.c
++GUEST_SRCS-$(CONFIG_X86) += xc_ptlsim.c
+ GUEST_SRCS-$(CONFIG_IA64) += xc_linux_build.c
+ GUEST_SRCS-$(CONFIG_MIGRATE) += xc_linux_restore.c xc_linux_save.c
+ GUEST_SRCS-$(CONFIG_HVM) += xc_hvm_build.c
+diff -r ea04335d238b tools/libxc/xc_linux_build.c
+--- a/tools/libxc/xc_linux_build.c	Thu Aug  3 18:45:14 2006
++++ b/tools/libxc/xc_linux_build.c	Wed Aug 16 04:26:29 2006
+@@ -6,12 +6,14 @@
+ #include "xg_private.h"
+ #include "xc_private.h"
+ #include <xenctrl.h>
++#include <xc_ptlsim.h>
+ 
+ #include "xc_elf.h"
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <inttypes.h>
+ #include <zlib.h>
++#include <assert.h>
+ 
+ /* Handy for printing out '0' prepended values at native pointer size */
+ #define _p(a) ((void *) ((ulong)a))
+@@ -457,6 +459,7 @@
+                        const char *image, unsigned long image_size,
+                        struct initrd_info *initrd,
+                        unsigned long nr_pages,
++                       unsigned long nr_reserved_pages,
+                        unsigned long *pvsi, unsigned long *pvke,
+                        unsigned long *pvss, vcpu_guest_context_t *ctxt,
+                        const char *cmdline,
+@@ -649,6 +652,7 @@
+                        const char *image, unsigned long image_size,
+                        struct initrd_info *initrd,
+                        unsigned long nr_pages,
++                       unsigned long nr_reserved_pages,
+                        unsigned long *pvsi, unsigned long *pvke,
+                        unsigned long *pvss, vcpu_guest_context_t *ctxt,
+                        const char *cmdline,
+@@ -668,6 +672,7 @@
+     int rc;
+ 
+     unsigned long nr_pt_pages;
++    unsigned long nr_guest_pages;
+     unsigned long physmap_pfn;
+     xen_pfn_t *physmap, *physmap_e;
+ 
+@@ -687,6 +692,9 @@
+     unsigned long guest_store_mfn, guest_console_mfn, guest_shared_info_mfn;
+     unsigned long shadow_mode_enabled;
+     uint32_t supported_features[XENFEAT_NR_SUBMAPS] = { 0, };
++    unsigned long start_info_frame;
++
++    nr_guest_pages = nr_pages - nr_reserved_pages;
+ 
+     rc = probeimageformat(image, image_size, &load_funcs);
+     if ( rc != 0 )
+@@ -753,7 +761,7 @@
+     if ( !increment_ulong(&v_end, round_pgup(initrd->len)) )
+         goto error_out;
+     vphysmap_start = v_end;
+-    if ( !increment_ulong(&v_end, round_pgup(nr_pages * sizeof(long))) )
++    if ( !increment_ulong(&v_end, round_pgup(nr_guest_pages * sizeof(long))) )
+         goto error_out;
+     vstartinfo_start = v_end;
+     if ( !increment_ulong(&v_end, PAGE_SIZE) )
+@@ -845,11 +853,11 @@
+     IPRINTF(" TOTAL:            %p->%p\n", _p(dsi.v_start), _p(v_end));
+     IPRINTF(" ENTRY ADDRESS:    %p\n", _p(dsi.v_kernentry));
+ 
+-    if ( ((v_end - dsi.v_start)>>PAGE_SHIFT) > nr_pages )
++    if ( ((v_end - dsi.v_start)>>PAGE_SHIFT) > nr_guest_pages )
+     {
+         PERROR("Initial guest OS requires too much space\n"
+                "(%pMB is greater than %luMB limit)\n",
+-               _p((v_end-dsi.v_start)>>20), nr_pages>>(20-PAGE_SHIFT));
++               _p((v_end-dsi.v_start)>>20), nr_guest_pages>>(20-PAGE_SHIFT));
+         goto error_out;
+     }
+ 
+@@ -938,7 +946,7 @@
+         xc_handle, dom, PAGE_SIZE, PROT_READ|PROT_WRITE,
+         page_array[physmap_pfn++]);
+ 
+-    for ( count = 0; count < nr_pages; count++ )
++    for ( count = 0; count < nr_guest_pages; count++ )
+     {
+         if ( xc_add_mmu_update(
+             xc_handle, mmu,
+@@ -1030,16 +1038,17 @@
+         guest_console_mfn = *console_mfn;
+     }
+ 
++    start_info_frame = page_array[(vstartinfo_start-dsi.v_start)>>PAGE_SHIFT];
+     start_info = xc_map_foreign_range(
+         xc_handle, dom, PAGE_SIZE, PROT_READ|PROT_WRITE,
+-        page_array[(vstartinfo_start-dsi.v_start)>>PAGE_SHIFT]);
++        start_info_frame);
+     /*shared_info, start_info */
+     memset(start_info, 0, sizeof(*start_info));
+     rc = xc_version(xc_handle, XENVER_version, NULL);
+     sprintf(start_info->magic, "xen-%i.%i-x86_%d%s",
+             rc >> 16, rc & (0xFFFF), (unsigned int)sizeof(long)*8,
+             (dsi.pae_kernel != PAEKERN_no) ? "p" : "");
+-    start_info->nr_pages     = nr_pages;
++    start_info->nr_pages     = nr_guest_pages;
+     start_info->shared_info  = guest_shared_info_mfn << PAGE_SHIFT;
+     start_info->flags        = flags;
+     start_info->pt_base      = vpt_start;
+@@ -1055,11 +1064,10 @@
+         start_info->mod_len      = initrd->len;
+     }
+     if ( cmdline != NULL )
+-    {
++    { 
+         strncpy((char *)start_info->cmd_line, cmdline, MAX_GUEST_CMDLINE);
+         start_info->cmd_line[MAX_GUEST_CMDLINE-1] = '\0';
+     }
+-    munmap(start_info, PAGE_SIZE);
+ 
+     /* shared_info page starts its life empty. */
+     shared_info = xc_map_foreign_range(
+@@ -1069,18 +1077,12 @@
+     for ( i = 0; i < MAX_VIRT_CPUS; i++ )
+         shared_info->vcpu_info[i].evtchn_upcall_mask = 1;
+ 
+-    munmap(shared_info, PAGE_SIZE);
+-
+-    /* Send the page update requests down to the hypervisor. */
+-    if ( xc_finish_mmu_updates(xc_handle, mmu) )
+-        goto error_out;
+-
+     p = strstr(dsi.xen_guest_string, "HYPERCALL_PAGE=");
+     if ( p != NULL )
+     {
+         p += strlen("HYPERCALL_PAGE=");
+         hypercall_pfn = strtoul(p, NULL, 16);
+-        if ( hypercall_pfn >= nr_pages )
++        if ( hypercall_pfn >= nr_guest_pages )
+             goto error_out;
+         op.u.hypercall_init.domain = (domid_t)dom;
+         op.u.hypercall_init.gmfn   = shadow_mode_enabled ?
+@@ -1089,6 +1091,19 @@
+         if ( xc_dom0_op(xc_handle, &op) )
+             goto error_out;
+     }
++
++    if (nr_reserved_pages > 0) {
++        setup_ptlsim_space(xc_handle, dom, page_array + nr_guest_pages, nr_reserved_pages,
++                           shared_info, shared_info_frame,
++                           start_info, start_info_frame);
++    }
++
++    munmap(start_info, PAGE_SIZE);
++    munmap(shared_info, PAGE_SIZE);
++
++    /* Send the page update requests down to the hypervisor. */
++    if ( xc_finish_mmu_updates(xc_handle, mmu) )
++        goto error_out;
+ 
+     free(mmu);
+     free(page_array);
+@@ -1117,7 +1132,8 @@
+                                    unsigned int store_evtchn,
+                                    unsigned long *store_mfn,
+                                    unsigned int console_evtchn,
+-                                   unsigned long *console_mfn)
++                                   unsigned long *console_mfn,
++                                   unsigned long reserved_pages)
+ {
+     dom0_op_t launch_op;
+     DECLARE_DOM0_OP;
+@@ -1163,9 +1179,10 @@
+ 
+     memset(ctxt, 0, sizeof(*ctxt));
+ 
+-    if ( setup_guest(xc_handle, domid, image, image_size,
++    if ( setup_guest(xc_handle, domid, image, image_size, 
+                      initrd,
+-                     nr_pages,
++                     nr_pages, 
++                     reserved_pages,
+                      &vstartinfo_start, &vkern_entry,
+                      &vstack_start, ctxt, cmdline,
+                      op.u.getdomaininfo.shared_info_frame,
+@@ -1248,11 +1265,11 @@
+ 
+     launch_op.u.setvcpucontext.domain = (domid_t)domid;
+     launch_op.u.setvcpucontext.vcpu   = 0;
+-    set_xen_guest_handle(launch_op.u.setvcpucontext.ctxt, ctxt);
++    launch_op.u.setvcpucontext.ctxt.p = ctxt;
+ 
+     launch_op.cmd = DOM0_SETVCPUCONTEXT;
+     rc = xc_dom0_op(xc_handle, &launch_op);
+-
++    
+     return rc;
+ 
+  error_out:
+@@ -1271,7 +1288,8 @@
+                        unsigned int store_evtchn,
+                        unsigned long *store_mfn,
+                        unsigned int console_evtchn,
+-                       unsigned long *console_mfn)
++                       unsigned long *console_mfn,
++                       unsigned long reserved_pages)
+ {
+     int            sts;
+     char          *img_buf;
+@@ -1312,7 +1330,8 @@
+     sts = xc_linux_build_internal(xc_handle, domid, img_buf, img_len,
+                                   &initrd_info, cmdline, features, flags,
+                                   store_evtchn, store_mfn,
+-                                  console_evtchn, console_mfn);
++                                  console_evtchn, console_mfn,
++                                  reserved_pages);
+ 
+  out:
+     /* The inflation routines may pass back the same buffer so be */
+@@ -1337,7 +1356,8 @@
+                    unsigned int store_evtchn,
+                    unsigned long *store_mfn,
+                    unsigned int console_evtchn,
+-                   unsigned long *console_mfn)
++                   unsigned long *console_mfn,
++                   unsigned long reserved_pages)
+ {
+     char *image = NULL;
+     unsigned long image_size;
+@@ -1369,7 +1389,8 @@
+     sts = xc_linux_build_internal(xc_handle, domid, image, image_size,
+                                   &initrd_info, cmdline, features, flags,
+                                   store_evtchn, store_mfn,
+-                                  console_evtchn, console_mfn);
++                                  console_evtchn, console_mfn,
++                                  reserved_pages);
+ 
+  error_out:
+     free(image);
+diff -r ea04335d238b tools/libxc/xc_linux_restore.c
+--- a/tools/libxc/xc_linux_restore.c	Thu Aug  3 18:45:14 2006
++++ b/tools/libxc/xc_linux_restore.c	Wed Aug 16 04:26:29 2006
+@@ -11,6 +11,7 @@
+ 
+ #include "xg_private.h"
+ #include "xg_save_restore.h"
++#include "xc_ptlsim.h"
+ 
+ /* max mfn of the whole machine */
+ static unsigned long max_mfn;
+@@ -105,7 +106,8 @@
+ int xc_linux_restore(int xc_handle, int io_fd,
+                      uint32_t dom, unsigned long nr_pfns,
+                      unsigned int store_evtchn, unsigned long *store_mfn,
+-                     unsigned int console_evtchn, unsigned long *console_mfn)
++                     unsigned int console_evtchn, unsigned long *console_mfn,
++                     unsigned long reserved_pages)
+ {
+     DECLARE_DOM0_OP;
+     int rc = 1, i, n, pae_extended_cr3 = 0;
+@@ -138,7 +140,8 @@
+     xen_pfn_t *p2m_frame_list = NULL;
+ 
+     /* A temporary mapping of the guest's start_info page. */
+-    start_info_t *start_info;
++    start_info_t *start_info = NULL;
++    unsigned long start_info_mfn;
+ 
+     char *region_base;
+ 
+@@ -149,7 +152,6 @@
+ 
+     struct mmuext_op pin[MAX_PIN_BATCH];
+     unsigned int nr_pins;
+-
+ 
+     max_pfn = nr_pfns;
+ 
+@@ -241,8 +243,8 @@
+     }
+ 
+     /* We want zeroed memory so use calloc rather than malloc. */
+-    p2m        = calloc(max_pfn, sizeof(xen_pfn_t));
+-    pfn_type   = calloc(max_pfn, sizeof(unsigned long));
++    p2m        = calloc(max_pfn + reserved_pages, sizeof(xen_pfn_t));
++    pfn_type   = calloc(max_pfn + reserved_pages, sizeof(unsigned long));
+     region_mfn = calloc(MAX_BATCH_SIZE, sizeof(xen_pfn_t));
+ 
+     if ((p2m == NULL) || (pfn_type == NULL) || (region_mfn == NULL)) {
+@@ -265,22 +267,22 @@
+     }
+     shared_info_frame = op.u.getdomaininfo.shared_info_frame;
+ 
+-    if(xc_domain_setmaxmem(xc_handle, dom, PFN_TO_KB(max_pfn)) != 0) {
++    if(xc_domain_setmaxmem(xc_handle, dom, PFN_TO_KB(max_pfn + reserved_pages)) != 0) {
+         errno = ENOMEM;
+         goto out;
+     }
+ 
+     if(xc_domain_memory_increase_reservation(
+-           xc_handle, dom, max_pfn, 0, 0, NULL) != 0) {
+-        ERR("Failed to increase reservation by %lx KB", PFN_TO_KB(max_pfn));
++           xc_handle, dom, max_pfn + reserved_pages, 0, 0, NULL) != 0) {
++        ERR("Failed to increase reservation by %lx KB", PFN_TO_KB(max_pfn + reserved_pages));
+         errno = ENOMEM;
+         goto out;
+     }
+ 
+-    DPRINTF("Increased domain reservation by %lx KB\n", PFN_TO_KB(max_pfn));
++    DPRINTF("Increased domain reservation by %lx KB\n", PFN_TO_KB(max_pfn + reserved_pages));
+ 
+     /* Build the pfn-to-mfn table. We choose MFN ordering returned by Xen. */
+-    if (xc_get_pfn_list(xc_handle, dom, p2m, max_pfn) != max_pfn) {
++    if (xc_get_pfn_list(xc_handle, dom, p2m, max_pfn + reserved_pages) != (max_pfn + reserved_pages)) {
+         ERR("Did not read correct number of frame numbers for new dom");
+         goto out;
+     }
+@@ -682,7 +684,7 @@
+         ERR("Suspend record frame number is bad");
+         goto out;
+     }
+-    ctxt.user_regs.edx = mfn = p2m[pfn];
++    ctxt.user_regs.edx = mfn = start_info_mfn = p2m[pfn];
+     start_info = xc_map_foreign_range(
+         xc_handle, dom, PAGE_SIZE, PROT_READ | PROT_WRITE, mfn);
+     start_info->nr_pages    = max_pfn;
+@@ -692,7 +694,6 @@
+     start_info->store_evtchn                 = store_evtchn;
+     *console_mfn = start_info->console_mfn   = p2m[start_info->console_mfn];
+     start_info->console_evtchn               = console_evtchn;
+-    munmap(start_info, PAGE_SIZE);
+ 
+     /* Uncanonicalise each GDT frame number. */
+     if (ctxt.gdt_ents > 8192) {
+@@ -738,7 +739,15 @@
+     page = xc_map_foreign_range(
+         xc_handle, dom, PAGE_SIZE, PROT_WRITE, shared_info_frame);
+     memcpy(page, shared_info, sizeof(shared_info_t));
++
++    if (reserved_pages > 0) {
++      setup_ptlsim_space(xc_handle, dom, p2m + max_pfn, reserved_pages, (shared_info_t*)page, shared_info_frame, start_info, start_info_mfn);
++    }
++
+     munmap(page, PAGE_SIZE);
++
++    munmap(start_info, PAGE_SIZE);
++    start_info = NULL;
+ 
+     /* Uncanonicalise the pfn-to-mfn table frame-number list. */
+     for (i = 0; i < P2M_FL_ENTRIES; i++) {
+@@ -808,6 +817,7 @@
+     }
+ 
+  out:
++    if (start_info) munmap(start_info, PAGE_SIZE);
+     if ( (rc != 0) && (dom != 0) )
+         xc_domain_destroy(xc_handle, dom);
+     free(mmu);
+diff -r ea04335d238b tools/libxc/xc_linux_save.c
+--- a/tools/libxc/xc_linux_save.c	Thu Aug  3 18:45:14 2006
++++ b/tools/libxc/xc_linux_save.c	Wed Aug 16 04:26:29 2006
+@@ -15,6 +15,7 @@
+ #include "xc_private.h"
+ #include "xg_private.h"
+ #include "xg_save_restore.h"
++#include "xc_ptlsim.h"
+ 
+ /*
+ ** Default values for important tuning parameters. Can override by passing
+@@ -658,7 +659,7 @@
+ 
+     /* Map the shared info frame */
+     if(!(live_shinfo = xc_map_foreign_range(xc_handle, dom, PAGE_SIZE,
+-                                            PROT_READ, shared_info_frame))) {
++                                            PROT_READ|PROT_WRITE, shared_info_frame))) {
+         ERR("Couldn't map live_shinfo");
+         goto out;
+     }
+diff -r ea04335d238b tools/libxc/xenguest.h
+--- a/tools/libxc/xenguest.h	Thu Aug  3 18:45:14 2006
++++ b/tools/libxc/xenguest.h	Wed Aug 16 04:26:29 2006
+@@ -40,7 +40,8 @@
+ int xc_linux_restore(int xc_handle, int io_fd, uint32_t dom,
+                      unsigned long nr_pfns, unsigned int store_evtchn,
+                      unsigned long *store_mfn, unsigned int console_evtchn,
+-                     unsigned long *console_mfn);
++                     unsigned long *console_mfn,
++                     unsigned long reserved_pages);
+ 
+ /**
+  * This function will create a domain for a paravirtualized Linux
+@@ -56,6 +57,7 @@
+  * @parm store_mfn returned with the mfn of the store page
+  * @parm console_evtchn the console event channel for this domain to use
+  * @parm conole_mfn returned with the mfn of the console page
++ * @parm reserved
+  * @return 0 on success, -1 on failure
+  */
+ int xc_linux_build(int xc_handle,
+@@ -68,7 +70,8 @@
+                    unsigned int store_evtchn,
+                    unsigned long *store_mfn,
+                    unsigned int console_evtchn,
+-                   unsigned long *console_mfn);
++                   unsigned long *console_mfn,
++                   unsigned long reserved_pages);
+ 
+ /**
+  * This function will create a domain for a paravirtualized Linux
+@@ -100,7 +103,8 @@
+                        unsigned int store_evtchn,
+                        unsigned long *store_mfn,
+                        unsigned int console_evtchn,
+-                       unsigned long *console_mfn);
++                       unsigned long *console_mfn,
++                       unsigned long reserved_pages);
+ 
+ int xc_hvm_build(int xc_handle,
+                  uint32_t domid,
+diff -r ea04335d238b tools/python/xen/lowlevel/xc/xc.c
+--- a/tools/python/xen/lowlevel/xc/xc.c	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/lowlevel/xc/xc.c	Wed Aug 16 04:26:29 2006
+@@ -331,25 +331,27 @@
+     int store_evtchn, console_evtchn;
+     unsigned long store_mfn = 0;
+     unsigned long console_mfn = 0;
++    int reserved_pages = 0;
+ 
+     static char *kwd_list[] = { "dom", "store_evtchn",
+                                 "console_evtchn", "image",
+ 				/* optional */
+ 				"ramdisk", "cmdline", "flags",
+-				"features", NULL };
+-
+-    if ( !PyArg_ParseTupleAndKeywords(args, kwds, "iiis|ssis", kwd_list,
++				"features", "reserved_pages", NULL };
++
++    if ( !PyArg_ParseTupleAndKeywords(args, kwds, "iiis|ssisi", kwd_list,
+                                       &dom, &store_evtchn,
+ 				      &console_evtchn, &image,
+ 				      /* optional */
+ 				      &ramdisk, &cmdline, &flags,
+-				      &features) )
++				      &features, &reserved_pages) )
+         return NULL;
+ 
+     if ( xc_linux_build(self->xc_handle, dom, image,
+                         ramdisk, cmdline, features, flags,
+                         store_evtchn, &store_mfn,
+-			console_evtchn, &console_mfn) != 0 ) {
++                        console_evtchn, &console_mfn,
++                        reserved_pages) != 0 ) {
+         if (!errno)
+              errno = EINVAL;
+         return PyErr_SetFromErrno(xc_error);
+@@ -1041,6 +1043,7 @@
+       " ramdisk [str, n/a]: Name of ramdisk file, if any.\n"
+       " cmdline [str, n/a]: Kernel parameters, if any.\n\n"
+       " vcpus   [int, 1]:   Number of Virtual CPUS in domain.\n\n"
++      " reserved_pages [int]: Pages reserved for integrated monitor.\n\n"
+       "Returns: [int] 0 on success; -1 on error.\n" },
+ 
+     { "hvm_build", 
+diff -r ea04335d238b tools/python/xen/xend/XendCheckpoint.py
+--- a/tools/python/xen/xend/XendCheckpoint.py	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/xend/XendCheckpoint.py	Wed Aug 16 04:26:29 2006
+@@ -111,7 +111,9 @@
+         raise Exception, exn
+ 
+ 
+-def restore(xd, fd):
++def restore(xd, fd, paused, reserved_pages):
++    log.debug('Restore request: paused = %d, reserved_pages = %d', paused, reserved_pages)
++    
+     signature = read_exact(fd, len(SIGNATURE),
+         "not a valid guest state file: signature read")
+     if signature != SIGNATURE:
+@@ -147,11 +149,11 @@
+             raise XendError(
+                 "not a valid guest state file: pfn count out of range")
+ 
+-        balloon.free(xc.pages_to_kib(nr_pfns))
++        balloon.free(xc.pages_to_kib(nr_pfns + reserved_pages))
+ 
+         cmd = map(str, [xen.util.auxbin.pathTo(XC_RESTORE),
+                         xc.handle(), fd, dominfo.getDomid(), nr_pfns,
+-                        store_port, console_port])
++                        store_port, console_port, reserved_pages])
+         log.debug("[xc_restore]: %s", string.join(cmd))
+ 
+         handler = RestoreInputHandler()
+@@ -161,7 +163,8 @@
+         if handler.store_mfn is None or handler.console_mfn is None:
+             raise XendError('Could not read store/console MFN')
+ 
+-        dominfo.unpause()
++        if paused == 0:
++            dominfo.unpause()
+ 
+         dominfo.completeRestore(handler.store_mfn, handler.console_mfn)
+ 
+diff -r ea04335d238b tools/python/xen/xend/XendDomain.py
+--- a/tools/python/xen/xend/XendDomain.py	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/xend/XendDomain.py	Wed Aug 16 04:26:29 2006
+@@ -240,7 +240,7 @@
+         # !!!
+         raise XendError("Unsupported")
+ 
+-    def domain_restore(self, src):
++    def domain_restore(self, src, paused, reserved_pages):
+         """Restore a domain from file.
+ 
+         @param src:      source file
+@@ -249,18 +249,18 @@
+         try:
+             fd = os.open(src, os.O_RDONLY)
+             try:
+-                return self.domain_restore_fd(fd)
++                return self.domain_restore_fd(fd, paused, reserved_pages)
+             finally:
+                 os.close(fd)
+         except OSError, ex:
+             raise XendError("can't read guest state file %s: %s" %
+                             (src, ex[1]))
+ 
+-    def domain_restore_fd(self, fd):
++    def domain_restore_fd(self, fd, paused, reserved_pages):
+         """Restore a domain from the given file descriptor."""
+ 
+         try:
+-            return XendCheckpoint.restore(self, fd)
++            return XendCheckpoint.restore(self, fd, paused, reserved_pages)
+         except:
+             # I don't really want to log this exception here, but the error
+             # handling in the relocation-socket handling code (relocate.py) is
+diff -r ea04335d238b tools/python/xen/xend/XendDomainInfo.py
+--- a/tools/python/xen/xend/XendDomainInfo.py	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/xend/XendDomainInfo.py	Wed Aug 16 04:26:29 2006
+@@ -1283,6 +1283,7 @@
+             xc.domain_setmaxmem(self.domid, self.info['maxmem'] * 1024)
+ 
+             m = self.image.getDomainMemory(self.info['memory'] * 1024)
++            log.debug('XendDomainInfo.initDomain: memory %d', m);
+             balloon.free(m)
+ 
+             init_reservation = self.info['memory'] * 1024
+diff -r ea04335d238b tools/python/xen/xend/image.py
+--- a/tools/python/xen/xend/image.py	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/xend/image.py	Wed Aug 16 04:26:29 2006
+@@ -69,6 +69,7 @@
+         self.kernel = None
+         self.ramdisk = None
+         self.cmdline = None
++        self.reserved_pages = 0
+ 
+         self.configure(imageConfig, deviceConfig)
+ 
+@@ -90,7 +91,9 @@
+         if args:
+             self.cmdline += " " + args
+         self.ramdisk = get_cfg("ramdisk", '')
+-        
++
++        self.reserved_pages = (int(get_cfg("reservedmem", 0)) * 1024 * 1024) / 4096
++
+         self.vm.storeVm(("image/ostype", self.ostype),
+                         ("image/kernel", self.kernel),
+                         ("image/cmdline", self.cmdline),
+@@ -182,14 +185,16 @@
+         log.debug("ramdisk        = %s", self.ramdisk)
+         log.debug("vcpus          = %d", self.vm.getVCpuCount())
+         log.debug("features       = %s", self.vm.getFeatures())
+-
++        log.debug("reservedpages  = %s", self.reserved_pages)
++        
+         return xc.linux_build(dom            = self.vm.getDomid(),
+                               image          = self.kernel,
+                               store_evtchn   = store_evtchn,
+                               console_evtchn = console_evtchn,
+                               cmdline        = self.cmdline,
+                               ramdisk        = self.ramdisk,
+-                              features       = self.vm.getFeatures())
++                              reserved_pages = self.reserved_pages)
++                              # features       = self.features,
+ 
+ class HVMImageHandler(ImageHandler):
+ 
+diff -r ea04335d238b tools/python/xen/xend/server/XMLRPCServer.py
+--- a/tools/python/xen/xend/server/XMLRPCServer.py	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/xend/server/XMLRPCServer.py	Wed Aug 16 04:26:29 2006
+@@ -63,8 +63,8 @@
+     info = XendDomain.instance().domain_create(config)
+     return fixup_sxpr(info.sxpr())
+ 
+-def domain_restore(src):
+-    info = XendDomain.instance().domain_restore(src)
++def domain_restore(src, paused, reserved_pages):
++    info = XendDomain.instance().domain_restore(src, paused, reserved_pages)
+     return fixup_sxpr(info.sxpr())
+ 
+ def get_log():
+diff -r ea04335d238b tools/python/xen/xm/create.py
+--- a/tools/python/xen/xm/create.py	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/xm/create.py	Wed Aug 16 04:26:29 2006
+@@ -154,6 +154,10 @@
+           fn=set_int, default=128,
+           use="Domain memory in MB.")
+ 
++gopts.var('reservedmem', val='RESERVEDMEM',
++          fn=set_value, default=0,
++          use="Memory in MB to reserve for internal supervisor.")
++
+ gopts.var('maxmem', val='MEMORY',
+           fn=set_int, default=None,
+           use="Maximum domain memory in MB.")
+@@ -471,6 +475,8 @@
+         config_image.append(['root', cmdline_root])
+     if vals.extra:
+         config_image.append(['args', vals.extra])
++    if vals.reservedmem:
++        config_image.append(['reservedmem', vals.reservedmem])
+ 
+     if vals.builder == 'hvm':
+         configure_hvm(config_image, vals)
+diff -r ea04335d238b tools/python/xen/xm/main.py
+--- a/tools/python/xen/xm/main.py	Thu Aug  3 18:45:14 2006
++++ b/tools/python/xen/xm/main.py	Wed Aug 16 04:26:29 2006
+@@ -65,7 +65,7 @@
+ migrate_help = "migrate <DomId> <Host>           Migrate a domain to another machine"
+ pause_help =   "pause <DomId>                    Pause execution of a domain"
+ reboot_help =  "reboot <DomId> [-w][-a]          Reboot a domain"
+-restore_help = "restore <File>                   Create a domain from a saved state file"
++restore_help = "restore <File> [--paused] [--reserved kb] Create a domain from a saved state file"
+ save_help =    "save <DomId> <File>              Save domain state (and config) to file"
+ shutdown_help ="shutdown <DomId> [-w][-a][-R|-H] Shutdown a domain"
+ top_help =     "top                              Monitor system and domains in real-time"
+@@ -349,15 +349,26 @@
+     server.xend.domain.save(dom, savefile)
+     
+ def xm_restore(args):
+-    arg_check(args, "restore", 1)
++    arg_check(args, "restore", 1, 4)
+ 
+     savefile = os.path.abspath(args[0])
++
++    paused = 0
++    reserved_pages = 0
++
++    # Convert to pages
++    if (len(args) >= 3) and (args[1] in ['--reserve']):
++        reserved_pages = int(args[2]) * ((1024 * 1024) / 4096)
++
++    for f in args:
++        if f in ['--paused']:
++            paused = 1
+ 
+     if not os.access(savefile, os.R_OK):
+         err("xm restore: Unable to read file %s" % savefile)
+         sys.exit(1)
+-
+-    server.xend.domain.restore(savefile)
++        
++    server.xend.domain.restore(savefile, paused, reserved_pages)
+ 
+ 
+ def getDomains(domain_names):
+diff -r ea04335d238b tools/xcutils/xc_restore.c
+--- a/tools/xcutils/xc_restore.c	Thu Aug  3 18:45:14 2006
++++ b/tools/xcutils/xc_restore.c	Wed Aug 16 04:26:29 2006
+@@ -19,9 +19,9 @@
+ {
+     unsigned int xc_fd, io_fd, domid, nr_pfns, store_evtchn, console_evtchn;
+     int ret;
+-    unsigned long store_mfn, console_mfn;
++    unsigned long store_mfn, console_mfn, reserved_pages;
+ 
+-    if (argc != 7)
++    if (argc < 7)
+ 	errx(1,
+ 	     "usage: %s xcfd iofd domid nr_pfns store_evtchn console_evtchn",
+ 	     argv[0]);
+@@ -32,9 +32,10 @@
+     nr_pfns = atoi(argv[4]);
+     store_evtchn = atoi(argv[5]);
+     console_evtchn = atoi(argv[6]);
++    reserved_pages = (argc > 7) ? atoi(argv[7]) : 0;
+ 
+     ret = xc_linux_restore(xc_fd, io_fd, domid, nr_pfns, store_evtchn,
+-			   &store_mfn, console_evtchn, &console_mfn);
++			   &store_mfn, console_evtchn, &console_mfn, reserved_pages);
+     if (ret == 0) {
+ 	printf("store-mfn %li\n", store_mfn);
+ 	printf("console-mfn %li\n", console_mfn);
+diff -r ea04335d238b tools/xentrace/formats
+--- a/tools/xentrace/formats	Thu Aug  3 18:45:14 2006
++++ b/tools/xentrace/formats	Wed Aug 16 04:26:29 2006
+@@ -19,3 +19,15 @@
+ 0x00081001      CPU%(cpu)d      %(tsc)d         VMEXIT                  0x%(1)08x 0x%(2)08x 0x%(3)08x 
+ 0x00081002      CPU%(cpu)d      %(tsc)d         VMENTRY                 0x%(1)08x 0x%(2)08x 0x%(3)08x 0x%(4)08x 0x%(5)08x
+ 
++0x0010f001	CPU%(cpu)d	%(tsc)d		evtchn_send [ type = %(1)d, from_dom_and_vcpu = %(2)016lx, lport = %(3)d, to_dom_and_vcpu %(4)016lx, rport = %(5)d ]
++0x0010f002	CPU%(cpu)d	%(tsc)d		evtchn_set_pending [ domid = %(1)d, vcpuid = %(2)d, port = %(3)d, bits = 0x%(4)016lx, action = %(5)d ]
++0x0010f003	CPU%(cpu)d	%(tsc)d		evtchn_unmask [ domid = %(1)d, vcpuid = %(2)d, port = %(3)d, bits = 0x%(4)016lx, action = %(5)d ]
++
++0x0020f000  CPU%(cpu)d  %(tsc)d   except_page_fault_fixable [ vcpu_dom_err = 0x%(1)016lx, rip = 0x%(2)016lx, faultaddr = 0x%(3)016lx, pt_base_mfn = %(4)d ]
++0x0020f001  CPU%(cpu)d  %(tsc)d   except_page_fault_spurious [ vcpu_dom_err = 0x%(1)016lx, rip = 0x%(2)016lx, faultaddr = 0x%(3)016lx, pt_base_mfn = %(4)d ]
++0x0020f002  CPU%(cpu)d  %(tsc)d   except_page_fault_checked [ vcpu_dom_err = 0x%(1)016lx, rip = 0x%(2)016lx, faultaddr = 0x%(3)016lx, pt_base_mfn = %(4)d, fixup = 0x%(5)016lx ]
++0x0020f003  CPU%(cpu)d  %(tsc)d   except_page_fault_propagate [ vcpu_dom_err = 0x%(1)016lx, rip = 0x%(2)016lx, faultaddr = 0x%(3)016lx, pt_base_mfn = %(4)d ]
++
++0x000af001  CPU%(cpu)d  %(tsc)d   grant_map [ flags_status_remdom_dom = 0x%(1)016lx, dev_bus_addr = 0x%(2)016lx, host_addr = 0x%(3)016lx, handle = %(4)d, ref = %(5)d ]
++0x000af002  CPU%(cpu)d  %(tsc)d   grant_unmap [ flags_status_remdom_dom = 0x%(1)016lx, dev_bus_addr = 0x%(2)016lx, host_addr = 0x%(3)016lx, handle = %(4)d, ref = %(5)d ]
++0x000af003  CPU%(cpu)d  %(tsc)d   grant_transfer [ status_remdom_dom = 0x%(1)016lx, physaddr = 0x%(2)016lx, ref = %(5)d ]
