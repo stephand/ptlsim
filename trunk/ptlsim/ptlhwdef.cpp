@@ -471,6 +471,7 @@ void BasicBlock::reset(const RIPVirtPhys& rip) {
   hitcount = 0;
   predcount = 0;
   confidence = 0;
+  lastused = 0;
 }
 
 //
@@ -506,6 +507,7 @@ BasicBlock* BasicBlock::clone() {
   bb->synthops = null;
   // hashlink, mfnlo_loc, mfnhi_loc are always updated after cloning
   bb->hashlink.reset();
+  bb->use(0);
 
   foreach (i, count) bb->transops[i] = this->transops[i];
   return bb;

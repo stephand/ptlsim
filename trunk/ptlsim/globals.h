@@ -99,6 +99,7 @@ MakeLimits(unsigned long, 0, 0xffffffff);
 // Null pointer to the specified object type, for computing field offsets
 template <typename T> static inline T* nullptr() { return (T*)(Waddr)0; }
 #define offsetof(T, field) ((Waddr)(&(nullptr<T>()->field)) - ((Waddr)nullptr<T>()))
+#define baseof(T, field, ptr) (*((T*)(((byte*)(ptr)) - offsetof(T, field))))
 
 //#error FIXME: This does not work right when the struct is a temporary (compiler bug?) (test_refs() in cpuid.cpp)
 // Add raw data auto-casts to a structured or bitfield type 

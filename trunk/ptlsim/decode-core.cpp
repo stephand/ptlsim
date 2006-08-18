@@ -14,7 +14,7 @@ BasicBlockCache bbcache;
 
 struct BasicBlockChunkListHashtableLinkManager {
   static inline BasicBlockChunkList& objof(selflistlink* link) {
-    return *(BasicBlockChunkList*)(((byte*)link) - offsetof(BasicBlockChunkList, hashlink));
+    return baseof(BasicBlockChunkList, hashlink, link);
   }
 
   static inline W64& keyof(BasicBlockChunkList& obj) {
@@ -84,11 +84,16 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_ptlcall,
   assist_wrmsr,
   assist_rdmsr,
-  assist_wrcr,
-  assist_rdcr,
+  assist_write_cr0,
+  assist_write_cr2,
+  assist_write_cr3,
+  assist_write_cr4,
+  assist_write_debug_reg,
   assist_iret16,
   assist_iret32,
   assist_iret64,
+  assist_ioport_in,
+  assist_ioport_out,
 };
 
 const char* assist_names[ASSIST_COUNT] = {
@@ -138,11 +143,16 @@ const char* assist_names[ASSIST_COUNT] = {
   "ptlcall",
   "wrmsr",
   "rdmsr",
-  "wrcr",
-  "rdcr",
+  "write_cr0",
+  "write_cr2",
+  "write_cr3",
+  "write_cr4",
+  "write_debug_reg",
   "iret16",
   "iret32",
   "iret64",
+  "in",
+  "out"
 };
 
 const char* x86_exception_names[256] = {
@@ -1313,6 +1323,80 @@ int BasicBlockCache::invalidate_page(Waddr mfn) {
   return n;
 }
 
+//
+// Scan through the BB cache and try to free up
+// <bytesreq> bytes, starting with the least
+// recently used BBs.
+//
+int BasicBlockCache::reclaim(int bytesreq) {
+  if (!count) return 0;
+
+  logfile << "Reclaiming cached basic blocks at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits:", endl, flush;
+
+  W64 oldest = limits<W64>::max;
+  W64 newest = 0;
+  W64 average = 0;
+  W64 total_bytes = 0;
+
+  int n = 0;
+  foreach (i, lengthof(sets)) {
+    selflistlink* tlink = sets[i];
+    while (tlink) {
+      selflistlink* next = tlink->next;
+      assert(n < count);
+      BasicBlock& obj = BasicBlockHashtableLinkManager::objof(tlink);
+      oldest = min(oldest, obj.lastused);
+      newest = max(newest, obj.lastused);
+      average += obj.lastused;
+      total_bytes += ptl_mm_getsize(&obj);
+      n++;
+      tlink = next;
+    }
+  }
+
+  assert(count == n);
+  assert(n > 0);
+  average /= n;
+
+  logfile << "Before:", endl;
+  logfile << "  Basic blocks:   ", intstring(count, 12), endl;
+  logfile << "  Bytes occupied: ", intstring(total_bytes, 12), endl;
+  logfile << "  Oldest cycle:   ", intstring(oldest, 12), endl;
+  logfile << "  Average cycle:  ", intstring(average, 12), endl;
+  logfile << "  Newest cycle:   ", intstring(newest, 12), endl;
+
+  //
+  // Reclaim all objects older than the average
+  //
+  n = 0;
+  W64 reclaimed_bytes = 0;
+  int reclaimed_objs = 0;
+
+  foreach (i, lengthof(sets)) {
+    selflistlink* tlink = sets[i];
+    while (tlink) {
+      selflistlink* next = tlink->next;
+      BasicBlock& obj = BasicBlockHashtableLinkManager::objof(tlink);
+      // We use '<=' to guarantee even a uniform distribution will be reclaimmed:
+      if (obj.lastused <= average) {
+        reclaimed_bytes += ptl_mm_getsize(&obj);
+        reclaimed_objs++;
+        invalidate(&obj);
+      }
+      n++;
+      tlink = next;
+    }
+  }
+
+  logfile << "After:", endl;
+  logfile << "  Basic blocks:   ", intstring(reclaimed_objs, 12), " BBs reclaimed", endl;
+  logfile << "  Bytes occupied: ", intstring(reclaimed_bytes, 12), " bytes reclaimed", endl;
+  logfile << "  New pool size:  ", intstring(count, 12), " BBs", endl;
+  logfile.flush();
+
+  return n;
+}
+
 void assist_exec_page_fault(Context& ctx) {
   //
   // We need to check if faultaddr is now a valid page, since the page tables
@@ -1621,5 +1705,11 @@ ostream& BasicBlockCache::print(ostream& os) const {
   return os;
 }
 
-void init_translate() { }
+void bbcache_reclaim(size_t bytes) {
+  bbcache.reclaim();
+}
+
+void init_translate() {
+  ptl_mm_register_reclaim_handler(bbcache_reclaim);
+}
 

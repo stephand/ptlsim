@@ -153,7 +153,6 @@ int HYPERVISOR_sched_op(int cmd, void *arg) {
   return _hypercall2(int, sched_op, cmd, arg);
 }
 
-#if 0
 int HYPERVISOR_callback_op(int cmd, void *arg) {
   return _hypercall2(int, callback_op, cmd, arg);
 }
@@ -161,14 +160,13 @@ int HYPERVISOR_callback_op(int cmd, void *arg) {
 int HYPERVISOR_xenoprof_op(int op, unsigned long arg1, unsigned long arg2) {
   return _hypercall3(int, xenoprof_op, op, arg1, arg2);
 }
-#endif
 
 int HYPERVISOR_event_channel_op(int cmd, void *arg) {
 	return _hypercall2(int, event_channel_op, cmd, arg);
 }
 
-int HYPERVISOR_physdev_op(void *physdev_op) {
-  return _hypercall1(int, physdev_op, physdev_op);
+int HYPERVISOR_physdev_op(int cmd, void *arg) {
+  return _hypercall2(int, physdev_op, cmd, arg);
 }
 
 int xen_sched_block() {
@@ -615,7 +613,7 @@ void initiate_prefetch(W64 addr, int cachelevel) {
 
 asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
-  sb << "ptlxen: Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ")", endl;
+  sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ")", endl;
 
   logfile << sb, flush;
   cerr << sb, flush;
@@ -1187,13 +1185,12 @@ Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn) {
 // to keep our simulated TLBs in sync.
 //
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update) {
-  static const bool DEBUG = 1;
+  static const bool DEBUG = 0;
 
   VirtAddr virt(rawvirt);
 
   if (unlikely((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end))) return;
 
-  //++MTY CHECKME This does not seem to be getting called.
   if (logable(5)) logfile << "Update acc/dirty bits: ", update.a, " ", update.d, " for virt ", (void*)rawvirt, endl;
 
   Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
@@ -1445,6 +1442,14 @@ void Context::init() {
     if (use64) seg[SEGID_GS].base = gs_base_user;
     swapgs_base = gs_base_kernel;
   }
+
+  // Extended Feature Enable Register (EFER MSR):
+  efer = 0;
+  efer.sce = 1;
+  efer.lme = 1;
+  efer.lma = 1;
+  efer.nxe = 1;
+  efer.ffxsr = 1;
 }
 
 void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
@@ -2056,6 +2061,19 @@ void update_time();
 W64 timer_interrupt_period_in_cycles = infinity;
 W64 timer_interrupt_last_sent_at_cycle = 0;
 
+ostream& print(ostream& os, const xen_memory_reservation_t& req, Context& ctx) {
+  os << "{nr_extents = ", req.nr_extents, ", ", "extent_order = ", ((1 << req.extent_order) * 4096), " bytes, address_bits = ", req.address_bits, ", frames:";
+  pfn_t* extents = (pfn_t*)req.extent_start.p;
+  foreach (i, req.nr_extents) {
+    pfn_t pfn;
+    int n = ctx.copy_from_user(&pfn, (Waddr)&extents[i], sizeof(pfn));
+    os << " ";
+    if likely (n == sizeof(pfn)) os << pfn; else os << "???";
+  }
+  os << "}";
+  return os;
+}
+
 int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5, W64 arg6) {
   //
   // x86-64 hypercall conventions:
@@ -2090,6 +2108,9 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
   PageFaultErrorCode pfec;
   Waddr faultaddr;
+
+#define getreq(type) type req; if (ctx.copy_from_user(&req, (Waddr)arg2, sizeof(type), pfec, faultaddr) != sizeof(type)) { rc = -EFAULT; break; }
+#define putreq(type) ctx.copy_to_user((Waddr)arg2, &req, sizeof(type), pfec, faultaddr)
 
   switch (hypercallid) {
   case __HYPERVISOR_set_trap_table: {
@@ -2158,6 +2179,31 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   }
 
+  case __HYPERVISOR_set_gdt: {
+    unsigned int entries = arg2;
+    unsigned int pages = ceil(entries, 512) / 512;
+    unsigned long mfns[16];
+
+    int n = ctx.copy_from_user(&mfns, arg1, sizeof(unsigned long) * pages);
+    if unlikely (n != (sizeof(unsigned long) * pages)) {
+      rc = -EFAULT;
+      break;
+    }
+
+    rc = HYPERVISOR_set_gdt(mfns, entries);
+
+    if (debug) {
+      logfile << "hypercall: set_gdt: ", entries, " entries in ", pages, " pages:";
+      foreach (i, pages) { logfile << " ", mfns[i]; }
+      logfile << "; rc ", rc, endl;
+    }
+
+    ctx.gdtsize = entries;
+    foreach (i, pages) ctx.gdtpages[i] = mfns[i];
+    ctx.flush_tlb();
+
+    break;
+  }
     // __HYPERVISOR_set_gdt only needed during boot
 
   case __HYPERVISOR_stack_switch: {
@@ -2197,7 +2243,89 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   };
 
-    // __HYPERVISOR_memory_op needed only during boot
+  case __HYPERVISOR_memory_op: {
+    switch (arg1) {
+    case XENMEM_machphys_mapping: {
+      xen_machphys_mapping_t req;
+      rc = HYPERVISOR_memory_op(XENMEM_machphys_mapping, &req);
+      if (debug) {
+        logfile << "hypercall: memory_op (machphys_mapping): ",
+          (void*)(Waddr)arg2, " <= {", (void*)(Waddr)req.v_start, ", ",
+          (void*)(Waddr)req.v_end, ", ", (void*)(Waddr)req.max_mfn, "} rc ", rc , endl;
+      }
+      putreq(req);
+      break;
+    }
+    case XENMEM_memory_map: {
+      getreq(xen_memory_map_t);
+      unsigned int orig_nr_entries = req.nr_entries;
+      rc = HYPERVISOR_memory_op(XENMEM_memory_map, &req);
+      //++MTY CHECKME should we fixup the memory map to exclude the PTLsim reserved area?
+      // We cannot do this when starting from a checkpoint, but this may be different.
+      if (debug) {
+        logfile << "hypercall: memory_op (memory_map): {nr_entries = ", orig_nr_entries,
+          ", buffer = ", req.buffer.p, "} => rc ", rc, ", ", req.nr_entries, " entries filled", endl;
+      }
+      putreq(xen_memory_map_t);
+      break;
+    }
+    case XENMEM_populate_physmap: {
+      getreq(xen_memory_reservation_t);
+      if (debug) { logfile << "hypercall: memory_op (populate_physmap): in "; print(logfile, req, ctx); logfile << endl; }
+      rc = HYPERVISOR_memory_op(XENMEM_populate_physmap, &req);
+      if (debug) { logfile << "  populate_physmap: rc ", rc, " out "; print(logfile, req, ctx); logfile << endl; }
+      putreq(xen_memory_reservation_t);
+      break;
+    }
+    case XENMEM_increase_reservation: {
+      getreq(xen_memory_reservation_t);
+      if (debug) { logfile << "hypercall: memory_op (increase_reservation): in "; print(logfile, req, ctx); logfile << endl; }
+      rc = HYPERVISOR_memory_op(XENMEM_increase_reservation, &req);
+      if (debug) { logfile << "  increase_reservation: rc ", rc, " out "; print(logfile, req, ctx); logfile << endl; }
+      putreq(xen_memory_reservation_t);
+      break;
+    }
+    case XENMEM_decrease_reservation: {
+      //++MTY CHECKME we first need to unmap the specified MFNs from PTLsim if they were mapped!
+      getreq(xen_memory_reservation_t);
+      if (debug) { logfile << "hypercall: memory_op (decrease_reservation): in "; print(logfile, req, ctx); logfile << endl; }
+
+      //
+      // We must unmap 
+      //
+      mfn_t* extents = (pfn_t*)req.extent_start.p;
+      foreach (i, req.nr_extents) {
+        unsigned int pages_in_extent = 1 << req.extent_order;
+        mfn_t basemfn;
+        int n = ctx.copy_from_user(&basemfn, (Waddr)&extents[i], sizeof(basemfn));
+        if unlikely (!n) continue;
+
+        foreach (j, pages_in_extent) {
+          mfn_t mfn = basemfn + j;
+          if unlikely (mfn >= bootinfo.total_machine_pages) break;
+          Level1PTE& pte = bootinfo.phys_pagedir[mfn];
+          if likely (pte.p) {
+            pte <= pte.P(0);
+            if unlikely (debug) logfile << "  Unmap mfn ", mfn, endl;
+          }
+        }
+      }
+
+      commit_page_table_updates();
+
+      rc = HYPERVISOR_memory_op(XENMEM_decrease_reservation, &req);
+      if (debug) { logfile << "  decrease_reservation: rc ", rc, " out "; print(logfile, req, ctx); logfile << endl; }
+      putreq(xen_memory_reservation_t);
+      break;
+    }
+    default: {
+      // All others are only used by dom0
+      logfile << "hypercall: memory_op (", arg1, ") not supported!", endl, flush;
+      abort();
+    }
+    }
+    break;
+  };
 
     // __HYPERVISOR_multicall handled elsewhere
 
@@ -2312,14 +2440,31 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   }
 
-    // __HYPERVISOR_console_io not needed in domU
+  case __HYPERVISOR_console_io: {
+    switch (arg1) {
+    case CONSOLEIO_write: {
+      if (debug) logfile << "hypercall: console_io (write): write ", arg2, " bytes at ", (void*)(Waddr)arg3, endl, flush;
+      logfile << "Console output (", arg2, " bytes):", endl, flush;
+      logfile.write((void*)arg3, arg2);
+      logfile << flush;
+      rc = arg2;
+      break;
+    }
+    case CONSOLEIO_read: {
+      if (debug) logfile << "hypercall: console_io (read): read ", arg2, " bytes into ", (void*)(Waddr)arg3, endl, flush;
+      rc = 0;
+      break;
+    }
+    default:
+      abort();
+    }
+    break;
+  };
 
     // __HYPERVISOR_physdev_op_compat deprecated
 
   case __HYPERVISOR_grant_table_op: {
     foreach (i, arg3) {
-#define getreq(type) type req; if (ctx.copy_from_user(&req, (Waddr)arg2, sizeof(type), pfec, faultaddr) != sizeof(type)) { rc = -EFAULT; break; }
-#define putreq(type) ctx.copy_to_user((Waddr)arg2, &req, sizeof(type), pfec, faultaddr)
       switch (arg1) {
         //
         //++MTY TODO:
@@ -2386,7 +2531,11 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   }
 
-    // __HYPERVISOR_vm_assist not generally needed on x86-64
+  case __HYPERVISOR_vm_assist: {
+    if (debug) logfile << "hypercall: vm_assist (subcall ", arg1, ") = value ", arg2, endl;
+    // Writable pagetables are always supported by PTLsim (this is the only relevant assist type)
+    break;
+  }
 
     // __HYPERVISOR_update_va_mapping_otherdomain not needed in domU
 
@@ -2654,7 +2803,48 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   };
 
-    // __HYPERVISOR_callback_op needed only during boot
+  case __HYPERVISOR_callback_op: {
+    switch (arg1) {
+    case CALLBACKOP_register: {
+      getreq(callback_register_t);
+      bool disable_events = ((req.flags & CALLBACKF_mask_events) != 0);
+      switch (req.type) {
+      case CALLBACKTYPE_event:
+        if (debug) logfile << "hypercall: callback_op: set event callback to ", (void*)(Waddr)req.address, endl;
+        ctx.event_callback_rip = req.address;
+        break;
+      case CALLBACKTYPE_syscall:
+        if (debug) logfile << "hypercall: callback_op: set syscall callback to ", 
+                     (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
+        ctx.syscall_rip = req.address;
+        ctx.syscall_disables_events = disable_events;
+        break;
+      case CALLBACKTYPE_failsafe:
+        if (debug) logfile << "hypercall: callback_op: set failsafe callback to ", 
+                     (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
+        ctx.failsafe_callback_rip = req.address;
+        ctx.failsafe_disables_events = disable_events;
+        break;
+      case CALLBACKTYPE_nmi:
+        if (debug) logfile << "hypercall: callback_op: set nmi callback to ", 
+                     (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
+        // We don't have NMIs in PTLsim - dom0 handles that
+        break;
+      default:
+        logfile << "hypercall: callback_op: set unknown callback ", req.type, " to ", 
+          (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
+        abort();
+        break;
+      }
+      rc = 0;
+      break;
+    }
+    default:
+      abort();
+      rc = -EINVAL;
+    }
+    break;
+  };
 
     // __HYPERVISOR_xenoprof_op not needed for now
 
@@ -2759,7 +2949,20 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   }
 
-    // __HYPERVISOR_physdev_op not needed in domU
+  case __HYPERVISOR_physdev_op: {
+    switch (arg1) {
+    case PHYSDEVOP_set_iopl: {
+      if (debug) logfile << "hypercall: physdev_op (set_iopl): ignored", endl;
+      // Even domU's try to get iopl 1; just ignore it: they don't have any physical devices anyway
+      rc = 0;
+      break;
+    }
+    default:
+      rc = -EINVAL;
+      abort();
+    }
+    break;
+  }
 
   default:
     if (debug) logfile << "Cannot handle hypercall ", hypercallid, "!", endl, flush;
@@ -3103,6 +3306,44 @@ RealTimeInfo initial_realtime_info;
 // sleep mode and will re-init all VIRQs, etc. for us.
 //
 
+static inline W32 div_frac(W32 dividend, W32 divisor) {
+  W32 quotient, remainder;
+
+  if (divisor == dividend)
+    return 0xffffffff; // a.k.a. 0.99999, as close as we can
+
+  if (!divisor)
+    return 0; // avoid divide-by-zero at all costs
+
+  assert(dividend < divisor);
+  asm("divl %4" : "=a" (quotient), "=d" (remainder) : "0" (0), "1" (dividend), "r" (divisor));
+  return quotient;
+}
+
+#define MILLISECS(_ms) ((W64)((_ms) * 1000000ULL))
+
+static void compute_time_scale(W32& tsc_to_system_mul, W8s& tsc_shift, W64 hz) {
+  W64 tps64 = hz;
+  int shift = 0;
+
+  while (tps64 > (MILLISECS(1000)*2)) {
+    tps64 >>= 1;
+    shift--;
+  }
+  
+  W32 tps32 = (W32)tps64;
+  while (tps32 < (W32)MILLISECS(1000)) {
+    tps32 <<= 1;
+    shift++;
+  }
+  
+  tsc_to_system_mul = div_frac(MILLISECS(1000), tps32);
+  tsc_shift = shift;
+}
+
+//
+// Compute core frequency from an existing shared info struct
+//
 W64 get_core_freq_hz(const vcpu_time_info_t& timeinfo) {
   W64 core_freq_hz = ((1000000000ULL << 32) / timeinfo.tsc_to_system_mul);
 
@@ -3119,14 +3360,15 @@ void init_virqs() {
   foreach (i, bootinfo.vcpu_count) {
     Context& ctx = contextof(i);
 
+    ctx.core_freq_hz = (config.core_freq_hz) ? config.core_freq_hz : get_core_freq_hz(shinfo.vcpu_info[0].time);
+
     vcpu_time_info_t& timeinfo = sshinfo.vcpu_info[ctx.vcpuid].time;
+    compute_time_scale(timeinfo.tsc_to_system_mul, timeinfo.tsc_shift, ctx.core_freq_hz);
 
     if (config.pseudo_real_time_clock) {
       timeinfo.tsc_timestamp = 0;
       timeinfo.system_time = 0;
     }
-
-    ctx.core_freq_hz = get_core_freq_hz(timeinfo);
 
     ctx.sys_time_cycles_to_nsec_coeff = 1. / ((double)ctx.core_freq_hz / 1000000000.);
     ctx.base_tsc = timeinfo.tsc_timestamp;
@@ -3744,6 +3986,16 @@ bool simulate(const char* corename) {
   return 0;
 }
 
+static inline void outb(W16 port, byte value) {
+  asm volatile("outb %%al,%%dx" : : "a" (value), "d" (port) : "memory");
+}
+
+static inline byte inb(W16 port) {
+  byte value;
+  asm volatile("inb %%dx,%%al" : "=a" (value) : "d" (port) : "memory");
+  return value;
+}
+
 int main(int argc, char** argv) {
   ptlsim_init();
 
@@ -3751,6 +4003,13 @@ int main(int argc, char** argv) {
 
   for (;;) {
     W64 requuid = handle_upcall(config);
+
+    outb(0xcfb, 0x00);
+    outb(0xcf8, 0x00);
+    outb(0xcfa, 0x00);
+    byte pci0 = inb(0xcf8);
+    byte pci1 = inb(0xcfa);
+    logfile << "pci = ", hexstring(pci0, 8), " ", hexstring(pci1, 8), endl, flush;
 
     if (config.run) {
       config.run = 0;

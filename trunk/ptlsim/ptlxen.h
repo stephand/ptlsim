@@ -25,6 +25,7 @@ asmlinkage {
 #include <xen/sched_ctl.h>
 #include <xen/xenoprof.h>
 #include <xen/callback.h>
+#include <xen/physdev.h>
 #include <xen/features.h>
 #include "xc_ptlsim.h"
 }
@@ -400,6 +401,9 @@ T add_page_table_update(T& target, const T& source) {
   if unlikely (mmuqueue_count >= lengthof(mmuqueue)) {
     commit_page_table_updates();
   }
+
+  // Don't process redundant updates
+  if unlikely (target == source) return source;
 
   mmu_update_t& mmu = mmuqueue[mmuqueue_count++];
   mmu.ptr = (W64)&target;

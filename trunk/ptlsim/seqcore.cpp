@@ -12,8 +12,8 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-#define ENABLE_CHECKS
-#define ENABLE_LOGGING
+//#define ENABLE_CHECKS
+//#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -583,6 +583,7 @@ struct SequentialCore {
     
     current_basic_block_transop_index = 0;
 
+    current_basic_block->use(sim_cycle);
     return current_basic_block;
   }
 

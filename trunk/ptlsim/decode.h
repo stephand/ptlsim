@@ -263,11 +263,16 @@ enum {
   ASSIST_PTLCALL,
   ASSIST_WRMSR,
   ASSIST_RDMSR,
-  ASSIST_WRCR,
-  ASSIST_RDCR,
+  ASSIST_WRITE_CR0,
+  ASSIST_WRITE_CR2,
+  ASSIST_WRITE_CR3,
+  ASSIST_WRITE_CR4,
+  ASSIST_WRITE_DEBUG_REG,
   ASSIST_IRET16,
   ASSIST_IRET32,
   ASSIST_IRET64,
+  ASSIST_IOPORT_IN,
+  ASSIST_IOPORT_OUT,
   ASSIST_COUNT,
 };
 
@@ -340,8 +345,13 @@ void assist_cld(Context& ctx);
 void assist_std(Context& ctx);
 void assist_wrmsr(Context& ctx);
 void assist_rdmsr(Context& ctx);
-void assist_wrcr(Context& ctx);
-void assist_rdcr(Context& ctx);
+void assist_write_cr0(Context& ctx);
+void assist_write_cr2(Context& ctx);
+void assist_write_cr3(Context& ctx);
+void assist_write_cr4(Context& ctx);
+void assist_write_debug_reg(Context& ctx);
 void assist_iret16(Context& ctx);
 void assist_iret32(Context& ctx);
 void assist_iret64(Context& ctx);
+void assist_ioport_in(Context& ctx);
+void assist_ioport_out(Context& ctx);

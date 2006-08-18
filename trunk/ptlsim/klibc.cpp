@@ -1965,7 +1965,7 @@ extern "C" void abort() {
   cout.flush();
   cerr.flush();
   if (logfile) logfile.flush();
-  asm("ud2a");
+  asm("ud2a" : : "a" (__builtin_return_address(0)));
   for (;;) { asm("nop"); }
 }
 

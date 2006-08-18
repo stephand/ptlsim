@@ -2203,7 +2203,7 @@ namespace superstl {
     // Example:
     //
     // T& objof(selflistlink* link) {
-    //   return *(T*)((byte*)link) - offsetof(T, hashlink);
+    //   return baseof(T, hashlink, link); // a.k.a. *(T*)((byte*)link) - offsetof(T, hashlink);
     // }
     //
   };

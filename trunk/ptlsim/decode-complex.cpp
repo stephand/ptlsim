@@ -113,6 +113,126 @@ static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
 static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
 
 
+//
+// CPUID level 0x00000001, result in %edx
+//
+#define X86_FEATURE_FPU		(1 <<  0) // Onboard FPU
+#define X86_FEATURE_VME		(1 <<  1) // Virtual Mode Extensions
+#define X86_FEATURE_DE		(1 <<  2) // Debugging Extensions
+#define X86_FEATURE_PSE 	(1 <<  3) // Page Size Extensions
+#define X86_FEATURE_TSC		(1 <<  4) // Time Stamp Counter
+#define X86_FEATURE_MSR		(1 <<  5) // Model-Specific Registers, RDMSR, WRMSR
+#define X86_FEATURE_PAE		(1 <<  6) // Physical Address Extensions
+#define X86_FEATURE_MCE		(1 <<  7) // Machine Check Architecture
+
+#define X86_FEATURE_CX8		(1 <<  8) // CMPXCHG8 instruction
+#define X86_FEATURE_APIC	(1 <<  9) // Onboard APIC
+#define X86_FEATURE_BIT10 (1 << 10) // (undefined)
+#define X86_FEATURE_SEP		(1 << 11) // SYSENTER/SYSEXIT
+#define X86_FEATURE_MTRR	(1 << 12) // Memory Type Range Registers
+#define X86_FEATURE_PGE		(1 << 13) // Page Global Enable
+#define X86_FEATURE_MCA		(1 << 14) // Machine Check Architecture
+#define X86_FEATURE_CMOV	(1 << 15) // CMOV instruction (FCMOVCC and FCOMI too if FPU present)
+
+#define X86_FEATURE_PAT		(1 << 16) // Page Attribute Table
+#define X86_FEATURE_PSE36	(1 << 17) // 36-bit PSEs
+#define X86_FEATURE_PN		(1 << 18) // Processor serial number
+#define X86_FEATURE_CLFL  (1 << 19) // Supports the CLFLUSH instruction
+#define X86_FEATURE_NX    (1 << 20) // No-Execute page attribute
+#define X86_FEATURE_DTES	(1 << 21) // Debug Trace Store
+#define X86_FEATURE_ACPI	(1 << 22) // ACPI via MSR
+#define X86_FEATURE_MMX		(1 << 23) // Multimedia Extensions
+
+#define X86_FEATURE_FXSR	(1 << 24) // FXSAVE and FXRSTOR instructions; CR4.OSFXSR available
+#define X86_FEATURE_XMM		(1 << 25) // Streaming SIMD Extensions
+#define X86_FEATURE_XMM2	(1 << 26) // Streaming SIMD Extensions-2
+#define X86_FEATURE_SNOOP (1 << 27) // CPU self snoop
+#define X86_FEATURE_HT		(1 << 28) // Hyper-Threading
+#define X86_FEATURE_ACC		(1 << 29) // Automatic clock control
+#define X86_FEATURE_IA64	(1 << 30) // IA-64 processor
+#define X86_FEATURE_BIT31 (1 << 31) // (undefined)
+
+//
+// Xen forces us to mask some features (vme, de, pse, pge, sep, mtrr)
+// when returning the CPUID to a guest, since it uses these features itself.
+//
+#define PTLSIM_X86_FEATURE (\
+  X86_FEATURE_FPU | /*X86_FEATURE_VME | X86_FEATURE_DE | */ X86_FEATURE_PSE | \
+  X86_FEATURE_TSC | X86_FEATURE_MSR | X86_FEATURE_PAE | X86_FEATURE_MCE | \
+  X86_FEATURE_CX8 | X86_FEATURE_APIC | /*X86_FEATURE_BIT10 | X86_FEATURE_SEP | */ \
+  /*X86_FEATURE_MTRR | X86_FEATURE_PGE | */  X86_FEATURE_MCA | X86_FEATURE_CMOV | \
+  X86_FEATURE_PAT | X86_FEATURE_PSE36 | X86_FEATURE_PN | X86_FEATURE_CLFL | \
+  X86_FEATURE_NX | /*X86_FEATURE_DTES | */ X86_FEATURE_ACPI | X86_FEATURE_MMX | \
+  X86_FEATURE_FXSR | X86_FEATURE_XMM | X86_FEATURE_XMM2 | X86_FEATURE_SNOOP | \
+  X86_FEATURE_HT /* | X86_FEATURE_ACC | X86_FEATURE_IA64 | X86_FEATURE_BIT31*/)
+
+//
+// CPUID level 0x00000001, result in %ecx
+//
+#define X86_EXT_FEATURE_XMM3	(1 <<  0) // Streaming SIMD Extensions-3
+#define X86_EXT_FEATURE_MWAIT	(1 <<  3) // Monitor/Mwait support
+#define X86_EXT_FEATURE_DSCPL	(1 <<  4) // CPL Qualified Debug Store
+#define X86_EXT_FEATURE_EST		(1 <<  7) // Enhanced SpeedStep
+#define X86_EXT_FEATURE_TM2		(1 <<  8) // Thermal Monitor 2
+#define X86_EXT_FEATURE_CID		(1 << 10) // Context ID
+#define X86_EXT_FEATURE_CX16	(1 << 13) // CMPXCHG16B
+#define X86_EXT_FEATURE_XTPR	(1 << 14) // Send Task Priority Messages
+
+#define PTLSIM_X86_EXT_FEATURE (\
+  X86_EXT_FEATURE_XMM3 | X86_EXT_FEATURE_CX16)
+
+//
+// CPUID level 0x80000001, result in %edx
+//
+#define X86_VENDOR_FEATURE_SYSCALL  (1 << 11) // SYSCALL/SYSRET
+#define X86_VENDOR_FEATURE_MMXEXT   (1 << 22) // AMD MMX extensions
+#define X86_VENDOR_FEATURE_FXSR_OPT (1 << 25) // FXSR optimizations
+#define X86_VENDOR_FEATURE_RDTSCP   (1 << 27) // RDTSCP instruction
+#define X86_VENDOR_FEATURE_LM       (1 << 29) // Long Mode (x86-64)
+#define X86_VENDOR_FEATURE_3DNOWEXT (1 << 30) // AMD 3DNow! extensions
+#define X86_VENDOR_FEATURE_3DNOW    (1 << 31) // 3DNow!
+
+#define PTLSIM_X86_VENDOR_FEATURE \
+  (X86_VENDOR_FEATURE_FXSR_OPT | X86_VENDOR_FEATURE_LM | (PTLSIM_X86_FEATURE & 0x1ffffff))
+
+//
+// CPUID level 0x80000001, result in %ecx
+//
+#define X86_VENDOR_EXT_FEATURE_LAHF_LM    (1 << 0) // LAHF/SAHF in long mode
+#define X86_VENDOR_EXT_FEATURE_CMP_LEGACY (1 << 1) // If yes HyperThreading not valid
+#define X86_VENDOR_EXT_FEATURE_SVM        (1 << 2) // Secure Virtual Machine extensions
+
+//
+// Make sure we do NOT define CMP_LEGACY since PTLsim may have multiple threads
+// per core enabled and the guest OS must optimize cache coherency as such.
+//
+#define PTLSIM_X86_VENDOR_EXT_FEATURE (X86_VENDOR_EXT_FEATURE_LAHF_LM)
+
+union ProcessorModelInfo {
+  struct { W32 stepping:4, model:4, family:4, reserved1:4, extmodel:4, extfamily:8, reserved2:4; } fields;
+  W32 data;
+};
+
+union ProcessorMiscInfo {
+  struct { W32 brandid:8, clflush:8, reserved:8, apicid:8; } fields;
+  W32 data;
+};
+
+#define PTLSIM_X86_MODEL_INFO (\
+  (0  << 0) /* stepping */ | \
+  (0  << 4) /* model */ | \
+  (15 << 8) /* family */ | \
+  (0  << 12) /* reserved1 */ | \
+  (0  << 16) /* extmodel */ | \
+  (0  << 20) /* extfamily */ | \
+  (0  << 24))
+
+#define PTLSIM_X86_MISC_INFO (\
+  (0  << 0) /* brandid */ | \
+  (8  << 8) /* line size (8 x 8 = 64) */ | \
+  (0 << 16) /* reserved */ | \
+  (0 << 24)) /* APIC ID (must be patched later!) */
+
 void assist_cpuid(Context& ctx) {
   W64& rax = ctx.commitarf[REG_rax];
   W64& rbx = ctx.commitarf[REG_rbx];
@@ -128,29 +248,27 @@ void assist_cpuid(Context& ctx) {
   switch (func) {
   case 0: {
     // Max avail function spec and vendor ID:
-    W32* vendor = (W32*)&cpuid_vendor;
-    rax = 6;
+    const W32* vendor = (const W32*)&cpuid_vendor;
+    rax = 1; // only one extended function
     rbx = vendor[0];
     rdx = vendor[1];
     rcx = vendor[2];
     break;
   }
+
   case 1: {
     // Model and capability information
-    // PTLsim pretends to be a standard Pentium 4 Northwood processor;
-    // these values are taken from such a chip (by running cpuid)
-    rax = 0x00000f29; // model
-    rbx = 0x0002080b; // other info
-    rcx = 0x00004400; // Intel-specific features (no SSE3 bit set)
-    rdx = 0xbfebfbff; // features
+    rax = PTLSIM_X86_MODEL_INFO; // model
+    rbx = PTLSIM_X86_MISC_INFO | (ctx.vcpuid << 24);
+    rcx = PTLSIM_X86_EXT_FEATURE;
+    rdx = PTLSIM_X86_FEATURE;
     break;
   }
+
   case 0x80000000: {
     // Max avail extended function spec and vendor ID:
-    W32 eax, ebx, ecx, edx;
-    cpuid(func, eax, ebx, ecx, edx);
-    W32* vendor = (W32*)&cpuid_vendor;
-    rax = eax;
+    const W32* vendor = (const W32*)&cpuid_vendor;
+    rax = 4;
     rbx = vendor[0];
     rdx = vendor[1];
     rcx = vendor[2];
@@ -159,18 +277,16 @@ void assist_cpuid(Context& ctx) {
 
   case 0x80000001: {
     // extended feature info
-    W32 eax, ebx, ecx, edx;
-    cpuid(func, eax, ebx, ecx, edx);
-    rax = eax;
-    rbx = ebx;
-    rcx = ecx;
-    rdx = edx;
+    rax = PTLSIM_X86_MODEL_INFO;
+    rbx = 0; // brand ID
+    rcx = PTLSIM_X86_VENDOR_EXT_FEATURE;
+    rdx = PTLSIM_X86_VENDOR_FEATURE;
     break;
   }
 
   case 0x80000002 ... 0x80000004: {
     // processor name string
-    W32* cpudesc = (W32*)(&cpuid_description[(func - 0x80000002)*16]);
+    const W32* cpudesc = (const W32*)(&cpuid_description[(func - 0x80000002)*16]);
     rax = cpudesc[0];
     rbx = cpudesc[1];
     rcx = cpudesc[2];
@@ -310,7 +426,28 @@ void assist_wrmsr(Context& ctx) {
 
 #ifdef PTLSIM_HYPERVISOR
   if (ctx.kernel_mode) {
-    abort();
+    W64 value = (ctx.commitarf[REG_rdx] << 32) | LO32(ctx.commitarf[REG_rax]);
+    W32 msr = ctx.commitarf[REG_rcx];
+    bool invalid = 0;
+    switch (msr) {
+    case 0xc0000100:
+      ctx.seg[SEGID_FS].base = value; break;
+    case 0xc0000101:
+      ctx.seg[SEGID_GS].base = value; break;
+    case 0xc0000102:
+      ctx.swapgs_base = value; break;
+    default:
+      invalid = 1; break;
+    }
+    if (invalid) {
+      logfile << "Warning: wrmsr: invalid MSR write (msr  ", (void*)(Waddr)msr,
+        ") with value ", (void*)(Waddr)value, " from rip ",
+        (void*)(Waddr)ctx.commitarf[REG_rip], endl;
+      // Invalid MSR writes are ignored by Xen by default
+      // ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    } else {
+      ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+    }
   } else {
     ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
   }
@@ -318,6 +455,7 @@ void assist_wrmsr(Context& ctx) {
   ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 #endif
 }
+
 
 void assist_rdmsr(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
@@ -334,6 +472,8 @@ void assist_rdmsr(Context& ctx) {
       rc = ctx.seg[SEGID_GS].base; break;
     case 0xc0000102:
       rc = ctx.swapgs_base; break;
+    case 0xc0000080:
+      rc = ctx.efer; break;
     default:
       invalid = 1; break;
     }
@@ -352,15 +492,121 @@ void assist_rdmsr(Context& ctx) {
 #endif
 }
 
-void assist_wrcr(Context& ctx) {
+#ifdef PTLSIM_HYPERVISOR
+void assist_write_cr0(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+  if (!ctx.kernel_mode) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  W64 val = ctx.commitarf[REG_ar1];
+
+  if ((val ^ ctx.cr0) & ~(X86_CR0_TS)) {
+    // Only allowed to change TS flag
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  ctx.cr0 = val;
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_write_cr2(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+  if (!ctx.kernel_mode) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  W64 val = ctx.commitarf[REG_ar1];
+  sshinfo.vcpu_info[ctx.vcpuid].arch.cr2 = val;
+  ctx.cr2 = val;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_write_cr3(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+  if (!ctx.kernel_mode) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  ctx.cr3 = ctx.commitarf[REG_ar1] & 0xfffffffffffff000ULL;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_write_cr4(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+  if (!ctx.kernel_mode) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  // (Ignore all writes to CR4 under Xen)
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_write_debug_reg(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+  if (!ctx.kernel_mode) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  W64 value = ctx.commitarf[REG_ar1];
+  W64 regid = ctx.commitarf[REG_ar2];
+
+  switch (regid) {
+  case 0: ctx.dr0 = value; break;
+  case 1: ctx.dr1 = value; break;
+  case 2: ctx.dr2 = value; break;
+  case 3: ctx.dr3 = value; break;
+  case 4: ctx.dr4 = value; break;
+  case 5: ctx.dr5 = value; break;
+  case 6: ctx.dr6 = value; break;
+  case 7: ctx.dr7 = value; break;
+  };
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+#else
+//
+// Userspace PTLsim does not support these:
+//
+void assist_write_cr0(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
   ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 }
 
-void assist_rdcr(Context& ctx) {
+void assist_write_cr2(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
   ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 }
+
+void assist_write_cr3(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_write_cr4(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_write_debug_reg(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+#endif
 
 void assist_iret16(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
@@ -427,6 +673,83 @@ void assist_iret64(Context& ctx) {
   ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 #endif
 }
+
+static inline W64 x86_merge(W64 rd, W64 ra, int sizeshift) {
+  union {
+    W8 w8;
+    W16 w16;
+    W32 w32;
+    W64 w64;
+  } sizes;
+
+  switch (sizeshift) {
+  case 0: sizes.w64 = rd; sizes.w8 = ra; return sizes.w64;
+  case 1: sizes.w64 = rd; sizes.w16 = ra; return sizes.w64;
+  case 2: return LO32(ra);
+  case 3: return ra;
+  }
+
+  return rd;
+}
+
+#ifdef PTLSIM_HYPERVISOR
+void assist_ioport_in(Context& ctx) {
+  // ar1 = 16-bit port number
+  // ar2 = sizeshift
+  // rax = output
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+  if (!ctx.kernel_mode) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  W64 port = ctx.commitarf[REG_ar1];
+  W64 sizeshift = ctx.commitarf[REG_ar2];
+  W64 value = x86_merge(ctx.commitarf[REG_rax], 0xffffffffffffffffULL, sizeshift);
+
+  logfile << "assist_ioport_in from rip ", (void*)(Waddr)ctx.commitarf[REG_selfrip], "): ",
+    "in port 0x", hexstring(port, 16), " (size ", (1<<sizeshift), " bytes) => 0x",
+    hexstring(value, 64), endl;
+
+  ctx.commitarf[REG_rax] = value;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_ioport_out(Context& ctx) {
+  // ar1 = 16-bit port number
+  // ar2 = sizeshift
+  // rax = value to write
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+
+  if (!ctx.kernel_mode) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+    return;
+  }
+
+  W64 port = ctx.commitarf[REG_ar1];
+  W64 sizeshift = ctx.commitarf[REG_ar2];
+  W64 value = x86_merge(0, ctx.commitarf[REG_rax], sizeshift);
+
+  logfile << "assist_ioport_out from rip ", (void*)(Waddr)ctx.commitarf[REG_selfrip], "): ",
+    "out port 0x", hexstring(port, 16), " (size ", (1<<sizeshift), " bytes) <= 0x",
+    hexstring(value, 64), endl;
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+#else
+void assist_ioport_in(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+
+void assist_ioport_out(Context& ctx) {
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+}
+#endif
 
 bool TraceDecoder::decode_complex() {
   DecodedOperand rd;
@@ -982,17 +1305,61 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
-  case 0xe4 ... 0xe7: {
-    // inb/inw/outb/outw imm8/imm16: NOT SUPPORTED
-    MakeInvalid();
-    assert(false);
-  }
+#ifdef PTLSIM_HYPERVISOR
+  case 0xe6 ... 0xe7: {
+    // out [imm8] = %al|%ax|%eax
+    DECODE(iform, ra, b_mode);
+    CheckInvalid();
 
-  case 0xec ... 0xef: {
-    // inb/inw/outb/outw ax,edx: NOT SUPPORTED
-    MakeInvalid();
+    int sizeshift = (op == 0xe6) ? 0 : (opsize_prefix ? 1 : 2);
+
+    this << TransOp(OP_mov, REG_ar1, REG_zero, REG_imm, REG_zero, 3, ra.imm.imm & 0xff);
+    this << TransOp(OP_mov, REG_ar2, REG_zero, REG_imm, REG_zero, 0, sizeshift);
+    microcode_assist(ASSIST_IOPORT_OUT, ripstart, rip);
+    end_of_block = 1;
     break;
   }
+
+  case 0xee ... 0xef: {
+    // out [%dx] = %al|%ax|%eax
+    CheckInvalid();
+
+    int sizeshift = (op == 0xee) ? 0 : (opsize_prefix ? 1 : 2);
+
+    this << TransOp(OP_mov, REG_ar1, REG_zero, REG_rdx, REG_zero, 1);
+    this << TransOp(OP_mov, REG_ar2, REG_zero, REG_imm, REG_zero, 0, sizeshift);
+    microcode_assist(ASSIST_IOPORT_OUT, ripstart, rip);
+    end_of_block = 1;
+    break;
+  }
+
+  case 0xe4 ... 0xe5: {
+    // in %al|%ax|%eax = [imm8]
+    DECODE(iform, ra, b_mode);
+    CheckInvalid();
+
+    int sizeshift = (op == 0xe4) ? 0 : (opsize_prefix ? 1 : 2);
+
+    this << TransOp(OP_mov, REG_ar1, REG_zero, REG_imm, REG_zero, 3, ra.imm.imm & 0xff);
+    this << TransOp(OP_mov, REG_ar2, REG_zero, REG_imm, REG_zero, 0, sizeshift);
+    microcode_assist(ASSIST_IOPORT_IN, ripstart, rip);
+    end_of_block = 1;
+    break;
+  }
+
+  case 0xec ... 0xed: {
+    // in %al|%ax|%eax = [%dx]
+    CheckInvalid();
+
+    int sizeshift = (op == 0xec) ? 0 : (opsize_prefix ? 1 : 2);
+
+    this << TransOp(OP_mov, REG_ar1, REG_zero, REG_rdx, REG_zero, 1);
+    this << TransOp(OP_mov, REG_ar2, REG_zero, REG_imm, REG_zero, 0, sizeshift);
+    microcode_assist(ASSIST_IOPORT_IN, ripstart, rip);
+    end_of_block = 1;
+    break;
+  }
+#endif
 
   case 0xf0 ... 0xf3: {
     // (prefixes: lock icebrkpt repne repe)
@@ -1002,7 +1369,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0xf4: {
     // hlt (nop)
-    //++MTY TODO: this should be trapped by hypervisor to properly do idle time
+    // This should be trapped by hypervisor to properly do idle time
     CheckInvalid();
     this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     break;
@@ -1095,11 +1462,37 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
+  case 0x10b: { // ud2a
+#ifdef PTLSIM_HYPERVISOR
+    //
+    // ud2a is special under Xen: if the {0x0f, 0x0b} opcode is followed by
+    // the bytes {0x78, 0x65, 0x6e} ("xen"), we check the next instruction
+    // in sequence and modify its behavior in a Xen-specific manner. The
+    // only supported instruction is CPUID {0x0f, 0xa2}, which Xen extends.
+    //
+    //
+    if (((valid_byte_count - ((int)(rip - (Waddr)bb.rip))) >= 5) && 
+        (fetch(5) == 0xa20f6e6578)) { // 78 65 6e 0f a2 = 'x' 'e' 'n' <cpuid>
+      logfile << "Decode special intercept cpuid at rip ", (void*)ripstart, "; return to rip ", (void*)rip, endl, flush;
+      CheckInvalid();
+      microcode_assist(ASSIST_CPUID, ripstart, rip);
+      end_of_block = 1;
+    } else {
+      MakeInvalid();
+    }
+#else
+    MakeInvalid();
+#endif
+    break;
+  }
+
   case 0x120: { // mov reg,crN
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
 #ifdef PTLSIM_HYPERVISOR
     if (rd.type != OPTYPE_REG) MakeInvalid();
+    if (ra.type != OPTYPE_REG) MakeInvalid();
+    if (!kernel) MakeInvalid();
     CheckInvalid();
 
     int offset;
@@ -1117,6 +1510,86 @@ bool TraceDecoder::decode_complex() {
     }
 
     TransOp ldp(OP_ld, arch_pseudo_reg_to_arch_reg[rd.reg.reg], REG_ctx, REG_imm, REG_zero, 3, offset); ldp.internal = 1; this << ldp;
+#else
+    MakeInvalid();
+#endif
+    break;
+  }
+
+  case 0x122: { // mov crN,reg
+    DECODE(gform, rd, v_mode);
+    DECODE(eform, ra, v_mode);
+#ifdef PTLSIM_HYPERVISOR
+    if (rd.type != OPTYPE_REG) MakeInvalid();
+    if (ra.type != OPTYPE_REG) MakeInvalid();
+    if (!kernel) MakeInvalid();
+    CheckInvalid();
+
+    int offset;
+
+    static const int index_to_assist[8] = {
+      ASSIST_WRITE_CR0,
+      ASSIST_INVALID_OPCODE,
+      ASSIST_WRITE_CR2,
+      ASSIST_WRITE_CR3,
+      ASSIST_WRITE_CR4,
+      ASSIST_INVALID_OPCODE,
+      ASSIST_INVALID_OPCODE,
+      ASSIST_INVALID_OPCODE
+    };
+
+    this << TransOp(OP_mov, REG_ar1, REG_zero, arch_pseudo_reg_to_arch_reg[ra.reg.reg], REG_zero, reginfo[ra.reg.reg].sizeshift);
+    microcode_assist(index_to_assist[modrm.reg], ripstart, rip);
+    end_of_block = 1;
+#else
+    MakeInvalid();
+#endif
+    break;
+  }
+
+  case 0x121: { // mov reg,drN
+    DECODE(eform, rd, v_mode);
+    DECODE(gform, ra, v_mode);
+#ifdef PTLSIM_HYPERVISOR
+    if (rd.type != OPTYPE_REG) MakeInvalid();
+    if (ra.type != OPTYPE_REG) MakeInvalid();
+    if (!kernel) MakeInvalid();
+    CheckInvalid();
+
+    int offset;
+
+    switch (modrm.reg) {
+    case 0: offset = offsetof(Context, dr0); break;
+    case 1: offset = offsetof(Context, dr1); break;
+    case 2: offset = offsetof(Context, dr2); break;
+    case 3: offset = offsetof(Context, cr3); break;
+    case 4: offset = offsetof(Context, dr4); break;
+    case 5: offset = offsetof(Context, dr5); break;
+    case 6: offset = offsetof(Context, dr6); break;
+    case 7: offset = offsetof(Context, dr7); break;
+    default: MakeInvalid();
+    }
+
+    TransOp ldp(OP_ld, arch_pseudo_reg_to_arch_reg[rd.reg.reg], REG_ctx, REG_imm, REG_zero, 3, offset); ldp.internal = 1; this << ldp;
+#else
+    MakeInvalid();
+#endif
+    break;
+  }
+
+  case 0x123: { // mov drN,reg
+    DECODE(gform, rd, v_mode);
+    DECODE(eform, ra, v_mode);
+#ifdef PTLSIM_HYPERVISOR
+    if (rd.type != OPTYPE_REG) MakeInvalid();
+    if (ra.type != OPTYPE_REG) MakeInvalid();
+    if (!kernel) MakeInvalid();
+    CheckInvalid();
+
+    this << TransOp(OP_mov, REG_ar1, REG_zero, arch_pseudo_reg_to_arch_reg[ra.reg.reg], REG_zero, reginfo[ra.reg.reg].sizeshift);
+    this << TransOp(OP_mov, REG_ar2, REG_zero, REG_imm, REG_zero, 3, modrm.reg);
+    microcode_assist(ASSIST_WRITE_DEBUG_REG, ripstart, rip);
+    end_of_block = 1;
 #else
     MakeInvalid();
 #endif

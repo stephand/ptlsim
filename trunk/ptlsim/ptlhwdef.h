@@ -620,6 +620,18 @@ ostream& operator <<(ostream& os, const Level2PTE& pte);
 ostream& operator <<(ostream& os, const Level3PTE& pte);
 ostream& operator <<(ostream& os, const Level4PTE& pte);
 
+#define X86_CR0_PE              0x00000001 // Enable Protected Mode    (RW)
+#define X86_CR0_MP              0x00000002 // Monitor Coprocessor      (RW)
+#define X86_CR0_EM              0x00000004 // Require FPU Emulation    (RO)
+#define X86_CR0_TS              0x00000008 // Task Switched            (RW)
+#define X86_CR0_ET              0x00000010 // Extension type           (RO)
+#define X86_CR0_NE              0x00000020 // Numeric Error Reporting  (RW)
+#define X86_CR0_WP              0x00010000 // Supervisor Write Protect (RW)
+#define X86_CR0_AM              0x00040000 // Alignment Checking       (RW)
+#define X86_CR0_NW              0x20000000 // Not Write-Through        (RW)
+#define X86_CR0_CD              0x40000000 // Cache Disable            (RW)
+#define X86_CR0_PG              0x80000000 // Paging                   (RW)
+
 struct CR0 {
   W64 pe:1, mp:1, em:1, ts:1, et:1, ne:1, res6:10, wp:1, res17:1, am:1, res19:10, nw:1, cd:1, pg:1, res32:32;
   RawDataAccessors(CR0, W64);
@@ -629,6 +641,19 @@ ostream& operator <<(ostream& os, const CR0& cr0);
 // CR2 is page fault linear address
 
 // CR3 is page table physical base
+
+#define X86_CR4_VME		0x0001	// enable vm86 extensions
+#define X86_CR4_PVI		0x0002	// virtual interrupts flag enable
+#define X86_CR4_TSD		0x0004	// disable time stamp at ipl 3
+#define X86_CR4_DE		0x0008	// enable debugging extensions
+#define X86_CR4_PSE		0x0010	// enable page size extensions
+#define X86_CR4_PAE		0x0020	// enable physical address extensions
+#define X86_CR4_MCE		0x0040	// Machine check enable
+#define X86_CR4_PGE		0x0080	// enable global pages
+#define X86_CR4_PCE		0x0100	// enable performance counters at ipl 3
+#define X86_CR4_OSFXSR		0x0200	// enable fast FPU save and restore
+#define X86_CR4_OSXMMEXCPT	0x0400	// enable unmasked SSE exceptions
+#define X86_CR4_VMXE		0x2000  // enable VMX
 
 struct CR4 {
   W64 vme:1, pvi:1, tsd:1, de:1, pse:1, pae:1, mce:1, pge:1, pce:1, osfxsr:1, osxmmexcpt:1, res11:53;
@@ -655,6 +680,12 @@ enum {
   DEBUGREG_SIZE_2 = 1,
   DEBUGREG_SIZE_8 = 2, 
   DEBUGREG_SIZE_4 = 3,
+};
+
+// Extended Feature Enable Register
+struct EFER {
+  W32 sce:1, pad1:7, lme:1, pad2:1, lma:1, nxe:1, svme:1, pad3:1, ffxsr:1, pad4:17;
+  RawDataAccessors(EFER, W32);
 };
 
 struct vcpu_guest_context;
@@ -737,6 +768,7 @@ struct ContextBase {
   Waddr fs_base;
   Waddr gs_base_kernel;
   Waddr gs_base_user;
+  EFER efer;
 
   struct TrapTarget idt[256]; // Virtual IDT
   Waddr ldtvirt;
@@ -1281,6 +1313,7 @@ struct BasicBlockBase {
   W32 hitcount;
   W32 predcount;
   W32 confidence;
+  W64 lastused;
 
   void acquire() {
     refcount++;
@@ -1299,6 +1332,7 @@ struct BasicBlock: public BasicBlockBase {
   void reset(const RIPVirtPhys& rip);
   BasicBlock* clone();
   void free();
+  void use(W64 counter) { lastused = counter; };
 };
 
 ostream& operator <<(ostream& os, const BasicBlock& bb);
@@ -1350,6 +1384,7 @@ struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlock
   void invalidate(const RIPVirtPhys& rvp);
   void invalidate(BasicBlock* bb);
   int invalidate_page(Waddr mfn);
+  int reclaim(int reqbytes = 0);
 
   ostream& print(ostream& os) const;
 };

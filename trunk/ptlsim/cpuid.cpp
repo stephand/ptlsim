@@ -88,11 +88,6 @@ int main(int argc, char* argv[]) {
   W32 maxfuncs;
 
   {
-    cout << "Context size: ", sizeof(Context), endl, flush;
-    return 0;
-  }
-
-  {
     cout << "Function 0:", endl;
     CPUVendorID vendor;
     memset(&vendor, 0, sizeof(vendor));

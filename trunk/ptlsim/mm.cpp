@@ -141,7 +141,7 @@ struct ExtentAllocator {
     FreeExtent* r = FreeExtent::startaddrlink_to_self(free_extents_by_startaddr_hash[slot]);
 
     while (r) {
-      if (r == (FreeExtent*)addr) return r;
+      if unlikely (r == (FreeExtent*)addr) return r;
       r = FreeExtent::startaddrlink_to_self(r->startaddrlink.next);
     }
 
@@ -153,7 +153,7 @@ struct ExtentAllocator {
     FreeExtent* r = FreeExtent::endaddrlink_to_self(free_extents_by_endaddr_hash[slot]);
 
     while (r) {
-      if ((r + r->size) == (FreeExtent*)addr) return r;
+      if unlikely ((r + r->size) == (FreeExtent*)addr) return r;
       r = FreeExtent::endaddrlink_to_self(r->endaddrlink.next);
     }
 
@@ -176,7 +176,7 @@ struct ExtentAllocator {
     if (DEBUG) cout << "find_extent_in_size_slot(size ", size, ", slot ", sizeslot, "): r = ", r, endl;
 
     while (r) {
-      if (r->size < size) {
+      if likely (r->size < size) {
         if (DEBUG) cout << "  ", r, " too small: only ", r->size, " chunks", endl;
         r = FreeExtent::sizelink_to_self(r->sizelink.next);
         continue;
@@ -184,7 +184,7 @@ struct ExtentAllocator {
 
       alloc_extent(r);
 
-      if (size == r->size) {
+      if likely (size == r->size) {
         if (DEBUG) cout << "  Exact match: ", r, endl;
         return r;
       }
@@ -206,7 +206,7 @@ struct ExtentAllocator {
 
     for (int i = extent_size_to_slot(size); i < SIZESLOTS; i++) {
       FreeExtent* r = find_extent_in_size_slot(size, i);
-      if (r) return r;
+      if unlikely (r) return r;
     }
 
     return null;
@@ -215,7 +215,7 @@ struct ExtentAllocator {
   void free_extent(FreeExtent* r, size_t size) {
     static const bool DEBUG = 0;
 
-    if ((!r) | (!size)) return;
+    if unlikely ((!r) | (!size)) return;
     //
     // <F1> AAA [now-F] AA <F2>
     //
@@ -238,7 +238,7 @@ struct ExtentAllocator {
     // Try to merge with right extent if possible
     //
 
-    if (right) {
+    if unlikely (right) {
       right->sizelink.unlink();
       right->startaddrlink.unlink();
       right->endaddrlink.unlink();
@@ -250,7 +250,7 @@ struct ExtentAllocator {
 
     FreeExtent* left = find_extent_by_endaddr(r);
 
-    if (left) {
+    if likely (left) {
       left->sizelink.unlink();
       left->startaddrlink.unlink();
       left->endaddrlink.unlink();
@@ -273,7 +273,7 @@ struct ExtentAllocator {
   void* alloc(size_t size) {
     size = ceil(size, CHUNKSIZE) >> log2(CHUNKSIZE);
     void* addr = (void*)find_free_extent_of_size(size);
-    if (!addr) return null;
+    if unlikely (!addr) return null;
     allocs++;
     current_bytes_allocated += (size * CHUNKSIZE);
     peak_bytes_allocated = max(peak_bytes_allocated, current_bytes_allocated);
@@ -326,13 +326,13 @@ struct ExtentAllocator {
           cout << "  Trying to reclaim extent "; r->print(cout); cout << " (", bytes_in_middle, " bytes in middle)", endl;
         }
 
-        if (!bytes_in_middle) {
+        if likely (!bytes_in_middle) {
           r = FreeExtent::sizelink_to_self(r->sizelink.next);          
           continue;
         }
 
         // These are full pages that we can return to the system
-        if (n == asscount) return n;
+        if unlikely (n == asscount) return n;
 
         Waddr full_page_bytes = last_full_page - first_full_page;
         if (DEBUG) cout << "    Adding reclaimed full page extent at ", (void*)first_full_page, " of ", full_page_bytes, " bytes (", full_page_bytes / sizealign, " pages)", endl;
@@ -344,12 +344,12 @@ struct ExtentAllocator {
         alloc_extent(r);
         extents_reclaimed++;
 
-        if (bytes_at_end_of_first_page) {
+        if unlikely (bytes_at_end_of_first_page) {
           if (DEBUG) cout << "    Adding ", bytes_at_end_of_first_page, " bytes at end of first page @ ", r, " back to free pool", endl;
           free(r, bytes_at_end_of_first_page);
         }
 
-        if (bytes_at_start_of_last_page) {
+        if unlikely (bytes_at_start_of_last_page) {
           void* p = (void*)(rend - bytes_at_start_of_last_page);
           if (DEBUG) cout << "    Adding ", bytes_at_start_of_last_page, " bytes at start of last page @ ", p, " back to free pool", endl;
           free(p, bytes_at_start_of_last_page);
@@ -574,13 +574,13 @@ struct SlabAllocator {
 
   FreeObjectHeader* alloc_from_page(PageHeader* page) {  
     FreeObjectHeader* obj = page->freelist;
-    if (!obj) return obj;
+    if unlikely (!obj) return obj;
 
     obj->unlink();
     assert(page->freecount > 0);
     page->freecount--;
     
-    if (!page->freelist) {
+    if unlikely (!page->freelist) {
       assert(page->freecount == 0);
       page->unlink();
       page->addto((selflistlink*&)full_pages);
@@ -603,7 +603,7 @@ struct SlabAllocator {
     // page_is_slab_bitmap to find out if it's a slab or genalloc page:
     //
     PageHeader* page = (PageHeader*)ptl_alloc_private_32bit_page();
-    if (!page) return null;
+    if unlikely (!page) return null;
 
     page_allocs++;
     current_pages_allocated++;
@@ -637,15 +637,15 @@ struct SlabAllocator {
   void* alloc() {
     PageHeader* page = partial_pages;
 
-    if (!page) page = free_pages;
+    if unlikely (!page) page = free_pages;
 
-    if (!page) {
+    if unlikely (!page) {
       page = alloc_new_page();
       assert(page);
       page->addto((selflistlink*&)partial_pages);
     }
 
-    if (page == free_pages) {
+    if likely (page == free_pages) {
       page->unlink();
       page->addto((selflistlink*&)partial_pages);
       free_page_count--;
@@ -660,7 +660,7 @@ struct SlabAllocator {
 
   void free(void* p) {
     frees++;
-    if (current_objs_allocated > 0) current_objs_allocated--;
+    if likely (current_objs_allocated > 0) current_objs_allocated--;
     current_bytes_allocated -= min((W64)objsize, current_bytes_allocated);
 
     FreeObjectHeader* obj = (FreeObjectHeader*)p;
@@ -671,7 +671,7 @@ struct SlabAllocator {
     assert(page->freecount <= max_objects_per_page);
     page->freecount++;
 
-    if (page->freecount == max_objects_per_page) {
+    if unlikely (page->freecount == max_objects_per_page) {
       assert(page->freelist); // all free?
       page->unlink();
       page->addto((selflistlink*&)free_pages);
@@ -699,7 +699,7 @@ struct SlabAllocator {
 
       ptl_free_private_page(page);
       page_frees++;
-      if (current_pages_allocated > 0) current_pages_allocated--;
+      if likely (current_pages_allocated > 0) current_pages_allocated--;
       n++;
       free_page_count--;
     }
@@ -777,19 +777,29 @@ static const int SLAB_ALLOC_SLOT_COUNT = (SLAB_ALLOC_LARGE_OBJ_THRESH / SlabAllo
 SlabAllocator slaballoc[SLAB_ALLOC_SLOT_COUNT];
 
 #ifdef PTLSIM_HYPERVISOR
+
+extern ostream logfile;
+
 //
 // Full-system PTLxen running on the bare hardware:
 //
-void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
-  void* p = pagealloc.alloc(bytecount);
-  assert(p);
-  return p;
+void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) { 
+  static const int retry_count = 4;
+
+  foreach (i, retry_count) {
+    void* p = pagealloc.alloc(bytecount);
+    if likely (p) return p;
+    ptl_mm_reclaim();
+  }
+
+  cerr << "ptl_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
+  logfile << "ptl_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
+  logfile << flush;
+  abort();
 }
 
 void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
-  void* p = pagealloc.alloc(bytecount);
-  assert(p);
-  return p;
+  return ptl_alloc_private_pages(bytecount, prot, base);
 }
 
 void ptl_free_private_pages(void* addr, Waddr bytecount) {
@@ -884,9 +894,9 @@ static const int GEN_ALLOC_CHUNK_SIZE = 256*1024; // 256 KB (64 pages)
 void* ptl_mm_alloc(size_t bytes) {
   // General purpose malloc
 
-  if (!bytes) return null;
+  if unlikely (!bytes) return null;
 
-  if ((bytes <= SLAB_ALLOC_LARGE_OBJ_THRESH)) {
+  if likely ((bytes <= SLAB_ALLOC_LARGE_OBJ_THRESH)) {
     //
     // Allocate from slab
     //
@@ -894,7 +904,7 @@ void* ptl_mm_alloc(size_t bytes) {
     int slot = (bytes >> log2(SlabAllocator::GRANULARITY))-1;
     assert(slot < SLAB_ALLOC_SLOT_COUNT);
     void* p = slaballoc[slot].alloc();
-    if (!p) {
+    if unlikely (!p) {
       ptl_mm_reclaim();
       p = slaballoc[slot].alloc();
     }
@@ -905,21 +915,23 @@ void* ptl_mm_alloc(size_t bytes) {
     //
     bytes += sizeof(Waddr);
     Waddr* p = (Waddr*)genalloc.alloc(bytes);
-    if (!p) {
+    if unlikely (!p) {
       // Add some storage to the pool
       Waddr pagebytes = max((Waddr)ceil(bytes, PAGE_SIZE), (Waddr)GEN_ALLOC_CHUNK_SIZE);
       //
       // We need the pages in the low 2 GB of the address space so we can use
-      // page_is_slab_bitmap to find out if it's a slab or genalloc page:
+      // page_is_slab_bitmap to find out if it's a slab or genalloc page. For
+      // PTLsim/X, this is not required since we have complete control over the
+      // page tables and can put the entire page pool in one 2 GB aligned block.
       //
       void* newpool = ptl_alloc_private_32bit_pages(pagebytes);
-      if (!newpool) {
+      if unlikely (!newpool) {
         ptl_mm_reclaim();
         pagebytes = ceil(bytes, PAGE_SIZE);
         newpool = ptl_alloc_private_32bit_pages(pagebytes);
       }
 
-      if (!newpool) {
+      if unlikely (!newpool) {
 #ifdef PTLSIM_HYPERVISOR
         cerr << pagealloc, flush;
 #endif
@@ -938,12 +950,24 @@ void* ptl_mm_alloc(size_t bytes) {
   }
 }
 
+size_t ptl_mm_getsize(void* p) {
+  SlabAllocator* sa;
+
+  if likely (sa = SlabAllocator::pointer_to_slaballoc(p)) {
+    return sa->objsize;
+  } else {
+    Waddr* pp = ((Waddr*)p)-1;
+    Waddr bytes = *pp;
+    return bytes;
+  }
+}
+
 void ptl_mm_free(void* p) {
   SlabAllocator* sa;
 
   static const bool DEBUG = 0;
 
-  if (sa = SlabAllocator::pointer_to_slaballoc(p)) {
+  if likely (sa = SlabAllocator::pointer_to_slaballoc(p)) {
     //
     // From slab allocation pool: all objects on a given page are the same size
     //
@@ -968,11 +992,37 @@ void ptl_mm_free(void* p) {
 }
 
 //
+// When we run out of memory, we let the user register
+// reclaim handlers. These get called in registered order
+// to trim down various structures (like caches) as much
+// as possible before retrying the allocation. The reclaim
+// handler must not allocate memory under any circumstances!
+//
+
+mm_reclaim_handler_t reclaim_handler_list[64];
+int reclaim_handler_list_count = 0;
+
+bool ptl_mm_register_reclaim_handler(mm_reclaim_handler_t handler) {
+  if (reclaim_handler_list_count == lengthof(reclaim_handler_list)) {
+    logfile << "Too many memory manager reclaim handlers while registering ", handler, endl;
+    assert(false);
+    return false;
+  }
+
+  reclaim_handler_list[reclaim_handler_list_count++] = handler;
+  return true;
+}
+
+//
 // Return unused sub-allocator resources to the main page allocator
 // in case of an out-of-memory condition. This may free up some space
 // for other types of big allocations.
 //
 void ptl_mm_reclaim() {
+  foreach (i, reclaim_handler_list_count) {
+    if likely (reclaim_handler_list[i]) reclaim_handler_list[i](0);
+  }
+
   foreach (i, SLAB_ALLOC_SLOT_COUNT) {
     slaballoc[i].reclaim();
   }

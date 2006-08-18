@@ -143,7 +143,6 @@ ifdef __x86_64__
 ifdef PTLSIM_HYPERVISOR
 ptlsim: ptlmon.o ptlxen.bin.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o ptlmon.lds Makefile
 	g++ $(CFLAGS) ptlmon.o ptlxen.bin.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -Wl,-T,ptlmon.lds -static -o ptlsim
-	chmod a+rx ptlsim
 else
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
 	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`
