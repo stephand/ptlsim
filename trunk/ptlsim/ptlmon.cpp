@@ -1398,10 +1398,7 @@ struct XenController {
 #endif
       break;
     };
-    case PTLSIM_HOST_SWITCH_TO_NATIVE:
-    case PTLSIM_HOST_TERMINATE: {
-      cerr << "Got hostreq ", bootinfo->hostreq.op, endl, flush;
-
+    case PTLSIM_HOST_SWITCH_TO_NATIVE: {
       pause();
       //
       // We have to be careful when copying the shadow shinfo page
@@ -1440,7 +1437,12 @@ struct XenController {
       bootinfo->hostreq.rc = 0;
       if (!bootinfo->hostreq.switch_to_native.pause) unpause();
 
-      return (bootinfo->hostreq.op == PTLSIM_HOST_TERMINATE);
+      return 0;
+    };
+    case PTLSIM_HOST_SHUTDOWN: {
+      pause();
+      cout << "ptlmon: Domain ", domain, " has shut down", endl, flush;
+      return 1;
     };
     case PTLSIM_HOST_ACCEPT_UPCALL: {
       if ((!requestq.empty()) | (!bootinfo->hostreq.accept_upcall.blocking)) complete_hostcall();
@@ -2039,9 +2041,8 @@ int main(int argc, char** argv) {
         int done = xc.process_event();
 
         if (done) {
-          cout << "PTLsim exited", endl, flush;
-          xc.print_log_buffer(cout);
-          cout << flush;
+          cerr << "PTLsim exited", endl, flush;
+          cerr << flush;
           break;
         }
       }

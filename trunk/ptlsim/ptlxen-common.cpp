@@ -366,7 +366,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(run,                          "run",                  "Run under simulation");
   add(native,                       "native",               "Switch to native mode");
   add(pause,                        "pause",                "Pause domain after switching back to native mode");
-  add(kill,                         "kill",                 "Kill PTLsim inside domain (and ptlmon), then either go native (default) or pause");
+  add(kill,                         "kill",                 "Kill PTLsim inside domain (and ptlmon), then shutdown domain");
 
   section("Simulation Control");
 

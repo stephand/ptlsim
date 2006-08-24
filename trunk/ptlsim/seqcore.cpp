@@ -12,18 +12,16 @@
 #include <datastore.h>
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
 #define assert(x) (x)
 #endif
 
+#ifndef ENABLE_LOGGING
 #undef logable
-#ifdef ENABLE_LOGGING
-#define logable(level) (config.loglevel >= level)
-#else
 #define logable(level) (0)
 #endif
 
@@ -261,7 +259,7 @@ struct SequentialCore {
 
     void* mapped = addrgen<1>(uop, state, origaddr, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
-    if unlikely ((status = handle_common_exceptions<0>(uop, state, origaddr, addr, exception, pfec)) != ISSUE_COMPLETED) return status;
+    if unlikely ((status = handle_common_exceptions<1>(uop, state, origaddr, addr, exception, pfec)) != ISSUE_COMPLETED) return status;
 
 #ifdef PTLSIM_HYPERVISOR
     if unlikely (pteupdate.ptwrite) {
@@ -420,6 +418,8 @@ struct SequentialCore {
       arf[i] = 0;
       arflags[i] = 0;
     }
+
+    arflags[REG_flags] = ctx.commitarf[REG_flags];
   }
 
   void core_to_external_state() {
@@ -432,9 +432,9 @@ struct SequentialCore {
     core_to_external_state();
     assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
-    if (logable(6)) {
+    if (logable(4)) {
       logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ",
-        (void*)(Waddr)ctx.commitarf[REG_selfrip], "; return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
+        (RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx)), "; return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
         ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
     }
 
@@ -629,6 +629,11 @@ struct SequentialCore {
 
       if unlikely (arf[REG_rip] == config.stop_at_rip) {
         return SEQEXEC_EARLY_EXIT;
+      }
+
+      if unlikely (arf[REG_rip] == config.start_log_at_rip) {
+        config.start_log_at_iteration = 0;
+        logenable = 1;
       }
 
       if likely (!unaligned_ldst_buf.get(uop, synthop)) {
@@ -851,9 +856,6 @@ struct SequentialCore {
 
     bool exiting = false;
 
-    int oldloglevel = config.loglevel;
-    if (config.start_log_at_iteration != infinity) config.loglevel = 0;
-
     ctseq.start();
 
     W64 last_printed_status_at_cycle = 0;
@@ -871,8 +873,8 @@ struct SequentialCore {
       }
 #endif
 
-      if unlikely ((iterations >= config.start_log_at_iteration) & (!config.loglevel)) {
-        config.loglevel = oldloglevel;
+      if unlikely (iterations >= config.start_log_at_iteration) {
+        logenable = 1;
       }
 
       Waddr rip = arf[REG_rip];

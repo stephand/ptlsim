@@ -22,6 +22,7 @@ W64 total_uops_executed = 0;
 W64 total_uops_committed = 0;
 W64 total_user_insns_committed = 0;
 W64 total_basic_blocks_committed = 0;
+bool logenable = 0;
 
 void PTLsimConfig::reset() {
   // Logging
@@ -398,10 +399,6 @@ void switch_to_sim() {
     if (config.use_out_of_order_core)
       out_of_order_core_toplevel_loop();
   }
-
-  //++MTY TESTING ONLY
-  logfile << "Invalidating origrip ", hexstring(origrip, 64), endl;
-  bbcache.invalidate_page(lowbits(origrip >> 12, 28)); // technically this is an MFN, but virt == phys
 
   // Sanitize flags (AMD and Intel CPUs also use bits 1 and 3 for reserved bits, but not for INV and WAIT like we do).
   ctx.commitarf[REG_flags] &= FLAG_NOT_WAIT_INV;

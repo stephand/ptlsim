@@ -414,6 +414,16 @@ struct ExtentAllocator {
     return true;
   }
 
+  size_t largest_free_extent_bytes() const {
+    for (int i = SIZESLOTS-1; i >= 0; i--) {
+      FreeExtent* r = FreeExtent::sizelink_to_self(free_extents_by_size[i]);
+      if likely (!r) continue;
+      return ((i+1) * CHUNKSIZE);
+    }
+
+    return 0;
+  }
+
   ostream& print(ostream& os) const {
     os << "ExtentAllocator<", CHUNKSIZE, ", ", SIZESLOTS, ", ", HASHSLOTS, ">: ", extent_count, " extents:", endl;
 
@@ -784,17 +794,33 @@ extern ostream logfile;
 // Full-system PTLxen running on the bare hardware:
 //
 void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) { 
-  static const int retry_count = 4;
+  static const int retry_count = 64;
 
   foreach (i, retry_count) {
     void* p = pagealloc.alloc(bytecount);
     if likely (p) return p;
-    ptl_mm_reclaim();
+    logfile << "Before reclaim round ", i, ": largest free physical extent: ", pagealloc.largest_free_extent_bytes(), " bytes", endl;
+    // The urgency -1 means "free everything possible at all costs":
+    ptl_mm_reclaim(bytecount, ((i == (retry_count-2)) ? -1 : 0));
+    logfile << "After reclaim round ", i, ": largest free physical extent: ", pagealloc.largest_free_extent_bytes(), " bytes", endl;
   }
 
   cerr << "ptl_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
   logfile << "ptl_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
+
+  logfile << "Page allocator:", endl;
+  pagealloc.print(logfile);
+
+  logfile << "General allocator:", endl;
+  genalloc.print(logfile);
+
+  foreach (i, SLAB_ALLOC_SLOT_COUNT) {
+    logfile << "Slab Allocator ", i, ":", endl;
+    slaballoc[i].print(logfile);
+  }
+
   logfile << flush;
+  cerr << flush;
   abort();
 }
 
@@ -889,7 +915,7 @@ void ptl_mm_init(byte* heap_start, byte* heap_end) {
   }
 }
 
-static const int GEN_ALLOC_CHUNK_SIZE = 256*1024; // 256 KB (64 pages)
+static const int GEN_ALLOC_CHUNK_SIZE = 65*1024; // 64 KB (16 pages)
 
 void* ptl_mm_alloc(size_t bytes) {
   // General purpose malloc
@@ -905,7 +931,7 @@ void* ptl_mm_alloc(size_t bytes) {
     assert(slot < SLAB_ALLOC_SLOT_COUNT);
     void* p = slaballoc[slot].alloc();
     if unlikely (!p) {
-      ptl_mm_reclaim();
+      ptl_mm_reclaim(bytes);
       p = slaballoc[slot].alloc();
     }
     return p;
@@ -926,7 +952,7 @@ void* ptl_mm_alloc(size_t bytes) {
       //
       void* newpool = ptl_alloc_private_32bit_pages(pagebytes);
       if unlikely (!newpool) {
-        ptl_mm_reclaim();
+        ptl_mm_reclaim(bytes);
         pagebytes = ceil(bytes, PAGE_SIZE);
         newpool = ptl_alloc_private_32bit_pages(pagebytes);
       }
@@ -1018,9 +1044,9 @@ bool ptl_mm_register_reclaim_handler(mm_reclaim_handler_t handler) {
 // in case of an out-of-memory condition. This may free up some space
 // for other types of big allocations.
 //
-void ptl_mm_reclaim() {
+void ptl_mm_reclaim(size_t bytes, int urgency) {
   foreach (i, reclaim_handler_list_count) {
-    if likely (reclaim_handler_list[i]) reclaim_handler_list[i](0);
+    if likely (reclaim_handler_list[i]) reclaim_handler_list[i](bytes, urgency);
   }
 
   foreach (i, SLAB_ALLOC_SLOT_COUNT) {

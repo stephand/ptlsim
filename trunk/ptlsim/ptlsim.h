@@ -193,7 +193,8 @@ extern W64 snapshotid;
 //inline bool analyze_in_detail() { return 0; }
 inline bool analyze_in_detail() { return (config.loglevel > 0); }
 
-#define logable(level) (unlikely(config.loglevel >= level))
+extern bool logenable;
+#define logable(level) (unlikely (logenable && (config.loglevel >= level)))
 
 
 #endif // _PTLSIM_H_

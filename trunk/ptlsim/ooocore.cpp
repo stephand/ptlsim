@@ -22,10 +22,8 @@
 #define assert(x) (x)
 #endif
 
+#ifndef ENABLE_LOGGING
 #undef logable
-#ifdef ENABLE_LOGGING
-#define logable(level) (config.loglevel >= level)
-#else
 #define logable(level) (0)
 #endif
 
@@ -4826,9 +4824,6 @@ int out_of_order_core_toplevel_loop() {
   logfile << "Core State:", endl;
   logfile << ctx.commitarf;
 
-  int oldloglevel = config.loglevel;
-  if (config.start_log_at_iteration != infinity) config.loglevel = 0;
-
   cttotal.start();
 
   bool exiting = false;
@@ -4838,9 +4833,9 @@ int out_of_order_core_toplevel_loop() {
   requested_switch_to_native = 0;
 
   while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
-    if unlikely ((!config.loglevel) && (iterations >= config.start_log_at_iteration)) {
-      config.loglevel = oldloglevel;
-      logfile << "Start logging (level ", config.loglevel, ") at cycle ", sim_cycle, endl, flush;
+    if unlikely (iterations >= config.start_log_at_iteration) {
+      if unlikely (!logenable) logfile << "Start logging (level ", config.loglevel, ") at cycle ", sim_cycle, endl, flush;
+      logenable = 1;
     }
     if (logable(1)) logfile << "Cycle ", sim_cycle, ((stall_frontend) ? " (frontend stalled)" : ""), ": commit rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
 

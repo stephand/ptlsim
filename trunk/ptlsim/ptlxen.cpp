@@ -16,6 +16,7 @@
 //
 ostream logfile;
 W64 loglevel = 0;
+bool logenable = 0;
 W64 sim_cycle = 0;
 W64 iterations = 0;
 W64 total_uops_executed = 0;
@@ -349,9 +350,14 @@ bool shadow_evtchn_set_pending(unsigned int port) {
 //
 // Host calls to PTLmon
 //
-W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false) {
+W64 hostreq_calls = 0;
+W64 hostreq_spins = 0;
+
+W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false, bool ignorerc = false) {
   stringbuf sb;
   int rc;
+
+  hostreq_calls++;
 
   void* p = &bootinfo.hostreq;
   memcpy(&bootinfo.hostreq, &call, sizeof(PTLsimHostCall));
@@ -365,6 +371,8 @@ W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false) {
   sendop.port = bootinfo.hostcall_port;
   rc = HYPERVISOR_event_channel_op(EVTCHNOP_send, &sendop);
 
+  if (ignorerc) return 0;
+
   //
   // We need to block here since we need an event to clear the hostcall
   // pending bit. However, for switching to native mode, we should NOT
@@ -375,7 +383,7 @@ W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false) {
   // this, we specify spin = true for these calls.
   //
   while (!bootinfo.hostreq.ready) {
-    if (!spin) xen_sched_block();
+    if (!spin) { hostreq_spins++; xen_sched_block(); }
   }
 
   assert(bootinfo.hostreq.ready);
@@ -408,20 +416,25 @@ int switch_to_native(bool pause = false) {
   return rc;
 }
 
-int shutdown(bool pause = false) {
+//
+// Shutdown PTLsim and the domain
+//
+int shutdown(int reason) {
   Context ptlctx[32];
   int rc;
 
   PTLsimHostCall call;
-  call.op = PTLSIM_HOST_TERMINATE;
+  call.op = PTLSIM_HOST_SHUTDOWN;
   call.ready = 0;
-  call.terminate.pause = pause;
+  call.shutdown.reason = reason;
 
   // Linux kernels expect this to be re-enabled:
 	HYPERVISOR_vm_assist(VMASST_CMD_enable, VMASST_TYPE_writable_pagetables);
 
-  rc = synchronous_host_call(call, true);
+  rc = synchronous_host_call(call, false, true);
+  xen_shutdown_domain(reason);
   // (never returns)
+
   return rc;
 }
 
@@ -797,7 +810,7 @@ asmlinkage void ptl_internal_trap(int trapid, const char* name, W64* regs) {
   cerr.flush();
   cout.flush();
 
-  xen_shutdown_domain(SHUTDOWN_crash);
+  shutdown(SHUTDOWN_crash);
 }
 
 #define DO_ERROR(trapid, str, name) asmlinkage void do_##name(W64* regs) { ptl_internal_trap(trapid, str, regs); }
@@ -1878,8 +1891,6 @@ void inject_ptlsim_into_toplevel(mfn_t mfn, bool force = false) {
 // already be pinned on behalf of the guest.
 //
 void switch_page_table(mfn_t mfn) {
-  //return;
-
   inject_ptlsim_into_toplevel(mfn);
 
   mmuext_op op;
@@ -1955,7 +1966,7 @@ asmlinkage void do_page_fault(W64* regs) {
     print_stack(cerr, regs[REG_rsp]);
     cerr.flush();
     logfile.flush();
-    xen_shutdown_domain(SHUTDOWN_crash);
+    shutdown(SHUTDOWN_crash);
   }
 
   page_fault_in_progress = 1;
@@ -2010,7 +2021,7 @@ asmlinkage void do_page_fault(W64* regs) {
         logfile << "Stopped at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
         logfile << flush;
         cerr << flush;
-        xen_shutdown_domain(SHUTDOWN_crash);
+        shutdown(SHUTDOWN_crash);
       }
 
       if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
@@ -2024,7 +2035,7 @@ asmlinkage void do_page_fault(W64* regs) {
     print_stack(cerr, regs[REG_rsp]);
     cerr.flush();
     logfile.flush();
-    xen_shutdown_domain(SHUTDOWN_crash);
+    shutdown(SHUTDOWN_crash);
     asm("ud2a");
   }
 
@@ -2125,13 +2136,24 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
     setzero(ctx.idt);
 
+    if (logable(1) | force_hypercall_logging) {
+      logfile << "hypercall: set_trap_table(", (void*)arg1, "):", endl;
+    }
+
     foreach (i, 256) {
       const trap_info& ti = trap_ctxt[i];
+      if (!ti.address) break;
+
       TrapTarget& tt = ctx.idt[ti.vector];
       tt.cs = ti.cs >> 3;
       tt.rip = ti.address;
       tt.cpl = lowbits(ti.flags, 2);
       tt.maskevents = bit(ti.flags, 2);
+
+      if (logable(1) | force_hypercall_logging) {
+        logfile << "  Trap 0x", hexstring(ti.vector, 8), " = ", hexstring(tt.cs << 3, 16),
+          ":", hexstring(tt.rip, 64), " cpl ", tt.cpl, (tt.maskevents ? " (mask events)" : ""), endl;
+      }
     }
 
     rc = 0;
@@ -2164,13 +2186,18 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       //
 
       Level1PTE newpte(req.val);
-      if (newpte.p) unmap_phys_page(newpte.mfn);
+      if (newpte.p) {
+        unmap_phys_page(newpte.mfn);
+        // (See notes about DMA and self-modifying code for update_va_mapping)
+        bbcache.invalidate_page(newpte.mfn);
+      }
 
-      if (debug) logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", (Level1PTE)req.val, endl, flush;
+      if (debug) logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", newpte, endl, flush;
 
       int update_count;
       rc = HYPERVISOR_mmu_update(&req, 1, &update_count, arg4);
       total_updates += update_count;
+
       if (rc) break;
     }
 
@@ -2361,15 +2388,41 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
     if (debug) logfile << "  Old PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), endl, flush;
 
-    rc = HYPERVISOR_update_va_mapping(va, arg2, arg3);
-    /*
+    //rc = HYPERVISOR_update_va_mapping(va, arg2, arg3);
+
     // Can also be converted to an mmu_update call if we don't have PTLsim in the same
     // address space as the guest. Currently this is not necessary:
+
+    rc = update_phys_pte(ptephys, arg2);
+    /*
     mmu_update_t u;
     u.ptr = ptephys;
     u.val = arg2;
     rc = HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
+
+    //if (bbcache.invalidate_page(
     */
+
+    if likely (Level1PTE(arg2).p) {
+      //
+      // External DMA handling:
+      //
+      // Currently we have no way to track virtual DMAs
+      // from backend drivers outside the domain. However,
+      // we *do* know when newly DMA'd pages are mapped
+      // into some address space; we simply invalidate
+      // all cached BBs on the target page. Since we never
+      // load kernel space code via DMA, we always have
+      // to map the page into some user process before
+      // using it for the first time; hence this works.
+      //
+      //++MTY TODO: add hooks into dom0 drivers to pass us
+      // an invalidation event or set a bit in a shared memory
+      // bitmap whenever pages shared with the target domain
+      // are written. This is the only reliable way.
+      //
+      bbcache.invalidate_page(targetmfn);
+    }
 
     if (debug) logfile << "  New PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), " (rc ", rc, ")", endl, flush;
 
@@ -2672,7 +2725,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         ctx.kernel_ptbase_mfn = req.arg1.mfn;
         ctx.cr3 = ctx.kernel_ptbase_mfn << 12;
         ctx.flush_tlb();
-        switch_page_table(ctx.kernel_ptbase_mfn);
+        switch_page_table(ctx.cr3 >> 12);
         total_updates++;
         rc = 0;
         break;
@@ -2793,6 +2846,14 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       if (debug) logfile << "hypercall: sched_op: blocking VCPU ", ctx.vcpuid, endl, flush;
       ctx.change_runstate(RUNSTATE_blocked);
       sshinfo.vcpu_info[ctx.vcpuid].evtchn_upcall_mask = 0;
+      break;
+    }
+    case SCHEDOP_shutdown: {
+      getreq(sched_shutdown_t);
+      if (debug) logfile << "hypercall: sched_op: shutdown (reason ", req.reason, ")", endl, flush;
+
+      assist_requested_break = 1;
+      assist_requested_break_command = "-kill";
       break;
     }
     default: {
@@ -3040,6 +3101,7 @@ void handle_xen_hypercall_assist(Context& ctx) {
       ctx.kernel_mode = 0;
       ctx.cr3 = ctx.user_ptbase_mfn << 12;
       ctx.flush_tlb();
+      switch_page_table(ctx.cr3 >> 12);
       if (logable(4)) logfile << "  Switch back to user mode @ cr3 mfn ", (ctx.cr3 >> 12), endl;
       ctx.swapgs();
     }
@@ -3157,7 +3219,7 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
     cr3 = kernel_ptbase_mfn << 12;
     if (logable(4)) logfile << "  Load kernel page table @ cr3 mfn ", (cr3 >> 12), endl;
     flush_tlb();
-
+    switch_page_table(cr3 >> 12);
     if (logable(4)) logfile << "  Switching to kernel mode (new kernel ptbase mfn ", (cr3 >> 12), ")", endl;
   }
 
@@ -3247,7 +3309,7 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
   assert(exception < lengthof(idt));
 
   if (logable(2)) {
-    logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (void*)commitarf[REG_rip], ": error code ";
+    logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", RIPVirtPhys(commitarf[REG_rip]).update(*this), ": error code ";
     if likely (exception == EXCEPTION_x86_page_fault) {
       logfile << PageFaultErrorCode(errorcode), " (", (void*)(Waddr)errorcode, ") @ virtaddr ", (void*)virtaddr;
     } else {
@@ -3525,15 +3587,6 @@ int inject_events() {
   //
   if unlikely (xchg(shinfo.vcpu_info[0].evtchn_upcall_pending, (byte)0)) {
     xen_event_callback(0);
-  }
-
-  W64 evmask;
-  if unlikely (evmask = xchg(events_just_handled, 0ULL)) {
-    logfile << "Just got external events: ", bitstring(evmask, 64, true), endl;
-    logfile << "cycle ", sim_cycle, ": sshinfo.evtchn_pending ", bitstring(sshinfo.evtchn_pending[0], 32, true), endl;
-    logfile << "cycle ", sim_cycle, ": sshinfo.evtchn_mask    ", bitstring(sshinfo.evtchn_mask[0], 32, true), endl;
-    logfile << "cycle ", sim_cycle, ": vcpu pending ", sshinfo.vcpu_info[0].evtchn_upcall_pending, ", mask ", sshinfo.vcpu_info[0].evtchn_upcall_mask, endl;
-    logfile.flush();
   }
 
   W64 delta = sim_cycle - timer_interrupt_last_sent_at_cycle;
@@ -3831,26 +3884,8 @@ void print_sysinfo(ostream& os) {
 
 stringbuf current_log_filename;
 
-W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
-  // This needs to be static because string parameters point into here:
-  static char reqstr[4096];
+bool handle_config_change(PTLsimConfig& config) {
   static bool first_time = true;
-
-  int rc;
-  logfile << "PTLsim: waiting for request (", (blocking ? "blocking" : "non-blocking"), ")...", endl, flush;
-
-  W64 requuid = accept_upcall(reqstr, sizeof(reqstr), blocking);
-  if (!requuid) return 0;
-
-  logfile << "PTLsim: processing request '", reqstr, "' with uuid ", requuid, endl, flush;
-
-  int lastarg = configparser.parse(config, reqstr);
-  
-  //
-  // Fix up parameter defaults:
-  //
-  if ((config.start_log_at_iteration == infinity) && (config.loglevel > 0))
-    config.start_log_at_iteration = 0;
 
   if (config.log_filename.size() && (config.log_filename != current_log_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
@@ -3860,12 +3895,26 @@ W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
 
   logfile.setchain((config.log_on_console) ? &cout : null);
 
+  //
+  // Fix up parameter defaults:
+  //
+  if (config.start_log_at_rip != 0xffffffffffffffffULL) {
+    config.start_log_at_iteration = infinity;
+    logenable = 0;
+    // logfile << "Start logging at level ", config.loglevel, " at rip ", (void*)(Waddr)config.start_log_at_rip, endl;
+  } else if (config.start_log_at_iteration != infinity) {
+    config.start_log_at_rip = 0xffffffffffffffffULL;
+    logenable = 0;
+    // logfile << "Start logging at level ", config.loglevel, " at cycle ", (void*)(Waddr)config.start_log_at_iteration, endl;
+  }
+
   if (first_time) {
     if (!config.quiet) {
       print_banner(cerr);
       print_sysinfo(cerr);
 
-      cerr << "PTLsim is now waiting for a command.", endl, flush;
+      if (!(config.run | config.native))
+        cerr << "PTLsim is now waiting for a command.", endl, flush;
     }
     print_banner(logfile);
     print_sysinfo(logfile);
@@ -3886,6 +3935,25 @@ W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
     }
   }
 
+  return true;
+}
+
+W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
+  // This needs to be static because string parameters point into here:
+  static char reqstr[4096];
+
+  int rc;
+  logfile << "PTLsim: waiting for request (", (blocking ? "blocking" : "non-blocking"), ")...", endl, flush;
+
+  W64 requuid = accept_upcall(reqstr, sizeof(reqstr), blocking);
+  if (!requuid) return 0;
+
+  logfile << "PTLsim: processing request '", reqstr, "' with uuid ", requuid, endl, flush;
+
+  int lastarg = configparser.parse(config, reqstr);
+
+  handle_config_change(config);
+
   return requuid;
 }
 
@@ -3893,15 +3961,32 @@ W64 handle_upcall_nonblocking(PTLsimConfig& config) {
   return handle_upcall(config, false);
 }
 
+//
+// Inject a specific upcall into PTLsim itself, for instance in response
+// to assist-driven shutdown requests or PTLsim special requests
+//
+W64 handle_forced_upcall(PTLsimConfig& config, char* reqstr) {
+  int lastarg = configparser.parse(config, reqstr);
+  handle_config_change(config);
+  return 0;
+}
+
+int assist_requested_break = 0;
+stringbuf assist_requested_break_command;
+
 bool check_for_async_sim_break() {
-  if (bootinfo.queued_upcall_count) {
+  if unlikely (assist_requested_break) {
+    handle_forced_upcall(config, assist_requested_break_command);
+    assist_requested_break = 0;
+    assist_requested_break_command.reset();
+  } else if unlikely (bootinfo.queued_upcall_count) {
     W64 requuid = handle_upcall(config);
     complete_upcall(requuid);
+  }
 
-    if (config.native | config.pause | config.kill) {
-      logfile << "Requested exit from simulation loop", endl, flush;
-      return true;
-    }
+  if unlikely (config.native | config.pause | config.kill) {
+    logfile << "Requested exit from simulation loop", endl, flush;
+    return true;
   }
 
   return false;
@@ -3916,17 +4001,6 @@ bool simulate(const char* corename) {
   init_virqs();
   update_time();
 
-  /*
-  Waddr physmap_level1_page_count = ceil(bootinfo.total_machine_pages, PTES_PER_PAGE) / PTES_PER_PAGE;
-  logfile << "Pages comprising PTLsim physmap L1 pagedir (", physmap_level1_page_count, " L1 pages):", endl;
-  foreach (i, physmap_level1_page_count) {
-    if ((i % 8) == 0) logfile << " ";
-    logfile << " ", bootinfo.phys_level2_pagedir[i].mfn;
-    if ((i % 8) == 7) logfile << endl;
-  }
-  logfile << endl, flush;
-  */
-
   sequential_core_toplevel_loop();
 
   logfile << "Hypercall usage:", endl;
@@ -3935,6 +4009,9 @@ bool simulate(const char* corename) {
     logfile << "  ", padstring(hypercall_names[i], -40), " ",
       intstring(ptlsim_hypercall_histogram[i], 10), " ", intstring(guest_hypercall_histogram[i], 10), endl;
   }
+
+  logfile << "Hostcalls: ", hostreq_calls, endl;
+  logfile << "Spins: ", hostreq_spins, endl;
 
 #if 0
   //
@@ -3986,16 +4063,6 @@ bool simulate(const char* corename) {
   return 0;
 }
 
-static inline void outb(W16 port, byte value) {
-  asm volatile("outb %%al,%%dx" : : "a" (value), "d" (port) : "memory");
-}
-
-static inline byte inb(W16 port) {
-  byte value;
-  asm volatile("inb %%dx,%%al" : "=a" (value) : "d" (port) : "memory");
-  return value;
-}
-
 int main(int argc, char** argv) {
   ptlsim_init();
 
@@ -4003,13 +4070,6 @@ int main(int argc, char** argv) {
 
   for (;;) {
     W64 requuid = handle_upcall(config);
-
-    outb(0xcfb, 0x00);
-    outb(0xcf8, 0x00);
-    outb(0xcfa, 0x00);
-    byte pci0 = inb(0xcf8);
-    byte pci1 = inb(0xcfa);
-    logfile << "pci = ", hexstring(pci0, 8), " ", hexstring(pci1, 8), endl, flush;
 
     if (config.run) {
       config.run = 0;
@@ -4043,9 +4103,7 @@ int main(int argc, char** argv) {
       logfile << "Done!", endl;
       logfile << flush;
 
-      if (kill)
-        shutdown(pause);
-      else switch_to_native(pause);
+      switch_to_native(pause);
 
       foreach (i, bootinfo.vcpu_count) {
         Context& ctx = contextof(i);
@@ -4054,6 +4112,9 @@ int main(int argc, char** argv) {
       }
     
       logfile << "Returned from switch to native: now back in sim", endl, flush;
+    } else if (config.kill) {
+      logfile << "Killing PTLsim...", endl, flush;
+      shutdown(SHUTDOWN_poweroff);
     }
   }
 

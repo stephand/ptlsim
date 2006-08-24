@@ -528,6 +528,8 @@ void assist_write_cr2(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
+void switch_page_table(mfn_t mfn);
+
 void assist_write_cr3(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
 
@@ -537,6 +539,7 @@ void assist_write_cr3(Context& ctx) {
   }
 
   ctx.cr3 = ctx.commitarf[REG_ar1] & 0xfffffffffffff000ULL;
+  switch_page_table(ctx.cr3 >> 12);
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
@@ -1221,6 +1224,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0xcf: {
     // IRET
+    CheckInvalid();
     int assistid = (use64) ? (opsize_prefix ? ASSIST_IRET32 : ASSIST_IRET64) : (opsize_prefix ? ASSIST_IRET16 : ASSIST_IRET32);
     microcode_assist(assistid, ripstart, rip);
     end_of_block = 1;
@@ -1243,7 +1247,6 @@ bool TraceDecoder::decode_complex() {
   case 0xd8 ... 0xdf: {
     // x87 legacy FP
     // already handled as 0x6xx pseudo-opcodes
-
     MakeInvalid();
     break;
   }
@@ -1451,6 +1454,7 @@ bool TraceDecoder::decode_complex() {
   case 0xfa: { // cli
     // (nop)
     // NOTE! We still have to output something so %rip gets incremented correctly!
+    CheckInvalid();
     this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     break;
   }
@@ -1458,6 +1462,7 @@ bool TraceDecoder::decode_complex() {
   case 0xfb: { // sti
     // (nop)
     // NOTE! We still have to output something so %rip gets incremented correctly!
+    CheckInvalid();
     this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     break;
   }
@@ -1597,12 +1602,14 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x132: { // rdmsr
+    CheckInvalid();
     microcode_assist(ASSIST_RDMSR, ripstart, rip);
     end_of_block = 1;
     break;
   };
 
   case 0x130: { // wrmsr
+    CheckInvalid();
     microcode_assist(ASSIST_WRMSR, ripstart, rip);
     end_of_block = 1;
     break;

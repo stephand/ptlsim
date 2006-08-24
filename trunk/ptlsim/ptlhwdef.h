@@ -1384,16 +1384,12 @@ struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlock
   void invalidate(const RIPVirtPhys& rvp);
   void invalidate(BasicBlock* bb);
   int invalidate_page(Waddr mfn);
-  int reclaim(int reqbytes = 0);
+  int reclaim(size_t reqbytes = 0, int urgency = 0);
 
-  ostream& print(ostream& os) const;
+  ostream& print(ostream& os);
 };
 
 extern BasicBlockCache bbcache;
-
-static inline ostream& operator <<(ostream& os, const BasicBlockCache& bbcache) {
-  return bbcache.print(os);
-}
 
 //
 // Printing and information

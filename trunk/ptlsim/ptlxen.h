@@ -174,9 +174,9 @@ enum {
 
   //
   // Terminate PTLsim and PTLmon, removing it
-  // from the address space.
+  // from the address space, and kill the domain.
   //
-  PTLSIM_HOST_TERMINATE,
+  PTLSIM_HOST_SHUTDOWN,
 
   //
   // Notify external waiters that the current simulation
@@ -214,8 +214,8 @@ struct PTLsimHostCall {
       bool pause;
     } switch_to_native;
     struct {
-      bool pause;
-    } terminate;
+      int reason;
+    } shutdown;
     struct {
       PageFrameType* pft;
       int count;
@@ -523,6 +523,14 @@ ostream& operator <<(ostream& os, const PTLsimConfig& config);
 ostream& operator <<(ostream& os, const shared_info& si);
 
 void print_banner(ostream& os);
+
+//
+// Mode switch requests initiated within the simulation
+// via assists, shutdowns, etc.
+//
+
+extern int assist_requested_break;
+extern stringbuf assist_requested_break_command;
 
 //
 // Xen hypercalls

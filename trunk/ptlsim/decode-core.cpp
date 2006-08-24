@@ -208,6 +208,26 @@ const char* x86_exception_names[256] = {
   "intF8h", "intF9h", "intFAh", "intFBh", "intFCh", "intFDh", "intFEh", "intFFh"
 };
 
+int assist_index(assist_func_t assist) {
+  foreach (i, ASSIST_COUNT) {
+    if (assistid_to_func[i] == assist) { 
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+const char* assist_name(assist_func_t assist) {
+  foreach (i, ASSIST_COUNT) {
+    if (assistid_to_func[i] == assist) { 
+      return assist_names[i];
+    }
+  }
+
+  return "unknown";
+}
+
 W64 assist_histogram[ASSIST_COUNT];
 
 W64 decoder_type_fast;
@@ -1293,29 +1313,38 @@ void BasicBlockCache::invalidate(const RIPVirtPhys& rvp) {
   invalidate(bb);
 }
 
+//
+// Invalidate any basic blocks on the specified physical page.
+// This function is suitable for calling from a reclaim handler
+// when we run out of memory (it may not allocate any memory).
+//
+
 int BasicBlockCache::invalidate_page(Waddr mfn) {
   BasicBlockChunkList* pagelist = bbpages.get(mfn);
+
+  // static const bool log_code_page_ops = 1;
 
   if (logable(3) | log_code_page_ops) logfile << "Invalidate page mfn ", mfn, ": pagelist ", pagelist, " has ", (pagelist ? pagelist->count() : 0), " entries", endl;
 
   if (!pagelist) return 0;
 
-  BasicBlockPtr* bblist = (BasicBlockPtr*)ptl_alloc_private_pages(pagelist->count() * sizeof(BasicBlockPtr));
-
-  int n = pagelist->getentries(bblist, pagelist->count());
-  assert(n == pagelist->count());
-
-  foreach (i, n) {
-    BasicBlock* bb = bblist[i];
-    if (logable(3) | log_code_page_ops) logfile << "Invalidate bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes)", endl;
+  int oldcount = pagelist->count();
+  int n = 0;
+  BasicBlockChunkList::Iterator iter(pagelist);
+  BasicBlockPtr* entry;
+  while (entry = iter.next()) {
+    BasicBlock* bb = *entry;
+    if (logable(3) | log_code_page_ops) logfile << "  Invalidate bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes)", endl;
     bbcache.invalidate(bb);
+    n++;
   }
 
-  ptl_free_private_pages(bblist, n * sizeof(BasicBlockPtr));
+  assert(n == oldcount);
+  assert(pagelist->count() == 0);
+
   pagelist->clear();
   bbpages.remove(pagelist);
 
-  //smc_settrans(mfn);
   smc_cleardirty(mfn);
 
   delete pagelist;
@@ -1328,7 +1357,7 @@ int BasicBlockCache::invalidate_page(Waddr mfn) {
 // <bytesreq> bytes, starting with the least
 // recently used BBs.
 //
-int BasicBlockCache::reclaim(int bytesreq) {
+int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
   if (!count) return 0;
 
   logfile << "Reclaiming cached basic blocks at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits:", endl, flush;
@@ -1339,24 +1368,29 @@ int BasicBlockCache::reclaim(int bytesreq) {
   W64 total_bytes = 0;
 
   int n = 0;
-  foreach (i, lengthof(sets)) {
-    selflistlink* tlink = sets[i];
-    while (tlink) {
-      selflistlink* next = tlink->next;
-      assert(n < count);
-      BasicBlock& obj = BasicBlockHashtableLinkManager::objof(tlink);
-      oldest = min(oldest, obj.lastused);
-      newest = max(newest, obj.lastused);
-      average += obj.lastused;
-      total_bytes += ptl_mm_getsize(&obj);
-      n++;
-      tlink = next;
-    }
+
+  Iterator iter(this);
+  BasicBlock* bb;
+
+  while (bb = iter.next()) {
+    oldest = min(oldest, bb->lastused);
+    newest = max(newest, bb->lastused);
+    average += bb->lastused;
+    total_bytes += ptl_mm_getsize(bb);
+    n++;
   }
 
   assert(count == n);
   assert(n > 0);
   average /= n;
+
+  if unlikely (urgency < 0) {
+    //
+    // The allocator is so strapped for memory, we need to free
+    // everything possible at all costs:
+    //
+    average = infinity;
+  }
 
   logfile << "Before:", endl;
   logfile << "  Basic blocks:   ", intstring(count, 12), endl;
@@ -1372,20 +1406,15 @@ int BasicBlockCache::reclaim(int bytesreq) {
   W64 reclaimed_bytes = 0;
   int reclaimed_objs = 0;
 
-  foreach (i, lengthof(sets)) {
-    selflistlink* tlink = sets[i];
-    while (tlink) {
-      selflistlink* next = tlink->next;
-      BasicBlock& obj = BasicBlockHashtableLinkManager::objof(tlink);
-      // We use '<=' to guarantee even a uniform distribution will be reclaimmed:
-      if (obj.lastused <= average) {
-        reclaimed_bytes += ptl_mm_getsize(&obj);
-        reclaimed_objs++;
-        invalidate(&obj);
-      }
-      n++;
-      tlink = next;
+  iter.reset(this);
+  while (bb = iter.next()) {
+    // We use '<=' to guarantee even a uniform distribution will eventually be reclaimed:
+    if likely (bb->lastused <= average) {
+      reclaimed_bytes += ptl_mm_getsize(bb);
+      reclaimed_objs++;
+      invalidate(bb);
     }
+    n++;
   }
 
   logfile << "After:", endl;
@@ -1439,9 +1468,15 @@ void assist_gp_fault(Context& ctx) {
 
 void TraceDecoder::invalidate() {
   if ((rip - bb.rip) > valid_byte_count) {
-    if (logable(3)|1) {
-      logfile << "Translation crosses into invalid page: ripstart ", (void*)ripstart, ", rip ", (void*)rip,
-        ", faultaddr ", faultaddr, "; expected ", (rip - ripstart), " bytes but only got ", valid_byte_count, 
+#ifdef PTLSIM_HYPERVISOR
+    Level1PTE pte = contextof(0).virt_to_pte(ripstart);
+    mfn_t mfn = (pte.p) ? pte.mfn : 0;
+#else
+    int mfn = 0;
+#endif
+    if (logable(3)) {
+      logfile << "Translation crosses into invalid page (mfn ", mfn, "): ripstart ", (void*)ripstart, ", rip ", (void*)rip,
+        ", faultaddr ", (void*)faultaddr, "; expected ", (rip - ripstart), " bytes but only got ", valid_byte_count, 
         " (next page ", (void*)(Waddr)ceil(ripstart, 4096), ")", endl;
     }
 
@@ -1536,6 +1571,16 @@ bool TraceDecoder::translate() {
   is_x87 = 0;
   is_sse = 0;
 
+  invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count);
+
+  if (invalid) {
+    invalidate();
+    user_insn_count++;
+    end_of_block = 1;
+    lastop();
+    return false;
+  }
+
   switch (op >> 8) {
   case 0:
   case 1: {
@@ -1610,9 +1655,9 @@ ostream& printflags(ostream& os, W64 flags) {
 }
 
 BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
-  if (rip == config.start_log_at_rip) {
-    // Force logging to start here
-    config.start_log_at_iteration = sim_cycle - 1;
+  if unlikely (rip == config.start_log_at_rip) {
+    config.start_log_at_iteration = 0;
+    logenable = 1;
   }
 
   RIPVirtPhys rvp(rip);
@@ -1627,12 +1672,16 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   if (smc_isdirty(rvp.mfnhi))
     invalidate_page(rvp.mfnhi);
 
-  if (logable(5) | log_code_page_ops) logfile << "Translating ", rvp, " at ", total_user_insns_committed, " commits", endl, flush;
-
   translate_timer.start();
 
   TraceDecoder trans(rvp);
   trans.fillbuf(ctx);
+
+  if (logable(5) | log_code_page_ops) logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+
+  if (rvp.mfnlo == RIPVirtPhys::INVALID) {
+    assert(trans.valid_byte_count == 0);
+  }
 
   for (;;) {
     //if (DEBUG) logfile << "rip ", (void*)trans.rip, ", relrip = ", (void*)(trans.rip - trans.bb.rip), endl, flush;
@@ -1645,7 +1694,6 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
 
   BasicBlockChunkList* pagelist;
 
-  //smc_settrans(bb->rip.mfnlo);
   smc_cleardirty(bb->rip.mfnlo);
   pagelist = bbpages.get(bb->rip.mfnlo);
   if (!pagelist) {
@@ -1666,7 +1714,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
       bbpages.add(pagelist);
     }
     pagelist->add(bb, bb->mfnhi_loc);
-    if (logable(4) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
+    if (logable(5) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
   }
 
   if (logable(5)) {
@@ -1679,12 +1727,12 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   return bb;
 }
 
-ostream& BasicBlockCache::print(ostream& os) const {
+ostream& BasicBlockCache::print(ostream& os) {
   dynarray<BasicBlock*> bblist;
   getentries(bblist);
 
   foreach (i, bblist.length) {
-    BasicBlock& bb = *bblist[i];
+    const BasicBlock& bb = *bblist[i];
     double percent_of_total_uops = ((double)(bb.hitcount * bb.tagcount) / (double)total_uops_committed);
     double percent_of_total_bbs = ((double)(bb.hitcount) / (double)total_basic_blocks_committed);
 
@@ -1705,11 +1753,10 @@ ostream& BasicBlockCache::print(ostream& os) const {
   return os;
 }
 
-void bbcache_reclaim(size_t bytes) {
-  bbcache.reclaim();
+void bbcache_reclaim(size_t bytes, int urgency) {
+  bbcache.reclaim(bytes, urgency);
 }
 
 void init_translate() {
   ptl_mm_register_reclaim_handler(bbcache_reclaim);
 }
-

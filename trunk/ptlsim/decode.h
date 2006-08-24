@@ -280,26 +280,6 @@ extern const assist_func_t assistid_to_func[ASSIST_COUNT];
 
 extern const char* assist_names[ASSIST_COUNT];
 
-int assist_index(assist_func_t assist) {
-  foreach (i, ASSIST_COUNT) {
-    if (assistid_to_func[i] == assist) { 
-      return i;
-    }
-  }
-
-  return -1;
-}
-
-const char* assist_name(assist_func_t assist) {
-  foreach (i, ASSIST_COUNT) {
-    if (assistid_to_func[i] == assist) { 
-      return assist_names[i];
-    }
-  }
-
-  return "unknown";
-}
-
 int propagate_exception_during_assist(Context& ctx, byte exception, W32 errorcode, Waddr virtaddr = 0, bool intN = 0);
 
 //

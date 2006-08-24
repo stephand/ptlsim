@@ -98,7 +98,7 @@ namespace superstl {
   //
 
 #define DefineIntegerInserter(T, signedtype) \
-  inline stringbuf& operator <<(stringbuf& os, const T v) { \
+  static inline stringbuf& operator <<(stringbuf& os, const T v) { \
     char buf[128]; \
     format_integer(buf, sizeof(buf), ((signedtype) ? (W64s)v : (W64)v)); \
     return os << buf; \
@@ -114,7 +114,7 @@ namespace superstl {
   DefineIntegerInserter(unsigned long long, 0);
 
 #define DefineFloatInserter(T, digits) \
-  inline stringbuf& operator <<(stringbuf& os, const T v) { \
+  static inline stringbuf& operator <<(stringbuf& os, const T v) { \
     char buf[128]; \
     format_float(buf, sizeof(buf), v, digits); \
     return os << buf; \
@@ -123,19 +123,19 @@ namespace superstl {
   DefineFloatInserter(float, 6);
   DefineFloatInserter(double, 16);
 
-  inline stringbuf& operator <<(stringbuf& os, const bool v) {
+  static inline stringbuf& operator <<(stringbuf& os, const bool v) {
     return os << (int)v;
   }
 
 #undef DefineInserter
 
-  inline stringbuf& operator <<(stringbuf& os, const stringbuf& sb) {
+  static inline stringbuf& operator <<(stringbuf& os, const stringbuf& sb) {
     os << ((char*)sb);
     return os;
   }
 
   template <class T>
-  inline stringbuf& operator <<(stringbuf& os, const T* v) {
+  static inline stringbuf& operator <<(stringbuf& os, const T* v) {
     char buf[128];
     format_integer(buf, sizeof(buf), (W64)(Waddr)v, 0, FMT_SPECIAL, 16);
     return os << buf;
@@ -145,7 +145,7 @@ namespace superstl {
   // A much more intuitive syntax than STL provides:
   //
   template <class T>
-  inline stringbuf& operator ,(stringbuf& os, const T& v) {
+  static inline stringbuf& operator ,(stringbuf& os, const T& v) {
     return os << v;
   }
 
@@ -213,19 +213,19 @@ namespace superstl {
   //
   // Manipulators
   //      
-  inline odstream& operator <<(odstream& os, const iosflush& v) {
+  static inline odstream& operator <<(odstream& os, const iosflush& v) {
     os.flush();
     return os;
   }
 
   template <typename T>
-  inline odstream& operator <<(odstream& os, const T& v) {
+  static inline odstream& operator <<(odstream& os, const T& v) {
     os.write(&v, sizeof(T));
     return os;
   }
 
   template <typename T>
-  inline odstream& operator ,(odstream& os, const T& v) {
+  static inline odstream& operator ,(odstream& os, const T& v) {
     return os << v;
   }
 
@@ -243,7 +243,7 @@ namespace superstl {
   //
 
   template <typename T>
-  inline ostream& operator <<(ostream& os, const T& v) {
+  static inline ostream& operator <<(ostream& os, const T& v) {
     stringbuf sb;
     sb << v;
     os.write((char*)sb, sb.size());
@@ -251,27 +251,27 @@ namespace superstl {
   }
 
   template <>
-  inline ostream& operator <<(ostream& os, const iosflush& v) {
+  static inline ostream& operator <<(ostream& os, const iosflush& v) {
     os.flush();
     return os;
   }
 
   template <>
-  inline ostream& operator <<(ostream& os, const char& v) {
+  static inline ostream& operator <<(ostream& os, const char& v) {
     os.write(&v, sizeof(char));
     return os;
   }
 
-  inline ostream& operator <<(ostream& os, const char* v) {
+  static inline ostream& operator <<(ostream& os, const char* v) {
     os.write(v, strlen(v));
     return os;
   }
 
   template <>
-  inline ostream& operator <<(ostream& os, const stringbuf& v) { stringbuf sb; sb << (char*)v; os.write((char*)sb, sb.size()); return os; }
+  static inline ostream& operator <<(ostream& os, const stringbuf& v) { stringbuf sb; sb << (char*)v; os.write((char*)sb, sb.size()); return os; }
 
   template <class T>
-  inline ostream& operator ,(ostream& os, const T& v) {
+  static inline ostream& operator ,(ostream& os, const T& v) {
     return os << v;
   }
 
@@ -526,12 +526,12 @@ namespace superstl {
 
   //inline istream& operator ,(istream& is, const readline& v) { return is >> v; }
 
-  inline istream& operator >>(istream& is, const readline& v) {
+  static inline istream& operator >>(istream& is, const readline& v) {
     is.readline(v.buf, v.len);
     return is;
   }
 
-  inline istream& operator >>(istream& is, stringbuf& sb) {
+  static inline istream& operator >>(istream& is, stringbuf& sb) {
     is.readline(sb);
     return is;
   }
@@ -544,7 +544,7 @@ namespace superstl {
   extern ostream cerr;
 
   template <typename T>
-  T* renew(T* p, size_t oldcount, size_t newcount) {
+  static inline T* renew(T* p, size_t oldcount, size_t newcount) {
     if unlikely (newcount <= oldcount) return p;
 
     T* pp = new T[newcount];
@@ -646,13 +646,13 @@ namespace superstl {
   };
 
   template <typename T, int size>
-  inline ostream& operator <<(ostream& os, const stack<T, size>& st) {
+  static inline ostream& operator <<(ostream& os, const stack<T, size>& st) {
     foreach (i, st.count()) { os << ((i) ? " " : ""), st[i]; }
     return os;
   }
 
   template <typename T, int size>
-  inline ostream& operator <<(ostream& os, const array<T, size>& v) {
+  static inline ostream& operator <<(ostream& os, const array<T, size>& v) {
     os << "Array of ", size, " elements:", endl;
     for (int i = 0; i < size; i++) {
       os << "  [", i, "]: ", v[i], endl;
@@ -761,7 +761,7 @@ namespace superstl {
   char* dynarray<char*>::tokenize(char* string, const char* seplist);
 
   template <class T>
-  inline ostream& operator <<(ostream& os, const dynarray<T>& v) {
+  static inline ostream& operator <<(ostream& os, const dynarray<T>& v) {
     os << "Array of ", v.size(), " elements (", v.capacity(), " reserved): ", endl;
     for (int i = 0; i < v.size(); i++) {
       os << "  [", i, "]: ", v[i], endl;
@@ -878,8 +878,8 @@ namespace superstl {
     }
   };
 
-  template <class T> inline const T& operator <<(tempbuf<T>& buf, const T& v) { return buf.push(v); }
-  template <class T> inline const T& operator >>(tempbuf<T>& buf, T& v) { return (v = buf.pop()); }
+  template <class T> static inline const T& operator <<(tempbuf<T>& buf, const T& v) { return buf.push(v); }
+  template <class T> static inline const T& operator >>(tempbuf<T>& buf, T& v) { return (v = buf.pop()); }
 
   /*
    * CRC32
@@ -918,13 +918,13 @@ namespace superstl {
   };
 
   template <typename T>
-  inline CRC32& operator <<(CRC32& crc, const T& t) {
+  static inline CRC32& operator <<(CRC32& crc, const T& t) {
     crc.update((byte*)&t, sizeof(T));
     return crc;
   }
 
   template <class T>
-  inline CRC32& operator ,(CRC32& crc, const T& v) {
+  static inline CRC32& operator ,(CRC32& crc, const T& v) {
     return crc << v;
   }
 
@@ -1023,7 +1023,7 @@ namespace superstl {
     }
   };
 
-  inline ostream& operator <<(ostream& os, const selflistlink& link) {
+  static inline ostream& operator <<(ostream& os, const selflistlink& link) {
     return os << "[prev ", link.prev, ", next ", link.next, "]";
   }
 
@@ -1958,17 +1958,17 @@ namespace superstl {
   DeclareStringBufToStream(hilo<N>);
 
   template <size_t N>
-  inline ostream& operator <<(ostream& os, const bitvec<N>& v) {
+  static inline ostream& operator <<(ostream& os, const bitvec<N>& v) {
     return v.print(os);
   }
 
   template <size_t N>
-  inline stringbuf& operator <<(stringbuf& sb, const bitvec<N>& v) {
+  static inline stringbuf& operator <<(stringbuf& sb, const bitvec<N>& v) {
     return v.print(sb);
   }
 
   template <int size, typename T>
-  T vec_min_index(T* list, const bitvec<size>& include) {
+  static inline T vec_min_index(T* list, const bitvec<size>& include) {
     int minv = limits<T>::max;
     int mini = 0;
     foreach (i, size) {
@@ -1981,7 +1981,7 @@ namespace superstl {
   }
 
   template <int size, typename T, typename I>
-  void vec_make_sorting_permute_map(I* permute, T* list) {
+  static inline void vec_make_sorting_permute_map(I* permute, T* list) {
     bitvec<size> include;
     include++;
 
@@ -2150,7 +2150,7 @@ namespace superstl {
   };
 
   template <typename K, typename T, int setcount, typename KM>
-  ostream& operator <<(ostream& os, const Hashtable<K, T, setcount, KM>& ht) {
+  static inline ostream& operator <<(ostream& os, const Hashtable<K, T, setcount, KM>& ht) {
     return ht.print(os);
   }
 
@@ -2226,17 +2226,50 @@ namespace superstl {
       return null;
     }
 
-    dynarray<T*>& getentries(dynarray<T*>& a) const {
+    struct Iterator {
+      SelfHashtable<K, T, LM, setcount, KM>* ht;
+      selflistlink* link;
+      int slot;
+
+      Iterator() { }
+
+      Iterator(SelfHashtable<K, T, LM, setcount, KM>* ht) {
+        reset(ht);
+      }
+
+      void reset(SelfHashtable<K, T, LM, setcount, KM>* ht) {
+        this->ht = ht;
+        slot = 0;
+        link = ht->sets[slot];
+      }
+
+      T* next() {
+        for (;;) {
+          if unlikely (slot >= setcount) return null;
+
+          if unlikely (!link) {
+            // End of chain: advance to next chain
+            slot++;
+            if unlikely (slot >= setcount) return null;
+            link = ht->sets[slot];
+            continue;
+          }
+
+          T& obj = LM::objof(link);
+          link = link->next;
+          return &obj;
+        }
+      }
+    };
+
+    dynarray<T*>& getentries(dynarray<T*>& a) {
       a.resize(count);
       int n = 0;
-      foreach (i, setcount) {
-        selflistlink* tlink = sets[i];
-        while (tlink) {
-          assert(n < count);
-          T& obj = LM::objof(tlink);
-          a[n++] = &obj;
-          tlink = tlink->next;
-        }
+      Iterator iter(this);
+      T* t;
+      while (t = iter.next()) {
+        assert(n < count);
+        a[n++] = t;
       }
       return a;
     }
@@ -2311,7 +2344,7 @@ namespace superstl {
   };
 
   template <typename K, typename T, typename LM, int setcount, typename KM>
-  ostream& operator <<(ostream& os, const SelfHashtable<K, T, LM, setcount, KM>& ht) {
+  static inline ostream& operator <<(ostream& os, const SelfHashtable<K, T, LM, setcount, KM>& ht) {
     return ht.print(os);
   }
 
@@ -2351,13 +2384,37 @@ namespace superstl {
         return true;
       }
 
-      int getentries(T* a, int limit) const {
-        int n = 0;
-        foreach (i, lengthof(data)) {
-          if likely (!freemap[i]) {
-            if unlikely (n >= limit) return n;
-            a[n++] = data[i];
+      struct Iterator {
+        Chunk* chunk;
+        size_t i;
+
+        Iterator() { }
+
+        Iterator(Chunk* chunk_) {
+          reset(chunk_);
+        }
+
+        void reset(Chunk* chunk_) {
+          this->chunk = chunk_;
+          i = 0;
+        }
+
+        T* next() {
+          for (;;) {
+            if unlikely (i >= lengthof(chunk.data)) return null;
+            if unlikely (chunk->freemap[i]) { i++; continue; }
+            return &chunk->data[i++];
           }
+        }
+      };
+
+      int getentries(T* a, int limit) {
+        Iterator iter(this);
+        T* entry;
+        int n = 0;
+        while (entry = iter.next()) {
+          if unlikely (n >= limit) return n;
+          a[n++] = *entry;
         }
 
         return n;
@@ -2426,20 +2483,49 @@ namespace superstl {
 
     int count() { return elemcount; }
 
-    int getentries(T* a, int limit) const {
-      const Chunk* chunk = head;
+    struct Iterator {
+      Chunk* chunk;
+      int i;
 
-      int used = 0;
-
-      while (chunk) {
-        prefetch(chunk->next);
-        int n = chunk->getentries(a, limit);
-        limit -= n;
-        a += n;
-        used += n;
-        chunk = chunk->next;
+      Iterator() { }
+      
+      Iterator(ChunkList<T, N>* chunklist) {
+        reset(chunklist);
       }
-      return used;
+
+      void reset(ChunkList<T, N>* chunklist) {
+        chunk = chunklist->head;
+        i = 0;
+      }
+
+      T* next() {
+        for (;;) {
+          if unlikely (!chunk) return null;
+
+          if unlikely (i >= lengthof(chunk->data)) {
+            chunk = chunk->next;
+            if unlikely (!chunk) return null;
+            prefetch(chunk->next);
+            i = 0;
+          }
+          
+          if unlikely (chunk->freemap[i]) { i++; continue; }
+
+          return &chunk->data[i++];
+        }
+      }
+    };
+
+    int getentries(T* a, int limit) {
+      Iterator iter(this);
+      T* entry;
+      int n;
+      while (entry = iter.next()) {
+        if unlikely (n >= limit) return n;
+        a[n++] = *entry;
+      }
+
+      return n;
     }
   };
 
@@ -2498,7 +2584,7 @@ namespace superstl {
   };
 
   template <typename T, int entries_per_chunk>
-  ostream& operator <<(ostream& os, ChunkHashtableBlock<T, entries_per_chunk>& chunk) {
+  static inline ostream& operator <<(ostream& os, ChunkHashtableBlock<T, entries_per_chunk>& chunk) {
     chunk.print(os);
     return os;
   }
@@ -2589,12 +2675,12 @@ namespace superstl {
   };
 
   template <typename T, int setcount, int entries_per_chunk>
-  ostream& operator <<(ostream& os, ChunkHashtable<T, setcount, entries_per_chunk>& cht) {
+  static inline ostream& operator <<(ostream& os, ChunkHashtable<T, setcount, entries_per_chunk>& cht) {
     cht.print(os);
     return os;
   }
 
-  inline W64s expandword(const byte*& p, int type) {
+  static inline W64s expandword(const byte*& p, int type) {
     W64s v;
 
     switch (type) {
@@ -2633,7 +2719,7 @@ namespace superstl {
     return v;
   }
 
-  inline int compressword(byte*& p, W64s v) {
+  static inline int compressword(byte*& p, W64s v) {
     int f;
 
     if likely (!v) {

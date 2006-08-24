@@ -24,9 +24,9 @@ void ptl_zero_private_page(void* addr);
 void* ptl_mm_alloc(size_t bytes);
 void ptl_mm_free(void* p);
 
-typedef void (*mm_reclaim_handler_t)(size_t bytes);
+typedef void (*mm_reclaim_handler_t)(size_t bytes, int urgency);
 bool ptl_mm_register_reclaim_handler(mm_reclaim_handler_t handler);
-void ptl_mm_reclaim();
+void ptl_mm_reclaim(size_t bytes = 0, int urgency = 0);
 
 class DataStoreNode;
 DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root);
