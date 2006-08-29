@@ -24,6 +24,7 @@ namespace superstl {
     setbuf(bufsize);
     close_on_destroy = 1;
     chain = null;
+    offset = 0;
     return true;
   }
 
@@ -42,6 +43,7 @@ namespace superstl {
     setbuf(bufsize);
     close_on_destroy = 0;
     chain = null;
+    offset = 0;
     return ok();
   }
 
@@ -86,6 +88,8 @@ namespace superstl {
         tail = 0;
       }
     }
+
+    offset += total;
 
     if unlikely (force_synchronous_streams) flush();
 
@@ -494,6 +498,7 @@ namespace superstl {
     assert(inrange(bufused, 0, bufsize));
     assert(inrange(head, 0, bufsize-1));
     assert(inrange(tail, 0, bufsize-1));
+    offset -= bytes;
     return bytes;
   }
 
@@ -536,6 +541,7 @@ namespace superstl {
     c = buf[head];
     head = addmod(head, 1);
     bufused--;
+    offset++;
     return true;
   }
 
@@ -557,6 +563,8 @@ namespace superstl {
       r += n;
       p += n;
       count -= n;
+
+      offset += n;
     }
 
     return r;
@@ -620,11 +628,12 @@ namespace superstl {
     bufused = 0;
     head = 0;
     tail = 0;
+    offset = pos;
     return sys_seek(fd, pos, whence);
   }
 
   W64 idstream::where() const {
-    return sys_seek(fd, 0, SEEK_CUR);
+    return offset;
   }
 
   W64 idstream::size() const {
@@ -646,17 +655,23 @@ namespace superstl {
 
   template <>
   char* dynarray<char*>::tokenize(char* string, const char* seplist) {
+    byte issep[256];
+    setzero(issep);
+    foreach (i, strlen(seplist)) { issep[(byte)seplist[i]] = 1; }
+
     char* pbase = string;
     char* p = pbase;
 
     while (*p) {
+      while ((*p) && issep[*p]) p++;
+      if unlikely (!(*p)) break;
       push(p);
-      char* endp = strpbrk(p, seplist);
-      if (!endp) break;
-      *endp = 0;
-      p = endp+1;
+      while ((*p) && (!issep[*p])) p++;
+      int k = (!!(*p));
+      *p = 0;
+      p += k;
     }
-    
+
     return pbase;
   }
 

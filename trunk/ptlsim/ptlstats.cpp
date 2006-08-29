@@ -31,7 +31,8 @@ struct PTLstatsConfig {
   double graph_clip_percentile;
   W64 graph_logscale;
   double graph_logk;
-  
+
+  stringbuf snapshot;
   stringbuf subtract_branch;
   
   W64 show_sum_of_subtrees_only;
@@ -75,6 +76,7 @@ void PTLstatsConfig::reset() {
   graph_logscale = 0;
   graph_logk = 100.;
 
+  snapshot = "final";
   subtract_branch.reset();
 
   show_sum_of_subtrees_only = 0;
@@ -119,6 +121,7 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(invert_gains,                     "invert-gains",              "Invert sense of gains vs losses (i.e. 1 / x)");
 
   section("Statistics Range");
+  add(snapshot,                         "snapshot",                  "Main snapshot (default is final snapshot)");
   add(subtract_branch,                  "subtract",                  "Snapshot to subtract from the main snapshot");
 
   section("Display Control");
@@ -139,165 +142,6 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(cumulative_histogram,             "cumulative-histogram",      "Cumulative histogram");
   add(histogram_thresh,                 "histogram-thresh",          "Histogram threshold (1.0 = print nothing, 0.0 = everything)");
 };
-
-const char* labels[] = {
-  "L1hit", 
-};
-
-#define MAX_BENCHMARKS 256
-#define MAX_SHORT_STATS_COUNT 256
-
-stringbuf sbmatrix[MAX_BENCHMARKS][MAX_SHORT_STATS_COUNT];
-double totals[MAX_SHORT_STATS_COUNT];
-
-const char* benchnames[MAX_BENCHMARKS];
-
-//
-// NOTE: This is for example purposes only; modify as needed:
-//
-int ooo_get_short_stats(stringbuf* v, double* totals, DataStoreNode& root) {
-
-  int n = 0;
-
-  {
-    {
-      DataStoreNode& load = root("dcache")("load");
-      DataStoreNode& hit = load("hit");
-
-      W64 L1 = hit("L1");
-      W64 L2 = hit("L2");
-      W64 L3 = hit("L3");
-      W64 mem = hit("mem");
-
-      W64 total = (L1 + L2 + L3 + mem);
-
-      double avgcycles = 
-        (((double)L1 / (double)total) * 2.0) +
-        (((double)L2 / (double)total) * 6.0) +
-        (((double)L3 / (double)total) * (5.0 + 20.0)) +
-        (((double)mem / (double)total) * (5.0 + 20.0 + 120.0));
-
-      v[n] << floatstring(percent(L1, total), 4, 1);
-      totals[n++] += percent(L1, total);
-
-      v[n] << floatstring(percent(L2, total), 4, 1);
-      totals[n++] += percent(L2, total);
-
-      v[n] << floatstring(percent(L3, total), 4, 1);
-      totals[n++] += percent(L3, total);
-
-      v[n] << floatstring(percent(mem, total), 4, 1);
-      totals[n++] += percent(mem, total);
-
-      v[n] << floatstring(avgcycles, 4, 2);
-      totals[n++] += avgcycles;
-    }
-  }
-
-  return n;
-}
-
-void collect_short_stats(char** statfiles, int count) {
-  assert(count < MAX_BENCHMARKS);
-
-  int n = 0;
-
-  foreach (i, count) {
-    char cwd[1024];
-    getcwd(cwd, sizeof(cwd));
-
-    idstream is(statfiles[i]);
-    assert(is);
-
-    DataStoreNode& ds = *new DataStoreNode(is);
-    n = ooo_get_short_stats(sbmatrix[i], totals, ds("final"));
-
-    const char* p = strchr(statfiles[i], '/');
-    benchnames[i] = (p) ? strndup(statfiles[i], p-statfiles[i]) : "Bench";
-
-    delete &ds;
-  }
-
-  foreach (i, lengthof(totals)) {
-    totals[i] /= (double)count;
-  }
-}
-
-void print_short_stats_html(ostream& os, int count) {
-  os << "<html>", endl;
-  os << "<body>", endl;
-
-  os << "<table cols=", count, " rows=", lengthof(labels), " border=1 cellpadding=3 cellspacing=0>";
-
-  os << "<tr><td bgcolor='#c0c0c0'></td>";
-  foreach (i, count) {
-    os << "<td align=center bgcolor='#c0c0c0'><b>", benchnames[i], "</b></td>";
-  }
-  os << "</tr>", endl;
-
-  foreach (j, lengthof(labels)) {
-    os << "<tr>";
-    os << "<td align=right bgcolor='#c0c0c0'><b>", labels[j], "</b></td>", endl;
-
-    foreach (i, count) {
-      os << "<td align=right>", sbmatrix[i][j], "</td>";
-    }
-    os << "</tr>", endl;
-  }
-
-  os << "</table>", endl;
-  os << "</body>", endl;
-  os << "</html>", endl;
-}
-
-void print_short_stats_latex(ostream& os, int count) {
-  os << "\\documentclass[11pt]{article}", endl;
-  os << "\\usepackage[latin1]{inputenc}\\usepackage{color}\\usepackage{graphicx}", endl;
-  os << "\\providecommand{\\tabularnewline}{\\\\}", endl;
-  os << "\\begin{document}", endl;
-  os << "\\begin{tabular}{";
-  foreach (i, count+2) { os << "|r"; }
-  os << "|}", endl;
-  os << "\\hline", endl;
-
-  foreach (i, count) { 
-    os << "&\\textsf{\\textbf{\\footnotesize{", benchnames[i], "}}}";
-  }
-
-  os << "&\\textsf{\\textbf{\\footnotesize{", "Avg", "}}}";
-
-#if 0
-  os << "\\tabularnewline\\hline\\hline", endl;
-  os << "\\multicolumn{", count+1, "}{|c|}{\\textsf{\\textbf{\\footnotesize Baseline Processor (AMD Athlon 64 (K8), 2000 MHz)}}}\\tabularnewline\\hline\\hline", endl;
-
-  os << "\\textsf{\\textbf{\\footnotesize{Cycles}}}";
-  foreach (i, count) {
-    os << "&\\textsf{\\footnotesize{", 0, "}}";
-  }
-
-  os << "\\tabularnewline\\hline", endl;
-
-  os << "\\textsf{\\textbf{\\footnotesize{Speedup}}}";
-  foreach (i, count) {
-    os << "&\\textsf{\\footnotesize{", 0, "}}";
-  }
-
-#endif
-
-  os << "\\tabularnewline\\hline\\hline", endl;
-  os << "\\multicolumn{", count+2, "}{|c|}{\\textsf{\\textbf{\\footnotesize Experimental Model}}}\\tabularnewline\\hline\\hline", endl;
-
-  foreach (j, lengthof(labels)) {
-    os << "\\textsf{\\textbf{\\footnotesize{", labels[j], "}}}";
-    foreach (i, count) {
-      os << "&\\textsf{\\footnotesize{", sbmatrix[i][j], "}}";
-    }
-    os << "&\\textsf{\\footnotesize{", floatstring(totals[j], 0, 1), "}}";
-    os << "\\tabularnewline\\hline", endl;
-  }
-  os << "\\end{tabular}", endl;
-  os << "\\end{document}", endl;
-}
 
 struct RGBAColor {
   float r;
@@ -812,15 +656,19 @@ void printbanner() {
   cerr << endl;
 }
 
-DataStoreNode* collect_into_supernode(int argc, char** argv, char* path, const char* deltastart = null) {
+DataStoreNode* collect_into_supernode(int argc, char** argv, char* path, const char* deltastart = null, const char* deltaend = "final") {
   DataStoreNode* supernode = new DataStoreNode("super");
+
+  StatsFileReader reader;
 
   foreach (i, argc) {
     char* filename = argv[i];
-        
-    idstream is(filename);
+    DataStoreNode* endbase;
+    DataStoreNode* end;
+    DataStoreNode* startbase;
+    DataStoreNode* start;
 
-    if (!is) {
+    if (!reader.open(filename)) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
       return null;
     }
@@ -828,31 +676,41 @@ DataStoreNode* collect_into_supernode(int argc, char** argv, char* path, const c
     // Can't have slashes in tree pathnames
     int filenamelen = strlen(filename);
     foreach (i, filenamelen) { if (filename[i] == '/') filename[i] = ':'; }
+    
+    if (!(endbase = reader.get(deltaend))) {
+      cerr << "ptlstats: Error: cannot find ending snapshot '", deltaend, "'", endl;
+      reader.close();
+      return null;
+    }
 
-    DataStoreNode& dsbase =* new DataStoreNode(is);
-
-    DataStoreNode* ds = dsbase.searchpath(path);
-
-    if (!ds) {
-      cerr << "ptlstats: Error: cannot find subtree '", path, "'", endl;
-      delete &dsbase;
+    if (!(end = endbase->searchpath(path))) {
+      cerr << "ptlstats: Error: cannot find ending subtree '", path, "'", endl;
+      delete endbase;
+      reader.close();
       return null;
     }
 
     if (deltastart) {
-      DataStoreNode* dsstart = dsbase.searchpath(deltastart);
-      if (!dsstart) {
-        cerr << "ptlstats: Error: cannot find snapshot '", deltastart, "'", endl;
-        delete &dsbase;
+      if (!(startbase = reader.get(deltastart))) {
+        cerr << "ptlstats: Error: cannot find starting snapshot '", deltastart, "'", endl;
+        delete endbase;
+        reader.close();
         return null;
       }
 
-      *ds -= *dsstart;
+      if (!(start = startbase->searchpath(path))) {
+        cerr << "ptlstats: Error: cannot find starting subtree '", path, "'", endl;
+        delete startbase;
+        delete endbase;
+        reader.close();
+        return null;
+      }
+
+      *end -= *start;
     }
 
-    ds->rename(filename);
-
-    supernode->add(ds);
+    end->rename(filename);
+    supernode->add(end);
   }
 
   return supernode;
@@ -971,6 +829,8 @@ bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<
   //
   const char* findarray[2] = {"%row", "%col"};
 
+  StatsFileReader reader;
+
   for (int row = 0; row < rowlist.size(); row++) {
     data[row].resize(collist.size());
 
@@ -982,15 +842,18 @@ bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<
       replarray[1] = collist[col];
       stringsubst(filename, config.table_row_col_pattern, findarray, replarray, 2);
 
-      idstream is(filename);
-
-      if (!is) {
+      if (!reader.open(filename)) {
         cerr << "ptlstats: Cannot open '", filename, "' for row ", row, ", col ", col, endl, endl, flush;
         return false;
       }
 
-      DataStoreNode* ds = new DataStoreNode(is);
-      assert(ds);
+      DataStoreNode* ds = reader.get(config.snapshot);
+      if (!ds) {
+        cerr << "ptlstats: Cannot open snapshot '", config.snapshot, "' in '", filename, "' for row ", row, ", col ", col, endl, endl, flush;
+        reader.close();
+        return false;
+      }
+
       ds = ds->searchpath(statname);
 
       double value;
@@ -1003,6 +866,8 @@ bool capture_table(dynarray<char*>& rowlist, dynarray<char*>& collist, dynarray<
       }
 
       data[row][col] = value;
+
+      reader.close();
     }
   }
 
@@ -1278,15 +1143,21 @@ int main(int argc, char* argv[]) {
   printinfo.cumulative_histogram = config.cumulative_histogram;
 
   char* subtract_branch = (config.subtract_branch.set()) ? (char*)config.subtract_branch : null;
+  char* snapshot = (config.snapshot.set()) ? (char*)config.snapshot : null;
+
+  StatsFileReader reader;
 
   if (config.mode_histogram.set()) {
-    idstream is(filename);
-    if (!is) {
+    if (!reader.open(filename)) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
       return 2;
     }
 
-    DataStoreNode* ds = new DataStoreNode(is);
+    DataStoreNode* ds = reader.get(config.snapshot);
+    if (!ds) {
+      cerr << "ptlstats: Cannot find snapshot '", config.snapshot, "'", endl;
+      return 2;
+    }
 
     ds = ds->searchpath(config.mode_histogram);
     
@@ -1304,14 +1175,14 @@ int main(int argc, char* argv[]) {
   } else if (config.mode_collect.set()) {
     argv += n; argc -= n;
 
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect, subtract_branch);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect, subtract_branch, snapshot);
     if (!supernode) return -1;
     supernode->identical_subtrees = 0;
     supernode->print(cout, printinfo);
     delete supernode;
   } else if (config.mode_collect_sum.set()) {
     argv += n; argc -= n;
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect_sum, subtract_branch);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect_sum, subtract_branch, snapshot);
     if (!supernode) return -1;
     supernode->identical_subtrees = 1;
     DataStoreNode* sumnode = supernode->sum_of_subtrees();
@@ -1320,7 +1191,7 @@ int main(int argc, char* argv[]) {
     delete supernode;
   } else if (config.mode_collect_average.set()) {
     argv += n; argc -= n;
-    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect_average, subtract_branch);
+    DataStoreNode* supernode = collect_into_supernode(argc, argv, config.mode_collect_average, subtract_branch, snapshot);
     if (!supernode) return -1;
     supernode->identical_subtrees = 1;
     DataStoreNode* avgnode = supernode->average_of_subtrees();
@@ -1358,13 +1229,17 @@ int main(int argc, char* argv[]) {
                             config.table_row_col_pattern, config.table_scale_rel_to_col, config.graph_title,
                             config.graph_width, config.graph_height);
   } else {
-    idstream is(filename);
-    if (!is) {
+    if (!reader.open(filename)) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
       return 2;
     }
 
-    DataStoreNode* ds = new DataStoreNode(is);
+    DataStoreNode* ds = reader.get(snapshot);
+    if (!ds) {
+      cerr << "ptlstats: Cannot get snapshot '", snapshot, "'", endl, endl;
+      reader.close();
+      return 1;
+    }
 
     if (config.mode_subtree) {
       ds = ds->searchpath(config.mode_subtree);

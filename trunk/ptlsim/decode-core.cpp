@@ -9,6 +9,7 @@
 #include <ptlsim.h>
 #include <datastore.h>
 #include <decode.h>
+#include <stats.h>
 
 BasicBlockCache bbcache;
 
@@ -26,7 +27,9 @@ struct BasicBlockChunkListHashtableLinkManager {
   }
 };
 
-SelfHashtable<W64, BasicBlockChunkList, BasicBlockChunkListHashtableLinkManager, 16384> bbpages;
+typedef SelfHashtable<W64, BasicBlockChunkList, BasicBlockChunkListHashtableLinkManager, 16384> BasicBlockPageCache;
+
+BasicBlockPageCache bbpages;
 CycleTimer translate_timer("translate");
 
 //
@@ -229,11 +232,12 @@ const char* assist_name(assist_func_t assist) {
 }
 
 W64 assist_histogram[ASSIST_COUNT];
-
+/*
 W64 decoder_type_fast;
 W64 decoder_type_complex;
 W64 decoder_type_x87;
 W64 decoder_type_sse;
+*/
 
 void update_assist_stats(assist_func_t assist) {
   int idx = assist_index(assist);
@@ -245,6 +249,7 @@ void reset_assist_stats() {
   setzero(assist_histogram);
 }
 
+/*
 void save_assist_stats(DataStoreNode& root) {
   root.histogram("assists", assist_names, assist_histogram, ASSIST_COUNT);
   DataStoreNode& decoder = root("decoder"); {
@@ -254,7 +259,9 @@ void save_assist_stats(DataStoreNode& root) {
     decoder.add("x87", decoder_type_x87);
     decoder.add("sse", decoder_type_sse);
   }
+
 }
+*/
 
 void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
   assert(transop.unaligned);
@@ -562,6 +569,8 @@ TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
   user_insn_count = 0;
   last_flags_update_was_atomic = 1;
   invalid = 0;
+  some_insns_complex = 0;
+  used_microcode_assist = 0;
   end_of_block = false;
 }
 
@@ -619,10 +628,12 @@ void TraceDecoder::lastop() {
     if (transop.rc < ARCHREG_COUNT) setbit(bb.usedregs, transop.rc);
   }
 
+  stats.decoder.throughput.x86_insns++;
+  stats.decoder.throughput.uops += transbufcount;
+  stats.decoder.throughput.bytes += bytes;
+
   bb.user_insn_count++;
-
   bb.bytes += bytes;
-
   transbufcount = 0;
 }
 
@@ -1230,6 +1241,7 @@ void TraceDecoder::signext_reg_or_mem(const DecodedOperand& rd, DecodedOperand& 
 }
 
 void TraceDecoder::microcode_assist(int assistid, Waddr selfrip, Waddr nextrip) {
+  used_microcode_assist = 1;
   immediate(REG_selfrip, 3, (Waddr)selfrip);
   immediate(REG_nextrip, 3, (Waddr)nextrip);
   if (!last_flags_update_was_atomic) 
@@ -1286,9 +1298,7 @@ void assist_invalid_opcode(Context& ctx) {
 
 static const bool log_code_page_ops = 0;
 
-void BasicBlockCache::invalidate(BasicBlock* bb) {
-  // Fixup phys page SMC lists
-
+void BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
   BasicBlockChunkList* pagelist;
   pagelist = bbpages.get(bb->rip.mfnlo);
   if (logable(3) | log_code_page_ops) logfile << "Remove bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) from low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
@@ -1304,13 +1314,16 @@ void BasicBlockCache::invalidate(BasicBlock* bb) {
   }
 
   remove(bb);
-  delete bb;
+  stats.decoder.bbcache.count = bbcache.count;
+  stats.decoder.bbcache.invalidates[reason]++;
+
+  bb->free();
 }
 
-void BasicBlockCache::invalidate(const RIPVirtPhys& rvp) {
+void BasicBlockCache::invalidate(const RIPVirtPhys& rvp, int reason) {
   BasicBlock* bb = get(rvp);
   if (!bb) return;
-  invalidate(bb);
+  invalidate(bb, reason);
 }
 
 //
@@ -1319,10 +1332,10 @@ void BasicBlockCache::invalidate(const RIPVirtPhys& rvp) {
 // when we run out of memory (it may not allocate any memory).
 //
 
-int BasicBlockCache::invalidate_page(Waddr mfn) {
+int BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
   BasicBlockChunkList* pagelist = bbpages.get(mfn);
 
-  // static const bool log_code_page_ops = 1;
+  //static const bool log_code_page_ops = 0;
 
   if (logable(3) | log_code_page_ops) logfile << "Invalidate page mfn ", mfn, ": pagelist ", pagelist, " has ", (pagelist ? pagelist->count() : 0), " entries", endl;
 
@@ -1335,7 +1348,7 @@ int BasicBlockCache::invalidate_page(Waddr mfn) {
   while (entry = iter.next()) {
     BasicBlock* bb = *entry;
     if (logable(3) | log_code_page_ops) logfile << "  Invalidate bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes)", endl;
-    bbcache.invalidate(bb);
+    bbcache.invalidate(bb, reason);
     n++;
   }
 
@@ -1343,11 +1356,10 @@ int BasicBlockCache::invalidate_page(Waddr mfn) {
   assert(pagelist->count() == 0);
 
   pagelist->clear();
-  bbpages.remove(pagelist);
+  stats.decoder.pagecache.count = bbpages.count;
+  stats.decoder.pagecache.invalidates[reason]++;
 
   smc_cleardirty(mfn);
-
-  delete pagelist;
 
   return n;
 }
@@ -1358,9 +1370,13 @@ int BasicBlockCache::invalidate_page(Waddr mfn) {
 // recently used BBs.
 //
 int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
+  bool DEBUG = 1; //logable(1);
+
   if (!count) return 0;
 
-  logfile << "Reclaiming cached basic blocks at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits:", endl, flush;
+  if (DEBUG) logfile << "Reclaiming cached basic blocks at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits:", endl, flush;
+
+  stats.decoder.reclaim_rounds++;
 
   W64 oldest = limits<W64>::max;
   W64 newest = 0;
@@ -1392,12 +1408,14 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
     average = infinity;
   }
 
-  logfile << "Before:", endl;
-  logfile << "  Basic blocks:   ", intstring(count, 12), endl;
-  logfile << "  Bytes occupied: ", intstring(total_bytes, 12), endl;
-  logfile << "  Oldest cycle:   ", intstring(oldest, 12), endl;
-  logfile << "  Average cycle:  ", intstring(average, 12), endl;
-  logfile << "  Newest cycle:   ", intstring(newest, 12), endl;
+  if (DEBUG) {
+    logfile << "Before:", endl;
+    logfile << "  Basic blocks:   ", intstring(count, 12), endl;
+    logfile << "  Bytes occupied: ", intstring(total_bytes, 12), endl;
+    logfile << "  Oldest cycle:   ", intstring(oldest, 12), endl;
+    logfile << "  Average cycle:  ", intstring(average, 12), endl;
+    logfile << "  Newest cycle:   ", intstring(newest, 12), endl;
+  }
 
   //
   // Reclaim all objects older than the average
@@ -1412,16 +1430,40 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
     if likely (bb->lastused <= average) {
       reclaimed_bytes += ptl_mm_getsize(bb);
       reclaimed_objs++;
-      invalidate(bb);
+      invalidate(bb, INVALIDATE_REASON_RECLAIM);
     }
     n++;
   }
 
-  logfile << "After:", endl;
-  logfile << "  Basic blocks:   ", intstring(reclaimed_objs, 12), " BBs reclaimed", endl;
-  logfile << "  Bytes occupied: ", intstring(reclaimed_bytes, 12), " bytes reclaimed", endl;
-  logfile << "  New pool size:  ", intstring(count, 12), " BBs", endl;
-  logfile.flush();
+  if (DEBUG) {
+    logfile << "After:", endl;
+    logfile << "  Basic blocks:   ", intstring(reclaimed_objs, 12), " BBs reclaimed", endl;
+    logfile << "  Bytes occupied: ", intstring(reclaimed_bytes, 12), " bytes reclaimed", endl;
+    logfile << "  New pool size:  ", intstring(count, 12), " BBs", endl;
+    logfile.flush();
+  }
+
+  //
+  // Reclaim per-page chunklist heads
+  //
+
+  {
+    BasicBlockPageCache::Iterator iter(&bbpages);
+    BasicBlockChunkList* page;
+    int pages_freed = 0;
+
+    if (DEBUG) logfile << "Scanning ", bbpages.count, " code pages:", endl;
+    while (page = iter.next()) {
+      if (page->empty()) {
+        if (DEBUG) logfile << "  mfn ", page->mfn, " has no entries; freeing", endl;
+        bbpages.remove(page);
+        delete page;
+        pages_freed++;
+      }
+    }
+
+    if (DEBUG) logfile << "Freed ", pages_freed, " empty pages", endl, flush;
+  }
 
   return n;
 }
@@ -1451,8 +1493,7 @@ void assist_exec_page_fault(Context& ctx) {
         (void*)faultaddr, " @ ", total_user_insns_committed, 
         " user commits (", sim_cycle, " cycles)";
     }
-    bbcache.invalidate(RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx));
-    bbcache.invalidate(RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx));
+    bbcache.invalidate(RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx), INVALIDATE_REASON_SPURIOUS);
     ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
     return;
   }
@@ -1588,10 +1629,15 @@ bool TraceDecoder::translate() {
 
     // Try again with the complex decoder if needed
     bool iscomplex = ((rc == 0) & (!invalid));
-    decoder_type_fast += (!iscomplex);
-    decoder_type_complex += iscomplex;
-
+    some_insns_complex |= iscomplex;
     if (iscomplex) rc = decode_complex();
+
+    if unlikely (used_microcode_assist) {
+      stats.decoder.x86_decode_type[DECODE_TYPE_ASSIST]++;
+    } else {
+      stats.decoder.x86_decode_type[DECODE_TYPE_FAST] += (!iscomplex);
+      stats.decoder.x86_decode_type[DECODE_TYPE_COMPLEX] += iscomplex;
+    }
 
     break;
   }
@@ -1599,10 +1645,10 @@ bool TraceDecoder::translate() {
   case 3:
   case 4:
   case 5:
-    decoder_type_sse++;
+    stats.decoder.x86_decode_type[DECODE_TYPE_SSE]++;
     rc = decode_sse(); break;
   case 6:
-    decoder_type_x87++;
+    stats.decoder.x86_decode_type[DECODE_TYPE_X87]++;
     rc = decode_x87(); break;
   default: {
     MakeInvalid();
@@ -1619,6 +1665,8 @@ bool TraceDecoder::translate() {
   if (end_of_block) {
     // Block ended with a branch: close the uop and exit
     lastop();
+    stats.decoder.bb_decode_type.all_insns_fast += (!some_insns_complex);
+    stats.decoder.bb_decode_type.some_complex_insns += some_insns_complex;
     return false;
   } else {
     // Block did not end with a branch: do we have more room for another x86 insn?
@@ -1635,6 +1683,8 @@ bool TraceDecoder::translate() {
       bb.rip_taken = bb.rip_not_taken = (Waddr)rip;
       this << transop;
       lastop();
+      stats.decoder.bb_decode_type.all_insns_fast += (!some_insns_complex);
+      stats.decoder.bb_decode_type.some_complex_insns += some_insns_complex;
       return false;
     } else {
       lastop();
@@ -1667,10 +1717,10 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   if (bb) return bb;
 
   if (smc_isdirty(rvp.mfnlo))
-    invalidate_page(rvp.mfnlo);
+    invalidate_page(rvp.mfnlo, INVALIDATE_REASON_DIRTY);
 
   if (smc_isdirty(rvp.mfnhi))
-    invalidate_page(rvp.mfnhi);
+    invalidate_page(rvp.mfnhi, INVALIDATE_REASON_DIRTY);
 
   translate_timer.start();
 
@@ -1691,14 +1741,21 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   bb = trans.bb.clone();
 
   add(bb);
+  stats.decoder.bbcache.count = this->count;
+  stats.decoder.bbcache.inserts++;
+
+  stats.decoder.throughput.basic_blocks++;
 
   BasicBlockChunkList* pagelist;
 
   smc_cleardirty(bb->rip.mfnlo);
   pagelist = bbpages.get(bb->rip.mfnlo);
   if (!pagelist) {
+    //++MTY FIXME: This is allocated but never freed!
     pagelist = new BasicBlockChunkList(bb->rip.mfnlo);
     bbpages.add(pagelist);
+    stats.decoder.pagecache.inserts++;
+    stats.decoder.pagecache.count = bbpages.count;
   }
 
   pagelist->add(bb, bb->mfnlo_loc);
@@ -1710,8 +1767,11 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
     smc_cleardirty(bb->rip.mfnhi);
     pagelist = bbpages.get(bb->rip.mfnhi);
     if (!pagelist) {
+      //++MTY FIXME: This is allocated but never freed!
       pagelist = new BasicBlockChunkList(bb->rip.mfnhi);
       bbpages.add(pagelist);
+      stats.decoder.pagecache.inserts++;
+      stats.decoder.pagecache.count = bbpages.count;
     }
     pagelist->add(bb, bb->mfnhi_loc);
     if (logable(5) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;

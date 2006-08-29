@@ -164,10 +164,11 @@ namespace superstl {
     int bufsize;
     int tail;
     odstream* chain;
+    W64 offset;
   public:
     bool close_on_destroy;
 
-    odstream() { fd = -1; buf = null; bufsize = 0; tail = 0; close_on_destroy = 1; chain = null; }
+    odstream() { fd = -1; buf = null; bufsize = 0; tail = 0; close_on_destroy = 1; chain = null; offset = 0; }
 
     bool open(const char* filename, bool append = false, int bufsize = 65536);
 
@@ -205,6 +206,10 @@ namespace superstl {
 
     int filehandle() const {
       return fd;
+    }
+
+    W64 where() const {
+      return offset;
     }
 
     void flush();
@@ -443,6 +448,7 @@ namespace superstl {
     int bufsize;
     int bufused;
     W32 bufmask;
+    W64 offset;
     byte* buf;
 
     int fillbuf();
@@ -451,7 +457,7 @@ namespace superstl {
 
     inline int addmod(int a, int b) { return ((a + b) & bufmask); }
 
-    inline void reset() { fd = -1; error = 0; eos = 0; head = 0; tail = 0; buf = null; bufused = 0; bufsize = 0; bufmask = 0; close_on_destroy = 1; }
+    inline void reset() { fd = -1; error = 0; eos = 0; head = 0; tail = 0; buf = null; bufused = 0; bufsize = 0; bufmask = 0; offset = 0; close_on_destroy = 1; }
 
   public:
     bool close_on_destroy;
@@ -682,19 +688,20 @@ namespace superstl {
     dynarray() {
       length = reserved = 0;
       granularity = 16;
-      data = NULL;
+      data = null;
     }
     
     dynarray(int initcap, int g = 16) {
       length = 0;
       reserved = 0;
       granularity = g;
-      data = NULL;
+      data = null;
       reserve(initcap);
     }
     
     ~dynarray() {
-      delete[] data;
+      delete data;
+      data = null;
       length = 0;
       reserved = 0;
     }
@@ -2257,6 +2264,7 @@ namespace superstl {
 
           T& obj = LM::objof(link);
           link = link->next;
+          prefetch(link);
           return &obj;
         }
       }
@@ -2353,13 +2361,13 @@ namespace superstl {
     struct Chunk;
 
     struct Chunk {
-      Chunk* next;
+      selflistlink link;
       bitvec<N> freemap;
 
       // Formula: (CHUNK_SIZE - sizeof(ChunkHeader<T>)) / sizeof(T);
       T data[N];
 
-      Chunk() { next = null; freemap++; }
+      Chunk() { link.reset(); freemap++; }
 
       bool full() const { return (!freemap); }
       bool empty() const { return freemap.allset(); }
@@ -2381,7 +2389,7 @@ namespace superstl {
         data[idx] = 0;
         freemap[idx] = 1;
 
-        return true;
+        return empty();
       }
 
       struct Iterator {
@@ -2428,16 +2436,16 @@ namespace superstl {
       void reset() { chunk = null; index = 0; }
     };
 
-    Chunk* head;
+    selflistlink* head;
     int elemcount;
 
     ChunkList() { head = null; elemcount = 0; }
 
     bool add(const T& entry, Locator& hint) {
-      Chunk* chunk = head;
+      Chunk* chunk = (Chunk*)head;
 
       while (chunk) {
-        prefetch(chunk->next);
+        prefetch(chunk->link.next);
         int index = chunk->add(entry);
         if likely (index >= 0) {
           hint.chunk = chunk;
@@ -2445,12 +2453,11 @@ namespace superstl {
           elemcount++;
           return true;
         }
-        chunk = chunk->next;
+        chunk = (Chunk*)chunk->link.next;
       }
 
       Chunk* newchunk = new Chunk();
-      newchunk->next = head;
-      head = newchunk;
+      newchunk->link.addto(head);
 
       int index = newchunk->add(entry);
       assert(index >= 0);
@@ -2462,16 +2469,23 @@ namespace superstl {
       return true;
     }
 
-    void remove(const Locator& locator) {
+    bool remove(const Locator& locator) {
       locator.chunk->remove(locator.index);
-      elemcount--; 
+      elemcount--;
+
+      if (locator.chunk->empty()) {
+        locator.chunk->link.unlink();
+        delete locator.chunk;
+      }
+
+      return empty();
     }
 
     void clear() {
-      Chunk* chunk = head;
+      Chunk* chunk = (Chunk*)head;
 
       while (chunk) {
-        Chunk* next = chunk->next;
+        Chunk* next = (Chunk*)chunk->link.next;
         prefetch(next);
         delete chunk;
         chunk = next;
@@ -2483,8 +2497,15 @@ namespace superstl {
 
     int count() { return elemcount; }
 
+    bool empty() { return (elemcount == 0); }
+
+    ~ChunkList() {
+      clear();
+    }
+
     struct Iterator {
       Chunk* chunk;
+      Chunk* nextchunk;
       int i;
 
       Iterator() { }
@@ -2494,7 +2515,8 @@ namespace superstl {
       }
 
       void reset(ChunkList<T, N>* chunklist) {
-        chunk = chunklist->head;
+        chunk = (Chunk*)chunklist->head;
+        nextchunk = (chunk) ? (Chunk*)chunk->link.next : null;
         i = 0;
       }
 
@@ -2503,9 +2525,10 @@ namespace superstl {
           if unlikely (!chunk) return null;
 
           if unlikely (i >= lengthof(chunk->data)) {
-            chunk = chunk->next;
+            chunk = nextchunk;
             if unlikely (!chunk) return null;
-            prefetch(chunk->next);
+            nextchunk = (Chunk*)chunk->link.next;
+            prefetch(nextchunk);
             i = 0;
           }
           

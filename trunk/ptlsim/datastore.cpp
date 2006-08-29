@@ -30,6 +30,7 @@ void DataStoreNode::init(const char* name, int type, int count) {
   parent = null;
   summable = 0;
   histogramarray = 0;
+  labeled_histogram = 0;
   identical_subtrees = 0;
   histomin = 0;
   histomax = 0;
@@ -37,6 +38,7 @@ void DataStoreNode::init(const char* name, int type, int count) {
   dynamic = 0;
   sum_of_subtrees_cache = null;
   average_of_subtrees_cache = null;
+  labels = null;
   total_sum_cache = -1;
 }
 
@@ -75,6 +77,12 @@ void DataStoreNode::cleanup() {
   } else {
     if (count > 1)
       delete[] values;
+  }
+  if (labels) {
+    foreach (i, count) {
+      delete labels[i];
+    }
+    delete[] labels;
   }
 }
 
@@ -366,10 +374,11 @@ double DataStoreNode::percent_of_toplevel() const {
 }
 
 DataStoreNode& DataStoreNode::histogram(const char* key, const char** names, const W64* values, int count) {
-  DataStoreNode& ds = add(key);
-  ds.summable = 1;
+  DataStoreNode& ds = histogram(key, values, count, 0, count-1, 1);
+  ds.labeled_histogram = 1;
+  ds.labels = new char* [count];
   foreach (i, count) {
-    ds.add(names[i], values[i]);
+    ds.labels[i] = strdup(names[i]);
   }
   return ds;
 }
@@ -474,8 +483,10 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
         int valuewidth = digits(maxvalue);
         int w = max(width, valuewidth);
 
-        os << padding, "  ", "Range:   ", intstring(histomin, w), " ", intstring(histomax, w), endl;
-        os << padding, "  ", "Stride:  ", intstring(histostride, w), endl;
+        if (!labeled_histogram) {
+          os << padding, "  ", "Range:   ", intstring(histomin, w), " ", intstring(histomax, w), endl;
+          os << padding, "  ", "Stride:  ", intstring(histostride, w), endl;
+        }
 
         os << padding, "  ", "ValRange:", intstring(minvalue, w), " ", intstring(maxvalue, w), endl;
         os << padding, "  ", "Total:   ", intstring(total, w), endl;
@@ -492,17 +503,22 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
             double cumulative_percent = ((double)accum / (double)total) * 100.0;
             os << padding, "  [ ", floatstring(percent, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";
 
-            if (cumulative_percent >= 99.9)
-              os << "[ ", padstring("100", 3 + printinfo.percent_digits), "% ] ";
-            else os << "[ ", floatstring(cumulative_percent, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";
-
-            os << intstring(base, w), " ", 
-              intstring(base + (histostride-1), w), " ",
-              intstring(value, w), endl;
+            if (labeled_histogram) {
+              os << intstring(base, w), " ", intstring(value, w), " ", labels[i], endl;
+            } else {
+              if (cumulative_percent >= 99.9)
+                os << "[ ", padstring("100", 3 + printinfo.percent_digits), "% ] ";
+              else os << "[ ", floatstring(cumulative_percent, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";
+              
+              os << intstring(base, w), " ", 
+                intstring(base + (histostride-1), w), " ",
+                intstring(value, w), endl;
+            }
           }
 
           base += histostride;
         }
+
         os << padding;
       } else {
         foreach (i, count) {
@@ -594,7 +610,7 @@ struct DataStoreNodeHeader {
   W32 magic;
   byte type;
   byte namelength;
-  W16 isarray:1, summable:1, histogramarray:1, identical_subtrees:1;
+  W16 isarray:1, summable:1, histogramarray:1, identical_subtrees:1, labeled_histogram:1;
   W32 subcount;
   // (optional DataStoreNodeArrayInfo iff (isarray == 1)
   // (null-terminated name)
@@ -608,7 +624,7 @@ DataStoreNode::DataStoreNode(idstream& is) {
   }
 }
 
-#define DSN_MAGIC_VER_1 0x324c5450 // 'PTL2'
+#define DSN_MAGIC_VER_3 0x334c5450 // 'PTL3'
 
 bool DataStoreNode::read(idstream& is) {
   DataStoreNodeHeader h;
@@ -618,7 +634,7 @@ bool DataStoreNode::read(idstream& is) {
 
   assert(is);
 
-  if (h.magic != DSN_MAGIC_VER_1) {
+  if (h.magic != DSN_MAGIC_VER_3) {
     cerr << "DataStoreNode::read(): ERROR: stream does not have proper DSN version 2 header (0x", 
       hexstring(h.magic, 32), ") at offset ", is.where(), endl, flush;
     return false;
@@ -640,10 +656,23 @@ bool DataStoreNode::read(idstream& is) {
   summable = h.summable;
   identical_subtrees = h.identical_subtrees;
   histogramarray = h.histogramarray;
+  labeled_histogram = h.labeled_histogram;
 
   count = (h.isarray) ? ah.count : 1;
   subnodes = null;
   parent = null;
+
+  if (h.isarray & h.histogramarray & h.labeled_histogram) {
+    // Read the <count> histogram slot labels
+    labels = new char* [count];
+    foreach (i, count) {
+      W16 ll;
+      is >> ll;
+      labels[i] = new char[ll + 1];
+      is.read(labels[i], ll);
+      labels[i][ll] = 0;
+    }
+  }
 
   switch (type) {
   case DS_NODE_TYPE_NULL: {
@@ -701,12 +730,13 @@ odstream& DataStoreNode::write(odstream& os) const {
   int namelen = strlen(name);
   assert(namelen < 256);
 
-  h.magic = DSN_MAGIC_VER_1;
+  h.magic = DSN_MAGIC_VER_3;
   h.type = type;
   h.namelength = (byte)namelen;
   h.histogramarray = histogramarray;
   h.summable = summable;
   h.identical_subtrees = identical_subtrees;
+  h.labeled_histogram = labeled_histogram;
 
   h.isarray = (count > 1);
   if (count > 1) {
@@ -722,6 +752,15 @@ odstream& DataStoreNode::write(odstream& os) const {
   if (h.isarray) os << ah;
 
   os.write(name, h.namelength + 1);
+
+  if (h.isarray & h.histogramarray & h.labeled_histogram) {
+    // Write the <count> histogram slot labels
+    foreach (i, count) {
+      W16 ll = strlen(labels[i]);
+      os << ll;
+      os.write(labels[i], ll);
+    }
+  }
 
   switch (type) {
   case DS_NODE_TYPE_NULL: {
@@ -771,4 +810,433 @@ odstream& DataStoreNode::write(odstream& os) const {
     delete &a;
   }
   return os;
+}
+
+DataStoreNodeTemplate::DataStoreNodeTemplate(const char* name, int type, int count, const char** labels) {
+  magic = DataStoreNodeTemplateBase::MAGIC;
+  length = sizeof(DataStoreNodeTemplateBase);
+  this->name = strdup(name);
+  this->type = type;
+  this->count = count;
+
+  parent = null;
+
+  subcount = 0;
+  summable = 0;
+  histogramarray = 0;
+  identical_subtrees = 0;
+  labeled_histogram = 0;
+  labels = null;
+
+  histomin = 0;
+  histomax = 0;
+  histostride = 0;
+  limit = 0;
+
+  if (labels) {
+    labeled_histogram = 1;
+    this->labels = new char*[count];
+    foreach (i, count) {
+      this->labels[i] = strdup(labels[i]);
+    }
+  }
+}
+
+DataStoreNodeTemplate::~DataStoreNodeTemplate() {
+  foreach (i, subnodes.length) {
+    // delete subnodes[i];
+  }
+  subnodes.clear();
+  subcount = 0;
+  // if (labels) delete labels;
+  if (name) delete name;
+}
+
+//
+// Generate a C struct definition for the tree
+//
+ostream& DataStoreNodeTemplate::generate_struct_def(ostream& os, int depth) const {
+  foreach (i, depth) os << "  ";
+
+  if (labeled_histogram) {
+    assert(subnodes);
+    os << "W64 ", name, "[", subnodes.length, "];", endl;
+  } else {
+    switch (type) {
+    case DS_NODE_TYPE_NULL: {
+      os << "struct ", name, " {";
+      if (summable | identical_subtrees) os << " // node:";
+      if (summable) os << " summable";
+      if (identical_subtrees) os << " identical";
+      os << endl;
+      break;
+    }
+    case DS_NODE_TYPE_INT: {
+      os << "W64 ", name;
+      if (count > 1) os << "[", count, "]";
+      os << ";";
+      if (histogramarray) os << "// histo: ", histomin, " ", histomax, " ", histostride, endl;
+      if (labeled_histogram) {
+        os << "// label:";
+        foreach (i, count) { os << " ", labels[i]; }
+      }
+      os << endl;
+      break;
+    }
+    case DS_NODE_TYPE_FLOAT: {
+      os << "double ", name;
+      if (count > 1) os << "[", count, "]";
+      os << ";", endl;
+      break;
+    }
+    case DS_NODE_TYPE_STRING: {
+      os << "char ", name;
+      if (count > 1) os << "[", count, "]";
+      os << "[", limit, "]";
+      os << ";", endl;
+      break;
+    }
+    default:
+      assert(false);
+    }
+
+    //os << "// subnodes = ", subnodes, endl;
+    foreach (i, subnodes.length) {
+      subnodes[i]->generate_struct_def(os, depth + 1);
+    }
+
+    if (type == DS_NODE_TYPE_NULL) {
+      foreach (i, depth) os << "  ";
+      if (depth) {
+        os << "} ", (name ?: "UNKNOWN"), ";", endl;
+      } else {
+        os << "};", endl;
+      }
+    }
+  }
+
+  return os;
+}
+
+//
+// Write structural definition in binary format for use by ptlstats:
+//
+odstream& DataStoreNodeTemplate::write(odstream& os) const {
+  W16 n;
+
+  os.write((DataStoreNodeTemplateBase*)this, sizeof(DataStoreNodeTemplateBase));
+
+  n = strlen(name); os << n; os.write(name, n);
+
+  if (labeled_histogram) {
+    foreach (i, count) {
+      n = strlen(labels[i]); os << n; os.write(labels[i], n);
+    }
+  }
+
+  assert(subcount == subnodes.length);
+
+  foreach (i, subcount) {
+    subnodes[i]->write(os);
+  }
+
+  return os;
+}
+
+//
+// Read structural definition in binary format for use by ptlstats:
+//
+DataStoreNodeTemplate::DataStoreNodeTemplate(idstream& is) {
+  // Fill in all static fields:
+  is.read(this, sizeof(DataStoreNodeTemplateBase));
+  assert(magic == DataStoreNodeTemplateBase::MAGIC);
+  assert(length == sizeof(DataStoreNodeTemplateBase));
+
+  parent = null;
+
+  W16 n;
+  is >> n; name = new char[n+1]; is.read(name, n); name[n] = 0;
+
+  if (labeled_histogram) {
+    labels = new char*[count];
+    foreach (i, count) {
+      is >> n; labels[i] = new char[n+1]; is.read(labels[i], n); labels[i][n] = 0;
+    }
+  }
+
+  subnodes.resize(subcount);
+
+  foreach (i, subcount) {
+    subnodes[i] = new DataStoreNodeTemplate(is);
+  }
+}
+
+//
+// Reconstruct a stats tree from its template and an array of words
+// representing the tree in depth first traversal order, in a format
+// identical to the C struct generated by generate_struct_def()
+//
+DataStoreNode* DataStoreNodeTemplate::reconstruct(const W64*& p) {
+  DataStoreNode* ds;
+
+  switch (type) {
+  case DS_NODE_TYPE_NULL: {
+    ds = new DataStoreNode(name);
+    foreach (i, subnodes.length) {
+      ds->add(subnodes[i]->reconstruct(p));
+    }
+    break;
+  }
+  case DS_NODE_TYPE_INT: {
+    if (count > 1) {
+      ds = new DataStoreNode(name, (W64s*)p, count);
+      ds->histogramarray = histogramarray;
+      ds->histomin = histomin;
+      ds->histomax = histomax;
+      ds->histostride = histostride;
+      ds->labeled_histogram = labeled_histogram;
+        
+      if (labeled_histogram) {
+        ds->labels = new char* [count];
+        foreach (i, count) {
+          ds->labels[i] = strdup(labels[i]);
+        }
+      }
+        
+      p += count;
+    } else {
+      ds = new DataStoreNode(name, *(W64s*)p);
+      p++;
+    }
+    break;
+  }
+  case DS_NODE_TYPE_FLOAT: {
+    if (count > 1) {
+      ds = new DataStoreNode(name, (double*)p, count);
+      p += count;
+    } else {
+      ds = new DataStoreNode(name, *(double*)p);
+      p++;
+    }
+    break;
+  }
+  case DS_NODE_TYPE_STRING: {
+    if (count > 1) {
+      abort(); // not supported
+      const char** strings = new const char* [count];
+      foreach (i, count) {
+        strings[i] = (const char*)p;
+        p += limit / 8;
+      }        
+      ds = new DataStoreNode(name, strings, count);
+    } else {
+      ds = new DataStoreNode(name, (const char*)p);
+      p = (W64*)(((Waddr)p) + limit);
+    }
+
+    break;
+  }
+  default:
+    assert(false);
+  }
+
+  return ds;
+}
+
+//
+// Stats index file header
+//
+struct StatsIndexHeader {
+  W32 magic;
+  W32 version;
+  W32 record_size;
+  W32 template_size;
+
+  static const W32 MAGIC = 0x734c5450; // 'PTLs'
+  static const W32 VERSION = 1;
+};
+
+//
+// Stats index file record, pointing to
+// snapshots in data portion of file.
+// These structures come immediately
+// after the index header and template
+// descriptor.
+//
+struct StatsIndexRecord {
+  W64 uuid;
+  W64 offset;
+  W16 namelen;
+};
+
+//
+// StatsFileWriter
+//
+void StatsFileWriter::open(const char* filename, const void* dst, size_t dstsize, int record_size) {
+  close();
+  indexfile.open(filename);
+
+  stringbuf sb; sb << filename, ".data";
+  datafile.open(sb);
+
+  StatsIndexHeader h;
+  h.magic = StatsIndexHeader::MAGIC;
+  h.version = StatsIndexHeader::VERSION;
+  h.record_size = record_size;
+  h.template_size = dstsize;
+  this->record_size = record_size;
+
+  indexfile << h;
+  indexfile.write(dst, dstsize);
+  indexfile.flush();
+}
+
+void StatsFileWriter::write(const void* record, W64 uuid, const char* name) {
+  StatsIndexRecord idx;
+  idx.uuid = uuid;
+  idx.offset = datafile.where();
+  idx.namelen = (name) ? (strlen(name) + 1) : 0;
+  indexfile << idx;
+  if (idx.namelen) {
+    indexfile.write(name, idx.namelen);
+  }
+
+  datafile.write(record, record_size);
+}
+
+void StatsFileWriter::flush() {
+  if (indexfile) indexfile.flush();
+  if (datafile) datafile.flush();
+}
+
+//
+// StatsFileReader
+//
+
+bool StatsFileReader::open(const char* filename) {
+  close();
+
+  indexfile.open(filename);
+
+  if (!indexfile) {
+    cerr << "StatsFileReader: cannot open ", filename, endl;
+    return false;
+  }
+
+  stringbuf sb; sb << filename, ".data";
+  datafile.open(sb);
+
+  if (!datafile) {
+    cerr << "StatsFileReader: cannot open ", sb, endl;
+    close();
+    return false;
+  }
+
+  StatsIndexHeader h;
+  indexfile >> h;
+
+  if (!indexfile) {
+    cerr << "StatsFileReader: error reading index header", endl;
+    close();
+    return false;
+  }
+
+  if ((h.magic != StatsIndexHeader::MAGIC) | (h.version != StatsIndexHeader::VERSION)) {
+    cerr << "StatsFileReader: index header magic or version mismatch", endl;
+    close();
+    return false;
+  }
+
+  record_size = h.record_size;
+  buf = new byte[record_size];
+
+  dst = new DataStoreNodeTemplate(indexfile);
+
+  if ((!indexfile) | (!dst)) {
+    cerr << "StatsFileReader: error while reading and parsing template", endl;
+    close();
+    return false;
+  }
+
+  //
+  // Read in the records
+  //
+
+  int i = 0;
+  while (indexfile) {
+    StatsIndexRecord rec;
+    indexfile >> rec;
+    if (!indexfile) {
+      // Last record
+      return true;
+    }
+
+    //cerr << "  uuid ", intstring(rec.uuid, 12), " @ ", intstring(rec.offset, 12), endl;
+
+    if (rec.namelen) {
+      char* name = new char[rec.namelen];
+      // Already null-terminated in the file:
+      indexfile.read(name, rec.namelen);
+      name_to_uuid.add(name, rec.uuid);
+      //cerr << "    Name (", rec.namelen, ") = ", name, endl;
+      delete name;
+    }
+
+    if (i == 0) { base_uuid = rec.uuid; }
+    uuid_to_offset.push(rec.offset);
+    i++;
+  }
+
+  return true;
+}
+
+DataStoreNode* StatsFileReader::get(W64 uuid) {
+  //cerr << "seek to reconstruct uuid ", uuid, " (base ", base_uuid, ", offset ", offset, endl;
+
+  if unlikely (uuid < base_uuid) return null;
+  if unlikely ((uuid - base_uuid) >= uuid_to_offset.length) return null;
+
+  W64 offset = uuid_to_offset[uuid - base_uuid];
+
+  //cerr << "seek to reconstruct uuid ", uuid, ", offset ", offset, endl;
+
+  datafile.seek(offset, SEEK_SET);
+  if unlikely (datafile.read(buf, record_size) != record_size) return null;
+
+  const W64* p = (const W64*)buf;
+  DataStoreNode* dsn = dst->reconstruct(p);
+
+  //cerr << "dsn ", dsn, " reconstructed from uuid ", uuid, ", offset ", offset, endl;
+
+  return dsn;
+}
+
+DataStoreNode* StatsFileReader::get(const char* name) {
+  bool all_nums = 1;
+  foreach (i, strlen(name)) {
+    all_nums &= inrange(name[i], '0', '9');
+  }
+
+  if unlikely (all_nums) {
+    return get(atoi(name));
+  }
+
+  W64* uuidp = name_to_uuid(name);
+  if unlikely (!uuidp) return null;
+
+  W64 uuid = *uuidp;
+
+  //cerr << "found uuid ", uuid, " for name ", name, endl;
+  return get(uuid);
+}
+
+void StatsFileReader::close() {
+  if (dst) delete dst;
+  if (buf) delete buf;
+
+  name_to_uuid.clear();
+  uuid_to_offset.clear();
+
+  if (indexfile) indexfile.close();
+  if (datafile) datafile.close();
 }

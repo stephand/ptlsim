@@ -484,7 +484,7 @@ struct PTLsimConfig {
   // Statistics Database
   stringbuf stats_filename;
   W64 snapshot_cycles;
-  bool snapshot_now;
+  stringbuf snapshot_now;
 
   // Stopping Point
   W64 stop_at_user_insns;

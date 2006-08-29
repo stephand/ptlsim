@@ -6,6 +6,9 @@
 // Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
+#ifndef _DECODE_H_
+#define _DECODE_H_
+
 #include <globals.h>
 #include <ptlsim.h>
 #include <datastore.h>
@@ -165,6 +168,8 @@ struct TraceDecoder {
   bool end_of_block;
   bool is_x87;
   bool is_sse;
+  bool used_microcode_assist;
+  bool some_insns_complex;
 
   TraceDecoder(const RIPVirtPhys& rvp);
 
@@ -211,6 +216,12 @@ static inline TraceDecoder& operator <<(TraceDecoder& dec, const TransOp& transo
   dec.put(transop);
   return dec;
 }
+
+enum {
+  DECODE_TYPE_FAST, DECODE_TYPE_COMPLEX, DECODE_TYPE_X87, DECODE_TYPE_SSE, DECODE_TYPE_ASSIST, DECODE_TYPE_COUNT,
+};
+
+extern const char* decode_type_names[DECODE_TYPE_COUNT];
 
 #define DECODE(form, decbuf, mode) invalid |= (!decbuf.form(*this, mode));
 #define CheckInvalid() { invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count); if (invalid) { invalidate(); return false; } }
@@ -335,3 +346,5 @@ void assist_iret32(Context& ctx);
 void assist_iret64(Context& ctx);
 void assist_ioport_in(Context& ctx);
 void assist_ioport_out(Context& ctx);
+
+#endif // _DECODE_H_

@@ -1422,7 +1422,7 @@ struct XenController {
         dest.evtchn_pending_sel = src.evtchn_pending_sel;
       }
 
-      assert(bootinfo->ptlsim_state == PTLSIM_STATE_RUNNING);
+      //assert(bootinfo->ptlsim_state == PTLSIM_STATE_RUNNING);
 
       swap_context();
 

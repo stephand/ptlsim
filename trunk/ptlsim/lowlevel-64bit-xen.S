@@ -215,11 +215,14 @@ get_gs:
 .global xen_event_callback_entry
 .extern event_upcall_pending
 xen_event_callback_entry:
-  or    byte ptr [%rsp + (2+1)*8],3
-  or    byte ptr [%rsp + (2+4)*8],3
-  pop   %rcx
-  pop   %r11
-  iretq
+  save_regs 0
+  call xen_event_callback
+  restore_regs_and_iret 0
+# or    byte ptr [%rsp + (2+1)*8],3
+# or    byte ptr [%rsp + (2+4)*8],3
+# pop   %rcx
+# pop   %r11
+# iretq
 
 .global divide_error_entry
 divide_error_entry:

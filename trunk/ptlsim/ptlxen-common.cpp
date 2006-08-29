@@ -331,7 +331,7 @@ void PTLsimConfig::reset() {
 
   stats_filename.reset();
   snapshot_cycles = infinity;
-  snapshot_now = 0;
+  snapshot_now.reset();
 
   stop_at_user_insns = infinity;
   stop_at_iteration = infinity;
@@ -383,8 +383,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
 
   section("Statistics Database");
   add(stats_filename,               "stats",                "Statistics data store hierarchy root");
-  add(snapshot_cycles,              "snapshot",             "Take statistical snapshot and reset every <snapshot> cycles");
-  add(snapshot_now,                 "snapshot-now",         "Take statistical snapshot immediately");
+  add(snapshot_cycles,              "snapshot-cycles",      "Take statistical snapshot and reset every <snapshot> cycles");
+  add(snapshot_now,                 "snapshot-now",         "Take statistical snapshot immediately, using specified name");
 
   section("Event Trace Recording");
   add(event_trace_record_filename,  "event-record",         "Save replayable events (interrupts, DMAs, etc) to this file");

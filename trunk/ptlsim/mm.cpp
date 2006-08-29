@@ -917,6 +917,9 @@ void ptl_mm_init(byte* heap_start, byte* heap_end) {
 
 static const int GEN_ALLOC_CHUNK_SIZE = 65*1024; // 64 KB (16 pages)
 
+bool enable_mm_logging = false;
+extern ostream logfile;
+
 void* ptl_mm_alloc(size_t bytes) {
   // General purpose malloc
 
@@ -934,6 +937,7 @@ void* ptl_mm_alloc(size_t bytes) {
       ptl_mm_reclaim(bytes);
       p = slaballoc[slot].alloc();
     }
+    if unlikely (enable_mm_logging) logfile << "ptl_mm_alloc(", bytes, ") from slab ", slot, " => p ", p, " called from ", (void*)__builtin_return_address(0), endl;
     return p;
   } else {
     //
@@ -972,6 +976,8 @@ void* ptl_mm_alloc(size_t bytes) {
 
     *p = bytes;
     p++; // skip over hidden size word
+
+    if unlikely (enable_mm_logging) logfile << "ptl_mm_alloc(", bytes, ") from genpool => p ", p, " called from ", (void*)__builtin_return_address(0), endl;
     return p;
   }
 }
@@ -997,7 +1003,7 @@ void ptl_mm_free(void* p) {
     //
     // From slab allocation pool: all objects on a given page are the same size
     //
-    if (DEBUG) cerr << "ptl_mm_free(", p, "): free from slab ", sa, " (size ", sa->objsize, ")", endl, flush;
+    if unlikely (enable_mm_logging) logfile << "ptl_mm_free(", p, "): from slab ", sa, " (size ", sa->objsize, ")", endl, flush;
     sa->free(p);
   } else {
     //
@@ -1006,12 +1012,10 @@ void ptl_mm_free(void* p) {
     // the block size.
     //
 
-    if (DEBUG) cerr << "ptl_mm_free(", p, "): free from gen pool (size ", flush;
-
     Waddr* pp = ((Waddr*)p)-1;
     Waddr bytes = *pp;
 
-    if (DEBUG) cerr << bytes, ")", endl, flush;
+    if unlikely (enable_mm_logging) logfile << "ptl_mm_free(", p, "): from gen pool (size ", bytes, ")", endl;
 
     genalloc.free(pp, bytes);
   }

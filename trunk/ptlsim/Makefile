@@ -34,20 +34,22 @@ INCFLAGS += -DPTLSIM_HYPERVISOR -D__XEN__
 endif
 
 ifdef __x86_64__
-CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -m64 -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type -minline-all-stringops $(GCCVER_SPECIFIC)
-#CFLAGS = -O1 -g3 -march=k8 -falign-functions=16 -fno-trapping-math -fno-strict-aliasing -fno-exceptions -fno-rtti -mpreferred-stack-boundary=4 -Wreturn-type $(GCCVER_SPECIFIC)
-CFLAGS32BIT = -m32
+CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
+#CFLAGS = -O1 -g3 -march=k8 -falign-functions=16 $
+CFLAGS32BIT = $(CFLAGS) -m32
 else
 # 32-bit PTLsim32 only, on a Pentium 4:
-CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
+CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16
 # No optimizations:
-#CFLAGS = -O1 -g3 -march=pentium4 -mtune=k8 -falign-functions=16 -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
-CFLAGS32BIT = 
+#CFLAGS = -O1 -g3 -march=pentium4 -mtune=k8 -falign-functions=16
+CFLAGS32BIT = $(CFLAGS) 
 endif
 
 ifdef PTLSIM_HYPERVISOR
-CFLAGS += -fpic
+CFLAGS += -fpic -mno-red-zone
 endif
+
+CFLAGS += -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
 
 BASEOBJS = superstl.o config.o mathlib.o syscalls.o
 STDOBJS = glibc.o
@@ -55,19 +57,19 @@ STDOBJS = glibc.o
 ifdef __x86_64__
 # IMPORTANT: linkstart.o and linkend.o must be at opposite ends of the list to set up constructor tables properly:
 ifdef PTLSIM_HYPERVISOR
-COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o linkend.o
 else
-COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o dcache.o datastore.o injectcode-32bit.o injectcode-64bit.o $(BASEOBJS) klibc.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o dcache.o datastore.o injectcode-32bit.o injectcode-64bit.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
 else
 # 32-bit PTLsim32 only:
-COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o dcache.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o dcache.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
 
 OOOOBJS = ooocore.o seqcore.o branchpred.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h xen-types.h xc_ptlsim.h
+COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h xc_ptlsim.h
 OOOINCLUDES = branchpred.h ooohwdef.h cpthwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
@@ -128,6 +130,16 @@ ifdef __x86_64__
 else
 	$(CC) -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer ptlcalls.c -o ptlcalls-32bit.o
 endif
+
+ptlsim.dst: dstbuild stats.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
+	cpp $(CFLAGS) $(INCFLAGS) -C stats.h > stats.i
+	cat stats.i | dstbuild PTLsimStats > dstbuild.temp.cpp
+	g++ $(CFLAGS) $(INCFLAGS) -DDSTBUILD -include stats.h dstbuild.temp.cpp $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o -o dstbuild.temp
+	dstbuild.temp > ptlsim.dst
+	rm -f dstbuild.temp destbuild.temp.cpp stats.i
+
+ptlsim.dst.o: ptlsim.dst
+	objcopy -I binary -O elf64-x86-64 -B i386 --rename-section .data=.dst,alloc,load,readonly,data,contents ptlsim.dst ptlsim.dst.o
 
 ifdef PTLSIM_HYPERVISOR
 ifdef __x86_64__

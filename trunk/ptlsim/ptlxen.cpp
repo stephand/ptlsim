@@ -10,6 +10,9 @@
 #include <ptlxen.h>
 #include <mm.h>
 #include <ptlsim.h>
+#include <stats.h>
+
+PTLsimStats stats;
 
 //
 // Global variables
@@ -365,7 +368,7 @@ W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false, bool i
 
   // This will clear the port if a previous upcall got out of sync:
   unmask_evtchn(bootinfo.hostcall_port);
-  shinfo_evtchn_pending[bootinfo.hostcall_port] = 0;
+  //shinfo_evtchn_pending[bootinfo.hostcall_port] = 0;
 
   evtchn_send_t sendop;
   sendop.port = bootinfo.hostcall_port;
@@ -2189,7 +2192,9 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       if (newpte.p) {
         unmap_phys_page(newpte.mfn);
         // (See notes about DMA and self-modifying code for update_va_mapping)
-        bbcache.invalidate_page(newpte.mfn);
+        //++MTY FIXME We need a more intelligent mechanism to avoid constant flushing
+        // as new processes are started.
+        bbcache.invalidate_page(newpte.mfn, INVALIDATE_REASON_DMA);
       }
 
       if (debug) logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", newpte, endl, flush;
@@ -2399,8 +2404,6 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     u.ptr = ptephys;
     u.val = arg2;
     rc = HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
-
-    //if (bbcache.invalidate_page(
     */
 
     if likely (Level1PTE(arg2).p) {
@@ -2421,7 +2424,9 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       // bitmap whenever pages shared with the target domain
       // are written. This is the only reliable way.
       //
-      bbcache.invalidate_page(targetmfn);
+      //++MTY FIXME We need a more intelligent mechanism to avoid constant flushing
+      // as new processes are started.      
+      bbcache.invalidate_page(targetmfn, INVALIDATE_REASON_DMA);
     }
 
     if (debug) logfile << "  New PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), " (rc ", rc, ")", endl, flush;
@@ -3585,9 +3590,9 @@ int inject_events() {
   // and this allows us to have more control over forwarding
   // events to the guest.
   //
-  if unlikely (xchg(shinfo.vcpu_info[0].evtchn_upcall_pending, (byte)0)) {
-    xen_event_callback(0);
-  }
+  //if unlikely (xchg(shinfo.vcpu_info[0].evtchn_upcall_pending, (byte)0)) {
+  //xen_event_callback(0);
+  //}
 
   W64 delta = sim_cycle - timer_interrupt_last_sent_at_cycle;
 
@@ -3676,7 +3681,7 @@ void backup_and_reopen_logfile() {
   if (config.log_filename) {
     if (logfile) logfile.close();
     stringbuf oldname;
-    oldname << config.log_filename, ".backup"; // assert fails here
+    oldname << config.log_filename, ".backup";
     sys_unlink(oldname);
     sys_rename(config.log_filename, oldname);
     logfile.open(config.log_filename);
@@ -3689,6 +3694,8 @@ static inline void ptlsim_init_fail(W64 marker) {
 }
 
 extern Waddr xen_m2p_map_end;
+
+extern bool enable_mm_logging;
 
 void ptlsim_init() {
   stringbuf sb;
@@ -3757,15 +3764,17 @@ void ptlsim_init() {
   //
   // Enable upcalls
   //
-  // We leave events disabled most of the time, since
-  // sched_block atomically enables events anyway.
-  //
-  cli();
   clear_evtchn(bootinfo.hostcall_port);
   clear_evtchn(bootinfo.upcall_port);
   barrier();
+  //
+  // Unmask everything: we want to see all interrupts so we can
+  // pass them through to the guest.
+  //
+  setzero(shinfo.evtchn_mask);
   unmask_evtchn(bootinfo.hostcall_port);
   unmask_evtchn(bootinfo.upcall_port);
+  sti();
 
   //
   // From this point forward, we can make hostcalls to PTLmon
@@ -3880,20 +3889,80 @@ void print_sysinfo(ostream& os) {
   os << "  PTLsim upcall:      ", padstring("", 10), "  event channel ", intstring(bootinfo.upcall_port, 4), endl;
 
   os << endl;
+
+  stringbuf sb;
+#define strput(x, y) (strncpy((x), (y), sizeof(x)))
+
+  sb.reset(); sb << __DATE__, " ", __TIME__;
+  strput(stats.simulator.version.build_timestamp, sb);
+  stats.simulator.version.svn_revision = SVNREV;
+  strput(stats.simulator.version.svn_timestamp, stringify(SVNDATE));
+  strput(stats.simulator.version.build_hostname, stringify(BUILDHOST));
+  sb.reset(); sb << "gcc-", __GNUC__, ".", __GNUC_MINOR__;
+  strput(stats.simulator.version.build_compiler, sb);
+
+  stats.simulator.run.timestamp = shinfo.wc_sec;
+
+  utsname hostinfo; sys_uname(&hostinfo);
+  sb.reset(); sb << hostinfo.nodename, ".", hostinfo.domainname;
+  strput(stats.simulator.run.hostname, sb);
+  strput(stats.simulator.run.hypervisor_version, xen_caps);
+  stats.simulator.run.native_hz = get_core_freq_hz(shinfo.vcpu_info[0].time);
 }
 
+stringbuf current_stats_filename;
+
 stringbuf current_log_filename;
+
+//
+// Statistics collection
+//
+extern byte _binary_ptlsim_dst_start;
+extern byte _binary_ptlsim_dst_end;
+
+StatsFileWriter statswriter;
+
+W64 next_stats_snapshot_uuid = 1;
+
+void capture_stats_snapshot(const char* name = null) {
+  if unlikely (!statswriter) return;
+
+  if (logable(1)|1) {
+    logfile << "Making stats snapshot uuid ", next_stats_snapshot_uuid;
+    if (name) logfile << " named ", name;
+    logfile << " at cycle ", sim_cycle, endl;
+  }
+
+  setzero(stats.snapshot_name);
+
+  if (name) {
+    stringbuf sb;
+    strncpy(stats.snapshot_name, name, sizeof(stats.snapshot_name));
+  }
+
+  stats.snapshot_uuid = next_stats_snapshot_uuid++;
+  statswriter.write(&stats, stats.snapshot_uuid, name);
+}
 
 bool handle_config_change(PTLsimConfig& config) {
   static bool first_time = true;
 
-  if (config.log_filename.size() && (config.log_filename != current_log_filename)) {
+  if (config.log_filename.set() && (config.log_filename != current_log_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
     backup_and_reopen_logfile();
     current_log_filename = config.log_filename;
   }
 
   logfile.setchain((config.log_on_console) ? &cout : null);
+
+  if (config.stats_filename.set() && (config.stats_filename != current_stats_filename)) {
+    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
+    logfile << "Writing statistics to ", config.stats_filename, endl, flush;
+    statswriter.open(config.stats_filename, &_binary_ptlsim_dst_start,
+                     &_binary_ptlsim_dst_end - &_binary_ptlsim_dst_start,
+                     sizeof(PTLsimStats));
+    current_stats_filename = config.stats_filename;
+  }
 
   //
   // Fix up parameter defaults:
@@ -3974,6 +4043,8 @@ W64 handle_forced_upcall(PTLsimConfig& config, char* reqstr) {
 int assist_requested_break = 0;
 stringbuf assist_requested_break_command;
 
+W64 last_stats_captured_at_cycle = 0;
+
 bool check_for_async_sim_break() {
   if unlikely (assist_requested_break) {
     handle_forced_upcall(config, assist_requested_break_command);
@@ -3989,12 +4060,27 @@ bool check_for_async_sim_break() {
     return true;
   }
 
+  if unlikely ((sim_cycle - last_stats_captured_at_cycle) >= config.snapshot_cycles) {
+    last_stats_captured_at_cycle = sim_cycle;
+    capture_stats_snapshot();
+  }
+
+  if (config.snapshot_now.set()) {
+    capture_stats_snapshot("forced");
+    config.snapshot_now.reset();
+  }
+
   return false;
 }
 
 bool simulate(const char* corename) {
   logfile << "Switching to simulation core '", corename, "'...", endl, flush;
   logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
+  cerr << "Switching to simulation core '", corename, "'...", endl, flush;
+  cerr << "  Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
+
+  // For debugging memory leaks:
+  // enable_mm_logging = 1;
 
   sim_cycle = 0;
 
@@ -4060,6 +4146,8 @@ bool simulate(const char* corename) {
 
   unmap_address_space();
 
+  cerr << "  Done", endl, flush;
+
   return 0;
 }
 
@@ -4074,6 +4162,8 @@ int main(int argc, char** argv) {
     if (config.run) {
       config.run = 0;
       simulate(config.core_name);
+      capture_stats_snapshot("final");
+      statswriter.flush();
     }
 
     complete_upcall(requuid);

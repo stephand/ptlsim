@@ -10,6 +10,7 @@
 #include <branchpred.h>
 #include <dcache.h>
 #include <datastore.h>
+#include <stats.h>
 
 // With these disabled, simulation is faster
 #define ENABLE_CHECKS
@@ -667,8 +668,8 @@ struct SequentialCore {
 
       if unlikely (smc_isdirty(rvp.mfnlo) | (smc_isdirty(rvp.mfnhi))) {
         logfile << "Self-modifying code at rip ", rvp, " detected: mfn was dirty (invalidate and retry)", endl;
-        bbcache.invalidate_page(rvp.mfnlo);
-        if (rvp.mfnlo != rvp.mfnhi) bbcache.invalidate_page(rvp.mfnhi);
+        bbcache.invalidate_page(rvp.mfnlo, INVALIDATE_REASON_SMC);
+        if (rvp.mfnlo != rvp.mfnhi) bbcache.invalidate_page(rvp.mfnhi, INVALIDATE_REASON_SMC);
         return SEQEXEC_SMC;
       }
 
@@ -951,6 +952,7 @@ struct SequentialCore {
     return exiting;
   }
 
+  /*
   void seq_capture_stats(DataStoreNode& root) {
     DataStoreNode& summary = root("summary"); {
       summary.add("basicblocks", seq_total_basic_blocks);
@@ -982,6 +984,7 @@ struct SequentialCore {
       save_assist_stats(root("assist"));
     }
   }
+  */
 };
 
 SequentialCore seqcore;
@@ -996,7 +999,8 @@ int execute_sequential(BasicBlock* bb) {
   seqcore.core_to_external_state();
   return rc;
 }
-
+/*
 void seq_capture_stats(DataStoreNode& root) {
   seqcore.seq_capture_stats(root);
 }
+*/

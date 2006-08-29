@@ -1377,13 +1377,25 @@ struct BasicBlockHashtableLinkManager {
   }
 };
 
+enum {
+  INVALIDATE_REASON_SMC = 0,
+  INVALIDATE_REASON_DMA,
+  INVALIDATE_REASON_SPURIOUS,
+  INVALIDATE_REASON_RECLAIM,
+  INVALIDATE_REASON_DIRTY,
+  INVALIDATE_REASON_EMPTY,
+  INVALIDATE_REASON_COUNT
+};
+
+extern const char* invalidate_reason_names[INVALIDATE_REASON_COUNT];
+
 struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE> {
   BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE>() { }
 
   BasicBlock* translate(Context& ctx, Waddr rip);
-  void invalidate(const RIPVirtPhys& rvp);
-  void invalidate(BasicBlock* bb);
-  int invalidate_page(Waddr mfn);
+  void invalidate(const RIPVirtPhys& rvp, int reason);
+  void invalidate(BasicBlock* bb, int reason);
+  int invalidate_page(Waddr mfn, int reason);
   int reclaim(size_t reqbytes = 0, int urgency = 0);
 
   ostream& print(ostream& os);
