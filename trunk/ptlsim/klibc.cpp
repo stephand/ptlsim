@@ -1298,11 +1298,18 @@ extern "C" long long strtoll(const char *cp,char **endp,int base)
 static int skip_atoi(const char **s)
 {
 	int i=0;
-\
+
 	while (isdigit(**s))
 		i = i*10 + *((*s)++) - '0';
 	return i;
 }
+
+/*
+int atoi(const char* s) {
+  const char* p = s;
+  return skip_atoi(&p);
+}
+*/
 
 #define ZEROPAD FMT_ZEROPAD
 #define SIGN    FMT_SIGN

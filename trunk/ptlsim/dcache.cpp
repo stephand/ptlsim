@@ -492,22 +492,17 @@ namespace DataCache {
 
         if (analyze_in_detail()) logfile << "iter ", iterations, ": wakeup LFRQ slot ", idx, ": ", req, endl;
         // wakeup register and/or commitbuf here
-        if (true)
-        {
-          W64 delta = LO32(sim_cycle) - LO32(req.initcycle);
-          if unlikely (delta >= 65536) {
-            // avoid overflow induced erroneous values:
-            // logfile << "LFRQ: warning: cycle counter wraparound in initcycle latency (current ", sim_cycle, " vs init ", req.initcycle, " = delta ", delta, ")", endl;
-          } else {
-            lfrq_total_latency += delta;
-          }
-
-          lfrq_wakeups++;
-          wakeupcount++;
-          if likely (wakeup_func) wakeup_func(req.lsi, req.addr);
+        W64 delta = LO32(sim_cycle) - LO32(req.initcycle);
+        if unlikely (delta >= 65536) {
+          // avoid overflow induced erroneous values:
+          // logfile << "LFRQ: warning: cycle counter wraparound in initcycle latency (current ", sim_cycle, " vs init ", req.initcycle, " = delta ", delta, ")", endl;
         } else {
-          if (analyze_in_detail()) logfile << "  Wakeup prefetch", endl;
+          lfrq_total_latency += delta;
         }
+        
+        lfrq_wakeups++;
+        wakeupcount++;
+        if likely (wakeup_func) wakeup_func(req.lsi, req.addr);
 
         changestate(idx, ready, freemap);
       }

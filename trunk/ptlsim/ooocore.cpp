@@ -11,709 +11,144 @@
 #include <branchpred.h>
 #include <datastore.h>
 #include <logic.h>
-#include <ooohwdef.h>
 
-// With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
-
-#ifndef ENABLE_CHECKS
-#undef assert
-#define assert(x) (x)
-#endif
-
-#ifndef ENABLE_LOGGING
-#undef logable
-#define logable(level) (0)
-#endif
-
-#define ENABLE_SIM_TIMING
-#ifdef ENABLE_SIM_TIMING
-#define start_timer(ct) ct.start()
-#define stop_timer(ct) ct.stop()
-#else
-#define start_timer(ct)
-#define stop_timer(ct)
-#endif
-
-#define MAX_OPERANDS 4
-#define RA 0
-#define RB 1
-#define RC 2
-#define RS 3
-
-void print_rob(ostream& os);
-void print_lsq(ostream& os);
-void check_rob();
-void dump_ooo_state();
-void check_refcounts();
-
-struct ReorderBufferEntry;
-void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand);
-
-//
-// Issue queue based scheduler with broadcast
-//
-#ifdef BIG_ROB
-typedef W16 issueq_tag_t;
-#else
-typedef byte issueq_tag_t;
-#endif
-
-template <int size, int operandcount = MAX_OPERANDS>
-struct IssueQueue {
-#ifdef BIG_ROB
-  typedef FullyAssociativeTags16bit<size, size> assoc_t;
-  typedef vec8w vec_t;
-#else
-  typedef FullyAssociativeTags8bit<size, size> assoc_t;
-  typedef vec16b vec_t;
-#endif
-
-  typedef issueq_tag_t tag_t;
-
-  static const int SIZE = size;
-
-  assoc_t uopids;
-  assoc_t tags[operandcount];
-
-  // States:
-  //             V I
-  // free        0 0
-  // dispatched  1 0
-  // issued      1 1
-  // complete    0 1
-
-  bitvec<size> valid;
-  bitvec<size> issued;
-  bitvec<size> allready;
-  int count;
-
-  bool remaining() const { return (size - count); }
-  bool empty() const { return (!count); }
-  bool full() const { return (!remaining()); }
-
-  void reset() {
-    count = 0;
-    valid = 0;
-    issued = 0;
-    allready = 0;
-    foreach (i, operandcount) {
-      tags[i].reset();
-    }
-    uopids.reset();
-  }
-
-  void clock() {
-    allready = (valid & (~issued));
-    foreach (operand, operandcount) {
-      allready &= ~tags[operand].valid;
-    }
-  }
-
-  bool insert(tag_t uopid, const tag_t* operands, const tag_t* preready) {
-    if unlikely (count == size)
-      return false;
-
-    int slot = count++;
-    assert(!bit(valid, slot));
-
-    uopids.insertslot(slot, uopid);
-
-    valid[slot] = 1;
-    issued[slot] = 0;
-
-    foreach (operand, operandcount) {
-      if (preready[operand])
-        tags[operand].invalidateslot(slot);
-      else tags[operand].insertslot(slot, operands[operand]);
-    }
-
-    return true;
-  }
-
-  void tally_broadcast_matches(tag_t sourceid, const bitvec<size>& mask, int operand) const;
-
-  bool broadcast(tag_t uopid) {
-    vec_t tagvec = assoc_t::prep(uopid);
-
-    if (logable(1)) {
-      foreach (operand, operandcount) {
-        bitvec<size> mask = tags[operand].invalidate(tagvec);
-        tally_broadcast_matches(uopid, mask, operand);
-      }
-    } else {
-      foreach (operand, operandcount) tags[operand].invalidate(tagvec);
-    }
-    return true;
-  }
-
-  int uopof(int slot) const {
-    return uopids[slot];
-  }
-
-  int slotof(int uopid) const {
-    return uopids.search(uopid);
-  }
-
-  //
-  // Select one ready slot and move it to the issued state.
-  // This function returns the slot id. The returned slot
-  // id becomes invalid after the next call to remove()
-  // before the next uop can be processed in any way.
-  //
-  int issue() {
-    if (!allready) return -1;
-    int slot = allready.lsb();
-    issued[slot] = 1;
-    return slot;
-  }
-
-  //
-  // Replay a uop that has already issued once.
-  // The caller may add or reset dependencies here as needed.
-  //
-  bool replay(int slot, const tag_t* operands, const tag_t* preready) {
-    assert(valid[slot]);
-    assert(issued[slot]);
-
-    issued[slot] = 0;
-
-    foreach (operand, operandcount) {
-      if (preready[operand])
-        tags[operand].invalidateslot(slot);
-      else tags[operand].insertslot(slot, operands[operand]);
-    }
-
-    return true;
-  }
-
-  //
-  // Replay a uop that has already issued once.
-  // The caller may add or reset dependencies here as needed.
-  //
-  bool replay(int slot) {
-    issued[slot] = 0;
-    return true;
-  }
-
-  //
-  // Remove an entry from the issue queue after it has completed,
-  // or in the process of annulment.
-  //
-  bool release(int slot) {
-    remove(slot);
-    return true;
-  }
-
-  bool annul(int slot) {
-    remove(slot);
-    return true;
-  }
-
-  bool annuluop(int uopid) {
-    int slot = slotof(uopid);
-    if (slot < 0) return false;
-    remove(slot);
-    return true;
-  }
-
-  // NOTE: This is a fairly expensive operation:
-  bool remove(int slot) {
-    uopids.collapse(slot);
-
-    foreach (i, operandcount) {
-      tags[i].collapse(slot);
-    }
-
-    valid = valid.remove(slot, 1);
-    issued = issued.remove(slot, 1);
-    allready = allready.remove(slot, 1);
-
-    count--;
-    assert(count >= 0);
-    return true;
-  }
-
-  ostream& print(ostream& os) const {
-    os << "IssueQueue: count = ", count, ":", endl;
-    foreach (i, size) {
-      os << "  uop ";
-      uopids.printid(os, i);
-      os << ": ",
-        ((valid[i]) ? 'V' : '-'), ' ',
-        ((issued[i]) ? 'I' : '-'), ' ',
-        ((allready[i]) ? 'R' : '-'), ' ';
-      foreach (j, operandcount) {
-        if (j) os << ' ';
-        tags[j].printid(os, i);
-      }
-      os << endl;
-    }
-    return os;
-  }
-};
-
-template <int size, int operandcount>
-ostream& operator <<(ostream& os, const IssueQueue<size, operandcount>& issueq) {
-  return issueq.print(os);
-}
-
-//
-// Iterate through a linked list of objects where each object directly inherits
-// only from the selfqueuelink class or otherwise has a selfqueuelink object
-// as the first member.
-//
-// This iterator supports mutable lists, meaning the current entry (obj) may
-// be safely removed from the list and/or moved to some other list without
-// affecting the next object processed.
-//
-// This does NOT mean you can remove any object from the list other than the
-// current object obj - to do this, copy the list of pointers to an array and
-// then process that instead.
-//
-#define foreach_list_mutable_linktype(L, obj, entry, nextentry, linktype) \
-  linktype* entry; \
-  linktype* nextentry; \
-  for (entry = (L).next, nextentry = entry->next, prefetch(entry->next), obj = (typeof(obj))entry; \
-    entry != &(L); entry = nextentry, nextentry = entry->next, prefetch(nextentry), obj = (typeof(obj))entry)
-
-#define foreach_list_mutable(L, obj, entry, nextentry) foreach_list_mutable_linktype(L, obj, entry, nextentry, selfqueuelink)
-
-//
-// Each ROB's state_link member can be linked into at most one of the
-// following rob_xxx_list lists at any given time; the ROB's current_state_list
-// points back to the list it belongs to.
-//
-struct StateList;
-
-struct ListOfStateLists: public array<StateList*, 64> {
-  int count;
-
-  int add(StateList* list);
-  void reset();
-};
-
-ListOfStateLists rob_states;
-ListOfStateLists physreg_states;
-ListOfStateLists lsq_states;
-
-struct StateList: public selfqueuelink {
-  const char* name;
-  int count;
-  int listid;
-  W64 dispatch_source_counter;
-  W64 issue_source_counter;
-  W32 flags;
-
-  StateList() { }
-
-  void init(const char* name, ListOfStateLists& lol, W32 flags = 0) {
-    reset();
-    this->name = name;
-    this->flags = flags;
-    count = 0;
-    listid = lol.add(this);
-    dispatch_source_counter = 0;
-    issue_source_counter = 0;
-  }
-
-  StateList(const char* name, ListOfStateLists& lol, W32 flags = 0) {
-    init(name, lol, flags);
-  }
-
-  void reset() {
-    selfqueuelink::reset();
-    count = 0;
-  }
-
-  selfqueuelink* dequeue() {
-    if (empty())
-      return null;
-    count--;
-    selfqueuelink* obj = removehead();
-    return obj;
-  }
-
-  selfqueuelink* enqueue(selfqueuelink* entry) {
-    entry->addtail(this);
-    count++;
-    return entry;
-  }
-
-  selfqueuelink* enqueue_after(selfqueuelink* entry, selfqueuelink* preventry) {
-    if (preventry) entry->addhead(preventry); else entry->addhead(this);
-    count++;
-    return entry;
-  }
-
-  selfqueuelink* remove(selfqueuelink* entry) {
-    assert(entry->linked());
-    entry->unlink();
-    count--;
-    return entry;
-  }
-
-  selfqueuelink* peek() {
-    return (empty()) ? null : head();
-  }
-
-  void checkvalid();
-};
-
-int ListOfStateLists::add(StateList* list) {
-  assert(count < lengthof(data));
-  data[count] = list;
-  return count++;
-}
-
-void ListOfStateLists::reset() {
-  foreach (i, count) {
-    data[i]->reset();
-  }
-}
-
-template <typename T> 
-void print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title) {
-  os << title, ":", endl;
-  foreach (i, lol.count) {
-    StateList& list = *lol[i];
-    if (!list.count) continue;
-    os << list.name, " (", list.count, " entries):", endl;
-    int n = 0;
-    T* obj;
-    foreach_list_mutable(list, obj, entry, nextentry) {
-      if ((n % 16) == 0) os << " ";
-      os << " ", intstring(obj->index(), -3);
-      if (((n % 16) == 15) || (n == list.count-1)) os << endl;
-      n++;
-    }
-    os << endl;
-    // list.validate();
-  }
-}
-
-void StateList::checkvalid() {
-#if 0
-  int realcount = 0;
-  selfqueuelink* obj;
-  foreach_list_mutable(*this, obj, entry, nextentry) {
-    realcount++;
-  }
-  assert(count == realcount);
-#endif
-}
-
-#define DeclareROBList(name, description, flags) StateList name("" description "", rob_states, flags);
-
-//
-// Reorder Buffer (ROB) structure, used for tracking all instructions in flight.
-// This same structure is used to represent both dispatched but not yet issued 
-// instructions (traditionally held in an instruction dispatch buffer, IDB) 
-// as well as issued instructions. The descriptions below have much more
-// detail on this.
-//
-
-struct Cluster {
-  char* name;
-  W16 issue_width;
-  W32 fu_mask;
-};
-
-//
-// Include the simulator configuration
-//
-#define DECLARE_CLUSTERS
-#include <ooohwdef.h>
-#undef DECLARE_CLUSTERS
-
-#define for_each_cluster(iter) for (int iter = 0; iter < MAX_CLUSTERS; iter++)
-#define for_each_operand(iter) for (int iter = 0; iter < MAX_OPERANDS; iter++)
-
-#define ROB_STATE_READY (1 << 0)
-#define ROB_STATE_IN_ISSUE_QUEUE (1 << 1)
-#define ROB_STATE_PRE_READY_TO_DISPATCH (1 << 2)
-
-// Frontend states
-DeclareROBList(rob_free_list, "free", 0);                                      // Free entry
-DeclareROBList(rob_frontend_list, "frontend",                                  // Frontend in progress (artificial delay)
-               ROB_STATE_PRE_READY_TO_DISPATCH);
-DeclareROBList(rob_ready_to_dispatch_list, "ready-to-dispatch", 0);            // Ready to dispatch
-DeclareClusteredROBList(rob_dispatched_list, "dispatched",                     // Dispatched but waiting for operands
-                        ROB_STATE_IN_ISSUE_QUEUE); 
-DeclareClusteredROBList(rob_ready_to_issue_list, "ready-to-issue",             // Ready to issue (all operands ready)
-                        ROB_STATE_IN_ISSUE_QUEUE);
-DeclareClusteredROBList(rob_ready_to_store_list, "ready-to-store",             // Ready to store (all operands ready except possibly rc)
-                        ROB_STATE_IN_ISSUE_QUEUE);
-DeclareClusteredROBList(rob_ready_to_load_list, "ready-to-load",               // Ready to load (all operands ready)
-                        ROB_STATE_IN_ISSUE_QUEUE);
-// Out of order core states
-DeclareClusteredROBList(rob_issued_list, "issued", 0);                         // Issued and in progress (or for loads, returned here after address is generated)
-DeclareClusteredROBList(rob_completed_list, "completed",                       // Completed and result in transit for local and global forwarding
-                        ROB_STATE_READY);
-DeclareClusteredROBList(rob_ready_to_writeback_list, "ready-to-write",         // Completed; result ready to writeback in parallel across all cluster register files
-                        ROB_STATE_READY);
-DeclareROBList(rob_cache_miss_list, "cache-miss", 0);                          // Loads only: wait for cache miss to be serviced
-
-// In-order commit and retirement state
-DeclareROBList(rob_ready_to_commit_queue, "ready-to-commit",                   // Ready to commit
-               ROB_STATE_READY);
-
-#define issueq_operation_on_cluster(cluster, expr) { int dummyrc; issueq_operation_on_cluster_with_result(cluster, dummyrc, expr); }
+#include <ooocore.h>
+#include <stats.h>
 
 static W32 forward_at_cycle_lut[MAX_CLUSTERS][MAX_FORWARDING_LATENCY+1];
 
-struct ReorderBufferEntry;
-struct LoadStoreQueueEntry;
-struct PhysicalRegister;
+const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
 
-struct BranchPredictorUpdateInfo: public PredictorUpdate {
-  int stack_recover_idx;
-  int bptype;
-  W64 ripafter;
+static byte bit_indices_set_8bits[1<<8][8] = {
+  {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0},  
+  {1, 1, 1, 1, 1, 1, 1, 1}, {0, 1, 0, 1, 0, 1, 0, 1},
+  {2, 2, 2, 2, 2, 2, 2, 2}, {0, 2, 0, 2, 0, 2, 0, 2},
+  {1, 2, 1, 2, 1, 2, 1, 2}, {0, 1, 2, 0, 1, 2, 0, 1},
+  {3, 3, 3, 3, 3, 3, 3, 3}, {0, 3, 0, 3, 0, 3, 0, 3},
+  {1, 3, 1, 3, 1, 3, 1, 3}, {0, 1, 3, 0, 1, 3, 0, 1},
+  {2, 3, 2, 3, 2, 3, 2, 3}, {0, 2, 3, 0, 2, 3, 0, 2},
+  {1, 2, 3, 1, 2, 3, 1, 2}, {0, 1, 2, 3, 0, 1, 2, 3},
+  {4, 4, 4, 4, 4, 4, 4, 4}, {0, 4, 0, 4, 0, 4, 0, 4},
+  {1, 4, 1, 4, 1, 4, 1, 4}, {0, 1, 4, 0, 1, 4, 0, 1},
+  {2, 4, 2, 4, 2, 4, 2, 4}, {0, 2, 4, 0, 2, 4, 0, 2},
+  {1, 2, 4, 1, 2, 4, 1, 2}, {0, 1, 2, 4, 0, 1, 2, 4},
+  {3, 4, 3, 4, 3, 4, 3, 4}, {0, 3, 4, 0, 3, 4, 0, 3},
+  {1, 3, 4, 1, 3, 4, 1, 3}, {0, 1, 3, 4, 0, 1, 3, 4},
+  {2, 3, 4, 2, 3, 4, 2, 3}, {0, 2, 3, 4, 0, 2, 3, 4},
+  {1, 2, 3, 4, 1, 2, 3, 4}, {0, 1, 2, 3, 4, 0, 1, 2},
+  {5, 5, 5, 5, 5, 5, 5, 5}, {0, 5, 0, 5, 0, 5, 0, 5},
+  {1, 5, 1, 5, 1, 5, 1, 5}, {0, 1, 5, 0, 1, 5, 0, 1},
+  {2, 5, 2, 5, 2, 5, 2, 5}, {0, 2, 5, 0, 2, 5, 0, 2},
+  {1, 2, 5, 1, 2, 5, 1, 2}, {0, 1, 2, 5, 0, 1, 2, 5},
+  {3, 5, 3, 5, 3, 5, 3, 5}, {0, 3, 5, 0, 3, 5, 0, 3},
+  {1, 3, 5, 1, 3, 5, 1, 3}, {0, 1, 3, 5, 0, 1, 3, 5},
+  {2, 3, 5, 2, 3, 5, 2, 3}, {0, 2, 3, 5, 0, 2, 3, 5},
+  {1, 2, 3, 5, 1, 2, 3, 5}, {0, 1, 2, 3, 5, 0, 1, 2},
+  {4, 5, 4, 5, 4, 5, 4, 5}, {0, 4, 5, 0, 4, 5, 0, 4},
+  {1, 4, 5, 1, 4, 5, 1, 4}, {0, 1, 4, 5, 0, 1, 4, 5},
+  {2, 4, 5, 2, 4, 5, 2, 4}, {0, 2, 4, 5, 0, 2, 4, 5},
+  {1, 2, 4, 5, 1, 2, 4, 5}, {0, 1, 2, 4, 5, 0, 1, 2},
+  {3, 4, 5, 3, 4, 5, 3, 4}, {0, 3, 4, 5, 0, 3, 4, 5},
+  {1, 3, 4, 5, 1, 3, 4, 5}, {0, 1, 3, 4, 5, 0, 1, 3},
+  {2, 3, 4, 5, 2, 3, 4, 5}, {0, 2, 3, 4, 5, 0, 2, 3},
+  {1, 2, 3, 4, 5, 1, 2, 3}, {0, 1, 2, 3, 4, 5, 0, 1},
+  {6, 6, 6, 6, 6, 6, 6, 6}, {0, 6, 0, 6, 0, 6, 0, 6},
+  {1, 6, 1, 6, 1, 6, 1, 6}, {0, 1, 6, 0, 1, 6, 0, 1},
+  {2, 6, 2, 6, 2, 6, 2, 6}, {0, 2, 6, 0, 2, 6, 0, 2},
+  {1, 2, 6, 1, 2, 6, 1, 2}, {0, 1, 2, 6, 0, 1, 2, 6},
+  {3, 6, 3, 6, 3, 6, 3, 6}, {0, 3, 6, 0, 3, 6, 0, 3},
+  {1, 3, 6, 1, 3, 6, 1, 3}, {0, 1, 3, 6, 0, 1, 3, 6},
+  {2, 3, 6, 2, 3, 6, 2, 3}, {0, 2, 3, 6, 0, 2, 3, 6},
+  {1, 2, 3, 6, 1, 2, 3, 6}, {0, 1, 2, 3, 6, 0, 1, 2},
+  {4, 6, 4, 6, 4, 6, 4, 6}, {0, 4, 6, 0, 4, 6, 0, 4},
+  {1, 4, 6, 1, 4, 6, 1, 4}, {0, 1, 4, 6, 0, 1, 4, 6},
+  {2, 4, 6, 2, 4, 6, 2, 4}, {0, 2, 4, 6, 0, 2, 4, 6},
+  {1, 2, 4, 6, 1, 2, 4, 6}, {0, 1, 2, 4, 6, 0, 1, 2},
+  {3, 4, 6, 3, 4, 6, 3, 4}, {0, 3, 4, 6, 0, 3, 4, 6},
+  {1, 3, 4, 6, 1, 3, 4, 6}, {0, 1, 3, 4, 6, 0, 1, 3},
+  {2, 3, 4, 6, 2, 3, 4, 6}, {0, 2, 3, 4, 6, 0, 2, 3},
+  {1, 2, 3, 4, 6, 1, 2, 3}, {0, 1, 2, 3, 4, 6, 0, 1},
+  {5, 6, 5, 6, 5, 6, 5, 6}, {0, 5, 6, 0, 5, 6, 0, 5},
+  {1, 5, 6, 1, 5, 6, 1, 5}, {0, 1, 5, 6, 0, 1, 5, 6},
+  {2, 5, 6, 2, 5, 6, 2, 5}, {0, 2, 5, 6, 0, 2, 5, 6},
+  {1, 2, 5, 6, 1, 2, 5, 6}, {0, 1, 2, 5, 6, 0, 1, 2},
+  {3, 5, 6, 3, 5, 6, 3, 5}, {0, 3, 5, 6, 0, 3, 5, 6},
+  {1, 3, 5, 6, 1, 3, 5, 6}, {0, 1, 3, 5, 6, 0, 1, 3},
+  {2, 3, 5, 6, 2, 3, 5, 6}, {0, 2, 3, 5, 6, 0, 2, 3},
+  {1, 2, 3, 5, 6, 1, 2, 3}, {0, 1, 2, 3, 5, 6, 0, 1},
+  {4, 5, 6, 4, 5, 6, 4, 5}, {0, 4, 5, 6, 0, 4, 5, 6},
+  {1, 4, 5, 6, 1, 4, 5, 6}, {0, 1, 4, 5, 6, 0, 1, 4},
+  {2, 4, 5, 6, 2, 4, 5, 6}, {0, 2, 4, 5, 6, 0, 2, 4},
+  {1, 2, 4, 5, 6, 1, 2, 4}, {0, 1, 2, 4, 5, 6, 0, 1},
+  {3, 4, 5, 6, 3, 4, 5, 6}, {0, 3, 4, 5, 6, 0, 3, 4},
+  {1, 3, 4, 5, 6, 1, 3, 4}, {0, 1, 3, 4, 5, 6, 0, 1},
+  {2, 3, 4, 5, 6, 2, 3, 4}, {0, 2, 3, 4, 5, 6, 0, 2},
+  {1, 2, 3, 4, 5, 6, 1, 2}, {0, 1, 2, 3, 4, 5, 6, 0},
+  {7, 7, 7, 7, 7, 7, 7, 7}, {0, 7, 0, 7, 0, 7, 0, 7},
+  {1, 7, 1, 7, 1, 7, 1, 7}, {0, 1, 7, 0, 1, 7, 0, 1},
+  {2, 7, 2, 7, 2, 7, 2, 7}, {0, 2, 7, 0, 2, 7, 0, 2},
+  {1, 2, 7, 1, 2, 7, 1, 2}, {0, 1, 2, 7, 0, 1, 2, 7},
+  {3, 7, 3, 7, 3, 7, 3, 7}, {0, 3, 7, 0, 3, 7, 0, 3},
+  {1, 3, 7, 1, 3, 7, 1, 3}, {0, 1, 3, 7, 0, 1, 3, 7},
+  {2, 3, 7, 2, 3, 7, 2, 3}, {0, 2, 3, 7, 0, 2, 3, 7},
+  {1, 2, 3, 7, 1, 2, 3, 7}, {0, 1, 2, 3, 7, 0, 1, 2},
+  {4, 7, 4, 7, 4, 7, 4, 7}, {0, 4, 7, 0, 4, 7, 0, 4},
+  {1, 4, 7, 1, 4, 7, 1, 4}, {0, 1, 4, 7, 0, 1, 4, 7},
+  {2, 4, 7, 2, 4, 7, 2, 4}, {0, 2, 4, 7, 0, 2, 4, 7},
+  {1, 2, 4, 7, 1, 2, 4, 7}, {0, 1, 2, 4, 7, 0, 1, 2},
+  {3, 4, 7, 3, 4, 7, 3, 4}, {0, 3, 4, 7, 0, 3, 4, 7},
+  {1, 3, 4, 7, 1, 3, 4, 7}, {0, 1, 3, 4, 7, 0, 1, 3},
+  {2, 3, 4, 7, 2, 3, 4, 7}, {0, 2, 3, 4, 7, 0, 2, 3},
+  {1, 2, 3, 4, 7, 1, 2, 3}, {0, 1, 2, 3, 4, 7, 0, 1},
+  {5, 7, 5, 7, 5, 7, 5, 7}, {0, 5, 7, 0, 5, 7, 0, 5},
+  {1, 5, 7, 1, 5, 7, 1, 5}, {0, 1, 5, 7, 0, 1, 5, 7},
+  {2, 5, 7, 2, 5, 7, 2, 5}, {0, 2, 5, 7, 0, 2, 5, 7},
+  {1, 2, 5, 7, 1, 2, 5, 7}, {0, 1, 2, 5, 7, 0, 1, 2},
+  {3, 5, 7, 3, 5, 7, 3, 5}, {0, 3, 5, 7, 0, 3, 5, 7},
+  {1, 3, 5, 7, 1, 3, 5, 7}, {0, 1, 3, 5, 7, 0, 1, 3},
+  {2, 3, 5, 7, 2, 3, 5, 7}, {0, 2, 3, 5, 7, 0, 2, 3},
+  {1, 2, 3, 5, 7, 1, 2, 3}, {0, 1, 2, 3, 5, 7, 0, 1},
+  {4, 5, 7, 4, 5, 7, 4, 5}, {0, 4, 5, 7, 0, 4, 5, 7},
+  {1, 4, 5, 7, 1, 4, 5, 7}, {0, 1, 4, 5, 7, 0, 1, 4},
+  {2, 4, 5, 7, 2, 4, 5, 7}, {0, 2, 4, 5, 7, 0, 2, 4},
+  {1, 2, 4, 5, 7, 1, 2, 4}, {0, 1, 2, 4, 5, 7, 0, 1},
+  {3, 4, 5, 7, 3, 4, 5, 7}, {0, 3, 4, 5, 7, 0, 3, 4},
+  {1, 3, 4, 5, 7, 1, 3, 4}, {0, 1, 3, 4, 5, 7, 0, 1},
+  {2, 3, 4, 5, 7, 2, 3, 4}, {0, 2, 3, 4, 5, 7, 0, 2},
+  {1, 2, 3, 4, 5, 7, 1, 2}, {0, 1, 2, 3, 4, 5, 7, 0},
+  {6, 7, 6, 7, 6, 7, 6, 7}, {0, 6, 7, 0, 6, 7, 0, 6},
+  {1, 6, 7, 1, 6, 7, 1, 6}, {0, 1, 6, 7, 0, 1, 6, 7},
+  {2, 6, 7, 2, 6, 7, 2, 6}, {0, 2, 6, 7, 0, 2, 6, 7},
+  {1, 2, 6, 7, 1, 2, 6, 7}, {0, 1, 2, 6, 7, 0, 1, 2},
+  {3, 6, 7, 3, 6, 7, 3, 6}, {0, 3, 6, 7, 0, 3, 6, 7},
+  {1, 3, 6, 7, 1, 3, 6, 7}, {0, 1, 3, 6, 7, 0, 1, 3},
+  {2, 3, 6, 7, 2, 3, 6, 7}, {0, 2, 3, 6, 7, 0, 2, 3},
+  {1, 2, 3, 6, 7, 1, 2, 3}, {0, 1, 2, 3, 6, 7, 0, 1},
+  {4, 6, 7, 4, 6, 7, 4, 6}, {0, 4, 6, 7, 0, 4, 6, 7},
+  {1, 4, 6, 7, 1, 4, 6, 7}, {0, 1, 4, 6, 7, 0, 1, 4},
+  {2, 4, 6, 7, 2, 4, 6, 7}, {0, 2, 4, 6, 7, 0, 2, 4},
+  {1, 2, 4, 6, 7, 1, 2, 4}, {0, 1, 2, 4, 6, 7, 0, 1},
+  {3, 4, 6, 7, 3, 4, 6, 7}, {0, 3, 4, 6, 7, 0, 3, 4},
+  {1, 3, 4, 6, 7, 1, 3, 4}, {0, 1, 3, 4, 6, 7, 0, 1},
+  {2, 3, 4, 6, 7, 2, 3, 4}, {0, 2, 3, 4, 6, 7, 0, 2},
+  {1, 2, 3, 4, 6, 7, 1, 2}, {0, 1, 2, 3, 4, 6, 7, 0},
+  {5, 6, 7, 5, 6, 7, 5, 6}, {0, 5, 6, 7, 0, 5, 6, 7},
+  {1, 5, 6, 7, 1, 5, 6, 7}, {0, 1, 5, 6, 7, 0, 1, 5},
+  {2, 5, 6, 7, 2, 5, 6, 7}, {0, 2, 5, 6, 7, 0, 2, 5},
+  {1, 2, 5, 6, 7, 1, 2, 5}, {0, 1, 2, 5, 6, 7, 0, 1},
+  {3, 5, 6, 7, 3, 5, 6, 7}, {0, 3, 5, 6, 7, 0, 3, 5},
+  {1, 3, 5, 6, 7, 1, 3, 5}, {0, 1, 3, 5, 6, 7, 0, 1},
+  {2, 3, 5, 6, 7, 2, 3, 5}, {0, 2, 3, 5, 6, 7, 0, 2},
+  {1, 2, 3, 5, 6, 7, 1, 2}, {0, 1, 2, 3, 5, 6, 7, 0},
+  {4, 5, 6, 7, 4, 5, 6, 7}, {0, 4, 5, 6, 7, 0, 4, 5},
+  {1, 4, 5, 6, 7, 1, 4, 5}, {0, 1, 4, 5, 6, 7, 0, 1},
+  {2, 4, 5, 6, 7, 2, 4, 5}, {0, 2, 4, 5, 6, 7, 0, 2},
+  {1, 2, 4, 5, 6, 7, 1, 2}, {0, 1, 2, 4, 5, 6, 7, 0},
+  {3, 4, 5, 6, 7, 3, 4, 5}, {0, 3, 4, 5, 6, 7, 0, 3},
+  {1, 3, 4, 5, 6, 7, 1, 3}, {0, 1, 3, 4, 5, 6, 7, 0},
+  {2, 3, 4, 5, 6, 7, 2, 3}, {0, 2, 3, 4, 5, 6, 7, 0},
+  {1, 2, 3, 4, 5, 6, 7, 1}, {0, 1, 2, 3, 4, 5, 6, 7},
 };
-
-struct FetchBufferEntry: public TransOp {
-  W64 rip;
-  W64 uuid;
-  TransOp* origop;
-  uopimpl_func_t synthop;
-  BranchPredictorUpdateInfo predinfo;
-  BasicBlock* bb;
-
-  int index() const;
-
-  int init(int idx) { return 0; }
-  void validate() { }
-
-  FetchBufferEntry() { }
-
-  FetchBufferEntry(const TransOp& transop) {
-    *((TransOp*)this) = transop;
-    origop = null;
-  }
-};
-
-struct ReorderBufferEntry: public selfqueuelink {
-  struct StateList* current_state_list;
-  PhysicalRegister* physreg;
-  PhysicalRegister* operands[MAX_OPERANDS];
-  LoadStoreQueueEntry* lsq;
-  FetchBufferEntry uop;
-  W16s idx;
-  W16s cycles_left; // execution latency counter, decremented every cycle when executing
-  W16s forward_cycle; // forwarding cycle after completion
-  W16s lfrqslot;
-  W16s iqslot;
-  W16  executable_on_cluster_mask;
-  W8s  cluster;
-  byte fu;
-  byte consumer_count;
-  PTEUpdate pteupdate;
-  Waddr origvirt;
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-  byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1;
-#else
-  byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1;
-#endif
-
-  int index() const { return idx; }
-
-  void init(int idx) {
-    this->idx = idx;
-    entry_valid = 0;
-    foreach_issueq(reset());
-    selfqueuelink::reset();
-    current_state_list = null;
-    reset();
-  }
-
-  //
-  // Clean out various fields from the ROB entry that are 
-  // expected to be zero when allocating a new ROB entry.
-  //
-  void reset() {
-    int latency, operand;
-    // Deallocate ROB entry
-    entry_valid = false;
-    cycles_left = 0;
-    physreg = (PhysicalRegister*)null;
-    lfrqslot = -1;
-    lsq = 0;
-    load_store_second_phase = 0;
-    consumer_count = 0;
-    executable_on_cluster_mask = 0;
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-    dest_renamed_before_writeback = 0;
-    no_branches_between_renamings = 0;
-#endif
-  }
-
-  void validate() {
-    entry_valid = true;
-  }
-
-  void changestate(StateList& newqueue, bool place_at_head = false, ReorderBufferEntry* prevrob = null) {
-    if (current_state_list)
-      current_state_list->remove(this);
-    current_state_list = &newqueue;
-    if (place_at_head) newqueue.enqueue_after(this, prevrob); else newqueue.enqueue(this);
-  }
-
-  bool operand_ready(int operand) const;
-
-  bool ready_to_issue() const {
-    bool raready = operand_ready(0);
-    bool rbready = operand_ready(1);
-    bool rcready = operand_ready(2);
-    bool rsready = operand_ready(3);
-
-    if (isstore(uop.opcode)) {
-      return (load_store_second_phase) ? (raready & rbready & rcready & rsready) : (raready & rbready);
-    } else if (isload(uop.opcode)) {
-      return (load_store_second_phase) ? (raready & rbready & rcready & rsready) : (raready & rbready & rcready);
-    } else {
-      return (raready & rbready & rcready & rsready);
-    }
-  }
-
-  bool ready_to_commit() const {
-    return (current_state_list == &rob_ready_to_commit_queue);
-  }
-
-  StateList& get_ready_to_issue_list() const {
-    return 
-      isload(uop.opcode) ? rob_ready_to_load_list[cluster] :
-      isstore(uop.opcode) ? rob_ready_to_store_list[cluster] :
-      rob_ready_to_issue_list[cluster];
-  }
-
-  bool has_exception() const;
-
-  bool find_sources();
-  int forward();
-
-  int select_cluster();
-
-  int issue();
-  int issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate);
-  int issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate);
-  void release();
-
-  W64 annul(bool keep_misspec_uop, bool return_first_annulled_rip = false);
-
-  W64 annul_after() { return annul(true); }
-  W64 annul_after_and_including() { return annul(false); }
-
-  int commit();
-  void replay();
-  int pseudocommit();
-  void redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob);
-  void redispatch_dependents(bool inclusive = true);
-
-  void loadwakeup();
-
-  ostream& print(ostream& os) const;
-  stringbuf& get_operand_info(stringbuf& sb, int operand) const;
-  ostream& print_operand_info(ostream& os, int operand) const;
-};
-
-ostream& operator <<(ostream& os, const ReorderBufferEntry& rob) {
-  return rob.print(os);
-}
-
-static Queue<ReorderBufferEntry, ROB_SIZE> ROB;
-
-void check_rob() {
-  foreach (i, ROB_SIZE) {
-    ReorderBufferEntry& rob = ROB[i];
-    if (!rob.entry_valid) continue;
-    assert(inrange((int)rob.forward_cycle, 0, (MAX_FORWARDING_LATENCY+1)-1));
-  }
-
-  foreach (i, rob_states.count) {
-    StateList& list = *rob_states[i];
-    ReorderBufferEntry* rob;
-    foreach_list_mutable(list, rob, entry, nextentry) {
-      assert(inrange(rob->index(), 0, ROB_SIZE-1));
-      assert(rob->current_state_list == &list);
-      if (!((rob->current_state_list != &rob_free_list) ? rob->entry_valid : (!rob->entry_valid))) {
-        logfile << "ROB ", rob->index(), " list = ", rob->current_state_list->name, " entry_valid ", rob->entry_valid, endl, flush;
-        dump_ooo_state();
-        assert(false);
-      }
-    }
-  }
-}
-
-#define LSQ_SIZE (LDQ_SIZE + STQ_SIZE)
-
-struct LoadStoreQueueEntry: public SFR {
-  ReorderBufferEntry* rob;
-  W16 idx;
-  W8s mbtag;
-  W8 store:1, entry_valid:1;
-  W32 padding;
-
-  LoadStoreQueueEntry() { }
-
-  int index() const { return idx; }
-
-  void reset() {
-    rob = null;
-    entry_valid = 0;
-    physaddr = 0;
-    invalid = 1;
-    bytemask = 0;
-    addrvalid = 0;
-    datavalid = 0;
-    mbtag = -1;
-    invalid = 0;
-    data = 0;
-    physaddr = 0;
-  }
-
-  void init(int idx) {
-    this->idx = idx;
-    reset();
-  }
-
-  void validate() {
-    entry_valid = 1;
-  }
-  
-  ostream& print(ostream& os) const;
-
-  LoadStoreQueueEntry& operator =(const SFR& sfr) {
-    data = sfr.data;
-    addrvalid = sfr.addrvalid;
-    datavalid = sfr.datavalid;
-    invalid = sfr.invalid;
-    physaddr = sfr.physaddr;
-    bytemask = sfr.bytemask;
-    return *this;
-  }
-};
-
-ostream& operator <<(ostream& os, const LoadStoreQueueEntry& lsq) {
-  return lsq.print(os);
-}
-
-static Queue<LoadStoreQueueEntry, LSQ_SIZE> LSQ;
-
-int loads_in_flight = 0;
-int stores_in_flight = 0;
-
-//
-// Physical Registers
-//
-
-struct PhysicalRegisterFile;
-
-// NOTE: the counter fields of the following total 100%:
-
-enum { PHYSREG_NONE, PHYSREG_FREE, PHYSREG_WAITING, PHYSREG_BYPASS, PHYSREG_WRITTEN, PHYSREG_ARCH, PHYSREG_PENDINGFREE, MAX_PHYSREG_STATE };
-static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
 
 //
 // Physical Register Recycling Complications
@@ -772,652 +207,6 @@ static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "wa
 // bit R is set. Register P cannot be freed until all bits in its vector are zero.
 //
 
-struct PhysicalRegister: public selfqueuelink {
-public:
-  ReorderBufferEntry* rob;
-  W64 data;
-  W16 flags;
-  W16 idx;
-  W8  rfid;
-  W8  state;
-  W8 archreg;
-  W8 all_consumers_sourced_from_bypass:1;
-  W16s refcount;
-
-  StateList& get_state_list(int state) const;
-
-  StateList& get_state_list() const { return get_state_list(this->state); }
-
-  void changestate(int newstate) {
-    if likely (state != PHYSREG_NONE) get_state_list(state).remove(this);
-    state = newstate;
-    get_state_list(state).enqueue(this);
-  }
-
-  void init(int rfid, int idx) {
-    this->rfid = rfid;
-    this->idx = idx;
-    reset();
-  }
-
-  void addref() { refcount++; }
-  void unref() { refcount--; assert(refcount >= 0); }
-
-  void addref(const ReorderBufferEntry& rob) { addref(); }
-  void unref(const ReorderBufferEntry& rob) { unref(); }
-  void addspecref(int archreg) { addref(); }
-  void unspecref(int archreg) { unref(); }
-  void addcommitref(int archreg) { addref(); }
-  void uncommitref(int archreg) { unref(); }
-  bool referenced() const { return (refcount > 0); }
-
-  bool nonnull() const { return (index() != PHYS_REG_NULL); }
-  bool allocated() const { return (state != PHYSREG_FREE); }
-
-  void commit() { changestate(PHYSREG_ARCH); }
-  void complete() { changestate(PHYSREG_BYPASS); }
-  void writeback() { changestate(PHYSREG_WRITTEN); }
-
-  void free() {
-    changestate(PHYSREG_FREE);
-    rob = 0;
-    refcount = 0;
-    all_consumers_sourced_from_bypass = 1;
-  }
-
-  void reset() {
-    selfqueuelink::reset();
-    state = PHYSREG_NONE;
-    free();
-  }
-
-  int index() const { return idx; }
-
-  bool valid() const { return ((flags & FLAG_INV) == 0);  }
-
-  bool ready() const {
-    return ((flags & FLAG_WAIT) == 0);
-  }
-};
-
-ostream& operator <<(ostream& os, const PhysicalRegister& physreg) {
-  stringbuf sb;
-  print_value_and_flags(sb, physreg.data, physreg.flags);
-
-  os << "  r", intstring(physreg.index(), -3), " state ", padstring(physreg.get_state_list().name, -12), " ", sb;
-  if (physreg.rob) os << " rob ", physreg.rob->index(), " (uuid ", physreg.rob->uop.uuid, ")";
-  os << " refcount ", physreg.refcount;
-
-  return os;
-}
-
-struct PhysicalRegisterFile: public array<PhysicalRegister, MAX_PHYS_REG_FILE_SIZE> {
-  int rfid;
-  int size;
-  const char* name;
-  StateList states[MAX_PHYSREG_STATE];
-  W64 allocations;
-  W64 frees;
-
-  PhysicalRegisterFile() { }
-
-  void init(const char* name, int rfid, int size) {
-    assert(rfid < PHYS_REG_FILE_COUNT);
-    assert(size <= MAX_PHYS_REG_FILE_SIZE);
-    this->size = size;
-    this->rfid = rfid;
-    this->name = name;
-    this->allocations = 0;
-    this->frees = 0;
-
-    foreach (i, MAX_PHYSREG_STATE) {
-      states[i].init(physreg_state_names[i], physreg_states);
-    }
-
-    foreach (i, size) {
-      (*this)[i].init(rfid, i);
-    }
-
-  }
-
-  PhysicalRegisterFile(const char* name, int rfid, int size) {
-    init(name, rfid, size);
-    reset();
-  }
-
-  void reset() {
-    foreach (i, MAX_PHYSREG_STATE) {
-      states[i].reset();
-    }
-
-    foreach (i, size) {
-      (*this)[i].reset();
-    }
-  }
-
-  bool remaining() const {
-    return (!states[PHYSREG_FREE].empty());
-  }
-
-  PhysicalRegister* alloc(int r = -1) {
-    PhysicalRegister* physreg = (PhysicalRegister*)((r >= 0) ? states[PHYSREG_FREE].remove(&(*this)[r]): states[PHYSREG_FREE].dequeue());
-    if unlikely (!physreg) return null;
-    physreg->state = PHYSREG_NONE;
-    physreg->changestate(PHYSREG_WAITING);
-    physreg->flags = FLAG_WAIT;
-    allocations++;
-    return physreg;
-  }
-
-  ostream& print(ostream& os) const {
-    os << "PhysicalRegisterFile<", name, ", rfid ", rfid, ", size ", size, ">:", endl;
-    foreach (i, size) {
-      os << (*this)[i], endl;
-    }
-    return os;
-  }
-};
-
-ostream& operator <<(ostream& os, const PhysicalRegisterFile& physregs) {
-  return physregs.print(os);
-}
-
-#define DECLARE_PHYS_REG_FILES
-#include <ooohwdef.h>
-#undef DECLARE_PHYS_REG_FILES
-
-StateList& PhysicalRegister::get_state_list(int s) const {
-  return physregfiles[rfid].states[s];
-}
-
-void reset_fetch_unit(W64 realrip);
-void flush_pipeline(W64 realrip);
-void external_to_core_state();
-void core_to_external_state();
-
-bool ReorderBufferEntry::has_exception() const {
-  return ((physreg->flags & FLAG_INV) != 0);
-}
-
-bool ReorderBufferEntry::operand_ready(int operand) const {
-  return operands[operand]->ready();
-}
-
-struct RegisterRenameTable: public array<PhysicalRegister*, TRANSREG_COUNT> {
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-  bitvec<TRANSREG_COUNT> renamed_in_this_basic_block;
-#endif
-
-  RegisterRenameTable() {
-    reset();
-  }
-
-  void reset() {
-    // external_to_core_state() does this instead
-  }
-
-  ostream& print(ostream& os) const {
-    foreach (i, TRANSREG_COUNT) {
-      if ((i % 8) == 0) os << " ";
-      os << " ", padstring(arch_reg_names[i], -6), " r", intstring((*this)[i]->index(), -3), " | ";
-      if (((i % 8) == 7) || (i == TRANSREG_COUNT-1)) os << endl;
-    }
-    return os;
-  }
-};
-
-ostream& operator <<(ostream& os, const RegisterRenameTable& rrt) {
-  return rrt.print(os);
-}
-
-RegisterRenameTable specrrt;
-RegisterRenameTable commitrrt;
-
-void print_rename_tables(ostream& os) {
-   os << "SpecRRT:", endl;
-   os << specrrt;
-   os << "CommitRRT:", endl;
-   os << commitrrt;
-}
-
-void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand) {
-  if (config.loglevel <= 0) return;
-
-  PhysicalRegister* physreg = source->physreg;
-
-  stringbuf rdstr; print_value_and_flags(rdstr, physreg->data, physreg->flags);
-  logfile << intstring(source->uop.uuid, 20), " forwd", source->forward_cycle, " rob ", intstring(source->index(), -3), 
-    " (", clusters[source->cluster].name, ") r", intstring(physreg->index(), -3), 
-    " => ", "uuid ", target->uop.uuid, " rob ", target->index(), " (", clusters[target->cluster].name, ") r", target->physreg->index(), " operand ", operand;
-  if (isstore(target->uop.opcode)) logfile << " => st", target->lsq->index();
-  logfile << " [still waiting?";
-  foreach (i, MAX_OPERANDS) { if (!target->operand_ready(i)) logfile << " r", (char)('a' + i); }
-  if (target->ready_to_issue()) logfile << " READY";
-  logfile << "]";
-  logfile << endl;
-}
-
-//
-// Flush everything in pipeline immediately
-//
-void flush_pipeline(W64 realrip) {
-  dcache_complete();
-  reset_fetch_unit(realrip);
-  rob_states.reset();
-  // physreg_states.reset();
-
-  ROB.reset();
-  foreach (i, ROB_SIZE) ROB[i].changestate(rob_free_list);
-  LSQ.reset();
-  loads_in_flight = 0;
-  stores_in_flight = 0;
-
-  foreach (i, PHYS_REG_FILE_COUNT) physregfiles[i].reset();
-  commitrrt.reset();
-  specrrt.reset();
-
-  external_to_core_state();
-}
-
-//
-// Copy external archregs to physregs and reset all rename tables
-//
-void external_to_core_state() {
-  foreach (i, PHYS_REG_FILE_COUNT) {
-    PhysicalRegisterFile& rf = physregfiles[i];
-    PhysicalRegister* zeroreg = rf.alloc(PHYS_REG_NULL);
-    zeroreg->addref();
-    zeroreg->commit();
-    zeroreg->data = 0;
-    zeroreg->flags = 0;
-  }
-
-  // Always start out on cluster 0:
-  PhysicalRegister* zeroreg = &physregfiles[0][PHYS_REG_NULL];
-
-  //
-  // Allocate and commit each architectural register
-  //
-  foreach (i, ARCHREG_COUNT) {
-    //
-    // IMPORTANT! If using some register file configuration other
-    // than (integer, fp), this needs to be changed!
-    //
-#ifdef UNIFIED_INT_FP_PHYS_REG_FILE
-    int rfid = (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
-#else
-    bool fp = inrange((int)i, REG_xmml0, REG_xmmh15) | (inrange((int)i, REG_fptos, REG_ctx));
-    int rfid = (fp) ? PHYS_REG_FILE_FP : (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
-#endif
-    PhysicalRegisterFile& rf = physregfiles[rfid];
-    PhysicalRegister* physreg = (i == REG_zero) ? zeroreg : rf.alloc();
-    physreg->data = ctx.commitarf[i];
-    physreg->flags = 0;
-    commitrrt[i] = physreg;
-  }
-
-  commitrrt[REG_flags]->flags = (W16)commitrrt[REG_flags]->data;
-
-  //
-  // Internal translation registers are never used before
-  // they are written for the first time:
-  //
-  for (int i = ARCHREG_COUNT; i < TRANSREG_COUNT; i++) {
-    commitrrt[i] = zeroreg;
-  }
-
-  //
-  // Set renamable flags
-  // 
-  commitrrt[REG_zf] = commitrrt[REG_flags];
-  commitrrt[REG_cf] = commitrrt[REG_flags];
-  commitrrt[REG_of] = commitrrt[REG_flags];
-
-  //
-  // Copy commitrrt to specrrt and update refcounts
-  //
-  foreach (i, TRANSREG_COUNT) {
-    commitrrt[i]->commit();
-    specrrt[i] = commitrrt[i];
-    specrrt[i]->addspecref(i);
-    commitrrt[i]->addcommitref(i);
-  }
-
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-  specrrt.renamed_in_this_basic_block.reset();
-  commitrrt.renamed_in_this_basic_block.reset();
-#endif
-}
-
-void core_to_external_state() {
-  // External state in ctx.commitarf is updated at each commit: no action here
-}
-
-template <int size, int operandcount>
-void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, operandcount>::tag_t sourceid, const bitvec<size>& mask, int operand) const {
-  if likely (!logable(1)) return;
-
-  const ReorderBufferEntry* source = &ROB[sourceid];
-
-  bitvec<size> temp = mask;
-
-  while (*temp) {
-    int slot = temp.lsb();
-    int robid = uopof(slot);
-    assert(inrange(robid, 0, ROB_SIZE-1));
-    const ReorderBufferEntry* target = &ROB[robid];
-
-    log_forwarding(source, target, operand);
-    temp[slot] = 0;
-  }
-}
-
-//
-// Fetch Stage
-//
-
-Waddr current_basic_block_rip = 0;
-BasicBlock* current_basic_block = null;
-int current_basic_block_transop_index = 0;
-int bytes_in_current_insn = 0;
-
-Waddr fetchrip;
-int uop_in_basic_block;
-
-//
-// Fetch a stream of x86 instructions from the L1 i-cache along predicted
-// branch paths.
-//
-// Internally, up to N uops per clock corresponding to instructions in
-// the current basic block are fetched per cycle and placed in the uopq
-// as TransOps. When we run out of uops in one basic block, we proceed
-// to lookup or translate the next basic block.
-//
-
-bool stall_frontend = 0;
-Queue<FetchBufferEntry, FETCH_QUEUE_SIZE> fetchq;
-bool waiting_for_icache_fill = false;
-
-void annul_ras_updates_in_fetchq() {
-  //
-  // There may be return address stack (RAS) updates from calls and returns
-  // in the fetch queue that never made it to renaming, so they have no ROB
-  // that the core can annul normally. Therefore, we must go backwards in
-  // the fetch queue to annul these updates, in addition to checking the ROB.
-  //
-  foreach_backward (fetchq, i) {
-    FetchBufferEntry& fetchbuf = fetchq[i];
-    if unlikely (isbranch(fetchbuf.opcode) && (fetchbuf.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
-      if (logable(1)) logfile << intstring(fetchbuf.uuid, 20), " anlras rip ", (void*)(Waddr)fetchbuf.rip, ": annul RAS update still in fetchq", endl;
-      branchpred.annulras(fetchbuf.predinfo);
-    }
-  }
-}
-
-// call this in response to a branch mispredict:
-void reset_fetch_unit(W64 realrip) {
-  fetchrip = realrip;
-  stall_frontend = false;
-  waiting_for_icache_fill = 0;
-  fetchq.reset();
-  current_basic_block = null;
-  current_basic_block_rip = realrip;
-  current_basic_block_transop_index = 0;
-}
-
-CycleTimer cttrans;
-
-W64 bbcache_inserts;
-W64 bbcache_removes;
-
-static BasicBlock* fetch_or_translate_basic_block(Context& ctx, Waddr fetchrip) {
-  RIPVirtPhys rvp(fetchrip);
-  rvp.update(ctx);
-
-  BasicBlock* bb = bbcache(rvp);
-  
-  if likely (bb) {
-    current_basic_block = bb;
-    current_basic_block_rip = fetchrip;
-  } else {
-    start_timer(cttrans);
-    current_basic_block = bbcache.translate(ctx, fetchrip);
-    current_basic_block_rip = fetchrip;
-    assert(current_basic_block);
-    stop_timer(cttrans);
-    
-    if (logable(1)) logfile << padstring("", 20), " xlate  rip ", rvp, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
-    bbcache_inserts++;
-  }
-
-  if unlikely (!current_basic_block->synthops) synth_uops_for_bb(*current_basic_block);
-  assert(current_basic_block->synthops);
-  
-  current_basic_block_transop_index = 0;
-
-  return current_basic_block;
-}
-
-int FetchBufferEntry::index() const {
-  return (this - fetchq.data);
-}
-
-W64 fetch_uuid = 0;
-
-CycleTimer ctfetch;
-
-W64 fetch_width_histogram[FETCH_WIDTH+1];
-W64 branchpred_predictions;
-W64 branchpred_updates;
-
-W64 branchpred_cond_correct;
-W64 branchpred_cond_mispred;
-W64 branchpred_indir_correct;
-W64 branchpred_indir_mispred;
-W64 branchpred_return_correct;
-W64 branchpred_return_mispred;
-W64 branchpred_total_correct;
-W64 branchpred_total_mispred;
-
-// Cause of fetch stops:
-// totals 100%
-W64 fetch_stop_icache_miss;
-W64 fetch_stop_fetchq_full;
-W64 fetch_stop_bogus_rip;
-W64 fetch_stop_branch_taken;
-W64 fetch_stop_full_width;
-
-// (n/a):
-W64 fetch_blocks_fetched;
-W64 fetch_uops_fetched;
-W64 fetch_user_insns_fetched;
-
-W64 fetch_opclass_histogram[OPCLASS_COUNT];
-
-W64 icache_filled_callback(LoadStoreInfo lsi, W64 addr) {
-  if (logable(1)) 
-    logfile << "L1 i-cache wakeup on line ", (void*)(Waddr)addr, endl;
-
-  waiting_for_icache_fill = 0;
-  return 0;
-}
-
-// How many bytes of x86 code to fetch into decode buffer at once
-#define ICACHE_FETCH_GRANULARITY 16
-
-// Last block in icache we fetched into our buffer
-W64 current_icache_block = 0;
-
-void fetch() {
-  int fetchcount = 0;
-  int taken_branch_count = 0;
-
-  start_timer(ctfetch);
-
-  if unlikely (stall_frontend) {
-    if (logable(1)) logfile << padstring("", 20), " fetch  frontend stalled", endl;
-    return;
-  }
-
-  if unlikely (waiting_for_icache_fill) {
-    if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": wait for icache fill", endl;
-    fetch_stop_icache_miss++;
-    return;
-  }
-
-  TransOpBuffer unaligned_ldst_buf;
-
-  while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
-    if unlikely (!fetchq.remaining()) {
-      if (!fetchcount)
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": fetchq full", endl;
-      fetch_stop_fetchq_full++;
-      break;
-    }
-
-    if unlikely (!asp.check((byte*)fetchrip, PROT_EXEC)) {
-      if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": bogus RIP", endl;
-      fetch_stop_bogus_rip++;
-      break;
-    }
-
-    W64 req_icache_block = floor(fetchrip, ICACHE_FETCH_GRANULARITY);
-    if (req_icache_block != current_icache_block) {
-      bool hit = probe_icache(fetchrip);
-      if unlikely (!hit) {
-        int missbuf = initiate_icache_miss(fetchrip);
-        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": wait for icache fill on missbuf ", missbuf, endl;
-        if unlikely (missbuf < 0) {
-          // Try to re-allocate a miss buffer on the next cycle
-          if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": icache fill missbuf full", endl;
-          break;
-        }
-        waiting_for_icache_fill = 1;
-        fetch_stop_icache_miss++;
-        break;
-      }
-
-      fetch_blocks_fetched++;
-      current_icache_block = req_icache_block;
-      fetch_hit_L1++;
-    }
-
-    if unlikely ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
-      fetch_or_translate_basic_block(ctx, fetchrip);
-    }
-
-    FetchBufferEntry& transop = *fetchq.alloc();
-
-    uopimpl_func_t synthop = null;
-
-    assert(current_basic_block->synthops);
-
-    if likely (!unaligned_ldst_buf.get(transop, synthop)) {
-      transop = current_basic_block->transops[current_basic_block_transop_index];
-      synthop = current_basic_block->synthops[current_basic_block_transop_index];
-    }
-
-    //
-    // Handle loads and stores marked as unaligned in the basic block cache.
-    // These uops are split into two parts (ld.lo, ld.hi or st.lo, st.hi)
-    // and the parts are put into a 2-entry buffer (unaligned_ldst_pair).
-    // Fetching continues from this buffer instead of the basic block
-    // until both uops are forced into the pipeline.
-    //
-    if unlikely (transop.unaligned) {
-      if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": split unaligned load or store ", transop, endl;
-      split_unaligned(transop, unaligned_ldst_buf);
-      assert(unaligned_ldst_buf.get(transop, synthop));
-    }
-
-    transop.origop = &current_basic_block->transops[current_basic_block_transop_index];
-    transop.synthop = synthop;
-
-    current_basic_block_transop_index += (unaligned_ldst_buf.empty());
-
-    if likely (transop.som) {
-      bytes_in_current_insn = transop.bytes;
-      fetch_user_insns_fetched++;
-    }
-
-    fetch_uops_fetched++;
-
-    Waddr predrip = 0;
-
-    transop.rip = fetchrip;
-    transop.uuid = fetch_uuid++;
-
-    if (isbranch(transop.opcode)) {
-      transop.predinfo.uuid = transop.uuid;
-      transop.predinfo.bptype = 
-        (isclass(transop.opcode, OPCLASS_COND_BRANCH) << log2(BRANCH_HINT_COND)) |
-        (isclass(transop.opcode, OPCLASS_INDIR_BRANCH) << log2(BRANCH_HINT_INDIRECT)) |
-        (bit(transop.extshift, log2(BRANCH_HINT_PUSH_RAS)) << log2(BRANCH_HINT_CALL)) |
-        (bit(transop.extshift, log2(BRANCH_HINT_POP_RAS)) << log2(BRANCH_HINT_RET));
-
-      transop.predinfo.ripafter = fetchrip + bytes_in_current_insn;
-      predrip = branchpred.predict(transop.predinfo, transop.predinfo.bptype, transop.predinfo.ripafter, transop.riptaken);
-      branchpred_predictions++;
-    }
-
-    // Set up branches so mispredicts can be calculated correctly:
-    if unlikely (isclass(transop.opcode, OPCLASS_COND_BRANCH)) {
-      if unlikely (predrip != transop.riptaken) {
-        assert(predrip == transop.ripseq);
-        transop.cond = invert_cond(transop.cond);
-        //
-        // We need to be careful here: we already looked up the synthop for this
-        // uop according to the old condition, so redo that here so we call the
-        // correct code for the swapped condition.
-        //
-        transop.synthop = get_synthcode_for_cond_branch(transop.opcode, transop.cond, transop.size, 0);
-        swap(transop.riptaken, transop.ripseq);
-      }
-    } else if unlikely (isclass(transop.opcode, OPCLASS_INDIR_BRANCH)) {
-      transop.riptaken = predrip;
-      transop.ripseq = predrip;
-    } else if unlikely (isclass(transop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
-      assert(predrip == transop.riptaken);
-    }
-
-    fetch_opclass_histogram[opclassof(transop.opcode)]++;
-
-    if (logable(1)) {
-      logfile << intstring(transop.uuid, 20), " fetch  rip ", (void*)(Waddr)transop.rip, ": ", transop, 
-        " (BB ", current_basic_block, " uop ", current_basic_block_transop_index, " of ", current_basic_block->count;
-      if (transop.som) logfile << "; SOM";
-      if (transop.eom) logfile << "; EOM ", bytes_in_current_insn, " bytes";
-      logfile << ")";
-      if (transop.eom && predrip) logfile << " -> pred ", (void*)predrip;
-      logfile << endl;
-    }
-
-    if likely (transop.eom) {
-      fetchrip += bytes_in_current_insn;
-
-      if unlikely (isbranch(transop.opcode) && (transop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET)))
-        branchpred.updateras(transop.predinfo, transop.predinfo.ripafter);
-
-      if unlikely (predrip) {
-        // follow to target, then end fetching for this cycle if predicted taken
-        bool taken = (predrip != fetchrip);
-        taken_branch_count += taken;
-        fetchrip = predrip;
-        if (taken) {
-          fetch_stop_branch_taken++;
-          break;
-        }
-      }
-    }
-
-    fetchcount++;
-  }
-
-  fetch_stop_full_width += (fetchcount == FETCH_WIDTH);
-  fetch_width_histogram[fetchcount]++;
-  stop_timer(ctfetch);
-}
-
 static const byte archdest_is_visible[TRANSREG_COUNT] = {
   // Integer registers
   1, 1, 1, 1, 1, 1, 1, 1,
@@ -1456,476 +245,36 @@ static const byte archdest_can_rename[TRANSREG_COUNT] = {
 
 byte uop_executable_on_cluster[OP_MAX_OPCODE];
 
-#define archdest_can_commit archdest_can_rename
-
-CycleTimer ctrename;
-
-// totals 100%:
-W64 frontend_status_complete;
-W64 frontend_status_fetchq_empty;
-W64 frontend_status_rob_full;
-W64 frontend_status_physregs_full;
-W64 frontend_status_ldq_full;
-W64 frontend_status_stq_full;
-
-// totals 100%
-W64 frontend_width_histogram[FRONTEND_WIDTH+1];
-
-// totals 100%:
-W64 frontend_renamed_none;
-W64 frontend_renamed_reg;
-W64 frontend_renamed_flags;
-W64 frontend_renamed_reg_and_flags;
-
-// totals 100%:
-W64 frontend_alloc_reg;
-W64 frontend_alloc_ldreg;
-W64 frontend_alloc_sfr;
-W64 frontend_alloc_br;
-
-// totals 100%:
-W64 frontend_rename_consumer_count_histogram[256];
-
 //
-// Physical register file ID (rfid) where the search
-// for a free register should begin each cycle:
-//
-int round_robin_reg_file_offset = 0;
-
-//
-// Determine which physical register files can be written
-// by a given type of uop.
-//
-// This must be customized if the physical register files
-// are altered in ooohwdef.h.
-//
-W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
-  W32 c = opinfo[uop.opcode].opclass;
-
-#ifdef UNIFIED_INT_FP_PHYS_REG_FILE
-  return
-    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
-    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
-    PHYS_REG_FILE_MASK_INT;
-#else
-  return
-    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
-    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
-    (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? PHYS_REG_FILE_MASK_INT : PHYS_REG_FILE_MASK_FP) :
-    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_ctx)) ? PHYS_REG_FILE_MASK_FP :
-    PHYS_REG_FILE_MASK_INT;
-#endif
-}
-
-void rename() {
-  int prepcount = 0;
-
-  start_timer(ctrename);
-
-  while (prepcount < FRONTEND_WIDTH) {
-    if unlikely (fetchq.empty()) {
-      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename fetchq empty", endl;
-      frontend_status_fetchq_empty++;
-      break;
-    } 
-
-    if unlikely (!ROB.remaining()) {
-      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename ROB full", endl;
-      frontend_status_rob_full++;
-      break;
-    }
-
-    FetchBufferEntry& fetchbuf = *fetchq.peek();
-
-    int phys_reg_file = -1;
-
-    W32 acceptable_phys_reg_files = phys_reg_files_writable_by_uop(fetchbuf);
-
-    foreach (i, PHYS_REG_FILE_COUNT) {
-      int reg_file_to_check = add_index_modulo(round_robin_reg_file_offset, i, PHYS_REG_FILE_COUNT);
-      if likely (bit(acceptable_phys_reg_files, reg_file_to_check) && physregfiles[reg_file_to_check].remaining()) {
-        phys_reg_file = reg_file_to_check; break;
-      }
-    }
-
-    if (phys_reg_file < 0) {
-      if unlikely (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename physregs full", endl;
-      frontend_status_physregs_full++;
-      break;
-    }
-
-    bool ld = isload(fetchbuf.opcode);
-    bool st = isstore(fetchbuf.opcode);
-    bool br = isbranch(fetchbuf.opcode);
-
-    if unlikely (ld && (loads_in_flight >= LDQ_SIZE)) {
-      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename ldq full", endl;
-      frontend_status_ldq_full++;
-      break;
-    }
-
-    if unlikely (st && (stores_in_flight >= STQ_SIZE)) {
-      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename stq full", endl;
-      frontend_status_stq_full++;
-      break;
-    }
-
-    if unlikely ((ld|st) && (!LSQ.remaining())) {
-      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename memq full", endl;
-      break;
-    }
-
-    frontend_status_complete++;
-
-    FetchBufferEntry& transop = *fetchq.dequeue();
-    ReorderBufferEntry& rob = *ROB.alloc();
-    PhysicalRegister* physreg = null;
-
-    LoadStoreQueueEntry* lsqp = (ld|st) ? LSQ.alloc() : null;
-    LoadStoreQueueEntry& lsq = *lsqp;
-
-    rob.reset();
-    rob.uop = transop;
-    rob.entry_valid = 1;
-    rob.cycles_left = FRONTEND_STAGES;
-    if unlikely (ld|st) {
-      rob.lsq = &lsq;
-      lsq.rob = &rob;
-      lsq.store = st;
-      lsq.datavalid = 0;
-      lsq.addrvalid = 0;
-      lsq.invalid = 0;
-    }
-
-    frontend_alloc_reg += (!(ld|st|br));
-    frontend_alloc_ldreg += ld;
-    frontend_alloc_sfr += st;
-    frontend_alloc_br += br;
-
-    //
-    // Rename operands:
-    //
-
-    rob.operands[RA] = specrrt[transop.ra];
-    rob.operands[RB] = specrrt[transop.rb];
-    rob.operands[RC] = specrrt[transop.rc];
-    rob.operands[RS] = &physregfiles[0][PHYS_REG_NULL]; // used for loads and stores only
-
-    // See notes above on Physical Register Recycling Complications
-    foreach (i, MAX_OPERANDS) {
-      rob.operands[i]->addref(rob);
-      assert(rob.operands[i]->state != PHYSREG_FREE);
-
-      if likely ((rob.operands[i]->state == PHYSREG_WAITING) |
-          (rob.operands[i]->state == PHYSREG_BYPASS) |
-          (rob.operands[i]->state == PHYSREG_WRITTEN)) {
-        rob.operands[i]->rob->consumer_count = min(rob.operands[i]->rob->consumer_count + 1, 255);
-      }
-    }
-
-    //
-    // Select a physical register file based on desired
-    // heuristics. We only consider a given register
-    // file N if bit N in the acceptable_phys_reg_files
-    // bitmap is set (otherwise it is off limits for
-    // the type of functional unit or cluster the uop
-    // must execute on).
-    //
-    // The phys_reg_file variable should be set to the
-    // register file ID selected by the heuristics.
-    //
-
-    //
-    // Default heuristics from above: phys_reg_file is already
-    // set to the first acceptable physical register file ID
-    // which has free registers.
-    //
-    rob.executable_on_cluster_mask = uop_executable_on_cluster[transop.opcode];
-
-    // This is used if there is exactly one physical register file per cluster:
-    // rob.executable_on_cluster_mask = (1 << phys_reg_file);
-
-    // For assignment only:
-    assert(bit(acceptable_phys_reg_files, phys_reg_file));
-
-    //
-    // Allocate the physical register
-    //
-
-    physreg = physregfiles[phys_reg_file].alloc();
-    assert(physreg);
-    physreg->flags = FLAG_WAIT;
-    physreg->data = 0xdeadbeefdeadbeefULL;
-    physreg->rob = &rob;
-    physreg->archreg = rob.uop.rd;
-    rob.physreg = physreg;
-
-    //
-    // Logging
-    //
-
-    bool renamed_reg = 0;
-    bool renamed_flags = 0;
-
-    if (logable(1)) {
-      logfile << intstring(transop.uuid, 20), " rename rob ", intstring(rob.index(), -3), " r", rob.physreg->index();
-      if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[physreg->rfid].name;
-      if (ld|st) logfile << ", lsq", lsq.index();
-
-      logfile << " = ";
-      foreach (i, MAX_OPERANDS) {
-        int srcreg = (i == 0) ? transop.ra : (i == 1) ? transop.rb : (i == 2) ? transop.rc : REG_zero;
-        logfile << arch_reg_names[srcreg], ((i < MAX_OPERANDS-1) ? "," : "");
-      }
-      logfile << " -> ";
-      foreach (i, MAX_OPERANDS) {
-        const PhysicalRegister* physreg = rob.operands[i];
-        logfile << "r", physreg->index();
-        if (physreg->rob) 
-          logfile << " (rob ", physreg->rob->index(), " uuid ", physreg->rob->uop.uuid, ")";
-        else logfile << " (arch ", arch_reg_names[physreg->archreg], ")";
-        logfile << ((i < MAX_OPERANDS-1) ? ", " : "");
-      }
-      logfile << "; renamed";
-    }
-
-    if likely (archdest_can_rename[transop.rd]) {
-      if (logable(1)) logfile << " ", arch_reg_names[transop.rd], " (old r", specrrt[transop.rd]->index(), ")";
-
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-      PhysicalRegister* oldmapping = specrrt[transop.rd];
-      if ((oldmapping->current_state_list == &physreg_waiting_list) |
-          (oldmapping->current_state_list == &physreg_ready_list)) {
-        oldmapping->rob->dest_renamed_before_writeback = 1;
-      }
-
-      if ((oldmapping->current_state_list == &physreg_waiting_list) |
-          (oldmapping->current_state_list == &physreg_ready_list) | 
-          (oldmapping->current_state_list == &physreg_written_list)) {
-        oldmapping->rob->no_branches_between_renamings = specrrt.renamed_in_this_basic_block[transop.rd];
-      }
-
-      specrrt.renamed_in_this_basic_block[transop.rd] = 1;
-#endif
-
-      specrrt[transop.rd]->unspecref(transop.rd);
-      specrrt[transop.rd] = rob.physreg;
-      rob.physreg->addspecref(transop.rd);
-      renamed_reg = archdest_is_visible[transop.rd];
-    }
-
-    if unlikely (!transop.nouserflags) {
-      if (transop.setflags & SETFLAG_ZF) {
-        if (logable(1)) logfile << " zf (old r", specrrt[REG_zf]->index(), ")";
-        specrrt[REG_zf]->unspecref(REG_zf);
-        specrrt[REG_zf] = rob.physreg;
-        rob.physreg->addspecref(REG_zf);
-      }
-      if (transop.setflags & SETFLAG_CF) {
-        if (logable(1)) logfile << " cf (old r", specrrt[REG_cf]->index(), ")";
-        specrrt[REG_cf]->unspecref(REG_cf);
-        specrrt[REG_cf] = rob.physreg;
-        rob.physreg->addspecref(REG_cf);
-      }
-      if (transop.setflags & SETFLAG_OF) {
-        if (logable(1)) logfile << " of (old r", specrrt[REG_of]->index(), ")";
-        specrrt[REG_of]->unspecref(REG_of);
-        specrrt[REG_of] = rob.physreg;
-        rob.physreg->addspecref(REG_of);
-      }
-      renamed_flags = (transop.setflags != 0);
-    }
-
-    if (logable(1)) {
-      logfile << endl;
-    }
-
-    foreach (i, MAX_OPERANDS) {
-      assert(rob.operands[i]->allocated());
-    }
-
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-    if unlikely (br) specrrt.renamed_in_this_basic_block.reset();
-#endif
-
-    frontend_renamed_none += ((!renamed_reg) && (!renamed_flags));
-    frontend_renamed_reg += ((renamed_reg) && (!renamed_flags));
-    frontend_renamed_flags += ((!renamed_reg) && (renamed_flags));
-    frontend_renamed_reg_and_flags += ((renamed_reg) && (renamed_flags));
-
-    rob.changestate(rob_frontend_list);
-
-    prepcount++;
-  }
-
-  frontend_width_histogram[prepcount]++;
-
-  stop_timer(ctrename);
-}
-
-CycleTimer ctfrontend;
-
-int frontend() {
-  ReorderBufferEntry* rob;
-
-  start_timer(ctfrontend);
-
-  foreach_list_mutable(rob_frontend_list, rob, entry, nextentry) {
-    if unlikely (rob->cycles_left <= 0) {
-      rob->cycles_left = -1;
-      rob->changestate(rob_ready_to_dispatch_list);
-    } else {
-      if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " front  rob ", intstring(rob->index(), -3), " frontend stage ", (FRONTEND_STAGES - rob->cycles_left), " of ", FRONTEND_STAGES, endl;
-    }
-
-    rob->cycles_left--;
-  }
-
-  stop_timer(ctfrontend);
-
-  return 0;
-}
-
-//
-// Dispatch and Cluster Selection
+// The following configuration has two integer/store clusters with a single cycle
+// latency between them, but both clusters can access the load pseudo-cluster with
+// no extra cycle. The floating point cluster is two cycles from everything else.
 //
 
-static byte bit_indices_set_8bits[1<<8][8] = {
-  {0, 0, 0, 0, 0, 0, 0, 0},  {0, 0, 0, 0, 0, 0, 0, 0},  
-  {1, 1, 1, 1, 1, 1, 1, 1},  {0, 1, 0, 1, 0, 1, 0, 1},
-  {2, 2, 2, 2, 2, 2, 2, 2},  {0, 2, 0, 2, 0, 2, 0, 2},
-  {1, 2, 1, 2, 1, 2, 1, 2},  {0, 1, 2, 0, 1, 2, 0, 1},
-  {3, 3, 3, 3, 3, 3, 3, 3},  {0, 3, 0, 3, 0, 3, 0, 3},
-  {1, 3, 1, 3, 1, 3, 1, 3},  {0, 1, 3, 0, 1, 3, 0, 1},
-  {2, 3, 2, 3, 2, 3, 2, 3},  {0, 2, 3, 0, 2, 3, 0, 2},
-  {1, 2, 3, 1, 2, 3, 1, 2},  {0, 1, 2, 3, 0, 1, 2, 3},
-  {4, 4, 4, 4, 4, 4, 4, 4},  {0, 4, 0, 4, 0, 4, 0, 4},
-  {1, 4, 1, 4, 1, 4, 1, 4},  {0, 1, 4, 0, 1, 4, 0, 1},
-  {2, 4, 2, 4, 2, 4, 2, 4},  {0, 2, 4, 0, 2, 4, 0, 2},
-  {1, 2, 4, 1, 2, 4, 1, 2},  {0, 1, 2, 4, 0, 1, 2, 4},
-  {3, 4, 3, 4, 3, 4, 3, 4},  {0, 3, 4, 0, 3, 4, 0, 3},
-  {1, 3, 4, 1, 3, 4, 1, 3},  {0, 1, 3, 4, 0, 1, 3, 4},
-  {2, 3, 4, 2, 3, 4, 2, 3},  {0, 2, 3, 4, 0, 2, 3, 4},
-  {1, 2, 3, 4, 1, 2, 3, 4},  {0, 1, 2, 3, 4, 0, 1, 2},
-  {5, 5, 5, 5, 5, 5, 5, 5},  {0, 5, 0, 5, 0, 5, 0, 5},
-  {1, 5, 1, 5, 1, 5, 1, 5},  {0, 1, 5, 0, 1, 5, 0, 1},
-  {2, 5, 2, 5, 2, 5, 2, 5},  {0, 2, 5, 0, 2, 5, 0, 2},
-  {1, 2, 5, 1, 2, 5, 1, 2},  {0, 1, 2, 5, 0, 1, 2, 5},
-  {3, 5, 3, 5, 3, 5, 3, 5},  {0, 3, 5, 0, 3, 5, 0, 3},
-  {1, 3, 5, 1, 3, 5, 1, 3},  {0, 1, 3, 5, 0, 1, 3, 5},
-  {2, 3, 5, 2, 3, 5, 2, 3},  {0, 2, 3, 5, 0, 2, 3, 5},
-  {1, 2, 3, 5, 1, 2, 3, 5},  {0, 1, 2, 3, 5, 0, 1, 2},
-  {4, 5, 4, 5, 4, 5, 4, 5},  {0, 4, 5, 0, 4, 5, 0, 4},
-  {1, 4, 5, 1, 4, 5, 1, 4},  {0, 1, 4, 5, 0, 1, 4, 5},
-  {2, 4, 5, 2, 4, 5, 2, 4},  {0, 2, 4, 5, 0, 2, 4, 5},
-  {1, 2, 4, 5, 1, 2, 4, 5},  {0, 1, 2, 4, 5, 0, 1, 2},
-  {3, 4, 5, 3, 4, 5, 3, 4},  {0, 3, 4, 5, 0, 3, 4, 5},
-  {1, 3, 4, 5, 1, 3, 4, 5},  {0, 1, 3, 4, 5, 0, 1, 3},
-  {2, 3, 4, 5, 2, 3, 4, 5},  {0, 2, 3, 4, 5, 0, 2, 3},
-  {1, 2, 3, 4, 5, 1, 2, 3},  {0, 1, 2, 3, 4, 5, 0, 1},
-  {6, 6, 6, 6, 6, 6, 6, 6},  {0, 6, 0, 6, 0, 6, 0, 6},
-  {1, 6, 1, 6, 1, 6, 1, 6},  {0, 1, 6, 0, 1, 6, 0, 1},
-  {2, 6, 2, 6, 2, 6, 2, 6},  {0, 2, 6, 0, 2, 6, 0, 2},
-  {1, 2, 6, 1, 2, 6, 1, 2},  {0, 1, 2, 6, 0, 1, 2, 6},
-  {3, 6, 3, 6, 3, 6, 3, 6},  {0, 3, 6, 0, 3, 6, 0, 3},
-  {1, 3, 6, 1, 3, 6, 1, 3},  {0, 1, 3, 6, 0, 1, 3, 6},
-  {2, 3, 6, 2, 3, 6, 2, 3},  {0, 2, 3, 6, 0, 2, 3, 6},
-  {1, 2, 3, 6, 1, 2, 3, 6},  {0, 1, 2, 3, 6, 0, 1, 2},
-  {4, 6, 4, 6, 4, 6, 4, 6},  {0, 4, 6, 0, 4, 6, 0, 4},
-  {1, 4, 6, 1, 4, 6, 1, 4},  {0, 1, 4, 6, 0, 1, 4, 6},
-  {2, 4, 6, 2, 4, 6, 2, 4},  {0, 2, 4, 6, 0, 2, 4, 6},
-  {1, 2, 4, 6, 1, 2, 4, 6},  {0, 1, 2, 4, 6, 0, 1, 2},
-  {3, 4, 6, 3, 4, 6, 3, 4},  {0, 3, 4, 6, 0, 3, 4, 6},
-  {1, 3, 4, 6, 1, 3, 4, 6},  {0, 1, 3, 4, 6, 0, 1, 3},
-  {2, 3, 4, 6, 2, 3, 4, 6},  {0, 2, 3, 4, 6, 0, 2, 3},
-  {1, 2, 3, 4, 6, 1, 2, 3},  {0, 1, 2, 3, 4, 6, 0, 1},
-  {5, 6, 5, 6, 5, 6, 5, 6},  {0, 5, 6, 0, 5, 6, 0, 5},
-  {1, 5, 6, 1, 5, 6, 1, 5},  {0, 1, 5, 6, 0, 1, 5, 6},
-  {2, 5, 6, 2, 5, 6, 2, 5},  {0, 2, 5, 6, 0, 2, 5, 6},
-  {1, 2, 5, 6, 1, 2, 5, 6},  {0, 1, 2, 5, 6, 0, 1, 2},
-  {3, 5, 6, 3, 5, 6, 3, 5},  {0, 3, 5, 6, 0, 3, 5, 6},
-  {1, 3, 5, 6, 1, 3, 5, 6},  {0, 1, 3, 5, 6, 0, 1, 3},
-  {2, 3, 5, 6, 2, 3, 5, 6},  {0, 2, 3, 5, 6, 0, 2, 3},
-  {1, 2, 3, 5, 6, 1, 2, 3},  {0, 1, 2, 3, 5, 6, 0, 1},
-  {4, 5, 6, 4, 5, 6, 4, 5},  {0, 4, 5, 6, 0, 4, 5, 6},
-  {1, 4, 5, 6, 1, 4, 5, 6},  {0, 1, 4, 5, 6, 0, 1, 4},
-  {2, 4, 5, 6, 2, 4, 5, 6},  {0, 2, 4, 5, 6, 0, 2, 4},
-  {1, 2, 4, 5, 6, 1, 2, 4},  {0, 1, 2, 4, 5, 6, 0, 1},
-  {3, 4, 5, 6, 3, 4, 5, 6},  {0, 3, 4, 5, 6, 0, 3, 4},
-  {1, 3, 4, 5, 6, 1, 3, 4},  {0, 1, 3, 4, 5, 6, 0, 1},
-  {2, 3, 4, 5, 6, 2, 3, 4},  {0, 2, 3, 4, 5, 6, 0, 2},
-  {1, 2, 3, 4, 5, 6, 1, 2},  {0, 1, 2, 3, 4, 5, 6, 0},
-  {7, 7, 7, 7, 7, 7, 7, 7},  {0, 7, 0, 7, 0, 7, 0, 7},
-  {1, 7, 1, 7, 1, 7, 1, 7},  {0, 1, 7, 0, 1, 7, 0, 1},
-  {2, 7, 2, 7, 2, 7, 2, 7},  {0, 2, 7, 0, 2, 7, 0, 2},
-  {1, 2, 7, 1, 2, 7, 1, 2},  {0, 1, 2, 7, 0, 1, 2, 7},
-  {3, 7, 3, 7, 3, 7, 3, 7},  {0, 3, 7, 0, 3, 7, 0, 3},
-  {1, 3, 7, 1, 3, 7, 1, 3},  {0, 1, 3, 7, 0, 1, 3, 7},
-  {2, 3, 7, 2, 3, 7, 2, 3},  {0, 2, 3, 7, 0, 2, 3, 7},
-  {1, 2, 3, 7, 1, 2, 3, 7},  {0, 1, 2, 3, 7, 0, 1, 2},
-  {4, 7, 4, 7, 4, 7, 4, 7},  {0, 4, 7, 0, 4, 7, 0, 4},
-  {1, 4, 7, 1, 4, 7, 1, 4},  {0, 1, 4, 7, 0, 1, 4, 7},
-  {2, 4, 7, 2, 4, 7, 2, 4},  {0, 2, 4, 7, 0, 2, 4, 7},
-  {1, 2, 4, 7, 1, 2, 4, 7},  {0, 1, 2, 4, 7, 0, 1, 2},
-  {3, 4, 7, 3, 4, 7, 3, 4},  {0, 3, 4, 7, 0, 3, 4, 7},
-  {1, 3, 4, 7, 1, 3, 4, 7},  {0, 1, 3, 4, 7, 0, 1, 3},
-  {2, 3, 4, 7, 2, 3, 4, 7},  {0, 2, 3, 4, 7, 0, 2, 3},
-  {1, 2, 3, 4, 7, 1, 2, 3},  {0, 1, 2, 3, 4, 7, 0, 1},
-  {5, 7, 5, 7, 5, 7, 5, 7},  {0, 5, 7, 0, 5, 7, 0, 5},
-  {1, 5, 7, 1, 5, 7, 1, 5},  {0, 1, 5, 7, 0, 1, 5, 7},
-  {2, 5, 7, 2, 5, 7, 2, 5},  {0, 2, 5, 7, 0, 2, 5, 7},
-  {1, 2, 5, 7, 1, 2, 5, 7},  {0, 1, 2, 5, 7, 0, 1, 2},
-  {3, 5, 7, 3, 5, 7, 3, 5},  {0, 3, 5, 7, 0, 3, 5, 7},
-  {1, 3, 5, 7, 1, 3, 5, 7},  {0, 1, 3, 5, 7, 0, 1, 3},
-  {2, 3, 5, 7, 2, 3, 5, 7},  {0, 2, 3, 5, 7, 0, 2, 3},
-  {1, 2, 3, 5, 7, 1, 2, 3},  {0, 1, 2, 3, 5, 7, 0, 1},
-  {4, 5, 7, 4, 5, 7, 4, 5},  {0, 4, 5, 7, 0, 4, 5, 7},
-  {1, 4, 5, 7, 1, 4, 5, 7},  {0, 1, 4, 5, 7, 0, 1, 4},
-  {2, 4, 5, 7, 2, 4, 5, 7},  {0, 2, 4, 5, 7, 0, 2, 4},
-  {1, 2, 4, 5, 7, 1, 2, 4},  {0, 1, 2, 4, 5, 7, 0, 1},
-  {3, 4, 5, 7, 3, 4, 5, 7},  {0, 3, 4, 5, 7, 0, 3, 4},
-  {1, 3, 4, 5, 7, 1, 3, 4},  {0, 1, 3, 4, 5, 7, 0, 1},
-  {2, 3, 4, 5, 7, 2, 3, 4},  {0, 2, 3, 4, 5, 7, 0, 2},
-  {1, 2, 3, 4, 5, 7, 1, 2},  {0, 1, 2, 3, 4, 5, 7, 0},
-  {6, 7, 6, 7, 6, 7, 6, 7},  {0, 6, 7, 0, 6, 7, 0, 6},
-  {1, 6, 7, 1, 6, 7, 1, 6},  {0, 1, 6, 7, 0, 1, 6, 7},
-  {2, 6, 7, 2, 6, 7, 2, 6},  {0, 2, 6, 7, 0, 2, 6, 7},
-  {1, 2, 6, 7, 1, 2, 6, 7},  {0, 1, 2, 6, 7, 0, 1, 2},
-  {3, 6, 7, 3, 6, 7, 3, 6},  {0, 3, 6, 7, 0, 3, 6, 7},
-  {1, 3, 6, 7, 1, 3, 6, 7},  {0, 1, 3, 6, 7, 0, 1, 3},
-  {2, 3, 6, 7, 2, 3, 6, 7},  {0, 2, 3, 6, 7, 0, 2, 3},
-  {1, 2, 3, 6, 7, 1, 2, 3},  {0, 1, 2, 3, 6, 7, 0, 1},
-  {4, 6, 7, 4, 6, 7, 4, 6},  {0, 4, 6, 7, 0, 4, 6, 7},
-  {1, 4, 6, 7, 1, 4, 6, 7},  {0, 1, 4, 6, 7, 0, 1, 4},
-  {2, 4, 6, 7, 2, 4, 6, 7},  {0, 2, 4, 6, 7, 0, 2, 4},
-  {1, 2, 4, 6, 7, 1, 2, 4},  {0, 1, 2, 4, 6, 7, 0, 1},
-  {3, 4, 6, 7, 3, 4, 6, 7},  {0, 3, 4, 6, 7, 0, 3, 4},
-  {1, 3, 4, 6, 7, 1, 3, 4},  {0, 1, 3, 4, 6, 7, 0, 1},
-  {2, 3, 4, 6, 7, 2, 3, 4},  {0, 2, 3, 4, 6, 7, 0, 2},
-  {1, 2, 3, 4, 6, 7, 1, 2},  {0, 1, 2, 3, 4, 6, 7, 0},
-  {5, 6, 7, 5, 6, 7, 5, 6},  {0, 5, 6, 7, 0, 5, 6, 7},
-  {1, 5, 6, 7, 1, 5, 6, 7},  {0, 1, 5, 6, 7, 0, 1, 5},
-  {2, 5, 6, 7, 2, 5, 6, 7},  {0, 2, 5, 6, 7, 0, 2, 5},
-  {1, 2, 5, 6, 7, 1, 2, 5},  {0, 1, 2, 5, 6, 7, 0, 1},
-  {3, 5, 6, 7, 3, 5, 6, 7},  {0, 3, 5, 6, 7, 0, 3, 5},
-  {1, 3, 5, 6, 7, 1, 3, 5},  {0, 1, 3, 5, 6, 7, 0, 1},
-  {2, 3, 5, 6, 7, 2, 3, 5},  {0, 2, 3, 5, 6, 7, 0, 2},
-  {1, 2, 3, 5, 6, 7, 1, 2},  {0, 1, 2, 3, 5, 6, 7, 0},
-  {4, 5, 6, 7, 4, 5, 6, 7},  {0, 4, 5, 6, 7, 0, 4, 5},
-  {1, 4, 5, 6, 7, 1, 4, 5},  {0, 1, 4, 5, 6, 7, 0, 1},
-  {2, 4, 5, 6, 7, 2, 4, 5},  {0, 2, 4, 5, 6, 7, 0, 2},
-  {1, 2, 4, 5, 6, 7, 1, 2},  {0, 1, 2, 4, 5, 6, 7, 0},
-  {3, 4, 5, 6, 7, 3, 4, 5},  {0, 3, 4, 5, 6, 7, 0, 3},
-  {1, 3, 4, 5, 6, 7, 1, 3},  {0, 1, 3, 4, 5, 6, 7, 0},
-  {2, 3, 4, 5, 6, 7, 2, 3},  {0, 2, 3, 4, 5, 6, 7, 0},
-  {1, 2, 3, 4, 5, 6, 7, 1},  {0, 1, 2, 3, 4, 5, 6, 7},
+const Cluster clusters[MAX_CLUSTERS] = {
+  {"int0",  2, (FU_ALU0|FU_STU0)},
+  {"int1",  2, (FU_ALU1|FU_STU1)},
+  {"ld",    2, (FU_LDU0|FU_LDU1)},
+  {"fp",    2, (FU_FPU0|FU_FPU1)},
 };
 
-int find_random_set_bit(W32 v, int randsource) {
-  return bit_indices_set_8bits[v & 0xff][randsource & 0x7];
-}
+static const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
+// I0 I1 LD FP <-to
+  {0, 1, 0, 2}, // from I0
+  {1, 0, 0, 2}, // from I1
+  {0, 0, 0, 2}, // from LD
+  {2, 2, 2, 0}, // from FP
+};
 
-void init_luts() {
+static const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
+// I0 I1 LD FP <-to
+  {2, 2, 1, 1}, // from I0
+  {2, 2, 1, 1}, // from I1
+  {1, 1, 2, 2}, // from LD
+  {1, 1, 1, 2}, // from FP
+};
+
+static void init_luts() {
   // Initialize opcode maps
   foreach (i, OP_MAX_OPCODE) {
     W32 allowedfu = opinfo[i].fu;
@@ -1935,7 +284,7 @@ void init_luts() {
     }
     uop_executable_on_cluster[i] = allowedcl;
   }
-
+  
   // Initialize forward-at-cycle LUTs
   foreach (srcc, MAX_CLUSTERS) {
     foreach (destc, MAX_CLUSTERS) {
@@ -1948,8 +297,145 @@ void init_luts() {
   }
 }
 
-W64 dispatch_cluster_histogram[MAX_CLUSTERS];
-W64 dispatch_cluster_none_avail;
+W64 load_filled_callback(LoadStoreInfo lsi, W64 addr) {
+  if unlikely (lsi.info.rd == PHYS_REG_NULL)
+                return 0; // ignore prefetches
+  /*  
+  assert(lsi.info.tag < ROB_SIZE);
+  ReorderBufferEntry& rob = ROB[lsi.info.tag];
+  assert(rob.current_state_list == &rob_cache_miss_list);
+  rob.loadwakeup();
+  */
+  return 0;
+}
+
+W64 icache_filled_callback(LoadStoreInfo lsi, W64 addr) {
+  if (logable(1)) 
+    logfile << "L1 i-cache wakeup on line ", (void*)(Waddr)addr, endl;
+  
+  //waiting_for_icache_fill = 0;
+  return 0;
+}
+
+
+//
+// ReorderBufferEntry
+//
+void ReorderBufferEntry::init(int coreid, int idx) {
+  this->coreid = coreid;
+  this->idx = idx;
+  entry_valid = 0;
+  selfqueuelink::reset();
+  current_state_list = null;
+  reset();
+}
+
+//
+// Clean out various fields from the ROB entry that are 
+// expected to be zero when allocating a new ROB entry.
+//
+void ReorderBufferEntry::reset() {
+  int latency, operand;
+  // Deallocate ROB entry
+  entry_valid = false;
+  cycles_left = 0;
+  physreg = (PhysicalRegister*)null;
+  lfrqslot = -1;
+  lsq = 0;
+  load_store_second_phase = 0;
+  consumer_count = 0;
+  executable_on_cluster_mask = 0;
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+  dest_renamed_before_writeback = 0;
+  no_branches_between_renamings = 0;
+#endif
+}
+
+bool ReorderBufferEntry::ready_to_issue() const {
+  bool raready = operand_ready(0);
+  bool rbready = operand_ready(1);
+  bool rcready = operand_ready(2);
+  bool rsready = operand_ready(3);
+  
+  if (isstore(uop.opcode)) {
+    return (load_store_second_phase) ? (raready & rbready & rcready & rsready) : (raready & rbready);
+  } else if (isload(uop.opcode)) {
+    return (load_store_second_phase) ? (raready & rbready & rcready & rsready) : (raready & rbready & rcready);
+  } else {
+    return (raready & rbready & rcready & rsready);
+  }
+}
+
+bool ReorderBufferEntry::ready_to_commit() const {
+  return (current_state_list == &coreof(coreid).rob_ready_to_commit_queue);
+}
+
+StateList& ReorderBufferEntry::get_ready_to_issue_list() const {
+  OutOfOrderCore& core = coreof(coreid);
+  return 
+    isload(uop.opcode) ? core.rob_ready_to_load_list[cluster] :
+    isstore(uop.opcode) ? core.rob_ready_to_store_list[cluster] :
+    core.rob_ready_to_issue_list[cluster];
+}
+
+bool ReorderBufferEntry::has_exception() const {
+  return ((physreg->flags & FLAG_INV) != 0);
+}
+
+bool ReorderBufferEntry::operand_ready(int operand) const {
+  return operands[operand]->ready();
+}
+
+//
+// This function locates the source operands for a uop and prepares to add the
+// uop to its cluster's issue queue.
+//
+// If an operand is already ready at dispatch time, the issue queue associative
+// array slot for that operand is marked as unused; otherwise it is marked
+// as valid so the operand's ROB index can be matched when broadcast.
+//
+// returns: 1 iff all operands were ready at dispatch time
+//
+
+bool ReorderBufferEntry::find_sources() {
+  int operands_still_needed = 0;
+
+  issueq_tag_t uopids[MAX_OPERANDS];
+  issueq_tag_t preready[MAX_OPERANDS];
+
+  foreach (operand, MAX_OPERANDS) {
+    PhysicalRegister& source_physreg = *operands[operand];
+    ReorderBufferEntry& source_rob = *source_physreg.rob;
+
+    if likely (source_physreg.state == PHYSREG_WAITING) {
+      uopids[operand] = source_rob.index();
+      preready[operand] = 0;
+      operands_still_needed++;
+    } else {
+      // No need to wait for it
+      uopids[operand] = 0;
+      preready[operand] = 1;
+    }
+
+    if likely (source_physreg.nonnull()) source_physreg.get_state_list().dispatch_source_counter++;
+  }
+
+  //
+  // Stores are special: we can issue a store even if its rc operand (the value
+  // to store) is not yet ready. In this case the store uop just checks for
+  // exceptions, establishes an STQ entry and gets replayed as a second phase
+  // store (this time around with the rc dependency required)
+  //
+  if unlikely (isstore(uop.opcode) && !load_store_second_phase) {
+    preready[RC] = 1;
+  }
+
+  bool ok;
+  issueq_operation_on_cluster_with_result(cluster, ok, insert(index(), uopids, preready));
+  assert(ok);
+
+  return operands_still_needed;
+}
 
 int ReorderBufferEntry::select_cluster() {
   if (MAX_CLUSTERS == 1) {
@@ -2066,179 +552,6 @@ ostream& ReorderBufferEntry::print(ostream& os) const {
   return os;
 }
 
-ostream& LoadStoreQueueEntry::print(ostream& os) const {
-  os << (store ? "st" : "ld"), intstring(index(), -3), " ";
-  os << "uuid ", intstring(rob->uop.uuid, 10), " ";
-  os << "rob ", intstring(rob->index(), -3), " ";
-  os << "r", intstring(rob->physreg->index(), -3);
-  if (PHYS_REG_FILE_COUNT > 1) os << "@", physregfiles[rob->physreg->rfid].name;
-  os << " ";
-  if (invalid) {
-    os << "< Invalid: fault 0x", hexstring(data, 8), " > ";
-  } else {
-    if (datavalid)
-      os << bytemaskstring((const byte*)&data, bytemask, 8);
-    else os << "<    Data Invalid     >";
-    os << " @ ";
-    if (addrvalid)
-      os << "0x", hexstring(physaddr << 3, 48);
-    else os << "< Addr Inval >";
-  }    
-  return os;
-}
-
-void print_rob(ostream& os) {
-  os << "ROB head ", ROB.head, " to tail ", ROB.tail, " (", ROB.count, " entries):", endl;
-  foreach_forward(ROB, i) {
-    ReorderBufferEntry& rob = ROB[i];
-    os << "  ", rob, endl;
-  }
-}
-
-void print_lsq(ostream& os) {
-  os << "LSQ head ", LSQ.head, " to tail ", LSQ.tail, " (", LSQ.count, " entries):", endl;
-  foreach_forward(LSQ, i) {
-    LoadStoreQueueEntry& lsq = LSQ[i];
-    os << "  ", lsq, endl;
-  }
-}
-
-//
-// This function locates the source operands for a uop and prepares to add the
-// uop to its cluster's issue queue.
-//
-// If an operand is already ready at dispatch time, the issue queue associative
-// array slot for that operand is marked as unused; otherwise it is marked
-// as valid so the operand's ROB index can be matched when broadcast.
-//
-// returns: 1 iff all operands were ready at dispatch time
-//
-
-bool ReorderBufferEntry::find_sources() {
-  int operands_still_needed = 0;
-
-  issueq_tag_t uopids[MAX_OPERANDS];
-  issueq_tag_t preready[MAX_OPERANDS];
-
-  foreach (operand, MAX_OPERANDS) {
-    PhysicalRegister& source_physreg = *operands[operand];
-    ReorderBufferEntry& source_rob = *source_physreg.rob;
-
-    if likely (source_physreg.state == PHYSREG_WAITING) {
-      uopids[operand] = source_rob.index();
-      preready[operand] = 0;
-      operands_still_needed++;
-    } else {
-      // No need to wait for it
-      uopids[operand] = 0;
-      preready[operand] = 1;
-    }
-
-    if likely (source_physreg.nonnull()) source_physreg.get_state_list().dispatch_source_counter++;
-  }
-
-  //
-  // Stores are special: we can issue a store even if its rc operand (the value
-  // to store) is not yet ready. In this case the store uop just checks for
-  // exceptions, establishes an STQ entry and gets replayed as a second phase
-  // store (this time around with the rc dependency required)
-  //
-  if unlikely (isstore(uop.opcode) && !load_store_second_phase) {
-    preready[RC] = 1;
-  }
-
-  bool ok;
-  issueq_operation_on_cluster_with_result(cluster, ok, insert(index(), uopids, preready));
-  assert(ok);
-
-  return operands_still_needed;
-}
-
-//
-// Dispatch any instructions in the rob_ready_to_dispatch_list by locating
-// their source operands, updating any wait queues and expanding immediates.
-//
-
-CycleTimer ctdispatch;
-
-W64 dispatch_width_histogram[DISPATCH_WIDTH+1];
-
-static const int DISPATCH_DEADLOCK_COUNTDOWN_CYCLES = 64;
-
-int dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
-
-void redispatch_deadlock_recovery();
-
-int dispatch() {
-  start_timer(ctdispatch);
-
-  int dispatchcount = 0;
-
-  ReorderBufferEntry* rob;
-
-  foreach_list_mutable(rob_ready_to_dispatch_list, rob, entry, nextentry) {
-    if unlikely (dispatchcount >= DISPATCH_WIDTH) break;
-
-    // All operands start out as valid, then get put on wait queues if they are not actually ready.
-
-    rob->cluster = rob->select_cluster();
-
-    //
-    // An available cluster could not be found. This only happens 
-    // when all applicable cluster issue queues are full. Since
-    // we are still processing instructions in order at this point,
-    // abort dispatching for this cycle.
-    //
-    if unlikely (rob->cluster < 0) {
-      if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " cannot dispatch (no cluster)", endl;
-      continue; // try the next uop to avoid deadlock on re-dispatches
-    }
-
-    int operands_still_needed = rob->find_sources();
-
-    if likely (operands_still_needed) {
-      rob->changestate(rob_dispatched_list[rob->cluster]);
-    } else {
-      rob->changestate(rob->get_ready_to_issue_list());
-    }
-
-    if (logable(1)) {
-      stringbuf rainfo, rbinfo, rcinfo;
-      rob->get_operand_info(rainfo, 0);
-      rob->get_operand_info(rbinfo, 1);
-      rob->get_operand_info(rcinfo, 2);
-
-      logfile << intstring(rob->uop.uuid, 20), " disptc rob ", intstring(rob->index(), -3), " to cluster ", clusters[rob->cluster].name,
-        ": r", rob->physreg->index();
-      if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[rob->physreg->rfid].name;
-      logfile << " = ", rainfo, "  ", rbinfo, "  ", rcinfo, endl;
-    }
-
-    dispatchcount++;
-  }
-
-  dispatch_width_histogram[dispatchcount]++;
-
-  stop_timer(ctdispatch);
-
-  if likely (dispatchcount) {
-    dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
-  } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
-    dispatch_deadlock_countdown--;
-    if (!dispatch_deadlock_countdown) {
-      if (logable(1)) logfile << "Dispatch deadlock at cycle ", sim_cycle, ", commits ", total_user_insns_committed, ": recovering...", endl;
-      redispatch_deadlock_recovery();
-      dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
-      return -1;
-    }
-  }
-
-  return dispatchcount;
-}
-
-W32 fu_avail = bitmask(FU_COUNT);
-ReorderBufferEntry* robs_on_fu[FU_COUNT];
-
 //
 // Release the ROB from the issue queue after there is
 // no possibility it will need to be pulled back for
@@ -2307,61 +620,6 @@ void ReorderBufferEntry::replay() {
 
   issueq_operation_on_cluster(cluster, replay(iqslot, uopids, preready));
 }
-
-enum {
-  ISSUE_COMPLETED = 1,      // issued correctly
-  ISSUE_NEEDS_REPLAY = 0,   // fast scheduling replay
-  ISSUE_MISSPECULATED = -1, // mis-speculation: redispatch dependent slice
-  ISSUE_NEEDS_REFETCH = -2, // refetch from RIP of bad insn
-};
-
-//
-// Load/Store Aliasing Prevention
-//
-// We always issue loads as soon as possible even if some entries in the
-// store queue have unresolved addresses. If a load gets erroneously
-// issued before an earlier store in program order to the same address,
-// this is considered load/store aliasing.
-// 
-// Aliasing is detected when stores issue: the load queue is scanned
-// for earlier loads in program order which collide with the store's
-// address. In this case all uops in program order after and including
-// the store (and by extension, the colliding load) must be annulled.
-//
-// To keep this from happening repeatedly, whenever a collision is
-// detected, the store looks up the rip of the colliding load and adds
-// it to a small table called the LSAP (load/store alias predictor).
-//
-// Loads query the LSAP with the rip of the load; if a matching entry
-// is found in the LSAP and the store address is unresolved, the load
-// is not allowed to proceed.
-//
-
-struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 8> { };
-LoadStoreAliasPredictor lsap;
-
-//
-// Stores have special dependency rules: they may issue as soon as operands ra and rb are ready,
-// even if rc (the value to store) or rs (the store buffer to inherit from) is not yet ready or
-// even known.
-//
-// After both ra and rb are ready, the store is moved to [ready_to_issue] as a first phase store.
-// When the store issues, it generates its physical address [ra+rb] and establishes an SFR with
-// the address marked valid but the data marked invalid.
-//
-// The sole purpose of doing this is to allow other loads and stores to create an rs dependency
-// on the SFR output of the store.
-//
-// The store is then marked as a second phase store, since the address has been generated.
-// When the store is replayed and rescheduled, it must now have all operands ready this time.
-//
-
-CycleTimer ctstore;
-
-int loads_in_this_cycle = 0;
-W32 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
-
-W64 store_datatype_histogram[DATATYPE_COUNT];
 
 int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate) {
   int sizeshift = uop.size;
@@ -2584,9 +842,9 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, 
 
       if unlikely (parallel_forwarding_match) {
         if (logable(1)) logfile << intstring(uop.uuid, 20), " store", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " st", lsq->index(), 
-          " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ", "0x", hexstring(addr, 48), 
-          " ignored parallel forwarding match with ldq ", ldbuf.index(), " (uuid ", ldbuf.rob->uop.uuid, " rob", ldbuf.rob->index(), 
-          " r", ldbuf.rob->physreg->index(), ")", endl;
+                          " r", intstring(physreg->index(), -3), " on ", padstring(FU[fu].name, -4), " @ ", "0x", hexstring(addr, 48), 
+                          " ignored parallel forwarding match with ldq ", ldbuf.index(), " (uuid ", ldbuf.rob->uop.uuid, " rob", ldbuf.rob->index(), 
+                          " r", ldbuf.rob->physreg->index(), ")", endl;
       }
 
       if unlikely (parallel_forwarding_match) {
@@ -3001,7 +1259,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W
 //
 void ReorderBufferEntry::loadwakeup() {
   if (logable(1)) logfile << intstring(uop.uuid, 20), " ldwake", " rob ", intstring(index(), -3), " ld", lsq->index(), 
-    " r", intstring(physreg->index(), -3), ": wakeup load from lfrq slot ", lfrqslot, endl;
+                    " r", intstring(physreg->index(), -3), ": wakeup load from lfrq slot ", lfrqslot, endl;
 
   physreg->flags &= ~FLAG_WAIT;
   physreg->complete();
@@ -3013,17 +1271,6 @@ void ReorderBufferEntry::loadwakeup() {
   lfrqslot = -1;
   forward_cycle = 0;
   fu = 0;
-}
-
-W64 load_filled_callback(LoadStoreInfo lsi, W64 addr) {
-  if unlikely (lsi.info.rd == PHYS_REG_NULL)
-    return 0; // ignore prefetches
-
-  assert(lsi.info.tag < ROB_SIZE);
-  ReorderBufferEntry& rob = ROB[lsi.info.tag];
-  assert(rob.current_state_list == &rob_cache_miss_list);
-  rob.loadwakeup();
-  return 0;
 }
 
 //
@@ -3386,86 +1633,6 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
   }
 }
 
-//
-// Re-dispatch all uops in the ROB that have not yet generated
-// a result or are otherwise stalled.
-//
-W64 redispatch_total_deadlock_flushes;
-W64 redispatch_total_deadlock_uops_flushed;
-
-void redispatch_deadlock_recovery() {
-  if (logable(1)) {
-    logfile << padstring("", 20), " recovr all recover from deadlock", endl;
-  }
-
-  if (logable(1)) dump_ooo_state();
-
-  redispatch_total_deadlock_flushes++;
-
-  flush_pipeline(ctx.commitarf[REG_rip]);
-
-  /*
-  //
-  // This is a more selective scheme than the full pipeline flush.
-  // Presently it does not work correctly in all cases, so it's
-  // disabled to ensure deadlock-free operation.
-  //
-
-  ReorderBufferEntry* prevrob = null;
-  bitvec<MAX_OPERANDS> noops = 0;
-
-  foreach_forward(ROB, robidx) {
-    ReorderBufferEntry& rob = ROB[robidx];
-
-    //
-    // Only re-dispatch those uops that have not yet generated a value
-    // or are guaranteed to produce a value soon without tying up resources.
-    // This must occur in program order to avoid deadlock!
-    // 
-    // bool recovery_required = (rob.current_state_list->flags & ROB_STATE_IN_ISSUE_QUEUE) || (rob.current_state_list == &rob_ready_to_dispatch_list);
-    bool recovery_required = 1; // for now, just to be safe
-
-    if (recovery_required) {
-      rob.redispatch(noops, prevrob);
-      prevrob = &rob;
-      redispatch_total_deadlock_uops_flushed++;
-    }
-  }
-
-  if (logable(1)) dump_ooo_state();
-  */
-}
-
-//
-// Issue a single ROB. 
-//
-// Returns:
-//  +1 if issue was successful
-//   0 if no functional unit was available
-//  -1 if there was an exception and we should stop issuing this cycle
-//
-
-W64 issue_total_uops;
-
-// totals 100%:
-W64 issue_result_no_fu;
-W64 issue_result_no_intercluster_bandwidth;
-W64 issue_result_replay;
-W64 issue_result_refetch;
-W64 issue_result_misspeculated;
-W64 issue_result_branch_mispredict;
-W64 issue_result_exception;
-W64 issue_result_complete;
-
-// totals 100%:
-W64 issue_width_histogram[MAX_CLUSTERS][MAX_ISSUE_WIDTH+1];
-
-// totals 100%:
-W64 issue_opclass_histogram[OPCLASS_COUNT];
-
-CycleTimer ctsubexec;
-CycleTimer ctsubexec2;
-
 int ReorderBufferEntry::issue() {
   struct FunctionalUnit* FU_assigned = null;
 
@@ -3721,88 +1888,6 @@ int ReorderBufferEntry::issue() {
 }
 
 //
-// Process the ready to issue queue and issue as many ROBs as possible
-//
-
-CycleTimer ctissue;
-
-static int issue(int cluster) {
-  int issuecount = 0;
-  ReorderBufferEntry* rob;
-
-  start_timer(ctissue);
-
-  int maxwidth = clusters[cluster].issue_width;
-
-  while (issuecount < maxwidth) {
-    int iqslot;
-    issueq_operation_on_cluster_with_result(cluster, iqslot, issue());
-  
-    // Is anything ready?
-    if unlikely (iqslot < 0) break;
-
-    int robid;
-    issueq_operation_on_cluster_with_result(cluster, robid, uopof(iqslot));
-    assert(inrange(robid, 0, ROB_SIZE-1));
-    ReorderBufferEntry& rob = ROB[robid];
-    rob.iqslot = iqslot;
-    int rc = rob.issue();
-    // Stop issuing from this cluster once something replays or has a mis-speculation
-    issuecount++;
-    if unlikely (rc <= 0) break;
-  }
-
-  issue_width_histogram[cluster][min(issuecount, MAX_ISSUE_WIDTH)]++;
-
-  stop_timer(ctissue);
-
-  return issuecount;
-}
-
-//
-// Process any ROB entries that just finished producing a result, forwarding
-// data within the same cluster directly to the waiting instructions.
-//
-// Note that we use the target physical register as a temporary repository
-// for the data. In a modern hardware implementation, this data would exist
-// only "on the wire" such that back to back ALU operations within a cluster
-// can occur using local forwarding.
-//
-
-CycleTimer ctcomplete;
-
-static int complete(int cluster) {
-  int completecount = 0;
-  ReorderBufferEntry* rob;
-
-  start_timer(ctcomplete);
-
-  // 
-  // Check the list of issued ROBs. If a given ROB is complete (i.e., is ready
-  // for writeback and forwarding), move it to rob_completed_list.
-  //
-  foreach_list_mutable(rob_issued_list[cluster], rob, entry, nextentry) {
-    rob->cycles_left--;
-
-    if unlikely (rob->cycles_left <= 0) {
-      if (logable(1)) {
-        stringbuf rdstr; print_value_and_flags(rdstr, rob->physreg->data, rob->physreg->flags);
-        logfile << intstring(rob->uop.uuid, 20), " complt rob ", intstring(rob->index(), -3), " on ", padstring(FU[rob->fu].name, -4), ": r", intstring(rob->physreg->index(), -3), " = ", rdstr, endl;
-      }
-
-      rob->changestate(rob_completed_list[cluster]);
-      rob->physreg->complete();
-      rob->forward_cycle = 0;
-      rob->fu = 0;
-      completecount++;
-    }
-  }
-
-  stop_timer(ctcomplete);
-  return 0;
-}
-
-//
 // Forward the result of ROB 'result' to any other waiting ROBs
 // dispatched to the issue queues. This is done by broadcasting
 // the ROB tag to all issue queues in clusters reachable within
@@ -3826,164 +1911,6 @@ int ReorderBufferEntry::forward() {
 
   return 0;
 }
-
-//
-// Process ROBs in flight between completion and global forwarding/writeback.
-//
-
-CycleTimer cttransfer;
-
-static int transfer(int cluster) {
-  int wakeupcount = 0;
-  ReorderBufferEntry* rob;
-
-  start_timer(cttransfer);
-
-  foreach_list_mutable(rob_completed_list[cluster], rob, entry, nextentry) {
-    rob->forward();
-    rob->forward_cycle++;
-    if unlikely (rob->forward_cycle > MAX_FORWARDING_LATENCY) {
-      rob->forward_cycle = MAX_FORWARDING_LATENCY;
-      rob->changestate(rob_ready_to_writeback_list[rob->cluster]);
-    }
-  }
-
-  stop_timer(cttransfer);
-
-  return 0;
-}
-
-//
-// Writeback at most WRITEBACK_WIDTH ROBs on rob_ready_to_writeback_list.
-//
-
-CycleTimer ctwriteback;
-
-W64 writeback_width_histogram[MAX_CLUSTERS][WRITEBACK_WIDTH+1];
-W64 writeback_total;
-
-W64 writeback_transient;
-W64 writeback_persistent;
-
-int writeback(int cluster) {
-  int writecount = 0;
-  int wakeupcount = 0;
-  ReorderBufferEntry* rob;
-
-  start_timer(ctwriteback);
-
-  foreach_list_mutable(rob_ready_to_writeback_list[cluster], rob, entry, nextentry) {
-    if unlikely (writecount >= WRITEBACK_WIDTH)
-      break;
-
-    //
-    // Gather statistics
-    //
-    bool transient = 0;
-
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-    if likely (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
-      transient =
-        (rob->dest_renamed_before_writeback) &&
-        (rob->consumer_count <= 1) &&
-        (rob->physreg->all_consumers_sourced_from_bypass) &&
-        (rob->no_branches_between_renamings);
-
-      writeback_transient += transient;
-      writeback_persistent += (!transient);
-    }
-
-    rob->transient = transient;
-#endif
-
-    if (logable(1)) {
-      stringbuf rdstr;
-      print_value_and_flags(rdstr, rob->physreg->data, rob->physreg->flags);
-      logfile << intstring(rob->uop.uuid, 20), " write  rob ", intstring(rob->index(), -3), " (", clusters[rob->cluster].name, ") r", intstring(rob->physreg->index(), -3), " = ", rdstr;
-#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
-      if (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
-        if (transient) logfile << " (transient)";
-        logfile << " (", rob->consumer_count, " consumers";
-        if (rob->physreg->all_consumers_sourced_from_bypass) logfile << ", all from bypass";
-        if (rob->no_branches_between_renamings) logfile << ", no intervening branches";
-        if (rob->dest_renamed_before_writeback) logfile << ", dest renamed before writeback";
-        logfile << ")";
-      }
-#endif
-      logfile << endl;
-    }
-
-    //
-    // Catch corner case where dependent uop was scheduled
-    // while producer waited in ready_to_writeback state:
-    //
-    wakeupcount += rob->forward();
-
-    writecount++;
-
-    //
-    // For simulation purposes, final value is already in rob->physreg,
-    // so we don't need to actually write anything back here.
-    //
-
-    rob->physreg->writeback();
-    rob->cycles_left = -1;
-
-    rob->changestate(rob_ready_to_commit_queue);
-
-    writeback_total++;
-  }
-
-  writeback_width_histogram[cluster][writecount]++;
-
-  stop_timer(ctwriteback);
-
-  return writecount;
-}
-
-//
-// Commit at most COMMIT_WIDTH ready to commit instructions from ROB queue,
-// and commits any stores by writing to the L1 cache with write through.
-// Returns:
-//    -1 if we are supposed to abort the simulation
-//  >= 0 for the number of instructions actually committed
-//
-
-enum {
-  COMMIT_RESULT_NONE = 0,
-  COMMIT_RESULT_OK = 1,
-  COMMIT_RESULT_EXCEPTION = 2,
-  COMMIT_RESULT_BARRIER = 3,
-  COMMIT_RESULT_STOP = 4
-};
-
-// See notes in handle_exception():
-W64 chk_recovery_rip;
-
-// totals 100%:
-W64 commit_width_histogram[COMMIT_WIDTH+1];
-
-// totals 100%:
-W64 commit_freereg_pending;
-W64 commit_freereg_free;
-
-// totals 100%:
-W64 commit_freereg_recycled;
-
-// totals 100%:
-W64 commit_result_none;
-W64 commit_result_ok;
-W64 commit_result_exception;
-W64 commit_result_exception_skipblock;
-W64 commit_result_barrier;
-W64 commit_result_stop;
-
-// totals 100%:
-W64 commit_flags_set;
-W64 commit_flags_unset;
-
-// totals 100%:
-W64 commit_opclass_histogram[OPCLASS_COUNT];
 
 int ReorderBufferEntry::pseudocommit() {
   if (logable(1)) {
@@ -4028,7 +1955,7 @@ int ReorderBufferEntry::pseudocommit() {
   }
 
   if unlikely (isclass(uop.opcode, OPCLASS_BARRIER))
-    return COMMIT_RESULT_BARRIER;
+                return COMMIT_RESULT_BARRIER;
 
   return COMMIT_RESULT_OK;
 }
@@ -4103,7 +2030,7 @@ int ReorderBufferEntry::commit() {
     if likely (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
       chk_recovery_rip = ctx.commitarf[REG_rip] + bytes_in_current_insn_to_commit;
       if (logable(1)) logfile << "SkipBlock exception commit: advancing rip ", (void*)(Waddr)ctx.commitarf[REG_rip],
-        " by ", bytes_in_current_insn_to_commit, " bytes to ", (void*)(Waddr)chk_recovery_rip, endl;
+                        " by ", bytes_in_current_insn_to_commit, " bytes to ", (void*)(Waddr)chk_recovery_rip, endl;
       commit_result_exception_skipblock++;
     } else {
       commit_result_exception++;
@@ -4274,7 +2201,7 @@ int ReorderBufferEntry::commit() {
   }
 
   if likely (uop.eom)
-    total_user_insns_committed++;
+              total_user_insns_committed++;
 
   total_uops_committed++;
 
@@ -4292,65 +2219,825 @@ int ReorderBufferEntry::commit() {
   return COMMIT_RESULT_OK;
 }
 
-W64 last_commit_at_cycle;
-
-CycleTimer ctcommit;
-
-int commit() {
-  //
-  // See notes above on Physical Register Recycling Complications
-  //
-  start_timer(ctcommit);
-
-  foreach (rfid, PHYS_REG_FILE_COUNT) {
-    StateList& statelist = physregfiles[rfid].states[PHYSREG_PENDINGFREE];
-    PhysicalRegister* physreg;
-    foreach_list_mutable(statelist, physreg, entry, nextentry) {
-      if unlikely (!physreg->referenced()) {
-        if (logable(1)) logfile << padstring("", 20), " free   r", physreg->index(), " no longer referenced; moving to free state", endl;
-        physreg->free();
-        commit_freereg_recycled++;
-      }
-    }
+//
+// Issue Queue
+//
+template <int size, int operandcount>
+void IssueQueue<size, operandcount>::reset(int coreid) {
+  this->coreid = coreid;
+  count = 0;
+  valid = 0;
+  issued = 0;
+  allready = 0;
+  foreach (i, operandcount) {
+    tags[i].reset();
   }
+  uopids.reset();
+}
 
-  //
-  // Commit ROB entries *in program order*, stopping at the first ROB that is 
-  // not ready to commit or has an exception.
-  //
-  int commitcount = 0;
-
-  int rc = COMMIT_RESULT_OK;
-
-  foreach_forward(ROB, i) {
-    ReorderBufferEntry& rob = ROB[i];
-
-    if unlikely (commitcount >= COMMIT_WIDTH) break;
-    rc = rob.commit();
-    if likely (rc == COMMIT_RESULT_OK) {
-      commitcount++;
-      last_commit_at_cycle = sim_cycle;
-      if (total_user_insns_committed >= config.stop_at_user_insns) {
-        stop_timer(ctcommit);
-        rc = COMMIT_RESULT_STOP;
-        break;
-      }
-    } else {
-      break;
-    }
+template <int size, int operandcount>
+void IssueQueue<size, operandcount>::clock() {
+  allready = (valid & (~issued));
+  foreach (operand, operandcount) {
+    allready &= ~tags[operand].valid;
   }
+}
 
-  commit_width_histogram[commitcount]++;
+template <int size, int operandcount>
+bool IssueQueue<size, operandcount>::insert(tag_t uopid, const tag_t* operands, const tag_t* preready) {
+  if unlikely (count == size)
+                return false;
+  
+  int slot = count++;
+  assert(!bit(valid, slot));
+  
+  uopids.insertslot(slot, uopid);
+  
+  valid[slot] = 1;
+  issued[slot] = 0;
+  
+  foreach (operand, operandcount) {
+    if likely (preready[operand])
+      tags[operand].invalidateslot(slot);
+    else tags[operand].insertslot(slot, operands[operand]);
+  }
+  
+  return true;
+}
 
-  stop_timer(ctcommit);
-  return rc;
+template <int size, int operandcount>
+void IssueQueue<size, operandcount>::tally_broadcast_matches(tag_t sourceid, const bitvec<size>& mask, int operand) const;
+
+template <int size, int operandcount>
+bool IssueQueue<size, operandcount>::broadcast(tag_t uopid) {
+  vec_t tagvec = assoc_t::prep(uopid);
+  
+  if (logable(1)) {
+    foreach (operand, operandcount) {
+      bitvec<size> mask = tags[operand].invalidate(tagvec);
+      tally_broadcast_matches(uopid, mask, operand);
+    }
+  } else {
+    foreach (operand, operandcount) tags[operand].invalidate(tagvec);
+  }
+  return true;
 }
 
 //
-// Total simulation time, excluding syscalls on behalf of user program,
-// logging activity and other non-simulation operations:
+// Select one ready slot and move it to the issued state.
+// This function returns the slot id. The returned slot
+// id becomes invalid after the next call to remove()
+// before the next uop can be processed in any way.
 //
-CycleTimer cttotal;
+template <int size, int operandcount>
+int IssueQueue<size, operandcount>::issue() {
+  if (!allready) return -1;
+  int slot = allready.lsb();
+  issued[slot] = 1;
+  return slot;
+}
+
+//
+// Replay a uop that has already issued once.
+// The caller may add or reset dependencies here as needed.
+//
+template <int size, int operandcount>
+bool IssueQueue<size, operandcount>::replay(int slot, const tag_t* operands, const tag_t* preready) {
+  assert(valid[slot]);
+  assert(issued[slot]);
+  
+  issued[slot] = 0;
+  
+  foreach (operand, operandcount) {
+    if (preready[operand])
+      tags[operand].invalidateslot(slot);
+    else tags[operand].insertslot(slot, operands[operand]);
+  }
+  
+  return true;
+}
+
+// NOTE: This is a fairly expensive operation:
+template <int size, int operandcount>
+bool IssueQueue<size, operandcount>::remove(int slot) {
+  uopids.collapse(slot);
+
+  foreach (i, operandcount) {
+    tags[i].collapse(slot);
+  }
+  
+  valid = valid.remove(slot, 1);
+  issued = issued.remove(slot, 1);
+  allready = allready.remove(slot, 1);
+  
+  count--;
+  assert(count >= 0);
+  return true;
+}
+
+template <int size, int operandcount>
+ostream& IssueQueue<size, operandcount>::print(ostream& os) const {
+  os << "IssueQueue: count = ", count, ":", endl;
+  foreach (i, size) {
+    os << "  uop ";
+    uopids.printid(os, i);
+    os << ": ",
+      ((valid[i]) ? 'V' : '-'), ' ',
+      ((issued[i]) ? 'I' : '-'), ' ',
+      ((allready[i]) ? 'R' : '-'), ' ';
+    foreach (j, operandcount) {
+      if (j) os << ' ';
+      tags[j].printid(os, i);
+    }
+    os << endl;
+  }
+  return os;
+}
+
+template <int size, int operandcount>
+void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, operandcount>::tag_t sourceid, const bitvec<size>& mask, int operand) const {
+  if likely (!logable(1)) return;
+
+  const ReorderBufferEntry* source = &ROB[sourceid];
+
+  bitvec<size> temp = mask;
+
+  while (*temp) {
+    int slot = temp.lsb();
+    int robid = uopof(slot);
+    assert(inrange(robid, 0, ROB_SIZE-1));
+    const ReorderBufferEntry* target = &coreof(coreid).ROB[robid];
+
+    log_forwarding(source, target, operand);
+    temp[slot] = 0;
+  }
+}
+
+template <typename T> 
+void print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title) {
+  os << title, ":", endl;
+  foreach (i, lol.count) {
+    StateList& list = *lol[i];
+    if (!list.count) continue;
+    os << list.name, " (", list.count, " entries):", endl;
+    int n = 0;
+    T* obj;
+    foreach_list_mutable(list, obj, entry, nextentry) {
+      if ((n % 16) == 0) os << " ";
+      os << " ", intstring(obj->index(), -3);
+      if (((n % 16) == 15) || (n == list.count-1)) os << endl;
+      n++;
+    }
+    os << endl;
+    // list.validate();
+  }
+}
+
+void StateList::checkvalid() {
+#if 0
+  int realcount = 0;
+  selfqueuelink* obj;
+  foreach_list_mutable(*this, obj, entry, nextentry) {
+    realcount++;
+  }
+  assert(count == realcount);
+#endif
+}
+
+void PhysicalRegisterFile::init(const char* name, int coreid, int rfid, int size) {
+  assert(rfid < PHYS_REG_FILE_COUNT);
+  assert(size <= MAX_PHYS_REG_FILE_SIZE);
+  this->size = size;
+  this->coreid = coreid;
+  this->rfid = rfid;
+  this->name = name;
+  this->allocations = 0;
+  this->frees = 0;
+
+  foreach (i, MAX_PHYSREG_STATE) {
+    states[i].init(physreg_state_names[i], physreg_states);
+  }
+
+  foreach (i, size) {
+    (*this)[i].init(coreid, rfid, i);
+  }
+}
+
+void PhysicalRegisterFile::reset() {
+  foreach (i, MAX_PHYSREG_STATE) {
+    states[i].reset();
+  }
+
+  foreach (i, size) {
+    (*this)[i].reset();
+  }
+}
+
+ostream& operator <<(ostream& os, const PhysicalRegisterFile& physregs) {
+  return physregs.print(os);
+}
+
+StateList& PhysicalRegister::get_state_list(int s) const {
+  return coreof(coreid).physregfiles[rfid].states[s];
+}
+
+ostream& operator <<(ostream& os, const PhysicalRegister& physreg) {
+  stringbuf sb;
+  print_value_and_flags(sb, physreg.data, physreg.flags);
+
+  os << "  r", intstring(physreg.index(), -3), " state ", padstring(physreg.get_state_list().name, -12), " ", sb;
+  if (physreg.rob) os << " rob ", physreg.rob->index(), " (uuid ", physreg.rob->uop.uuid, ")";
+  os << " refcount ", physreg.refcount;
+
+  return os;
+}
+
+  /*
+  void dcache_save_stats(DataStoreNode& ds);
+
+  void ooo_capture_stats(DataStoreNode& root) {
+
+    DataStoreNode& summary = root("summary"); {
+      summary.add("cycles", sim_cycle);
+      summary.add("commits", total_uops_committed);
+      summary.add("usercommits", total_user_insns_committed);
+      summary.add("issues", issue_total_uops);
+      DataStoreNode& ipc = summary("ipc"); {
+        ipc.addfloat("commit-in-uops", (double)total_uops_committed / (double)sim_cycle);
+        ipc.addfloat("commit-in-user-insns", (double)total_user_insns_committed / (double)sim_cycle);
+        ipc.addfloat("issue-in-uops", (double)issue_total_uops / (double)sim_cycle);
+      }
+    }
+
+    DataStoreNode& simulator = root("simulator"); {
+      DataStoreNode& cycles = simulator("cycles"); {
+        cycles.summable = 1;
+        cycles.addfloat("translate", cttrans.seconds());
+        cycles.addfloat("fetch", ctfetch.seconds());
+        cycles.addfloat("frontend", ctfrontend.seconds());
+        cycles.addfloat("rename", ctrename.seconds());
+        cycles.addfloat("dispatch", ctdispatch.seconds());
+      
+        cycles.addfloat("issue", ctissue.seconds());
+        DataStoreNode& issue = cycles("issue"); {
+          issue.summable = 1;
+          issue.addfloat("store", ctstore.seconds());
+          issue.addfloat("load", ctload.seconds());
+          issue.addfloat("annul", ctannul.seconds());
+        }
+
+        cycles.addfloat("exec", ctsubexec.seconds());
+        cycles.addfloat("exec2", ctsubexec2.seconds());
+
+        cycles.addfloat("complete", ctcomplete.seconds());
+        cycles.addfloat("transfer", cttransfer.seconds());
+        cycles.addfloat("writeback", ctwriteback.seconds());
+        cycles.addfloat("commit", ctcommit.seconds());
+      }
+
+      DataStoreNode& rate = simulator("rate"); {
+        rate.addfloat("total-secs", cttotal.seconds());
+        double seconds = cttotal.seconds();
+        rate.addfloat("cycles-per-sec", (double)sim_cycle / seconds);
+        rate.addfloat("issues-per-sec", (double)issue_total_uops / seconds);
+        rate.addfloat("commits-per-sec", (double)total_uops_committed / seconds);
+        rate.addfloat("user-commits-per-sec", (double)total_user_insns_committed / seconds);
+      }
+
+      DataStoreNode& bbcache = simulator("bbcache"); {
+        bbcache.add("count", bbcache.count);
+        bbcache.add("inserts", bbcache_inserts);
+        bbcache.add("removes", bbcache_removes);
+      }
+    }
+
+    DataStoreNode& fetch = root("fetch"); {
+      fetch.histogram("width", fetch_width_histogram, FETCH_WIDTH+1);
+
+      DataStoreNode& stop = fetch("stop"); {
+        stop.summable = 1;
+        stop.add("icache-miss", fetch_stop_icache_miss);
+        stop.add("fetchq-full", fetch_stop_fetchq_full);
+        stop.add("bogus-rip", fetch_stop_bogus_rip);
+        stop.add("branch-taken", fetch_stop_branch_taken);
+        stop.add("full-width", fetch_stop_full_width);
+      };
+
+      fetch.add("blocks", fetch_blocks_fetched);
+      fetch.add("uops", fetch_uops_fetched);
+      fetch.add("user-insns", fetch_user_insns_fetched);
+
+      fetch.histogram("opclass", opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
+    }
+
+    DataStoreNode& frontend = root("frontend"); {
+      DataStoreNode& status = frontend("status"); {
+        status.summable = 1;
+        status.add("complete", frontend_status_complete);
+        status.add("fetchq-empty", frontend_status_fetchq_empty);
+        status.add("rob-full", frontend_status_rob_full);
+        status.add("physregs-full", frontend_status_physregs_full);
+        status.add("ldq-full", frontend_status_ldq_full);
+        status.add("stq-full", frontend_status_stq_full);
+      }
+
+      DataStoreNode& renamed = frontend("renamed"); {
+        renamed.summable = 1;
+        renamed.add("none", frontend_renamed_none);
+        renamed.add("reg", frontend_renamed_reg);
+        renamed.add("flags", frontend_renamed_flags);
+        renamed.add("reg-and-flags", frontend_renamed_reg_and_flags);
+      }
+
+      frontend.histogram("consumer-count", frontend_rename_consumer_count_histogram, 
+                         lengthof(frontend_rename_consumer_count_histogram), 0, 
+                         lengthof(frontend_rename_consumer_count_histogram)-1, 1);
+
+      DataStoreNode& alloc = frontend("alloc"); {
+        alloc.summable = 1;
+        alloc.add("reg", frontend_alloc_reg);
+        alloc.add("ldreg", frontend_alloc_ldreg);
+        alloc.add("sfr", frontend_alloc_sfr);
+        alloc.add("br", frontend_alloc_br);
+      }
+
+      DataStoreNode& rfalloc = frontend("rf"); {
+        rfalloc.summable = 1;
+        foreach (rfid, PHYS_REG_FILE_COUNT) {
+          const PhysicalRegisterFile& rf = physregfiles[rfid];
+          stringbuf sb; sb << rf.name;
+          rfalloc.add(rf.name, rf.allocations);
+        }
+      }
+
+      frontend.histogram("width", frontend_width_histogram, FRONTEND_WIDTH+1);
+    }
+
+    DataStoreNode& dispatch = root("dispatch"); {
+      DataStoreNode& source = dispatch("source"); {
+        foreach (rfid, PHYS_REG_FILE_COUNT) {
+          const PhysicalRegisterFile& rf = physregfiles[rfid];
+          stringbuf sb; sb << rf.name;
+          DataStoreNode& rfsource = source(sb); {
+            rfsource.summable = 1;
+            rfsource.add("waiting", rf.states[PHYSREG_WAITING].dispatch_source_counter);
+            rfsource.add("bypass", rf.states[PHYSREG_BYPASS].dispatch_source_counter);
+            rfsource.add("physreg", rf.states[PHYSREG_WRITTEN].dispatch_source_counter);
+            rfsource.add("archreg", rf.states[PHYSREG_ARCH].dispatch_source_counter);
+            rfsource.add("pendingfree", rf.states[PHYSREG_PENDINGFREE].dispatch_source_counter);
+          }
+        }
+      }
+
+      DataStoreNode& cluster = dispatch("cluster"); {
+        cluster.summable = 1;
+        foreach (i, MAX_CLUSTERS) {
+          cluster.add(clusters[i].name, dispatch_cluster_histogram[i]);
+        }
+
+        cluster.add("none", dispatch_cluster_none_avail);
+      }
+
+      DataStoreNode& redispatch = dispatch("redispatch"); {
+        redispatch.add("trigger-uops", redispatch_total_trigger_uops);
+        redispatch.add("deadlock-flushes", redispatch_total_deadlock_flushes);
+        redispatch.add("deadlock-uops-flushed", redispatch_total_deadlock_uops_flushed);
+        redispatch.histogram("dependent-uops", redispatch_dependent_uop_count_histogram, ROB_SIZE+1);
+      }
+    }
+
+    DataStoreNode& issue = root("issue"); {
+      DataStoreNode& result = issue("result"); {
+        result.summable = 1;
+        result.add("no-fu", issue_result_no_fu);
+        result.add("replay", issue_result_replay);
+        result.add("misspeculation", issue_result_misspeculated);
+        result.add("refetch", issue_result_refetch);
+        result.add("branch-mispredict", issue_result_branch_mispredict);
+        result.add("exception", issue_result_exception);
+        result.add("complete", issue_result_complete);
+      }
+
+      DataStoreNode& source = issue("source"); {
+        foreach (rfid, PHYS_REG_FILE_COUNT) {
+          const PhysicalRegisterFile& rf = physregfiles[rfid];
+          stringbuf sb; sb << rf.name;
+          DataStoreNode& rfsource = source(sb); {
+            rfsource.summable = 1;
+            rfsource.add("bypass", rf.states[PHYSREG_BYPASS].issue_source_counter);
+            rfsource.add("physreg", rf.states[PHYSREG_WRITTEN].issue_source_counter);
+            rfsource.add("archreg", rf.states[PHYSREG_ARCH].issue_source_counter);
+            rfsource.add("pendingfree", rf.states[PHYSREG_PENDINGFREE].issue_source_counter);
+          }
+        }
+      }
+
+      DataStoreNode& datatype = issue("datatype"); {
+        datatype.histogram("load", datatype_names, load_datatype_histogram, DATATYPE_COUNT);
+        datatype.histogram("store", datatype_names, store_datatype_histogram, DATATYPE_COUNT);
+      }
+
+      DataStoreNode& cluster = issue("width"); {
+        foreach (i, MAX_CLUSTERS) {
+          cluster.histogram(clusters[i].name, issue_width_histogram[i], MAX_ISSUE_WIDTH+1);
+        }
+      }
+
+      issue.histogram("opclass", opclass_names, issue_opclass_histogram, OPCLASS_COUNT);
+    }
+
+    DataStoreNode& writeback = root("writeback"); {
+      writeback.add("total", writeback_total);
+
+      DataStoreNode& transient = writeback("transient"); {
+        transient.summable = 1;
+        transient.add("transient", writeback_transient);
+        transient.add("persistent", writeback_persistent);
+      }
+
+      DataStoreNode& cluster = writeback("width"); {
+        foreach (i, MAX_CLUSTERS) {
+          cluster.histogram(clusters[i].name, writeback_width_histogram[i], WRITEBACK_WIDTH+1);
+        }
+      }
+    }
+
+    DataStoreNode& commit = root("commit"); {
+      commit.add("uops", total_uops_committed);
+      commit.add("userinsns", total_user_insns_committed);
+
+      DataStoreNode& freereg = commit("freereg"); {
+        freereg.summable = 1;
+        freereg.add("pending", commit_freereg_pending);
+        freereg.add("free", commit_freereg_free);
+      }
+
+      commit.add("physreg-recycled", commit_freereg_recycled);
+
+      DataStoreNode& result = commit("result"); {
+        result.summable = 1;
+        result.add("none", commit_result_none);
+        result.add("ok", commit_result_ok);
+        result.add("exception", commit_result_exception);
+        result.add("skipblock", commit_result_exception_skipblock);
+        result.add("barrier", commit_result_barrier);
+        result.add("stop", commit_result_stop);
+      }
+
+      DataStoreNode& setflags = commit("setflags"); {
+        setflags.summable = 1;
+        setflags.add("yes", commit_flags_set);
+        setflags.add("no", commit_flags_unset);
+      }
+
+      commit.histogram("width", commit_width_histogram, COMMIT_WIDTH+1);
+      commit.histogram("opclass", opclass_names, commit_opclass_histogram, OPCLASS_COUNT);
+    }
+
+    DataStoreNode& branchpred = root("branchpred"); {
+      DataStoreNode& cond = branchpred("cond"); {
+        cond.summable = 1;
+        cond.add("correct", branchpred_cond_correct);
+        cond.add("mispred", branchpred_cond_mispred);
+      }
+      DataStoreNode& indir = branchpred("indirect"); {
+        indir.summable = 1;
+        indir.add("correct", branchpred_indir_correct);
+        indir.add("mispred", branchpred_indir_mispred);
+      }
+      DataStoreNode& ret = branchpred("return"); {
+        ret.summable = 1;
+        ret.add("correct", branchpred_return_correct);
+        ret.add("mispred", branchpred_return_mispred);
+      }
+      DataStoreNode& ras = branchpred("ras"); {
+        ras.summable = 1;
+        ras.add("push", branchpred_ras_pushes);
+        ras.add("push-overflow", branchpred_ras_overflows);
+        ras.add("pop", branchpred_ras_pops);
+        ras.add("pop-underflows", branchpred_ras_underflows);
+        ras.add("annuls", branchpred_ras_annuls);
+      }
+      DataStoreNode& summary = branchpred("summary"); {
+        summary.summable = 1;
+        summary.add("correct", branchpred_total_correct);
+        summary.add("mispred", branchpred_total_mispred);
+      }
+      branchpred.add("predictions", branchpred_predictions);
+      branchpred.add("updates", branchpred_updates);
+    }
+
+    save_assist_stats(root("assist"));
+
+    dcache_save_stats(root("dcache"));
+  }
+
+  void ooo_capture_stats(const char* snapshotname) {
+    cttotal.stop();
+
+    if (!dsroot)
+      return;
+
+    stringbuf sb;
+    if (snapshotname) sb << snapshotname; else sb << snapshotid;
+    snapshotid++;
+
+    ooo_capture_stats((*dsroot)(sb));
+
+    cttotal.start();
+  }
+  */
+
+/*
+  W64 branchpred_predictions;
+  W64 branchpred_updates;
+
+  W64 branchpred_cond_correct;
+  W64 branchpred_cond_mispred;
+  W64 branchpred_indir_correct;
+  W64 branchpred_indir_mispred;
+  W64 branchpred_return_correct;
+  W64 branchpred_return_mispred;
+  W64 branchpred_total_correct;
+  W64 branchpred_total_mispred;
+
+
+  W64 dispatch_cluster_histogram[MAX_CLUSTERS];
+  W64 dispatch_cluster_none_avail;
+
+  W64 dispatch_width_histogram[DISPATCH_WIDTH+1];
+
+  W64 store_datatype_histogram[DATATYPE_COUNT];
+
+  W64 redispatch_total_deadlock_flushes;
+  W64 redispatch_total_deadlock_uops_flushed;
+
+  W64 issue_total_uops;
+
+  // totals 100%:
+  W64 issue_result_no_fu;
+  W64 issue_result_no_intercluster_bandwidth;
+  W64 issue_result_replay;
+  W64 issue_result_refetch;
+  W64 issue_result_misspeculated;
+  W64 issue_result_branch_mispredict;
+  W64 issue_result_exception;
+  W64 issue_result_complete;
+
+  // totals 100%:
+  W64 issue_width_histogram[MAX_CLUSTERS][MAX_ISSUE_WIDTH+1];
+
+  // totals 100%:
+  W64 issue_opclass_histogram[OPCLASS_COUNT];
+
+  W64 writeback_width_histogram[MAX_CLUSTERS][WRITEBACK_WIDTH+1];
+  W64 writeback_total;
+
+  W64 writeback_transient;
+  W64 writeback_persistent;
+
+  // totals 100%:
+  W64 commit_width_histogram[COMMIT_WIDTH+1];
+
+  // totals 100%:
+  W64 commit_freereg_pending;
+  W64 commit_freereg_free;
+
+  // totals 100%:
+  W64 commit_freereg_recycled;
+
+  // totals 100%:
+  W64 commit_result_none;
+  W64 commit_result_ok;
+  W64 commit_result_exception;
+  W64 commit_result_exception_skipblock;
+  W64 commit_result_barrier;
+  W64 commit_result_stop;
+
+  // totals 100%:
+  W64 commit_flags_set;
+  W64 commit_flags_unset;
+
+  // totals 100%:
+  W64 commit_opclass_histogram[OPCLASS_COUNT];
+*/
+
+ostream& LoadStoreQueueEntry::print(ostream& os) const {
+  os << (store ? "st" : "ld"), intstring(index(), -3), " ";
+  os << "uuid ", intstring(rob->uop.uuid, 10), " ";
+  os << "rob ", intstring(rob->index(), -3), " ";
+  os << "r", intstring(rob->physreg->index(), -3);
+  if (PHYS_REG_FILE_COUNT > 1) os << "@", physregfiles[rob->physreg->rfid].name;
+  os << " ";
+  if (invalid) {
+    os << "< Invalid: fault 0x", hexstring(data, 8), " > ";
+  } else {
+    if (datavalid)
+      os << bytemaskstring((const byte*)&data, bytemask, 8);
+    else os << "<    Data Invalid     >";
+    os << " @ ";
+    if (addrvalid)
+      os << "0x", hexstring(physaddr << 3, 48);
+    else os << "< Addr Inval >";
+  }    
+  return os;
+}
+
+//
+// Determine which physical register files can be written
+// by a given type of uop.
+//
+// This must be customized if the physical register files
+// are altered in ooohwdef.h.
+//
+W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
+  W32 c = opinfo[uop.opcode].opclass;
+
+#ifdef UNIFIED_INT_FP_PHYS_REG_FILE
+  return
+    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
+    PHYS_REG_FILE_MASK_INT;
+#else
+  return
+    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
+    (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? PHYS_REG_FILE_MASK_INT : PHYS_REG_FILE_MASK_FP) :
+    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_ctx)) ? PHYS_REG_FILE_MASK_FP :
+    PHYS_REG_FILE_MASK_INT;
+#endif
+}
+
+void OutOfOrderCore::annul_ras_updates_in_fetchq() {
+  //
+  // There may be return address stack (RAS) updates from calls and returns
+  // in the fetch queue that never made it to renaming, so they have no ROB
+  // that the core can annul normally. Therefore, we must go backwards in
+  // the fetch queue to annul these updates, in addition to checking the ROB.
+  //
+  foreach_backward (fetchq, i) {
+    FetchBufferEntry& fetchbuf = fetchq[i];
+    if unlikely (isbranch(fetchbuf.opcode) && (fetchbuf.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
+      if (logable(1)) logfile << intstring(fetchbuf.uuid, 20), " anlras rip ", (void*)(Waddr)fetchbuf.rip, ": annul RAS update still in fetchq", endl;
+      branchpred.annulras(fetchbuf.predinfo);
+    }
+  }
+}
+
+//
+// Flush everything in pipeline immediately
+//
+void OutOfOrderCore::flush_pipeline(W64 realrip) {
+  dcache_complete();
+  reset_fetch_unit(realrip);
+  rob_states.reset();
+  // physreg_states.reset();
+
+  ROB.reset();
+  foreach (i, ROB_SIZE) {
+    ROB[i].coreid = coreid;
+    ROB[i].changestate(rob_free_list);
+  }
+  LSQ.reset();
+  loads_in_flight = 0;
+  stores_in_flight = 0;
+
+  foreach (i, PHYS_REG_FILE_COUNT) physregfiles[i].reset();
+  commitrrt.reset();
+  specrrt.reset();
+
+  foreach_issueq(reset(coreid));
+
+  dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+  last_commit_at_cycle = sim_cycle;
+
+  external_to_core_state();
+}
+
+// call this in response to a branch mispredict:
+void OutOfOrderCore::reset_fetch_unit(W64 realrip) {
+  fetchrip = realrip;
+  stall_frontend = 0;
+  waiting_for_icache_fill = 0;
+  fetchq.reset();
+  current_basic_block = null;
+  current_basic_block_rip = realrip;
+  current_basic_block_transop_index = 0;
+}
+
+//
+// Copy external archregs to physregs and reset all rename tables
+//
+void OutOfOrderCore::external_to_core_state() {
+  foreach (i, PHYS_REG_FILE_COUNT) {
+    PhysicalRegisterFile& rf = physregfiles[i];
+    PhysicalRegister* zeroreg = rf.alloc(PHYS_REG_NULL);
+    zeroreg->addref();
+    zeroreg->commit();
+    zeroreg->data = 0;
+    zeroreg->flags = 0;
+  }
+
+  // Always start out on cluster 0:
+  PhysicalRegister* zeroreg = &physregfiles[0][PHYS_REG_NULL];
+
+  //
+  // Allocate and commit each architectural register
+  //
+  foreach (i, ARCHREG_COUNT) {
+    //
+    // IMPORTANT! If using some register file configuration other
+    // than (integer, fp), this needs to be changed!
+    //
+#ifdef UNIFIED_INT_FP_PHYS_REG_FILE
+    int rfid = (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
+#else
+    bool fp = inrange((int)i, REG_xmml0, REG_xmmh15) | (inrange((int)i, REG_fptos, REG_ctx));
+    int rfid = (fp) ? PHYS_REG_FILE_FP : (i == REG_rip) ? PHYS_REG_FILE_BR : PHYS_REG_FILE_INT;
+#endif
+    PhysicalRegisterFile& rf = physregfiles[rfid];
+    PhysicalRegister* physreg = (i == REG_zero) ? zeroreg : rf.alloc();
+    physreg->data = ctx.commitarf[i];
+    physreg->flags = 0;
+    commitrrt[i] = physreg;
+  }
+
+  commitrrt[REG_flags]->flags = (W16)commitrrt[REG_flags]->data;
+
+  //
+  // Internal translation registers are never used before
+  // they are written for the first time:
+  //
+  for (int i = ARCHREG_COUNT; i < TRANSREG_COUNT; i++) {
+    commitrrt[i] = zeroreg;
+  }
+
+  //
+  // Set renamable flags
+  // 
+  commitrrt[REG_zf] = commitrrt[REG_flags];
+  commitrrt[REG_cf] = commitrrt[REG_flags];
+  commitrrt[REG_of] = commitrrt[REG_flags];
+
+  //
+  // Copy commitrrt to specrrt and update refcounts
+  //
+  foreach (i, TRANSREG_COUNT) {
+    commitrrt[i]->commit();
+    specrrt[i] = commitrrt[i];
+    specrrt[i]->addspecref(i);
+    commitrrt[i]->addcommitref(i);
+  }
+
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+  specrrt.renamed_in_this_basic_block.reset();
+  commitrrt.renamed_in_this_basic_block.reset();
+#endif
+}
+
+void OutOfOrderCore::redispatch_deadlock_recovery() {
+  if (logable(1)) {
+    logfile << padstring("", 20), " recovr all recover from deadlock", endl;
+  }
+
+  if (logable(1)) dump_ooo_state();
+
+  redispatch_total_deadlock_flushes++;
+
+  flush_pipeline(ctx.commitarf[REG_rip]);
+
+  /*
+  //
+  // This is a more selective scheme than the full pipeline flush.
+  // Presently it does not work correctly with some combinations
+  // of user-modifiable parameters, so it's disabled to ensure
+  // deadlock-free operation in every configuration.
+  //
+
+  ReorderBufferEntry* prevrob = null;
+  bitvec<MAX_OPERANDS> noops = 0;
+
+  foreach_forward(ROB, robidx) {
+  ReorderBufferEntry& rob = ROB[robidx];
+
+  //
+  // Only re-dispatch those uops that have not yet generated a value
+  // or are guaranteed to produce a value soon without tying up resources.
+  // This must occur in program order to avoid deadlock!
+  // 
+  // bool recovery_required = (rob.current_state_list->flags & ROB_STATE_IN_ISSUE_QUEUE) || (rob.current_state_list == &rob_ready_to_dispatch_list);
+  bool recovery_required = 1; // for now, just to be safe
+
+  if (recovery_required) {
+  rob.redispatch(noops, prevrob);
+  prevrob = &rob;
+  redispatch_total_deadlock_uops_flushed++;
+  }
+  }
+
+  if (logable(1)) dump_ooo_state();
+  */
+}
 
 //
 // Barriers must flush the fetchq and stall the frontend until
@@ -4358,7 +3045,7 @@ CycleTimer cttotal;
 // in internal register sr1 (rip after the instruction) after
 // handling the barrier in microcode.
 //
-bool handle_barrier() {
+bool OutOfOrderCore::handle_barrier() {
   cttotal.stop();
 
   branchpred.flush();
@@ -4395,7 +3082,7 @@ bool handle_barrier() {
   return true;
 }
 
-bool handle_exception() {
+bool OutOfOrderCore::handle_exception() {
   cttotal.stop();
 
   branchpred.flush();
@@ -4446,7 +3133,51 @@ bool handle_exception() {
   return false;
 }
 
-void dump_ooo_state() {
+int FetchBufferEntry::index() const {
+  return (this - fetchq.data);
+}
+
+void OutOfOrderCore::print_rob(ostream& os) {
+  os << "ROB head ", ROB.head, " to tail ", ROB.tail, " (", ROB.count, " entries):", endl;
+  foreach_forward(ROB, i) {
+    ReorderBufferEntry& rob = ROB[i];
+    os << "  ", rob, endl;
+  }
+}
+
+void OutOfOrderCore::print_lsq(ostream& os) {
+  os << "LSQ head ", LSQ.head, " to tail ", LSQ.tail, " (", LSQ.count, " entries):", endl;
+  foreach_forward(LSQ, i) {
+    LoadStoreQueueEntry& lsq = LSQ[i];
+    os << "  ", lsq, endl;
+  }
+}
+
+void OutOfOrderCore::print_rename_tables(ostream& os) {
+  os << "SpecRRT:", endl;
+  os << specrrt;
+  os << "CommitRRT:", endl;
+  os << commitrrt;
+}
+
+void OutOfOrderCore::log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand) {
+  if (config.loglevel <= 0) return;
+
+  PhysicalRegister* physreg = source->physreg;
+
+  stringbuf rdstr; print_value_and_flags(rdstr, physreg->data, physreg->flags);
+  logfile << intstring(source->uop.uuid, 20), " forwd", source->forward_cycle, " rob ", intstring(source->index(), -3), 
+    " (", clusters[source->cluster].name, ") r", intstring(physreg->index(), -3), 
+    " => ", "uuid ", target->uop.uuid, " rob ", target->index(), " (", clusters[target->cluster].name, ") r", target->physreg->index(), " operand ", operand;
+  if (isstore(target->uop.opcode)) logfile << " => st", target->lsq->index();
+  logfile << " [still waiting?";
+  foreach (i, MAX_OPERANDS) { if (!target->operand_ready(i)) logfile << " r", (char)('a' + i); }
+  if (target->ready_to_issue()) logfile << " READY";
+  logfile << "]";
+  logfile << endl;
+}
+
+void OutOfOrderCore::dump_ooo_state() {
   print_rename_tables(logfile);
   print_rob(logfile);
   print_list_of_state_lists<PhysicalRegister>(logfile, physreg_states, "Physical register states");
@@ -4461,307 +3192,13 @@ void dump_ooo_state() {
   logfile << flush;
 }
 
-void dcache_save_stats(DataStoreNode& ds);
-
-void ooo_capture_stats(DataStoreNode& root) {
-
-  DataStoreNode& summary = root("summary"); {
-    summary.add("cycles", sim_cycle);
-    summary.add("commits", total_uops_committed);
-    summary.add("usercommits", total_user_insns_committed);
-    summary.add("issues", issue_total_uops);
-    DataStoreNode& ipc = summary("ipc"); {
-      ipc.addfloat("commit-in-uops", (double)total_uops_committed / (double)sim_cycle);
-      ipc.addfloat("commit-in-user-insns", (double)total_user_insns_committed / (double)sim_cycle);
-      ipc.addfloat("issue-in-uops", (double)issue_total_uops / (double)sim_cycle);
-    }
-  }
-
-  DataStoreNode& simulator = root("simulator"); {
-    DataStoreNode& cycles = simulator("cycles"); {
-      cycles.summable = 1;
-      cycles.addfloat("translate", cttrans.seconds());
-      cycles.addfloat("fetch", ctfetch.seconds());
-      cycles.addfloat("frontend", ctfrontend.seconds());
-      cycles.addfloat("rename", ctrename.seconds());
-      cycles.addfloat("dispatch", ctdispatch.seconds());
-      
-      cycles.addfloat("issue", ctissue.seconds());
-      DataStoreNode& issue = cycles("issue"); {
-        issue.summable = 1;
-        issue.addfloat("store", ctstore.seconds());
-        issue.addfloat("load", ctload.seconds());
-        issue.addfloat("annul", ctannul.seconds());
-      }
-
-      cycles.addfloat("exec", ctsubexec.seconds());
-      cycles.addfloat("exec2", ctsubexec2.seconds());
-
-      cycles.addfloat("complete", ctcomplete.seconds());
-      cycles.addfloat("transfer", cttransfer.seconds());
-      cycles.addfloat("writeback", ctwriteback.seconds());
-      cycles.addfloat("commit", ctcommit.seconds());
-    }
-
-    DataStoreNode& rate = simulator("rate"); {
-      rate.addfloat("total-secs", cttotal.seconds());
-      double seconds = cttotal.seconds();
-      rate.addfloat("cycles-per-sec", (double)sim_cycle / seconds);
-      rate.addfloat("issues-per-sec", (double)issue_total_uops / seconds);
-      rate.addfloat("commits-per-sec", (double)total_uops_committed / seconds);
-      rate.addfloat("user-commits-per-sec", (double)total_user_insns_committed / seconds);
-    }
-
-    DataStoreNode& bbcache = simulator("bbcache"); {
-      bbcache.add("count", bbcache.count);
-      bbcache.add("inserts", bbcache_inserts);
-      bbcache.add("removes", bbcache_removes);
-    }
-  }
-
-  DataStoreNode& fetch = root("fetch"); {
-    fetch.histogram("width", fetch_width_histogram, FETCH_WIDTH+1);
-
-    DataStoreNode& stop = fetch("stop"); {
-      stop.summable = 1;
-      stop.add("icache-miss", fetch_stop_icache_miss);
-      stop.add("fetchq-full", fetch_stop_fetchq_full);
-      stop.add("bogus-rip", fetch_stop_bogus_rip);
-      stop.add("branch-taken", fetch_stop_branch_taken);
-      stop.add("full-width", fetch_stop_full_width);
-    };
-
-    fetch.add("blocks", fetch_blocks_fetched);
-    fetch.add("uops", fetch_uops_fetched);
-    fetch.add("user-insns", fetch_user_insns_fetched);
-
-    fetch.histogram("opclass", opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
-  }
-
-  DataStoreNode& frontend = root("frontend"); {
-    DataStoreNode& status = frontend("status"); {
-      status.summable = 1;
-      status.add("complete", frontend_status_complete);
-      status.add("fetchq-empty", frontend_status_fetchq_empty);
-      status.add("rob-full", frontend_status_rob_full);
-      status.add("physregs-full", frontend_status_physregs_full);
-      status.add("ldq-full", frontend_status_ldq_full);
-      status.add("stq-full", frontend_status_stq_full);
-    }
-
-    DataStoreNode& renamed = frontend("renamed"); {
-      renamed.summable = 1;
-      renamed.add("none", frontend_renamed_none);
-      renamed.add("reg", frontend_renamed_reg);
-      renamed.add("flags", frontend_renamed_flags);
-      renamed.add("reg-and-flags", frontend_renamed_reg_and_flags);
-    }
-
-    frontend.histogram("consumer-count", frontend_rename_consumer_count_histogram, 
-                       lengthof(frontend_rename_consumer_count_histogram), 0, 
-                       lengthof(frontend_rename_consumer_count_histogram)-1, 1);
-
-    DataStoreNode& alloc = frontend("alloc"); {
-      alloc.summable = 1;
-      alloc.add("reg", frontend_alloc_reg);
-      alloc.add("ldreg", frontend_alloc_ldreg);
-      alloc.add("sfr", frontend_alloc_sfr);
-      alloc.add("br", frontend_alloc_br);
-    }
-
-    DataStoreNode& rfalloc = frontend("rf"); {
-      rfalloc.summable = 1;
-      foreach (rfid, PHYS_REG_FILE_COUNT) {
-        const PhysicalRegisterFile& rf = physregfiles[rfid];
-        stringbuf sb; sb << rf.name;
-        rfalloc.add(rf.name, rf.allocations);
-      }
-    }
-
-    frontend.histogram("width", frontend_width_histogram, FRONTEND_WIDTH+1);
-  }
-
-  DataStoreNode& dispatch = root("dispatch"); {
-    DataStoreNode& source = dispatch("source"); {
-      foreach (rfid, PHYS_REG_FILE_COUNT) {
-        const PhysicalRegisterFile& rf = physregfiles[rfid];
-        stringbuf sb; sb << rf.name;
-        DataStoreNode& rfsource = source(sb); {
-          rfsource.summable = 1;
-          rfsource.add("waiting", rf.states[PHYSREG_WAITING].dispatch_source_counter);
-          rfsource.add("bypass", rf.states[PHYSREG_BYPASS].dispatch_source_counter);
-          rfsource.add("physreg", rf.states[PHYSREG_WRITTEN].dispatch_source_counter);
-          rfsource.add("archreg", rf.states[PHYSREG_ARCH].dispatch_source_counter);
-          rfsource.add("pendingfree", rf.states[PHYSREG_PENDINGFREE].dispatch_source_counter);
-        }
-      }
-    }
-
-    DataStoreNode& cluster = dispatch("cluster"); {
-      cluster.summable = 1;
-      foreach (i, MAX_CLUSTERS) {
-        cluster.add(clusters[i].name, dispatch_cluster_histogram[i]);
-      }
-
-      cluster.add("none", dispatch_cluster_none_avail);
-    }
-
-    DataStoreNode& redispatch = dispatch("redispatch"); {
-      redispatch.add("trigger-uops", redispatch_total_trigger_uops);
-      redispatch.add("deadlock-flushes", redispatch_total_deadlock_flushes);
-      redispatch.add("deadlock-uops-flushed", redispatch_total_deadlock_uops_flushed);
-      redispatch.histogram("dependent-uops", redispatch_dependent_uop_count_histogram, ROB_SIZE+1);
-    }
-  }
-
-  DataStoreNode& issue = root("issue"); {
-    DataStoreNode& result = issue("result"); {
-      result.summable = 1;
-      result.add("no-fu", issue_result_no_fu);
-      result.add("replay", issue_result_replay);
-      result.add("misspeculation", issue_result_misspeculated);
-      result.add("refetch", issue_result_refetch);
-      result.add("branch-mispredict", issue_result_branch_mispredict);
-      result.add("exception", issue_result_exception);
-      result.add("complete", issue_result_complete);
-    }
-
-    DataStoreNode& source = issue("source"); {
-      foreach (rfid, PHYS_REG_FILE_COUNT) {
-        const PhysicalRegisterFile& rf = physregfiles[rfid];
-        stringbuf sb; sb << rf.name;
-        DataStoreNode& rfsource = source(sb); {
-          rfsource.summable = 1;
-          rfsource.add("bypass", rf.states[PHYSREG_BYPASS].issue_source_counter);
-          rfsource.add("physreg", rf.states[PHYSREG_WRITTEN].issue_source_counter);
-          rfsource.add("archreg", rf.states[PHYSREG_ARCH].issue_source_counter);
-          rfsource.add("pendingfree", rf.states[PHYSREG_PENDINGFREE].issue_source_counter);
-        }
-      }
-    }
-
-    DataStoreNode& datatype = issue("datatype"); {
-      datatype.histogram("load", datatype_names, load_datatype_histogram, DATATYPE_COUNT);
-      datatype.histogram("store", datatype_names, store_datatype_histogram, DATATYPE_COUNT);
-    }
-
-    DataStoreNode& cluster = issue("width"); {
-      foreach (i, MAX_CLUSTERS) {
-        cluster.histogram(clusters[i].name, issue_width_histogram[i], MAX_ISSUE_WIDTH+1);
-      }
-    }
-
-    issue.histogram("opclass", opclass_names, issue_opclass_histogram, OPCLASS_COUNT);
-  }
-
-  DataStoreNode& writeback = root("writeback"); {
-    writeback.add("total", writeback_total);
-
-    DataStoreNode& transient = writeback("transient"); {
-      transient.summable = 1;
-      transient.add("transient", writeback_transient);
-      transient.add("persistent", writeback_persistent);
-    }
-
-    DataStoreNode& cluster = writeback("width"); {
-      foreach (i, MAX_CLUSTERS) {
-        cluster.histogram(clusters[i].name, writeback_width_histogram[i], WRITEBACK_WIDTH+1);
-      }
-    }
-  }
-
-  DataStoreNode& commit = root("commit"); {
-    commit.add("uops", total_uops_committed);
-    commit.add("userinsns", total_user_insns_committed);
-
-    DataStoreNode& freereg = commit("freereg"); {
-      freereg.summable = 1;
-      freereg.add("pending", commit_freereg_pending);
-      freereg.add("free", commit_freereg_free);
-    }
-
-    commit.add("physreg-recycled", commit_freereg_recycled);
-
-    DataStoreNode& result = commit("result"); {
-      result.summable = 1;
-      result.add("none", commit_result_none);
-      result.add("ok", commit_result_ok);
-      result.add("exception", commit_result_exception);
-      result.add("skipblock", commit_result_exception_skipblock);
-      result.add("barrier", commit_result_barrier);
-      result.add("stop", commit_result_stop);
-    }
-
-    DataStoreNode& setflags = commit("setflags"); {
-      setflags.summable = 1;
-      setflags.add("yes", commit_flags_set);
-      setflags.add("no", commit_flags_unset);
-    }
-
-    commit.histogram("width", commit_width_histogram, COMMIT_WIDTH+1);
-    commit.histogram("opclass", opclass_names, commit_opclass_histogram, OPCLASS_COUNT);
-  }
-
-  DataStoreNode& branchpred = root("branchpred"); {
-    DataStoreNode& cond = branchpred("cond"); {
-      cond.summable = 1;
-      cond.add("correct", branchpred_cond_correct);
-      cond.add("mispred", branchpred_cond_mispred);
-    }
-    DataStoreNode& indir = branchpred("indirect"); {
-      indir.summable = 1;
-      indir.add("correct", branchpred_indir_correct);
-      indir.add("mispred", branchpred_indir_mispred);
-    }
-    DataStoreNode& ret = branchpred("return"); {
-      ret.summable = 1;
-      ret.add("correct", branchpred_return_correct);
-      ret.add("mispred", branchpred_return_mispred);
-    }
-    DataStoreNode& ras = branchpred("ras"); {
-      ras.summable = 1;
-      ras.add("push", branchpred_ras_pushes);
-      ras.add("push-overflow", branchpred_ras_overflows);
-      ras.add("pop", branchpred_ras_pops);
-      ras.add("pop-underflows", branchpred_ras_underflows);
-      ras.add("annuls", branchpred_ras_annuls);
-    }
-    DataStoreNode& summary = branchpred("summary"); {
-      summary.summable = 1;
-      summary.add("correct", branchpred_total_correct);
-      summary.add("mispred", branchpred_total_mispred);
-    }
-    branchpred.add("predictions", branchpred_predictions);
-    branchpred.add("updates", branchpred_updates);
-  }
-
-  save_assist_stats(root("assist"));
-
-  dcache_save_stats(root("dcache"));
-}
-
-void ooo_capture_stats(const char* snapshotname) {
-  cttotal.stop();
-
-  if (!dsroot)
-    return;
-
-  stringbuf sb;
-  if (snapshotname) sb << snapshotname; else sb << snapshotid;
-  snapshotid++;
-
-  ooo_capture_stats((*dsroot)(sb));
-
-  cttotal.start();
-}
-
 //
 // Validate the physical register reference counters against what
 // is really accessible from the various tables and operand fields.
 //
 // This is for debugging only.
 //
-void check_refcounts() {
+void OutOfOrdercore::check_refcounts() {
   int refcounts[PHYS_REG_FILE_COUNT][MAX_PHYS_REG_FILE_SIZE];
   memset(refcounts, 0, sizeof(refcounts));
 
@@ -4810,111 +3247,962 @@ void check_refcounts() {
   if (errors) assert(false);
 }
 
-W64 last_stats_captured_at_cycle = 0;
 
-int out_of_order_core_toplevel_loop() {
-  init_luts();
+void OutOfOrderCore::check_rob() {
+  foreach (i, ROB_SIZE) {
+    ReorderBufferEntry& rob = ROB[i];
+    if (!rob.entry_valid) continue;
+    assert(inrange((int)rob.forward_cycle, 0, (MAX_FORWARDING_LATENCY+1)-1));
+  }
 
-  logfile << "Starting out-of-order core toplevel loop", endl, flush;
-
-  wakeup_func = load_filled_callback;
-  icache_wakeup_func = icache_filled_callback;
-
-  flush_pipeline(ctx.commitarf[REG_rip]);
-  logfile << "Core State:", endl;
-  logfile << ctx.commitarf;
-
-  cttotal.start();
-
-  bool exiting = false;
-
-  last_commit_at_cycle = sim_cycle;
-
-  requested_switch_to_native = 0;
-
-  while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
-    if unlikely (iterations >= config.start_log_at_iteration) {
-      if unlikely (!logenable) logfile << "Start logging (level ", config.loglevel, ") at cycle ", sim_cycle, endl, flush;
-      logenable = 1;
+  foreach (i, rob_states.count) {
+    StateList& list = *rob_states[i];
+    ReorderBufferEntry* rob;
+    foreach_list_mutable(list, rob, entry, nextentry) {
+      assert(inrange(rob->index(), 0, ROB_SIZE-1));
+      assert(rob->current_state_list == &list);
+      if (!((rob->current_state_list != &rob_free_list) ? rob->entry_valid : (!rob->entry_valid))) {
+        logfile << "ROB ", rob->index(), " list = ", rob->current_state_list->name, " entry_valid ", rob->entry_valid, endl, flush;
+        dump_ooo_state();
+        assert(false);
+      }
     }
-    if (logable(1)) logfile << "Cycle ", sim_cycle, ((stall_frontend) ? " (frontend stalled)" : ""), ": commit rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
+  }
+}
 
-    if unlikely ((sim_cycle - last_commit_at_cycle) > 1024) {
-      stringbuf sb;
-      sb << "WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, 
-        " user commits: no instructions have committed for ", (sim_cycle - last_commit_at_cycle),
-        " cycles; the pipeline could be deadlocked", endl;
-      logfile << sb, flush;
-      cerr << sb, flush;
+//
+// Fetch Stage
+//
+void OutOfOrderCore::fetch() {
+  int fetchcount = 0;
+  int taken_branch_count = 0;
+
+  start_timer(ctfetch);
+
+  if unlikely (stall_frontend) {
+    if (logable(1)) logfile << padstring("", 20), " fetch  frontend stalled", endl;
+    return;
+  }
+
+  if unlikely (waiting_for_icache_fill) {
+    if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": wait for icache fill", endl;
+    stats.ooocore.fetch.stop.icache_miss++;
+    return;
+  }
+
+  TransOpBuffer unaligned_ldst_buf;
+
+  while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
+    if unlikely (!fetchq.remaining()) {
+      if (!fetchcount)
+        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": fetchq full", endl;
+      stats.ooocore.fetch.stop.fetchq_full++;
       break;
     }
 
-    if unlikely (lowbits(sim_cycle, 16) == 0) 
-      logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)(Waddr)ctx.commitarf[REG_rip], ")", endl, flush;
+    W64 req_icache_block = floor(fetchrip, ICACHE_FETCH_GRANULARITY);
+    if (req_icache_block != current_icache_block) {
+      bool hit = probe_icache(fetchrip);
+      if unlikely (!hit) {
+        int missbuf = initiate_icache_miss(fetchrip);
+        if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": wait for icache fill on missbuf ", missbuf, endl;
+        if unlikely (missbuf < 0) {
+          // Try to re-allocate a miss buffer on the next cycle
+          if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": icache fill missbuf full", endl;
+          break;
+        }
+        waiting_for_icache_fill = 1;
+        stats.ooocore.fetch.stop.icache_miss++;
+        break;
+      }
 
-    if unlikely ((sim_cycle - last_stats_captured_at_cycle) >= config.snapshot_cycles) {
-      ooo_capture_stats();
-      last_stats_captured_at_cycle = sim_cycle;
+      stats.ooocore.fetch.blocks++;
+      current_icache_block = req_icache_block;
+      fetch_hit_L1++;
     }
 
-    // All FUs are available at top of cycle:
-    fu_avail = bitmask(FU_COUNT);
-    loads_in_this_cycle = 0;
-
-    dcache_clock();
-
-    int commitrc = commit();
-
-    for_each_cluster(i) { writeback(i); }
-    for_each_cluster(i) { transfer(i); }
-
-    for_each_cluster(i) { issue(i); complete(i); }
-
-    int dispatchrc = dispatch();
-
-    if likely ((!stall_frontend) && (dispatchrc >= 0)) {
-      frontend();
-      rename();
-      fetch();
+    if unlikely ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
+      fetch_or_translate_basic_block(ctx, fetchrip);
     }
 
-    if likely (dispatchrc >= 0) foreach_issueq(clock());
+    if unlikely (current_basic_block->invalidblock) {
+      if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": bogus RIP or decode failed", endl;
+      stats.ooocore.fetch.stop.bogus_rip++;
+      //
+      // Keep fetching - the decoder has injected assist microcode that
+      // branches to the invalid opcode or exec page fault handler.
+      //
+    }
 
-#ifdef ENABLE_CHECKS
-    // This significantly slows down simulation; only enable it if absolutely needed:
-    //check_refcounts();
+    FetchBufferEntry& transop = *fetchq.alloc();
+
+    uopimpl_func_t synthop = null;
+
+    assert(current_basic_block->synthops);
+
+    if likely (!unaligned_ldst_buf.get(transop, synthop)) {
+      transop = current_basic_block->transops[current_basic_block_transop_index];
+      synthop = current_basic_block->synthops[current_basic_block_transop_index];
+    }
+
+    //
+    // Handle loads and stores marked as unaligned in the basic block cache.
+    // These uops are split into two parts (ld.lo, ld.hi or st.lo, st.hi)
+    // and the parts are put into a 2-entry buffer (unaligned_ldst_pair).
+    // Fetching continues from this buffer instead of the basic block
+    // until both uops are forced into the pipeline.
+    //
+    if unlikely (transop.unaligned) {
+      if (logable(1)) logfile << padstring("", 20), " fetch  rip 0x", (void*)fetchrip, ": split unaligned load or store ", transop, endl;
+      split_unaligned(transop, unaligned_ldst_buf);
+      assert(unaligned_ldst_buf.get(transop, synthop));
+    }
+
+    transop.origop = &current_basic_block->transops[current_basic_block_transop_index];
+    transop.synthop = synthop;
+
+    current_basic_block_transop_index += (unaligned_ldst_buf.empty());
+
+    if likely (transop.som) {
+      bytes_in_current_insn = transop.bytes;
+      stats.ooocore.fetch.user_insns++;
+    }
+
+    stats.ooocore.fetch.uops++;
+
+    Waddr predrip = 0;
+
+    transop.rip = fetchrip;
+    transop.uuid = fetch_uuid++;
+
+    if (isbranch(transop.opcode)) {
+      transop.predinfo.uuid = transop.uuid;
+      transop.predinfo.bptype = 
+        (isclass(transop.opcode, OPCLASS_COND_BRANCH) << log2(BRANCH_HINT_COND)) |
+        (isclass(transop.opcode, OPCLASS_INDIR_BRANCH) << log2(BRANCH_HINT_INDIRECT)) |
+        (bit(transop.extshift, log2(BRANCH_HINT_PUSH_RAS)) << log2(BRANCH_HINT_CALL)) |
+        (bit(transop.extshift, log2(BRANCH_HINT_POP_RAS)) << log2(BRANCH_HINT_RET));
+
+      transop.predinfo.ripafter = fetchrip + bytes_in_current_insn;
+      predrip = branchpred.predict(transop.predinfo, transop.predinfo.bptype, transop.predinfo.ripafter, transop.riptaken);
+      stats.ooocore.branchpred.predictions++;
+    }
+
+    // Set up branches so mispredicts can be calculated correctly:
+    if unlikely (isclass(transop.opcode, OPCLASS_COND_BRANCH)) {
+      if unlikely (predrip != transop.riptaken) {
+        assert(predrip == transop.ripseq);
+        transop.cond = invert_cond(transop.cond);
+        //
+        // We need to be careful here: we already looked up the synthop for this
+        // uop according to the old condition, so redo that here so we call the
+        // correct code for the swapped condition.
+        //
+        transop.synthop = get_synthcode_for_cond_branch(transop.opcode, transop.cond, transop.size, 0);
+        swap(transop.riptaken, transop.ripseq);
+      }
+    } else if unlikely (isclass(transop.opcode, OPCLASS_INDIR_BRANCH)) {
+      transop.riptaken = predrip;
+      transop.ripseq = predrip;
+    } else if unlikely (isclass(transop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
+      assert(predrip == transop.riptaken);
+    }
+
+    stats.ooocore.fetch.opclass[opclassof(transop.opcode)]++;
+
+    if (logable(1)) {
+      logfile << intstring(transop.uuid, 20), " fetch  rip ", (void*)(Waddr)transop.rip, ": ", transop, 
+        " (BB ", current_basic_block, " uop ", current_basic_block_transop_index, " of ", current_basic_block->count;
+      if (transop.som) logfile << "; SOM";
+      if (transop.eom) logfile << "; EOM ", bytes_in_current_insn, " bytes";
+      logfile << ")";
+      if (transop.eom && predrip) logfile << " -> pred ", (void*)predrip;
+      logfile << endl;
+    }
+
+    if likely (transop.eom) {
+      fetchrip += bytes_in_current_insn;
+
+      if unlikely (isbranch(transop.opcode) && (transop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET)))
+                    branchpred.updateras(transop.predinfo, transop.predinfo.ripafter);
+
+      if unlikely (predrip) {
+        // follow to target, then end fetching for this cycle if predicted taken
+        bool taken = (predrip != fetchrip);
+        taken_branch_count += taken;
+        fetchrip = predrip;
+        if (taken) {
+          stats.ooocore.fetch.stop.branch_taken++;
+          break;
+        }
+      }
+    }
+
+    fetchcount++;
+  }
+
+  stats.ooocore.fetch.stop.full_width += (fetchcount == FETCH_WIDTH);
+  stats.ooocore.fetch.width[fetchcount]++;
+  stop_timer(ctfetch);
+}
+
+BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, Waddr fetchrip) {
+  RIPVirtPhys rvp(fetchrip);
+  rvp.update(ctx);
+  
+  BasicBlock* bb = bbcache(rvp);
+  
+  if likely (bb) {
+    current_basic_block = bb;
+    current_basic_block_rip = fetchrip;
+  } else {
+    start_timer(cttrans);
+    current_basic_block = bbcache.translate(ctx, fetchrip);
+    current_basic_block_rip = fetchrip;
+    assert(current_basic_block);
+    stop_timer(cttrans);
+    
+    if (logable(1)) logfile << padstring("", 20), " xlate  rip ", rvp, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
+  }
+
+  if unlikely (!current_basic_block->synthops) synth_uops_for_bb(*current_basic_block);
+  assert(current_basic_block->synthops);
+  
+  current_basic_block_transop_index = 0;
+
+  current_basic_block->use(sim_cycle);  
+  return current_basic_block;
+}
+
+//
+// Allocate and Rename Stages
+//
+void OutOfOrderCore::rename() {
+  int prepcount = 0;
+
+  start_timer(ctrename);
+
+  while (prepcount < FRONTEND_WIDTH) {
+    if unlikely (fetchq.empty()) {
+      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename fetchq empty", endl;
+      stats.ooocore.frontend.status.fetchq_empty++;
+      break;
+    } 
+
+    if unlikely (!ROB.remaining()) {
+      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename ROB full", endl;
+      stats.ooocore.frontend.status.rob_full++;
+      break;
+    }
+
+    FetchBufferEntry& fetchbuf = *fetchq.peek();
+
+    int phys_reg_file = -1;
+
+    W32 acceptable_phys_reg_files = phys_reg_files_writable_by_uop(fetchbuf);
+
+    foreach (i, PHYS_REG_FILE_COUNT) {
+      int reg_file_to_check = add_index_modulo(round_robin_reg_file_offset, i, PHYS_REG_FILE_COUNT);
+      if likely (bit(acceptable_phys_reg_files, reg_file_to_check) && physregfiles[reg_file_to_check].remaining()) {
+        phys_reg_file = reg_file_to_check; break;
+      }
+    }
+
+    if (phys_reg_file < 0) {
+      if unlikely (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename physregs full", endl;
+      stats.ooocore.frontend.status.physregs_full++;
+      break;
+    }
+
+    bool ld = isload(fetchbuf.opcode);
+    bool st = isstore(fetchbuf.opcode);
+    bool br = isbranch(fetchbuf.opcode);
+
+    if unlikely (ld && (loads_in_flight >= LDQ_SIZE)) {
+      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename ldq full", endl;
+      stats.ooocore.frontend.status.ldq_full++;
+      break;
+    }
+
+    if unlikely (st && (stores_in_flight >= STQ_SIZE)) {
+      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename stq full", endl;
+      stats.ooocore.frontend.status.stq_full++;
+      break;
+    }
+
+    if unlikely ((ld|st) && (!LSQ.remaining())) {
+      if (!prepcount) if (logable(1)) logfile << padstring("", 20), " rename memq full", endl;
+      break;
+    }
+
+    stats.ooocore.frontend.status.complete++;
+
+    FetchBufferEntry& transop = *fetchq.dequeue();
+    ReorderBufferEntry& rob = *ROB.alloc();
+    PhysicalRegister* physreg = null;
+
+    LoadStoreQueueEntry* lsqp = (ld|st) ? LSQ.alloc() : null;
+    LoadStoreQueueEntry& lsq = *lsqp;
+
+    rob.reset();
+    rob.uop = transop;
+    rob.entry_valid = 1;
+    rob.cycles_left = FRONTEND_STAGES;
+    if unlikely (ld|st) {
+      rob.lsq = &lsq;
+      lsq.rob = &rob;
+      lsq.store = st;
+      lsq.datavalid = 0;
+      lsq.addrvalid = 0;
+      lsq.invalid = 0;
+    }
+
+    stats.ooocore.frontend.alloc.reg += (!(ld|st|br));
+    stats.ooocore.frontend.alloc.ldreg += ld;
+    stats.ooocore.frontend.alloc.sfr += st;
+    stats.ooocore.frontend.alloc.br += br;
+
+    //
+    // Rename operands:
+    //
+
+    rob.operands[RA] = specrrt[transop.ra];
+    rob.operands[RB] = specrrt[transop.rb];
+    rob.operands[RC] = specrrt[transop.rc];
+    rob.operands[RS] = &physregfiles[0][PHYS_REG_NULL]; // used for loads and stores only
+
+    // See notes above on Physical Register Recycling Complications
+    foreach (i, MAX_OPERANDS) {
+      rob.operands[i]->addref(rob);
+      assert(rob.operands[i]->state != PHYSREG_FREE);
+
+      if likely ((rob.operands[i]->state == PHYSREG_WAITING) |
+                 (rob.operands[i]->state == PHYSREG_BYPASS) |
+                 (rob.operands[i]->state == PHYSREG_WRITTEN)) {
+        rob.operands[i]->rob->consumer_count = min(rob.operands[i]->rob->consumer_count + 1, 255);
+      }
+    }
+
+    //
+    // Select a physical register file based on desired
+    // heuristics. We only consider a given register
+    // file N if bit N in the acceptable_phys_reg_files
+    // bitmap is set (otherwise it is off limits for
+    // the type of functional unit or cluster the uop
+    // must execute on).
+    //
+    // The phys_reg_file variable should be set to the
+    // register file ID selected by the heuristics.
+    //
+
+    //
+    // Default heuristics from above: phys_reg_file is already
+    // set to the first acceptable physical register file ID
+    // which has free registers.
+    //
+    rob.executable_on_cluster_mask = uop_executable_on_cluster[transop.opcode];
+
+    // This is used if there is exactly one physical register file per cluster:
+    // rob.executable_on_cluster_mask = (1 << phys_reg_file);
+
+    // For assignment only:
+    assert(bit(acceptable_phys_reg_files, phys_reg_file));
+
+    //
+    // Allocate the physical register
+    //
+
+    physreg = physregfiles[phys_reg_file].alloc();
+    assert(physreg);
+    physreg->flags = FLAG_WAIT;
+    physreg->data = 0xdeadbeefdeadbeefULL;
+    physreg->rob = &rob;
+    physreg->archreg = rob.uop.rd;
+    rob.physreg = physreg;
+
+    //
+    // Logging
+    //
+
+    bool renamed_reg = 0;
+    bool renamed_flags = 0;
+
+    if (logable(1)) {
+      logfile << intstring(transop.uuid, 20), " rename rob ", intstring(rob.index(), -3), " r", rob.physreg->index();
+      if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[physreg->rfid].name;
+      if (ld|st) logfile << ", lsq", lsq.index();
+
+      logfile << " = ";
+      foreach (i, MAX_OPERANDS) {
+        int srcreg = (i == 0) ? transop.ra : (i == 1) ? transop.rb : (i == 2) ? transop.rc : REG_zero;
+        logfile << arch_reg_names[srcreg], ((i < MAX_OPERANDS-1) ? "," : "");
+      }
+      logfile << " -> ";
+      foreach (i, MAX_OPERANDS) {
+        const PhysicalRegister* physreg = rob.operands[i];
+        logfile << "r", physreg->index();
+        if (physreg->rob) 
+          logfile << " (rob ", physreg->rob->index(), " uuid ", physreg->rob->uop.uuid, ")";
+        else logfile << " (arch ", arch_reg_names[physreg->archreg], ")";
+        logfile << ((i < MAX_OPERANDS-1) ? ", " : "");
+      }
+      logfile << "; renamed";
+    }
+
+    if likely (archdest_can_rename[transop.rd]) {
+      if (logable(1)) logfile << " ", arch_reg_names[transop.rd], " (old r", specrrt[transop.rd]->index(), ")";
+
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+      PhysicalRegister* oldmapping = specrrt[transop.rd];
+      if ((oldmapping->current_state_list == &physreg_waiting_list) |
+          (oldmapping->current_state_list == &physreg_ready_list)) {
+        oldmapping->rob->dest_renamed_before_writeback = 1;
+      }
+
+      if ((oldmapping->current_state_list == &physreg_waiting_list) |
+          (oldmapping->current_state_list == &physreg_ready_list) | 
+          (oldmapping->current_state_list == &physreg_written_list)) {
+        oldmapping->rob->no_branches_between_renamings = specrrt.renamed_in_this_basic_block[transop.rd];
+      }
+
+      specrrt.renamed_in_this_basic_block[transop.rd] = 1;
 #endif
 
-    if unlikely (commitrc == COMMIT_RESULT_BARRIER) {
-      exiting = !handle_barrier();
-      if unlikely (exiting) break;
-    } else if unlikely (commitrc == COMMIT_RESULT_EXCEPTION) {
-      exiting = !handle_exception();
-      if unlikely (exiting) break;
-    } else if (commitrc == COMMIT_RESULT_STOP) {
-      break;
+      specrrt[transop.rd]->unspecref(transop.rd);
+      specrrt[transop.rd] = rob.physreg;
+      rob.physreg->addspecref(transop.rd);
+      renamed_reg = archdest_is_visible[transop.rd];
     }
 
-    if unlikely (requested_switch_to_native) {
-      exiting = 1;
-      break;
+    if unlikely (!transop.nouserflags) {
+      if (transop.setflags & SETFLAG_ZF) {
+        if (logable(1)) logfile << " zf (old r", specrrt[REG_zf]->index(), ")";
+        specrrt[REG_zf]->unspecref(REG_zf);
+        specrrt[REG_zf] = rob.physreg;
+        rob.physreg->addspecref(REG_zf);
+      }
+      if (transop.setflags & SETFLAG_CF) {
+        if (logable(1)) logfile << " cf (old r", specrrt[REG_cf]->index(), ")";
+        specrrt[REG_cf]->unspecref(REG_cf);
+        specrrt[REG_cf] = rob.physreg;
+        rob.physreg->addspecref(REG_cf);
+      }
+      if (transop.setflags & SETFLAG_OF) {
+        if (logable(1)) logfile << " of (old r", specrrt[REG_of]->index(), ")";
+        specrrt[REG_of]->unspecref(REG_of);
+        specrrt[REG_of] = rob.physreg;
+        rob.physreg->addspecref(REG_of);
+      }
+      renamed_flags = (transop.setflags != 0);
     }
 
-    iterations++;
-    sim_cycle++;
+    if (logable(1)) {
+      logfile << endl;
+    }
+
+    foreach (i, MAX_OPERANDS) {
+      assert(rob.operands[i]->allocated());
+    }
+
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+    if unlikely (br) specrrt.renamed_in_this_basic_block.reset();
+#endif
+
+    stats.ooocore.frontend.renamed.none += ((!renamed_reg) && (!renamed_flags));
+    stats.ooocore.frontend.renamed.reg += ((renamed_reg) && (!renamed_flags));
+    stats.ooocore.frontend.renamed.flags += ((!renamed_reg) && (renamed_flags));
+    stats.ooocore.frontend.renamed.reg_and_flags += ((renamed_reg) && (renamed_flags));
+
+    rob.changestate(rob_frontend_list);
+
+    prepcount++;
   }
 
-  cttotal.stop();
+  stats.ooocore.frontend.width[prepcount]++;
 
-  core_to_external_state();
+  stop_timer(ctrename);
+}
 
-  if (logable(1) | ((sim_cycle - last_commit_at_cycle) > 1024)) {
-    logfile << "Core State:", endl;
-    dump_ooo_state();
-    logfile << ctx;
+int OutOfOrderCore::frontend() {
+  ReorderBufferEntry* rob;
+  
+  start_timer(ctfrontend);
+  
+  foreach_list_mutable(rob_frontend_list, rob, entry, nextentry) {
+    if unlikely (rob->cycles_left <= 0) {
+      rob->cycles_left = -1;
+      rob->changestate(rob_ready_to_dispatch_list);
+    } else {
+      if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " front  rob ", intstring(rob->index(), -3), " frontend stage ", (FRONTEND_STAGES - rob->cycles_left), " of ", FRONTEND_STAGES, endl;
+    }
+    
+    rob->cycles_left--;
+  }
+  
+  stop_timer(ctfrontend);
+}
+
+//
+// Dispatch and Cluster Selection
+//
+int find_random_set_bit(W32 v, int randsource) {
+  return bit_indices_set_8bits[v & 0xff][randsource & 0x7];
+}
+
+int OutOfOrderCore::dispatch() {
+  start_timer(ctdispatch);
+
+  int dispatchcount = 0;
+
+  ReorderBufferEntry* rob;
+
+  foreach_list_mutable(rob_ready_to_dispatch_list, rob, entry, nextentry) {
+    if unlikely (dispatchcount >= DISPATCH_WIDTH) break;
+
+    // All operands start out as valid, then get put on wait queues if they are not actually ready.
+
+    rob->cluster = rob->select_cluster();
+
+    //
+    // An available cluster could not be found. This only happens 
+    // when all applicable cluster issue queues are full. Since
+    // we are still processing instructions in order at this point,
+    // abort dispatching for this cycle.
+    //
+    if unlikely (rob->cluster < 0) {
+      if (logable(1)) logfile << intstring(rob->uop.uuid, 20), " cannot dispatch (no cluster)", endl;
+      continue; // try the next uop to avoid deadlock on re-dispatches
+    }
+
+    int operands_still_needed = rob->find_sources();
+
+    if likely (operands_still_needed) {
+      rob->changestate(rob_dispatched_list[rob->cluster]);
+    } else {
+      rob->changestate(rob->get_ready_to_issue_list());
+    }
+
+    if (logable(1)) {
+      stringbuf rainfo, rbinfo, rcinfo;
+      rob->get_operand_info(rainfo, 0);
+      rob->get_operand_info(rbinfo, 1);
+      rob->get_operand_info(rcinfo, 2);
+
+      logfile << intstring(rob->uop.uuid, 20), " disptc rob ", intstring(rob->index(), -3), " to cluster ", clusters[rob->cluster].name,
+        ": r", rob->physreg->index();
+      if (PHYS_REG_FILE_COUNT > 1) logfile << "@", physregfiles[rob->physreg->rfid].name;
+      logfile << " = ", rainfo, "  ", rbinfo, "  ", rcinfo, endl;
+    }
+
+    dispatchcount++;
   }
 
-  logfile << flush;
+  dispatch_width_histogram[dispatchcount]++;
+
+  stop_timer(ctdispatch);
+
+  if likely (dispatchcount) {
+    dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+  } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
+    dispatch_deadlock_countdown--;
+    if (!dispatch_deadlock_countdown) {
+      if (logable(1)) logfile << "Dispatch deadlock at cycle ", sim_cycle, ", commits ", total_user_insns_committed, ": recovering...", endl;
+      redispatch_deadlock_recovery();
+      dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+      return -1;
+    }
+  }
+
+  return dispatchcount;
+}
+
+int OutOfOrderCore::issue(int cluster) {
+  int issuecount = 0;
+  ReorderBufferEntry* rob;
+
+  start_timer(ctissue);
+
+  int maxwidth = clusters[cluster].issue_width;
+
+  while (issuecount < maxwidth) {
+    int iqslot;
+    issueq_operation_on_cluster_with_result(cluster, iqslot, issue());
+  
+    // Is anything ready?
+    if unlikely (iqslot < 0) break;
+
+    int robid;
+    issueq_operation_on_cluster_with_result(cluster, robid, uopof(iqslot));
+    assert(inrange(robid, 0, ROB_SIZE-1));
+    ReorderBufferEntry& rob = ROB[robid];
+    rob.iqslot = iqslot;
+    int rc = rob.issue();
+    // Stop issuing from this cluster once something replays or has a mis-speculation
+    issuecount++;
+    if unlikely (rc <= 0) break;
+  }
+
+  issue_width_histogram[cluster][min(issuecount, MAX_ISSUE_WIDTH)]++;
+
+  stop_timer(ctissue);
+
+  return issuecount;
+}
+
+//
+// Process any ROB entries that just finished producing a result, forwarding
+// data within the same cluster directly to the waiting instructions.
+//
+// Note that we use the target physical register as a temporary repository
+// for the data. In a modern hardware implementation, this data would exist
+// only "on the wire" such that back to back ALU operations within a cluster
+// can occur using local forwarding.
+//
+
+CycleTimer ctcomplete;
+
+int OutOfOrderCore::complete(int cluster) {
+  int completecount = 0;
+  ReorderBufferEntry* rob;
+
+  start_timer(ctcomplete);
+
+  // 
+  // Check the list of issued ROBs. If a given ROB is complete (i.e., is ready
+  // for writeback and forwarding), move it to rob_completed_list.
+  //
+  foreach_list_mutable(rob_issued_list[cluster], rob, entry, nextentry) {
+    rob->cycles_left--;
+
+    if unlikely (rob->cycles_left <= 0) {
+      if (logable(1)) {
+        stringbuf rdstr; print_value_and_flags(rdstr, rob->physreg->data, rob->physreg->flags);
+        logfile << intstring(rob->uop.uuid, 20), " complt rob ", intstring(rob->index(), -3), " on ", padstring(FU[rob->fu].name, -4), ": r", intstring(rob->physreg->index(), -3), " = ", rdstr, endl;
+      }
+
+      rob->changestate(rob_completed_list[cluster]);
+      rob->physreg->complete();
+      rob->forward_cycle = 0;
+      rob->fu = 0;
+      completecount++;
+    }
+  }
+
+  stop_timer(ctcomplete);
+  return 0;
+}
+
+//
+// Process ROBs in flight between completion and global forwarding/writeback.
+//
+
+int OutOfOrderCore::transfer(int cluster) {
+  int wakeupcount = 0;
+  ReorderBufferEntry* rob;
+
+  start_timer(cttransfer);
+
+  foreach_list_mutable(rob_completed_list[cluster], rob, entry, nextentry) {
+    rob->forward();
+    rob->forward_cycle++;
+    if unlikely (rob->forward_cycle > MAX_FORWARDING_LATENCY) {
+      rob->forward_cycle = MAX_FORWARDING_LATENCY;
+      rob->changestate(rob_ready_to_writeback_list[rob->cluster]);
+    }
+  }
+
+  stop_timer(cttransfer);
+
+  return 0;
+}
+
+int OutOfOrderCore::writeback(int cluster) {
+  int writecount = 0;
+  int wakeupcount = 0;
+  ReorderBufferEntry* rob;
+
+  start_timer(ctwriteback);
+
+  foreach_list_mutable(rob_ready_to_writeback_list[cluster], rob, entry, nextentry) {
+    if unlikely (writecount >= WRITEBACK_WIDTH)
+                  break;
+
+    //
+    // Gather statistics
+    //
+    bool transient = 0;
+
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+    if likely (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
+      transient =
+        (rob->dest_renamed_before_writeback) &&
+        (rob->consumer_count <= 1) &&
+        (rob->physreg->all_consumers_sourced_from_bypass) &&
+        (rob->no_branches_between_renamings);
+
+      writeback_transient += transient;
+      writeback_persistent += (!transient);
+    }
+
+    rob->transient = transient;
+#endif
+
+    if (logable(1)) {
+      stringbuf rdstr;
+      print_value_and_flags(rdstr, rob->physreg->data, rob->physreg->flags);
+      logfile << intstring(rob->uop.uuid, 20), " write  rob ", intstring(rob->index(), -3), " (", clusters[rob->cluster].name, ") r", intstring(rob->physreg->index(), -3), " = ", rdstr;
+#ifdef ENABLE_TRANSIENT_VALUE_TRACKING
+      if (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
+        if (transient) logfile << " (transient)";
+        logfile << " (", rob->consumer_count, " consumers";
+        if (rob->physreg->all_consumers_sourced_from_bypass) logfile << ", all from bypass";
+        if (rob->no_branches_between_renamings) logfile << ", no intervening branches";
+        if (rob->dest_renamed_before_writeback) logfile << ", dest renamed before writeback";
+        logfile << ")";
+      }
+#endif
+      logfile << endl;
+    }
+
+    //
+    // Catch corner case where dependent uop was scheduled
+    // while producer waited in ready_to_writeback state:
+    //
+    wakeupcount += rob->forward();
+
+    writecount++;
+
+    //
+    // For simulation purposes, final value is already in rob->physreg,
+    // so we don't need to actually write anything back here.
+    //
+
+    rob->physreg->writeback();
+    rob->cycles_left = -1;
+
+    rob->changestate(rob_ready_to_commit_queue);
+
+    writeback_total++;
+  }
+
+  writeback_width_histogram[cluster][writecount]++;
+
+  stop_timer(ctwriteback);
+
+  return writecount;
+}
+
+int OutOfOrderCore::commit() {
+  //
+  // See notes above on Physical Register Recycling Complications
+  //
+  start_timer(ctcommit);
+
+  foreach (rfid, PHYS_REG_FILE_COUNT) {
+    StateList& statelist = physregfiles[rfid].states[PHYSREG_PENDINGFREE];
+    PhysicalRegister* physreg;
+    foreach_list_mutable(statelist, physreg, entry, nextentry) {
+      if unlikely (!physreg->referenced()) {
+        if (logable(1)) logfile << padstring("", 20), " free   r", physreg->index(), " no longer referenced; moving to free state", endl;
+        physreg->free();
+        commit_freereg_recycled++;
+      }
+    }
+  }
+
+  //
+  // Commit ROB entries *in program order*, stopping at the first ROB that is 
+  // not ready to commit or has an exception.
+  //
+  int commitcount = 0;
+
+  int rc = COMMIT_RESULT_OK;
+
+  foreach_forward(ROB, i) {
+    ReorderBufferEntry& rob = ROB[i];
+
+    if unlikely (commitcount >= COMMIT_WIDTH) break;
+    rc = rob.commit();
+    if likely (rc == COMMIT_RESULT_OK) {
+      commitcount++;
+      last_commit_at_cycle = sim_cycle;
+      if (total_user_insns_committed >= config.stop_at_user_insns) {
+        stop_timer(ctcommit);
+        rc = COMMIT_RESULT_STOP;
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  commit_width_histogram[commitcount]++;
+
+  stop_timer(ctcommit);
+  return rc;
+}
+
+//
+// Execute one cycle of the entire core state machine
+//
+bool OutOfOrderCore::runcycle() {
+  bool exiting = 0;
+
+  // All FUs are available at top of cycle:
+  fu_avail = bitmask(FU_COUNT);
+  loads_in_this_cycle = 0;
+
+  dcache_clock();
+    
+  int commitrc = commit();
+    
+  for_each_cluster(i) { writeback(i); }
+  for_each_cluster(i) { transfer(i); }
+    
+  for_each_cluster(i) { issue(i); complete(i); }
+    
+  int dispatchrc = dispatch();
+    
+  if likely ((!stall_frontend) && (dispatchrc >= 0)) {
+    frontend();
+    rename();
+    fetch();
+  }
+    
+  if likely (dispatchrc >= 0) foreach_issueq(clock());
+    
+#ifdef ENABLE_CHECKS
+  // This significantly slows down simulation; only enable it if absolutely needed:
+  //check_refcounts();
+#endif
+    
+  if unlikely (commitrc == COMMIT_RESULT_BARRIER) {
+    exiting = !handle_barrier();
+  } else if unlikely (commitrc == COMMIT_RESULT_EXCEPTION) {
+    exiting = !handle_exception();
+  } else if (commitrc == COMMIT_RESULT_STOP) {
+    exiting = 1;
+  }
+
+  if unlikely ((sim_cycle - last_commit_at_cycle) > 1024) {
+    stringbuf sb;
+    sb << "WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, 
+      " user commits: no instructions have committed for ", (sim_cycle - last_commit_at_cycle),
+      " cycles; the pipeline could be deadlocked", endl;
+    logfile << sb, flush;
+    cerr << sb, flush;
+    exiting = 1;
+  }
 
   return exiting;
 }
+
+struct OutOfOrderMachine: public PTLsimCore {
+  OutOfOrderCore* cores[MAX_CONTEXTS];
+
+  OutOfOrderMachine(const char* name) {
+    // Add to the list of available core types
+    addcore(name, this);
+  }
+
+  //
+  // Construct all the structures necessary to configure
+  // the cores. This function is only called once, after
+  // all other PTLsim subsystems are brought up.
+  //
+  virtual bool init(PTLsimConfig& config) {
+    foreach (i, contextcount) {
+      cores[i] = new OutOfOrderCore(i, contextof(i));
+      //
+      // Note: in a real cycle accurate model, config may
+      // specify various ways of slicing contextcount up
+      // into threads, cores and sockets; the appropriate
+      // interconnect and cache hierarchy parameters may
+      // be specified here.
+      //
+    }
+
+    init_luts();
+    return true;
+  }
+
+  //
+  // Run the processor model, until a stopping point
+  // is hit (as configured elsewhere in config).
+  //
+  virtual int run(PTLsimConfig& config) {
+    logfile << "Starting out-of-order core toplevel loop", endl, flush;
+
+    wakeup_func = load_filled_callback;
+    icache_wakeup_func = icache_filled_callback;
+
+    foreach (i, contextcount) {
+      OutOfOrderCore& core =* cores[i];
+      Context& ctx = contextof(i);
+
+      core.flush_pipeline(ctx.commitarf[REG_rip]);
+
+      if (logable(1)) {
+        logfile << "VCPU ", i, " initial state:", endl;
+        // core.print_state(logfile);
+        logfile << endl;
+      }
+    }
+
+    W64 last_printed_status_at_cycle = 0;
+    bool exiting = false;
+
+    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
+      if unlikely (iterations >= config.start_log_at_iteration) {
+        logenable = 1;
+      }
+
+      if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 1000000) {
+        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " total commits", endl, flush;
+        last_printed_status_at_cycle = sim_cycle;
+      }
+
+      //if (logable(1)) logfile << "Cycle ", sim_cycle, ((stall_frontend) ? " (frontend stalled)" : ""), ": commit rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
+      if (logable(1)) logfile << "Cycle ", sim_cycle, ":", endl;
+
+      inject_events();
+
+      foreach (i, contextcount) {
+        OutOfOrderCore& core =* cores[i];
+        Context& ctx = contextof(i);
+
+#ifdef PTLSIM_HYPERVISOR
+        if unlikely (ctx.check_events()) core.handle_interrupt();
+        if unlikely (!ctx.running) continue;
+#endif
+        exiting |= core.runcycle();
+      }
+#ifdef PTLSIM_HYPERVISOR
+      exiting |= check_for_async_sim_break();
+#endif
+      sim_cycle++;
+      iterations++;
+
+      if unlikely (exiting) break;
+    }
+
+    logfile << "Exiting sequential mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
+
+    foreach (i, contextcount) {
+      OutOfOrderCore& core =* cores[i];
+      Context& ctx = contextof(i);
+
+      core.core_to_external_state();
+
+      if (logable(1) | ((sim_cycle - core.last_commit_at_cycle) > 1024)) {
+        logfile << "Core State at end:", endl;
+        logfile << ctx;
+        core.dump_ooo_state();
+      }
+    }
+
+    return exiting;
+  }
+};
+
+OutOfOrderMachine ooomodel("ooo");

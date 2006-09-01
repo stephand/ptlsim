@@ -296,6 +296,11 @@ static inline Context& contextof(int vcpu) {
   return contextbase[vcpu];
 }
 
+#define contextcount bootinfo.vcpu_count
+
+// Maximum VCPUs per domain allowed by Xen:
+#define MAX_CONTEXTS 32
+
 static inline void* phys_to_mapped_virt(W64 rawphys) {
   return (void*)signext64(PHYS_VIRT_BASE + rawphys, 48);
 }

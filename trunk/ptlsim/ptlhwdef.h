@@ -839,7 +839,6 @@ struct Context: public ContextBase {
   SegmentDescriptor get_gdt_entry(W16 idx);
 
   Level1PTE virt_to_pte(W64 rawvirt) {
-
     int slot = lowbits(rawvirt >> 12, log2(PTE_CACHE_SIZE));
     if unlikely (cached_pte_virt[slot] != floor(rawvirt, PAGE_SIZE)) {
       cached_pte_virt[slot] = floor(rawvirt, PAGE_SIZE);
@@ -1306,7 +1305,7 @@ struct BasicBlockBase {
   byte tagcount;
   byte memcount;
   byte storecount;
-  byte repblock:1;
+  byte repblock:1, invalidblock:1;
   W64 usedregs;
   uopimpl_func_t* synthops;
   int refcount;

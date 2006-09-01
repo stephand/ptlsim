@@ -1531,6 +1531,7 @@ void TraceDecoder::invalidate() {
   }
   end_of_block = 1;
   user_insn_count++;
+  bb.invalidblock = 1;
   lastop();
 }
 

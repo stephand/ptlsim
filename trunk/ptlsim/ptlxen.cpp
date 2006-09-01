@@ -3585,15 +3585,6 @@ bool deliver_timer_interrupt_to_vcpu(int vcpuid, bool forced) {
 W64 inject_counter = 0;
 
 int inject_events() {
-  //
-  // Process events by polling: we are CPU-bound anyway
-  // and this allows us to have more control over forwarding
-  // events to the guest.
-  //
-  //if unlikely (xchg(shinfo.vcpu_info[0].evtchn_upcall_pending, (byte)0)) {
-  //xen_event_callback(0);
-  //}
-
   W64 delta = sim_cycle - timer_interrupt_last_sent_at_cycle;
 
   bool needs_upcall = false;
@@ -3895,8 +3886,8 @@ void print_sysinfo(ostream& os) {
 
   sb.reset(); sb << __DATE__, " ", __TIME__;
   strput(stats.simulator.version.build_timestamp, sb);
-  stats.simulator.version.svn_revision = SVNREV;
-  strput(stats.simulator.version.svn_timestamp, stringify(SVNDATE));
+  // stats.simulator.version.svn_revision = SVNREV;
+  // strput(stats.simulator.version.svn_timestamp, stringify(SVNDATE));
   strput(stats.simulator.version.build_hostname, stringify(BUILDHOST));
   sb.reset(); sb << "gcc-", __GNUC__, ".", __GNUC_MINOR__;
   strput(stats.simulator.version.build_compiler, sb);
@@ -4073,7 +4064,42 @@ bool check_for_async_sim_break() {
   return false;
 }
 
+
+Hashtable<const char*, PTLsimCore*, 1> coretable;
+
+PTLsimCore basecore;
+
+bool PTLsimCore::init(PTLsimConfig& config) { return false; }
+int PTLsimCore::run(PTLsimConfig& config) { return 0; }
+void PTLsimCore::update_stats(PTLsimStats& stats) { return; }
+
+void PTLsimCore::addcore(const char* name, PTLsimCore* core) {
+  coretable.add(name, core);
+}
+
+PTLsimCore* PTLsimCore::getcore(const char* name) {
+  PTLsimCore** p = coretable.get(name);
+  if (!p) return null;
+  return *p;
+}
+
 bool simulate(const char* corename) {
+  PTLsimCore* core = PTLsimCore::getcore(corename);
+
+  if (!core) {
+    logfile << "Cannot find core named '", corename, "'", endl;
+    return 0;
+  }
+
+  if (!core->initialized) {
+    logfile << "Initializing core '", corename, "'", endl;
+    if (!core->init(config)) {
+      logfile << "Cannot initialize core model; check its configuration!", endl;
+      return 0;
+    }
+    core->initialized = 1;
+  }
+
   logfile << "Switching to simulation core '", corename, "'...", endl, flush;
   logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
   cerr << "Switching to simulation core '", corename, "'...", endl, flush;
@@ -4087,7 +4113,10 @@ bool simulate(const char* corename) {
   init_virqs();
   update_time();
 
-  sequential_core_toplevel_loop();
+  core->run(config);
+  core->update_stats(stats);
+
+  //sequential_core_toplevel_loop();
 
   logfile << "Hypercall usage:", endl;
   logfile << "  ", padstring("Hypercall", -40), " ", padstring("Total", 10), " ", padstring("Guest", 10), endl;

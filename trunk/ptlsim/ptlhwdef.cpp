@@ -460,6 +460,7 @@ void BasicBlock::reset(const RIPVirtPhys& rip) {
   rip_not_taken = rip;
   refcount = 0;
   repblock = 0;
+  invalidblock = 0;
   usedregs = 0;
   count = 0;
   tagcount = 0;

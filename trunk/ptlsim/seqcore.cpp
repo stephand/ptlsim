@@ -70,12 +70,6 @@ struct SequentialCore {
   
   W64 fetch_opclass_histogram[OPCLASS_COUNT];
 
-  //
-  // Make these local to the sequential core namespace
-  // to avoid confusing the other core models:
-  //
-  W64 last_stats_captured_at_cycle;
-
   CycleTimer ctseq;
   CycleTimer ctfetch;
   CycleTimer ctissue;
@@ -831,126 +825,190 @@ struct SequentialCore {
 
     if (barrier) return SEQEXEC_BARRIER;
 
-#ifdef PTLSIM_HYPERVISOR
-    if (inject_events()) return SEQEXEC_INTERRUPT;
-#endif
-
     return (insnlimit < bb->user_insn_count) ? SEQEXEC_EARLY_EXIT : SEQEXEC_OK;
   }
 
-  int run() {
-    logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
+  int execute() {
+    Waddr rip = arf[REG_rip];
+    
+    current_basic_block = fetch_or_translate_basic_block(rip);
 
-    last_stats_captured_at_cycle = 0;
+    bool exiting = 0;
 
-    if (logable(1)) {
-      logfile << "Core state at start:", endl, flush;
-      logfile << ctx;
+    int result = execute(current_basic_block, (config.stop_at_user_insns - total_user_insns_committed));
+    
+    switch (result) {
+    case SEQEXEC_OK:
+    case SEQEXEC_SMC:
+    case SEQEXEC_SKIPBLOCK:
+      // no action required
+      break;
+    case SEQEXEC_EARLY_EXIT:
+      exiting = 1;
+      break;
+    case SEQEXEC_EXCEPTION:
+    case SEQEXEC_INVALIDRIP:
+      ctseq.stop();
+      exiting = (!handle_exception());
+      ctseq.start();
+      break;
+    case SEQEXEC_BARRIER:
+      ctseq.stop();
+      exiting = (!handle_barrier());
+      ctseq.start();
+      break;
 #ifdef PTLSIM_HYPERVISOR
-      logfile << sshinfo;
+    case SEQEXEC_INTERRUPT:
+      ctseq.stop();
+      handle_interrupt();
+      ctseq.start();
+      break;
 #endif
+    default:
+      assert(false);
     }
 
-    external_to_core_state();
-    print_state(logfile);
-    logfile << endl;
+    return exiting;
+  }
+};
 
-    bool exiting = false;
+struct SequentialMachine: public PTLsimCore {
+  SequentialCore* cores[MAX_CONTEXTS];
 
-    ctseq.start();
+  SequentialMachine(const char* name) {
+    // Add to the list of available core types
+    addcore(name, this);
+  }
 
-    W64 last_printed_status_at_cycle = 0;
+  //
+  // Construct all the structures necessary to configure
+  // the cores. This function is only called once, after
+  // all other PTLsim subsystems are brought up.
+  //
+  virtual bool init(PTLsimConfig& config) {
+    foreach (i, contextcount) {
+      cores[i] = new SequentialCore(contextof(i));
+      //
+      // Note: in a real cycle accurate model, config may
+      // specify various ways of slicing contextcount up
+      // into threads, cores and sockets; the appropriate
+      // interconnect and cache hierarchy parameters may
+      // be specified here.
+      //
+    }
 
-    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
-#ifdef PTLSIM_HYPERVISOR
-      if (!ctx.running) {
-        sim_cycle++;
-        iterations++;
+    return true;
+  }
 
-        inject_events();
-        if (ctx.check_events()) handle_interrupt();
+  //
+  // Run the processor model, until a stopping point
+  // is hit (as configured elsewhere in config).
+  //
+  virtual int run(PTLsimConfig& config) {
+    logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
 
-        continue;
+    foreach (i, contextcount) {
+      SequentialCore& core =* cores[i];
+      Context& ctx = contextof(i);
+
+      core.external_to_core_state();
+
+      if (logable(1)) {
+        logfile << "VCPU ", i, " initial state:", endl;
+        core.print_state(logfile);
+        logfile << endl;
       }
+    }
+
+#ifdef PTLSIM_HYPERVISOR
+    if (logable(1)) {
+      logfile << "Shared info at start:", endl;
+      logfile << sshinfo;
+    }
 #endif
 
+    W64 last_printed_status_at_cycle = 0;
+    bool exiting = false;
+
+    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
       if unlikely (iterations >= config.start_log_at_iteration) {
         logenable = 1;
       }
 
-      Waddr rip = arf[REG_rip];
-
       if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 2000000) {
-        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " commits (rip sample ", (void*)rip, "), ", iterations, " basic blocks", endl, flush;
+        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " total commits", endl, flush;
         last_printed_status_at_cycle = sim_cycle;
       }
 
-      if unlikely ((sim_cycle - last_stats_captured_at_cycle) >= config.snapshot_cycles) {
-        last_stats_captured_at_cycle = sim_cycle;
-      }
+      inject_events();
 
-      //
-      // Fetch
-      //
+      foreach (i, contextcount) {
+        SequentialCore& core =* cores[i];
+        Context& ctx = contextof(i);
 
-      current_basic_block = fetch_or_translate_basic_block(rip);
-
-      int result = execute(current_basic_block, (config.stop_at_user_insns - total_user_insns_committed));
-
-      switch (result) {
-      case SEQEXEC_OK:
-      case SEQEXEC_SMC:
-      case SEQEXEC_SKIPBLOCK:
-        // no action required
-        break;
-      case SEQEXEC_EARLY_EXIT:
-        exiting = 1;
-        break;
-      case SEQEXEC_EXCEPTION:
-      case SEQEXEC_INVALIDRIP:
-        ctseq.stop();
-        exiting = (!handle_exception());
-        ctseq.start();
-        break;
-      case SEQEXEC_BARRIER:
-        ctseq.stop();
-        exiting = (!handle_barrier());
-        ctseq.start();
-        break;
 #ifdef PTLSIM_HYPERVISOR
-      case SEQEXEC_INTERRUPT:
-        ctseq.stop();
-        handle_interrupt();
-        ctseq.start();
-        break;
+        if unlikely (ctx.check_events()) core.handle_interrupt();
+        if unlikely (!ctx.running) continue;
 #endif
-      default:
-        assert(false);
+        exiting |= core.execute();
       }
 #ifdef PTLSIM_HYPERVISOR
       exiting |= check_for_async_sim_break();
 #endif
+      sim_cycle++;
+      iterations++;
+
       if unlikely (exiting) break;
     }
 
-    ctseq.stop();
+    logfile << "Exiting sequential mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
 
-    core_to_external_state();
+    foreach (i, contextcount) {
+      SequentialCore& core =* cores[i];
+      Context& ctx = contextof(i);
 
-    logfile << "Exiting sequential mode at ", total_user_insns_committed, " instructions, ", total_uops_committed, " uops and ", iterations, " iterations", endl;
+      core.core_to_external_state();
 
-    if (logable(1)) {
-      logfile << "Core State at end:", endl;
-      logfile << ctx;
+      if (logable(1)) {
+        logfile << "Core State at end:", endl;
+        logfile << ctx;
+      }
     }
-
-    // Start counting from zero in out of order core (only if desired)
-    // total_uops_committed = 0;
-    // total_user_insns_committed = 0;
-    // sim_cycle = 0;
 
     return exiting;
   }
+
+  //
+  // Update any statistics in stats in preparation
+  // for writing it somewhere. The model may also
+  // directly update the global stats structure
+  // while it runs; this is only for cleanup tasks
+  // or computing derived values.
+  //
+  virtual void update_stats(PTLsimStats& stats) {
+    // (nop)
+  }
+};
+
+SequentialMachine seqmodel("seq");
+
+/*
+++MTY FIXME
+int execute_sequential(BasicBlock* bb) {
+  seqcore.external_to_core_state();
+  int rc = seqcore.execute(bb, bb->count);
+  seqcore.core_to_external_state();
+  return rc;
+}
+
+int sequential_core_toplevel_loop() {
+  return seqcore.run();
+}
+*/
+
+
+
+
 
   /*
   void seq_capture_stats(DataStoreNode& root) {
@@ -985,22 +1043,3 @@ struct SequentialCore {
     }
   }
   */
-};
-
-SequentialCore seqcore;
-
-int sequential_core_toplevel_loop() {
-  return seqcore.run();
-}
-
-int execute_sequential(BasicBlock* bb) {
-  seqcore.external_to_core_state();
-  int rc = seqcore.execute(bb, bb->count);
-  seqcore.core_to_external_state();
-  return rc;
-}
-/*
-void seq_capture_stats(DataStoreNode& root) {
-  seqcore.seq_capture_stats(root);
-}
-*/

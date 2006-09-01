@@ -196,7 +196,7 @@ ostream& ConfigurationParserBase::print(const void* baseptr, ostream& os) const 
       os << *((double*)(variable));
       break;
     case OPTION_TYPE_BOOL:
-      os << (*((W64*)(variable)) ? "enabled" : "disabled");
+      os << (*((bool*)(variable)) ? "enabled" : "disabled");
       break;
     case OPTION_TYPE_STRING:
       os << *((stringbuf*)(variable));

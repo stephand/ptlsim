@@ -37,6 +37,20 @@ BasicBlock* invalidate_basic_block(const RIPVirtPhys& rvp);
 
 static const int MAX_TRANSOP_BUFFER_SIZE = 4;
 
+struct PTLsimConfig;
+struct PTLsimStats;
+
+struct PTLsimCore {
+  bool initialized;
+  PTLsimCore() { initialized = 0; }
+  virtual bool init(PTLsimConfig& config);
+  virtual int run(PTLsimConfig& config);  
+  virtual void update_stats(PTLsimStats& stats);
+
+  static void addcore(const char* name, PTLsimCore* core);
+  static PTLsimCore* getcore(const char* name);
+};
+
 struct TransOpBuffer {
   TransOp uops[MAX_TRANSOP_BUFFER_SIZE];
   uopimpl_func_t synthops[MAX_TRANSOP_BUFFER_SIZE];

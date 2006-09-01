@@ -249,6 +249,10 @@ static inline void smc_cleardirty(Waddr mfn) { asp.cleardirty(mfn); }
 // Only one VCPU in userspace PTLsim:
 static inline Context& contextof(int vcpu) { return ctx; }
 
+#define contextcount (1)
+
+#define MAX_CONTEXTS 1
+
 // virtual == physical in userspace PTLsim:
 static inline void* phys_to_mapped_virt(Waddr rawphys) {
   return (void*)rawphys;

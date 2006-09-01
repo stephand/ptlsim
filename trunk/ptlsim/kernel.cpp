@@ -2180,5 +2180,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 
   call_global_constuctors();
 
+  tls->stack = (void*)sp;
+
   return sp;
 }
