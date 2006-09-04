@@ -221,8 +221,6 @@ enum {
   DECODE_TYPE_FAST, DECODE_TYPE_COMPLEX, DECODE_TYPE_X87, DECODE_TYPE_SSE, DECODE_TYPE_ASSIST, DECODE_TYPE_COUNT,
 };
 
-extern const char* decode_type_names[DECODE_TYPE_COUNT];
-
 #define DECODE(form, decbuf, mode) invalid |= (!decbuf.form(*this, mode));
 #define CheckInvalid() { invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count); if (invalid) { invalidate(); return false; } }
 #define MakeInvalid() { invalid |= true; CheckInvalid(); }
@@ -346,5 +344,20 @@ void assist_iret32(Context& ctx);
 void assist_iret64(Context& ctx);
 void assist_ioport_in(Context& ctx);
 void assist_ioport_out(Context& ctx);
+
+//
+// This part is used when parsing stats.h to build the
+// data store template; these must be in sync with the
+// corresponding definitions elsewhere.
+//
+#ifdef DSTBUILD
+static const char* decode_type_names[DECODE_TYPE_COUNT] = {
+  "fast", "complex", "x87", "sse", "assist"
+};
+
+static const char* invalidate_reason_names[INVALIDATE_REASON_COUNT] = {
+  "smc", "dma", "spurious", "reclaim", "dirty", "empty"
+};
+#endif
 
 #endif // _DECODE_H_

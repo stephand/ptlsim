@@ -40,15 +40,15 @@ static const int MAX_TRANSOP_BUFFER_SIZE = 4;
 struct PTLsimConfig;
 struct PTLsimStats;
 
-struct PTLsimCore {
+struct PTLsimMachine {
   bool initialized;
-  PTLsimCore() { initialized = 0; }
+  PTLsimMachine() { initialized = 0; }
   virtual bool init(PTLsimConfig& config);
   virtual int run(PTLsimConfig& config);  
   virtual void update_stats(PTLsimStats& stats);
 
-  static void addcore(const char* name, PTLsimCore* core);
-  static PTLsimCore* getcore(const char* name);
+  static void addmachine(const char* name, PTLsimMachine* machine);
+  static PTLsimMachine* getmachine(const char* name);
 };
 
 struct TransOpBuffer {

@@ -6,7 +6,6 @@
 //
 
 #include <globals.h>
-#include <superstl.h>
 #ifdef PTLSIM_HYPERVISOR
 #include <ptlxen.h>
 #else
@@ -508,14 +507,22 @@ ostream& operator <<(ostream& os, const SlabAllocator& slaballoc);
 ExtentAllocator<4096, 512, 512> pagealloc;
 
 struct SlabAllocator {
+#ifdef __x86_64__
+  // 64-bit x86-64: 8 + 8 = 16 bytes
   struct FreeObjectHeader: public selflistlink { };
+#else
+  // 32-bit x86: 4 + 4 + 8 = 16 bytes
+  struct FreeObjectHeader: public selflistlink { W64 pad; };
+#endif
 
   static const int GRANULARITY = sizeof(FreeObjectHeader);
 
+  // 32 bytes on both x86-64 and 32-bit x86
   struct PageHeader: public selflistlink {
     FreeObjectHeader* freelist;
     SlabAllocator* allocator;
     W64s freecount;
+    W64 pad;
     FreeObjectHeader objs[];
   };
 
@@ -942,9 +949,13 @@ void* ptl_mm_alloc(size_t bytes) {
   } else {
     //
     // Allocate from general allocation pool
+    // Make sure the first byte of the user
+    // allocation is 16-byte aligned; otherwise
+    // SSE vector ops will get alignment faults.
     //
-    bytes += sizeof(Waddr);
-    Waddr* p = (Waddr*)genalloc.alloc(bytes);
+    bytes = ceil(bytes + 16, 16);
+
+    W64* p = (W64*)genalloc.alloc(bytes);
     if unlikely (!p) {
       // Add some storage to the pool
       Waddr pagebytes = max((Waddr)ceil(bytes, PAGE_SIZE), (Waddr)GEN_ALLOC_CHUNK_SIZE);
@@ -975,7 +986,7 @@ void* ptl_mm_alloc(size_t bytes) {
     }
 
     *p = bytes;
-    p++; // skip over hidden size word
+    p += 2; // skip over hidden size word and pad-to-16-bytes word
 
     if unlikely (enable_mm_logging) logfile << "ptl_mm_alloc(", bytes, ") from genpool => p ", p, " called from ", (void*)__builtin_return_address(0), endl;
     return p;
@@ -988,7 +999,8 @@ size_t ptl_mm_getsize(void* p) {
   if likely (sa = SlabAllocator::pointer_to_slaballoc(p)) {
     return sa->objsize;
   } else {
-    Waddr* pp = ((Waddr*)p)-1;
+    // 16 bytes of padding used to store the size with proper alignment
+    W64* pp = ((W64*)p)-2;
     Waddr bytes = *pp;
     return bytes;
   }
@@ -1012,7 +1024,7 @@ void ptl_mm_free(void* p) {
     // the block size.
     //
 
-    Waddr* pp = ((Waddr*)p)-1;
+    W64* pp = ((W64*)p)-2;
     Waddr bytes = *pp;
 
     if unlikely (enable_mm_logging) logfile << "ptl_mm_free(", p, "): from gen pool (size ", bytes, ")", endl;

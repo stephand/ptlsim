@@ -46,7 +46,7 @@ struct PredictorUpdate {
   byte* cp2;
   byte* cpmeta;
   // predicted directions:
-  W32 bimodal:1, twolevel:1, meta:1, ras_push:1, flags:8;
+  W32 ctxid:8, flags:8, bimodal:1, twolevel:1, meta:1, ras_push:1;
   ReturnAddressStackEntry ras_old;
 };
 
@@ -56,9 +56,16 @@ extern W64 branchpred_ras_pops;
 extern W64 branchpred_ras_underflows;
 extern W64 branchpred_ras_annuls;
 
+struct BranchPredictorImplementation;
+
 struct BranchPredictorInterface {
-  BranchPredictorInterface() { reset(); }
+  // Pointer to private implementation:
+  BranchPredictorImplementation* impl;
+
+  BranchPredictorInterface() { impl = null; }
+  void init();
   void reset();
+  void destroy();
   W64 predict(PredictorUpdate& update, int type, W64 branchaddr, W64 target);
   void update(PredictorUpdate& update, W64 branchaddr, W64 target);
   void updateras(PredictorUpdate& predinfo, W64 branchaddr);

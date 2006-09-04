@@ -660,6 +660,13 @@ struct SequentialCore {
         saved_flags = arf[REG_flags];
       }
 
+      //
+      // Check for self modifying code (SMC) by checking if any previous
+      // instruction has dirtied the page(s) on which the current instruction
+      // resides. The SMC check is done first since it's perfectly legal for a
+      // store to overwrite its own instruction bytes, but this update only
+      // becomes visible after the store has committed.
+      //
       if unlikely (smc_isdirty(rvp.mfnlo) | (smc_isdirty(rvp.mfnhi))) {
         logfile << "Self-modifying code at rip ", rvp, " detected: mfn was dirty (invalidate and retry)", endl;
         bbcache.invalidate_page(rvp.mfnlo, INVALIDATE_REASON_SMC);
@@ -872,12 +879,12 @@ struct SequentialCore {
   }
 };
 
-struct SequentialMachine: public PTLsimCore {
+struct SequentialMachine: public PTLsimMachine {
   SequentialCore* cores[MAX_CONTEXTS];
 
   SequentialMachine(const char* name) {
     // Add to the list of available core types
-    addcore(name, this);
+    addmachine(name, this);
   }
 
   //

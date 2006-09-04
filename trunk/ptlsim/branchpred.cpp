@@ -9,6 +9,7 @@
 //
 
 #include <branchpred.h>
+#include <stats.h>
 
 template <int SIZE>
 struct BimodalPredictor {
@@ -69,12 +70,6 @@ struct BTBEntry {
 template <int SETCOUNT, int WAYCOUNT>
 struct BranchTargetBuffer: public AssociativeArray<W64, BTBEntry, SETCOUNT, WAYCOUNT, 1> { };
 
-W64 branchpred_ras_pushes;
-W64 branchpred_ras_overflows;
-W64 branchpred_ras_pops;
-W64 branchpred_ras_underflows;
-W64 branchpred_ras_annuls;
-
 template <int SIZE> struct ReturnAddressStack;
 
 template <int SIZE>
@@ -94,11 +89,11 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
 
   void push(W64 uuid, W64 rip, ReturnAddressStackEntry& old) {
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "ReturnAddressStack::push(uuid ", uuid, ", rip ", (void*)(Waddr)rip, "):", endl;
+    if (logable(5)) logfile << "ReturnAddressStack::push(uuid ", uuid, ", rip ", (void*)(Waddr)rip, "):", endl;
 #endif
     if (base_t::full()) {
-      if (logable(1)) logfile << "  Return address stack overflow: removing oldest entry to make space", endl;
-      branchpred_ras_overflows++;
+      if (logable(5)) logfile << "  Return address stack overflow: removing oldest entry to make space", endl;
+      stats.ooocore.branchpred.ras.overflows++;
       base_t::pophead();
     }
 
@@ -107,24 +102,25 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
 
     old = e;
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "  Old entry: ", old, endl;
+    if (logable(5)) logfile << "  Old entry: ", old, endl;
 #endif
 
     e.uuid = uuid;
     e.rip = rip;
 
-    branchpred_ras_pushes++;
-
-    if (logable(1)) { logfile << *this; }
+    stats.ooocore.branchpred.ras.pushes++;
+#ifdef DEBUG_RAS
+    if (logable(5)) { logfile << *this; }
+#endif
   }
 
   ReturnAddressStackEntry& pop(ReturnAddressStackEntry& old) {
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "ReturnAddressStack::pop():", endl;
+    if (logable(5)) logfile << "ReturnAddressStack::pop():", endl;
 #endif
     if (base_t::empty()) {
-      branchpred_ras_underflows++;
-      if (logable(1)) logfile << "  Return address stack underflow: returning entry with zero fields", endl;
+      stats.ooocore.branchpred.ras.underflows++;
+      if (logable(5)) logfile << "  Return address stack underflow: returning entry with zero fields", endl;
       old.idx = -1;
       old.uuid = 0;
       old.rip = 0;
@@ -135,25 +131,25 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
     assert(&e);
     old = e;
 #ifdef DEBUG_RAS
-    if (logable(1)) { logfile << "  Old entry: ", old, endl; logfile << *this; }
+    if (logable(5)) { logfile << "  Old entry: ", old, endl; logfile << *this; }
 #endif
 
-    branchpred_ras_pops++;
+    stats.ooocore.branchpred.ras.pops++;
 
     return e;
   }
 
   W64 peek() {
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "ReturnAddressStack::peek():", endl;
+    if (logable(5)) logfile << "ReturnAddressStack::peek():", endl;
 #endif
     if (base_t::empty()) {
-      if (logable(1)) logfile << "  Return address stack is empty: returning bogus rip 0", endl;
+      if (logable(5)) logfile << "  Return address stack is empty: returning bogus rip 0", endl;
       return 0;
     }
 
 #ifdef DEBUG_RAS
-    if (logable(1)) { logfile << "  Peeking entry ", (*base_t::peektail()); }
+    if (logable(5)) { logfile << "  Peeking entry ", (*base_t::peektail()); }
 #endif
 
     return base_t::peektail()->rip;
@@ -164,11 +160,13 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
   //
   void annulpush(const ReturnAddressStackEntry& old) {
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "ReturnAddressStack::annulpush(old index ", old.idx, ", uuid ", old.uuid, ", rip ", (void*)(Waddr)old.rip, "):", endl;
+    if (logable(5)) logfile << "ReturnAddressStack::annulpush(old index ", old.idx, ", uuid ", old.uuid, ", rip ", (void*)(Waddr)old.rip, "):", endl;
 #endif
 
     if (base_t::empty()) {
-      if (logable(1)) logfile << "  Cannot annul: return address stack is empty", endl;
+#ifdef DEBUG_RAS
+      if (logable(5)) logfile << "  Cannot annul: return address stack is empty", endl;
+#endif
       return;
     }
 
@@ -179,11 +177,11 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
     ReturnAddressStackEntry dummy;
     pop(dummy);
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "  Popped speculative push; e.index = ", e.index(), " vs tail ", base_t::tail, endl;
+    if (logable(5)) logfile << "  Popped speculative push; e.index = ", e.index(), " vs tail ", base_t::tail, endl;
     assert(e.index() == base_t::tail);
 #endif
 
-    branchpred_ras_annuls++;
+    stats.ooocore.branchpred.ras.annuls++;
   }
 
   //
@@ -191,21 +189,23 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
   //
   void annulpop(const ReturnAddressStackEntry& old) {
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "ReturnAddressStack::annulpop(old index ", old.idx, ", uuid ", old.uuid, ", rip ", (void*)(Waddr)old.rip, "):", endl;
+    if (logable(5)) logfile << "ReturnAddressStack::annulpop(old index ", old.idx, ", uuid ", old.uuid, ", rip ", (void*)(Waddr)old.rip, "):", endl;
 #endif
 
     if (base_t::full()) {
-      if (logable(1)) logfile << "  Cannot annul: stack is full", endl;
+#ifdef DEBUG_RAS
+      if (logable(5)) logfile << "  Cannot annul: stack is full", endl;
+#endif
       return;
     }
     ReturnAddressStackEntry dummy;
 
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "  Pushed speculative pop; old.index = ", old.index(), " vs tail ", base_t::tail, endl;
+    if (logable(5)) logfile << "  Pushed speculative pop; old.index = ", old.index(), " vs tail ", base_t::tail, endl;
     assert(old.index() == base_t::tail);
 #endif
     push(old.uuid, old.rip, dummy);
-    branchpred_ras_annuls++;
+    stats.ooocore.branchpred.ras.annuls++;
   }
 };
 
@@ -277,7 +277,7 @@ struct CombinedPredictor {
     //
     if (type & BRANCH_HINT_RET) {
 #ifdef DEBUG_RAS
-      if (logable(1)) logfile << "Peeking RAS for uuid ", update.uuid, ":", endl;
+      if (logable(5)) logfile << "Peeking RAS for uuid ", update.uuid, ":", endl;
 #endif
       return ras.peek();
     }
@@ -376,7 +376,7 @@ struct CombinedPredictor {
   //
   void annulras(const PredictorUpdate& predinfo) {
 #ifdef DEBUG_RAS
-    if (logable(1)) logfile << "Update RAS for uuid ", predinfo.uuid, ":", endl;
+    if (logable(5)) logfile << "Update RAS for uuid ", predinfo.uuid, ":", endl;
 #endif
     if (predinfo.ras_push)
       ras.annulpush(predinfo.ras_old);
@@ -386,33 +386,42 @@ struct CombinedPredictor {
 
 // template <int METASIZE, int BIMODSIZE, int L1SIZE, int L2SIZE, int SHIFTWIDTH, bool HISTORYXOR, int BTBSETS, int BTBWAYS, int RASSIZE>
 // G-share constraints: METASIZE, BIMODSIZE, 1, L2SIZE, log2(L2SIZE), (HISTORYXOR = true), BTBSETS, BTBWAYS, RASSIZE
-CombinedPredictor<65536, 65536, 1, 65536, 16, 1, 1024, 4, 1024> combpred;
+struct BranchPredictorImplementation: public CombinedPredictor<65536, 65536, 1, 65536, 16, 1, 1024, 4, 1024> { };
+
+void BranchPredictorInterface::destroy() {
+  if (impl) delete impl;
+  impl = null;
+}
 
 void BranchPredictorInterface::reset() {
-  combpred.reset();
+  impl->reset();
+}
+
+void BranchPredictorInterface::init() {
+  destroy();
+  impl = new BranchPredictorImplementation();
+  reset();
 }
 
 W64 BranchPredictorInterface::predict(PredictorUpdate& update, int type, W64 branchaddr, W64 target) {
-  return combpred.predict(update, type, branchaddr, target);
+  return impl->predict(update, type, branchaddr, target);
 }
 
 void BranchPredictorInterface::update(PredictorUpdate& update, W64 branchaddr, W64 target) {
-  combpred.update(update, branchaddr, target);
+  impl->update(update, branchaddr, target);
 }
 
 void BranchPredictorInterface::updateras(PredictorUpdate& predinfo, W64 branchaddr) {
-  combpred.updateras(predinfo, branchaddr);
+  impl->updateras(predinfo, branchaddr);
 };
 
 void BranchPredictorInterface::annulras(const PredictorUpdate& predinfo) {
-  combpred.annulras(predinfo);
+  impl->annulras(predinfo);
 };
 
 void BranchPredictorInterface::flush() { }
 
 ostream& operator <<(ostream& os, const BranchPredictorInterface& branchpred) {
-  os << combpred.ras;
+  os << branchpred.impl->ras;
   return os;
 }
-
-BranchPredictorInterface branchpred;

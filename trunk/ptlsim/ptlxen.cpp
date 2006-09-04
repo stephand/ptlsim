@@ -2222,6 +2222,10 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       break;
     }
 
+    foreach (i, pages) {
+      unmap_phys_page(mfns[i]);
+    }
+
     rc = HYPERVISOR_set_gdt(mfns, entries);
 
     if (debug) {
@@ -4065,44 +4069,44 @@ bool check_for_async_sim_break() {
 }
 
 
-Hashtable<const char*, PTLsimCore*, 1> coretable;
+Hashtable<const char*, PTLsimMachine*, 1> machinetable;
 
-PTLsimCore basecore;
+PTLsimMachine basemachine;
 
-bool PTLsimCore::init(PTLsimConfig& config) { return false; }
-int PTLsimCore::run(PTLsimConfig& config) { return 0; }
-void PTLsimCore::update_stats(PTLsimStats& stats) { return; }
+bool PTLsimMachine::init(PTLsimConfig& config) { return false; }
+int PTLsimMachine::run(PTLsimConfig& config) { return 0; }
+void PTLsimMachine::update_stats(PTLsimStats& stats) { return; }
 
-void PTLsimCore::addcore(const char* name, PTLsimCore* core) {
-  coretable.add(name, core);
+void PTLsimMachine::addmachine(const char* name, PTLsimMachine* machine) {
+  machinetable.add(name, machine);
 }
 
-PTLsimCore* PTLsimCore::getcore(const char* name) {
-  PTLsimCore** p = coretable.get(name);
+PTLsimMachine* PTLsimMachine::getmachine(const char* name) {
+  PTLsimMachine** p = machinetable.get(name);
   if (!p) return null;
   return *p;
 }
 
-bool simulate(const char* corename) {
-  PTLsimCore* core = PTLsimCore::getcore(corename);
+bool simulate(const char* machinename) {
+  PTLsimMachine* machine = PTLsimMachine::getmachine(machinename);
 
-  if (!core) {
-    logfile << "Cannot find core named '", corename, "'", endl;
+  if (!machine) {
+    logfile << "Cannot find core named '", machinename, "'", endl;
     return 0;
   }
 
-  if (!core->initialized) {
-    logfile << "Initializing core '", corename, "'", endl;
-    if (!core->init(config)) {
+  if (!machine->initialized) {
+    logfile << "Initializing core '", machinename, "'", endl;
+    if (!machine->init(config)) {
       logfile << "Cannot initialize core model; check its configuration!", endl;
       return 0;
     }
-    core->initialized = 1;
+    machine->initialized = 1;
   }
 
-  logfile << "Switching to simulation core '", corename, "'...", endl, flush;
+  logfile << "Switching to simulation core '", machinename, "'...", endl, flush;
   logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
-  cerr << "Switching to simulation core '", corename, "'...", endl, flush;
+  cerr << "Switching to simulation core '", machinename, "'...", endl, flush;
   cerr << "  Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
 
   // For debugging memory leaks:
@@ -4113,8 +4117,8 @@ bool simulate(const char* corename) {
   init_virqs();
   update_time();
 
-  core->run(config);
-  core->update_stats(stats);
+  machine->run(config);
+  machine->update_stats(stats);
 
   //sequential_core_toplevel_loop();
 

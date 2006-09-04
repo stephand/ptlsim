@@ -1386,8 +1386,6 @@ enum {
   INVALIDATE_REASON_COUNT
 };
 
-extern const char* invalidate_reason_names[INVALIDATE_REASON_COUNT];
-
 struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE> {
   BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE>() { }
 
@@ -1444,6 +1442,17 @@ typedef void (*assist_func_t)(Context& ctx);
 const char* assist_name(assist_func_t func);
 int assist_index(assist_func_t func);
 
+
+//
+// This part is used when parsing stats.h to build the
+// data store template; these must be in sync with the
+// corresponding definitions elsewhere.
+//
+#ifdef DSTBUILD
+static const char* sizeshift_names[4] = {
+  "1 (byte)", "2 (word)", "4 (dword)", "8 (qword)"
+};
+#endif
 
 #endif // __ASM_ONLY__
 #endif // _PTLHWDEF_H

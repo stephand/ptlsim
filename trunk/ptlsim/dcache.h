@@ -36,7 +36,7 @@ extern "C" W64 commitstore_unlocked(const SFR& sfr);
 
 int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR& sfra, LoadStoreInfo lsi);
 bool probe_cache_and_sfr(W64 addr, const SFR* sfra, int sizeshift);
-bool probe_icache(W64 addr);
+bool probe_icache(Waddr virtaddr, Waddr physaddr);
 bool covered_by_sfr(W64 addr, SFR* sfr, int sizeshift);
 void initiate_prefetch(W64 addr, int cachelevel);
 int initiate_icache_miss(W64 addr);
@@ -56,6 +56,8 @@ void dcache_print_rollback();
 void dcache_save_stats(DataStoreNode& ds);
 ostream& dcache_print(ostream& os);
 
+/*
+#if 0
 // This is an internal MSR required to correctly truncate ld/st pointers in 32-bit mode
 extern W64 virt_addr_mask;
 
@@ -129,5 +131,7 @@ extern W64 itlb_misses;
 
 extern W64 itlb_inserts;
 extern W64 itlb_invalidates;
+#endif
+*/
 
 #endif // _DCACHE_H

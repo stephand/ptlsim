@@ -57,7 +57,7 @@ STDOBJS = glibc.o
 ifdef __x86_64__
 # IMPORTANT: linkstart.o and linkend.o must be at opposite ends of the list to set up constructor tables properly:
 ifdef PTLSIM_HYPERVISOR
-COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o ooocore.o ooopipe.o oooexec.o branchpred.o dcache.o linkend.o
 else
 COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o dcache.o datastore.o injectcode-32bit.o injectcode-64bit.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif

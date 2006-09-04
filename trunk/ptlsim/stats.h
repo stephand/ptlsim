@@ -17,18 +17,8 @@
 #define STATS_ONLY
 #include <decode.h>
 #include <ooocore.h>
-//#include <dcache.h>
+#include <dcacheint.h>
 #undef STATS_ONLY
-
-#ifdef DSTBUILD
-const char* decode_type_names[DECODE_TYPE_COUNT] = {
-  "fast", "complex", "x87", "sse", "assist"
-};
-
-const char* invalidate_reason_names[INVALIDATE_REASON_COUNT] = {
-  "smc", "dma", "spurious", "reclaim", "dirty", "empty"
-};
-#endif
 
 //
 // This file is run through dstbuild to auto-generate
@@ -125,12 +115,6 @@ struct PTLsimStats { // rootnode:
     W64 reclaim_rounds;
   } decoder;
 
-  //#include "testme.txt"
-  //W64 opclass[OPCLASS_COUNT]; // label: opclass_names
-  //W64 trace_length[64]; // histo: 0, OPCLASS_COUNT-1, 1
-
-
-
   //
   // Out of Order Core
   //
@@ -180,9 +164,235 @@ struct PTLsimStats { // rootnode:
       // NOTE: This is capped at 255 consumers to keep the size reasonable:
       W64 consumer_count[256]; // histo: 0, 255, 1
     } frontend;
+    struct dispatch {
+      W64 width[DISPATCH_WIDTH+1]; // histo: 0, DISPATCH_WIDTH, 1
+
+      struct source { // node: summable
+        W64 integer[MAX_PHYSREG_STATE]; // label: physreg_state_names
+        W64 fp[MAX_PHYSREG_STATE]; // label: physreg_state_names
+        W64 st[MAX_PHYSREG_STATE]; // label: physreg_state_names
+        W64 br[MAX_PHYSREG_STATE]; // label: physreg_state_names
+      } source;
+
+      W64 cluster[MAX_CLUSTERS]; // label: cluster_names
+
+      struct redispatch {
+        W64 trigger_uops;
+        W64 deadlock_flushes;
+        W64 deadlock_uops_flushed;
+        W64 dependent_uops[ROB_SIZE+1]; // histo: 0, ROB_SIZE, 1
+      } redispatch;
+
+    } dispatch;
+    struct issue {
+      struct result { // node: summable
+        W64 no_fu;
+        W64 replay;
+        W64 misspeculated;
+        W64 refetch;
+        W64 branch_mispredict;
+        W64 exception;
+        W64 complete;
+      } result;
+      struct width {
+        W64 int0[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 int1[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 ld[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 fp[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+      } width;
+      W64 opclass[OPCLASS_COUNT]; // label: opclass_names
+
+    } issue;
+    struct writeback {
+      W64 total_writebacks;
+      struct width {
+        W64 int0[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 int1[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 ld[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 fp[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+      } width;
+    } writeback;
+
+    struct commit {
+      W64 total_uops_committed;
+      W64 total_user_insns_committed;
+      struct freereg { // node: summable
+        W64 pending;
+        W64 free;
+      } freereg;
+
+      W64 free_regs_recycled;
+
+      struct result { // node: summable
+        W64 none;
+        W64 ok;
+        W64 exception;
+        W64 skipblock;
+        W64 barrier;
+        W64 smc;
+        W64 stop;
+      } result;
+
+      struct setflags { // node: summable
+        W64 yes;
+        W64 no;
+      } setflags;
+
+      W64 width[COMMIT_WIDTH+1]; // histo: 0, COMMIT_WIDTH, 1
+      W64 opclass[OPCLASS_COUNT]; // label: opclass_names
+    } commit;
+
     struct branchpred {
       W64 predictions;
+      W64 updates;
+
+      // These counters are [0] = mispred, [1] = correct
+      W64 cond[2]; // label: branchpred_outcome_names
+      W64 indir[2]; // label: branchpred_outcome_names
+      W64 ret[2]; // label: branchpred_outcome_names
+      W64 summary[2]; // label: branchpred_outcome_names
+      struct ras { // node: summable
+        W64 pushes;
+        W64 overflows;
+        W64 pops;
+        W64 underflows;
+        W64 annuls;
+      } ras;
     } branchpred;
+
+    struct dcache {
+      struct load {
+        struct issue { // node: summable
+          W64 complete;
+          W64 miss;
+          W64 exception;
+          W64 ordering;
+          W64 unaligned;
+          struct replay { // node: summable
+            W64 sfr_addr_and_data_not_ready;
+            W64 sfr_addr_not_ready;
+            W64 sfr_data_not_ready;
+            W64 missbuf_full;
+          } replay;
+        } issue;
+
+        struct hit { // node: summable
+          W64 L1;
+          W64 L2;
+          W64 L3;
+          W64 mem;
+        } hit;
+        
+        struct forward { // node: summable
+          W64 cache;
+          W64 sfr;
+          W64 sfr_and_cache;
+        } forward;
+        
+        struct dependency { // node: summable
+          W64 independent;
+          W64 predicted_alias_unresolved;
+          W64 stq_address_match;
+        } dependency;
+        
+        struct type { // node: summable
+          W64 aligned;
+          W64 unaligned;
+          W64 internal;
+        } type;
+        
+        W64 size[4]; // label: sizeshift_names
+
+        W64 datatype[DATATYPE_COUNT]; // label: datatype_names
+
+        struct transfer { // node: summable
+          W64 L2_to_L1_full;
+          W64 L2_to_L1_partial;
+          W64 L2_L1I_full;
+        } transfer;
+        
+        struct dtlb { // node: summable
+          W64 hits;
+          W64 misses;
+        } dtlb;
+      } load;
+    
+      struct fetch {
+        struct hit { // node: summable
+          W64 L1;
+          W64 L2;
+          W64 L3;
+          W64 mem;
+        } hit;
+        
+        struct itlb { // node: summable
+          W64 hits;
+          W64 misses;
+        } itlb;
+      } fetch;
+
+      struct prefetch { // node: summable
+        W64 in_L1;
+        W64 in_L2;
+        W64 required;
+      } prefetch;
+    
+      struct missbuf {
+        W64 inserts;
+        struct deliver { // node: summable
+          W64 mem_to_L3;
+          W64 L3_to_L2;
+          W64 L2_to_L1D;
+          W64 L2_to_L1I;
+        } deliver;
+      } missbuf;
+
+      struct lfrq {
+        W64 inserts;
+        W64 wakeups;
+        W64 annuls;
+        W64 resets;
+        W64 total_latency;
+        double average_latency;
+        W64 width[MAX_WAKEUPS_PER_CYCLE+1]; // histo: 0, MAX_WAKEUPS_PER_CYCLE+1, 1
+      } lfrq;
+
+      struct store {
+        struct issue { // node: summable
+          W64 complete;
+          W64 exception;
+          W64 ordering;
+          W64 unaligned;
+          struct replay { // node: summable
+            W64 sfr_addr_and_data_not_ready;
+            W64 sfr_addr_not_ready;
+            W64 sfr_data_not_ready;
+            W64 sfr_addr_and_data_and_data_to_store_not_ready;
+            W64 sfr_addr_and_data_to_store_not_ready;
+            W64 sfr_data_and_data_to_store_not_ready;
+          } replay;
+        } issue;
+
+        struct forward { // node: summable
+          W64 zero;
+          W64 sfr;
+        } forward;
+        
+        struct type { // node: summable
+          W64 aligned;
+          W64 unaligned;
+          W64 internal;
+        } type;
+        
+        W64 size[4]; // label: sizeshift_names
+
+        W64 datatype[DATATYPE_COUNT]; // label: datatype_names
+
+        W64 parallel_aliasing;
+
+        W64 prefetches;
+      } store;
+    } dcache;
   } ooocore;
 };
 

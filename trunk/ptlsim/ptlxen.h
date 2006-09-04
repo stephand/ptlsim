@@ -511,6 +511,9 @@ struct PTLsimConfig {
   bool realtime;
   bool mask_interrupts;
 
+  // Out of order core features
+  bool perfect_cache;
+
   // Other info
   stringbuf dumpcode_filename;
 

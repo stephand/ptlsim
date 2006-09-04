@@ -1337,7 +1337,9 @@ int BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
 
   //static const bool log_code_page_ops = 0;
 
-  if (logable(3) | log_code_page_ops) logfile << "Invalidate page mfn ", mfn, ": pagelist ", pagelist, " has ", (pagelist ? pagelist->count() : 0), " entries", endl;
+  if (logable(3) | log_code_page_ops) logfile << "Invalidate page mfn ", mfn, ": pagelist ", pagelist, " has ", (pagelist ? pagelist->count() : 0), " entries (dirty? ", smc_isdirty(mfn), ")", endl;
+
+  smc_cleardirty(mfn);
 
   if (!pagelist) return 0;
 
@@ -1358,8 +1360,6 @@ int BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
   pagelist->clear();
   stats.decoder.pagecache.count = bbpages.count;
   stats.decoder.pagecache.invalidates[reason]++;
-
-  smc_cleardirty(mfn);
 
   return n;
 }

@@ -7,6 +7,7 @@
 
 #include <dcacheint.h>
 #include <datastore.h>
+#include <stats.h>
 
 
 using namespace DataCache;
@@ -26,6 +27,7 @@ CycleTimer store_flush_timer("Store commit buffer flush");
 notify_wakeup_t wakeup_func = null;
 notify_wakeup_t icache_wakeup_func = null;
 
+/*
 // totals 100%:
 W64 load_issue_complete;
 W64 load_issue_miss;
@@ -312,6 +314,7 @@ void dcache_save_stats(DataStoreNode& ds) {
   }
 #endif
 }
+*/
 
 namespace DataCache {
 
@@ -432,7 +435,7 @@ namespace DataCache {
         annul(idx);
       }
       reset();
-      lfrq_resets++;
+      stats.ooocore.dcache.lfrq.resets++;
     }
 
     bool full() {
@@ -447,7 +450,7 @@ namespace DataCache {
       int idx = freemap.lsb();
       changestate(idx, freemap, waiting);         
       reqs[idx] = req;
-      lfrq_inserts++;
+      stats.ooocore.dcache.lfrq.inserts++;
       return idx;
     }
 
@@ -497,17 +500,17 @@ namespace DataCache {
           // avoid overflow induced erroneous values:
           // logfile << "LFRQ: warning: cycle counter wraparound in initcycle latency (current ", sim_cycle, " vs init ", req.initcycle, " = delta ", delta, ")", endl;
         } else {
-          lfrq_total_latency += delta;
+          stats.ooocore.dcache.lfrq.total_latency += delta;
         }
         
-        lfrq_wakeups++;
+        stats.ooocore.dcache.lfrq.wakeups++;
         wakeupcount++;
         if likely (wakeup_func) wakeup_func(req.lsi, req.addr);
 
         changestate(idx, ready, freemap);
       }
 
-      lfrq_wakeup_width_histogram[wakeupcount]++;
+      stats.ooocore.dcache.lfrq.width[wakeupcount]++;
     }
 
     LoadFillReq& operator [](int idx) { return reqs[idx]; }
@@ -629,7 +632,7 @@ namespace DataCache {
 
       idx = freemap.lsb();
       freemap[idx] = 0;
-      missbuf_inserts++;
+      stats.ooocore.dcache.missbuf.inserts++;
       Entry& mb = missbufs[idx];
       mb.addr = addr;
       mb.lfrqmap = 0;
@@ -643,7 +646,7 @@ namespace DataCache {
         mb.state = STATE_DELIVER_TO_L1;
         mb.cycles = L2_LATENCY;
 
-        if (icache) fetch_hit_L2++; else load_hit_L2++;
+        if unlikely (icache) stats.ooocore.dcache.fetch.hit.L2++; else stats.ooocore.dcache.load.hit.L2++;
         return idx;
       }
       
@@ -652,14 +655,14 @@ namespace DataCache {
         if (DEBUG) logfile << "mb", idx, ": enter state deliver to L2 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
         mb.state = STATE_DELIVER_TO_L2;
         mb.cycles = L3_LATENCY;
-        if (icache) fetch_hit_L3++; else load_hit_L3++;
+        if (icache) stats.ooocore.dcache.fetch.hit.L3++; else stats.ooocore.dcache.load.hit.L3++;
         return idx;
       }
 
       if (DEBUG) logfile << "mb", idx, ": enter state deliver to L3 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
       mb.state = STATE_DELIVER_TO_L3;
       mb.cycles = MAIN_MEM_LATENCY;
-      if unlikely (icache) fetch_hit_mem++; else load_hit_mem++;
+      if unlikely (icache) stats.ooocore.dcache.fetch.hit.mem++; else stats.ooocore.dcache.load.hit.mem++;
 
       return idx;
     }
@@ -702,7 +705,7 @@ namespace DataCache {
             L3.validate(mb.addr);
             mb.cycles = L3_LATENCY;
             mb.state = STATE_DELIVER_TO_L2;
-            missbuf_deliver_mem_to_L3++;
+            stats.ooocore.dcache.missbuf.deliver.mem_to_L3++;
           }
           break;
         }
@@ -714,7 +717,7 @@ namespace DataCache {
             L2.validate(mb.addr);
             mb.cycles = L2_LATENCY;
             mb.state = STATE_DELIVER_TO_L1;
-            missbuf_deliver_L3_to_L2++;
+            stats.ooocore.dcache.missbuf.deliver.L3_to_L2++;
           }
           break;
         }
@@ -734,9 +737,9 @@ namespace DataCache {
               // Insert the line into the DTLB on its way up to the L1,
               // in case no mapping was present.
               //
-              dtlb_inserts += dtlb.insert(mb.addr);
+              dtlb.insert(mb.addr);
 #endif
-              missbuf_deliver_L2_to_L1++;
+              stats.ooocore.dcache.missbuf.deliver.L2_to_L1D++;
               lfrq.wakeup(mb.addr, mb.lfrqmap);
             }
             if unlikely (mb.icache) {
@@ -750,9 +753,9 @@ namespace DataCache {
               // Insert the line into the DTLB on its way up to the L1,
               // in case no mapping was present.
               //
-              itlb_inserts += itlb.insert(mb.addr);
+              itlb.insert(mb.addr);
 #endif
-              missbuf_deliver_L2_to_L1I++;
+              stats.ooocore.dcache.missbuf.deliver.L2_to_L1I++;
               LoadStoreInfo lsi;
               lsi.data = 0;
               if likely (icache_wakeup_func) icache_wakeup_func(lsi, mb.addr);
@@ -799,7 +802,7 @@ namespace DataCache {
   void LoadFillReqQueue<size>::annul(int lfrqslot) {
     LoadFillReq& req = reqs[lfrqslot];
     if (analyze_in_detail()) logfile << "  Annul LFRQ slot ", lfrqslot, endl;
-    lfrq_annuls++;
+    stats.ooocore.dcache.lfrq.annuls++;
     missbuf.annul_lfrq(lfrqslot);
     changestate(lfrqslot, ready, freemap);
   }
@@ -862,9 +865,9 @@ int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR&
 
   if likely (!L1line) {
     //L1line = L1.select(addr);
-    load_transfer_L2_to_L1_full++;
+    stats.ooocore.dcache.load.transfer.L2_to_L1_full++;
   } else {
-    load_transfer_L2_to_L1_partial++;
+    stats.ooocore.dcache.load.transfer.L2_to_L1_partial++;
   }
 
   int L2hit = 0;
@@ -966,8 +969,8 @@ bool probe_cache_and_sfr(W64 addr, const SFR* sfr, int sizeshift) {
 #ifdef USE_TLB
   bool tlbhit = dtlb.probe(addr);
 
-  dtlb_hits += tlbhit;
-  dtlb_misses += !tlbhit;
+  stats.ooocore.dcache.load.dtlb.hits += tlbhit;
+  stats.ooocore.dcache.load.dtlb.misses += (!tlbhit);
 
   // issueload_slowpath() will check this again:
   if unlikely (!tlbhit) {
@@ -1036,43 +1039,44 @@ void initiate_prefetch(W64 addr, int cachelevel) {
   //bool DEBUG = analyze_in_detail();
   static const bool DEBUG = 0;
 
-  addr &= ctx.virt_addr_mask;
+  //++MTY FIXME This needs to use physical addresses now!
+  // addr &= ctx.virt_addr_mask;
 
   addr = floor(addr, L1_LINE_SIZE);
 
   L1CacheLine* L1line = L1.probe(addr);
 
   if unlikely (L1line) {
-    prefetch_already_in_L1++;
+    stats.ooocore.dcache.prefetch.in_L1++;
     return;
   }
 
   L2CacheLine* L2line = L2.probe(addr);
 
   if unlikely (L2line) {
-    prefetch_already_in_L2++;
+    stats.ooocore.dcache.prefetch.in_L2++;
     if (PREFETCH_STOPS_AT_L2) return; // only move up to L2 level, and it's already there
   }
 
   if (DEBUG) logfile << "Prefetch requested for ", (void*)(Waddr)addr, " to cache level ", cachelevel, endl;
 
   missbuf.initiate_miss(addr, L2line);
-  prefetch_required++;
+  stats.ooocore.dcache.prefetch.required++;
 }
 
 //
 // Instruction cache
 //
 
-bool probe_icache(W64 addr) {
-  L1ICacheLine* L1line = L1I.probe(addr);
+bool probe_icache(Waddr virtaddr, Waddr physaddr) {
+  L1ICacheLine* L1line = L1I.probe(physaddr);
   bool hit = (L1line != null);
 
 #ifdef USE_TLB
-  bool tlbhit = itlb.probe(addr);
+  bool tlbhit = itlb.probe(virtaddr);
 
-  itlb_hits += tlbhit;
-  itlb_misses += !tlbhit;
+  stats.ooocore.dcache.fetch.itlb.hits += tlbhit;
+  stats.ooocore.dcache.fetch.itlb.misses += (!tlbhit);
 
   // issueload_slowpath() will check this again:
   if unlikely (!tlbhit) {
@@ -1080,9 +1084,9 @@ bool probe_icache(W64 addr) {
     // (See notes about TLB miss handling in probe_cache_and_sfr())
     //
     // itlb.insert(addr);
-    if (logable(1)) logfile << "ITLB miss on page ", (void*)(Waddr)(addr >> 12), ": initiate ITLB refill", endl;
+    if (logable(1)) logfile << "ITLB miss on virt page ", (void*)(Waddr)(virtaddr >> 12), ": initiate ITLB refill", endl;
 
-    L1.invalidate(addr);
+    L1.invalidate(physaddr);
     return false;
   }
 #endif
@@ -1121,7 +1125,6 @@ W64 commitstore_unlocked(const SFR& sfr) {
   L2CacheLine* L2line = L2.select(addr);
 
   storemask(sfr.physaddr << 3, sfr.data, sfr.bytemask);
-  store_commit_direct++;
 
   L1CacheLine* L1line = L1.select(addr);
 
@@ -1129,7 +1132,7 @@ W64 commitstore_unlocked(const SFR& sfr) {
   L2line->valid |= ((W64)sfr.bytemask << lowbits(addr, 6));
 
   if unlikely (!L1line->valid.allset()) {
-    store_prefetches++;
+    stats.ooocore.dcache.store.prefetches++;
     missbuf.initiate_miss(addr, L2line->valid.allset());
   }
 
@@ -1180,7 +1183,9 @@ void dcache_print_commit() {
 }
 
 void init_cache() {
+#ifndef PTLSIM_HYPERVISOR
   ctx.virt_addr_mask = (ctx.use64 ? 0xffffffffffffffffLL : 0x00000000ffffffffLL);
+#endif
 }
 
 ostream& dcache_print(ostream& os) {

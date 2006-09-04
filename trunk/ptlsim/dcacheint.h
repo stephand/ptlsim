@@ -6,10 +6,18 @@
 // Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
 //
 
+#ifndef _DCACHEINT_H_
+#define _DCACHEINT_H_
+
 #include <ptlsim.h>
 #include <dcache.h>
 #include <config.h>
 #include <datastore.h>
+
+// How many load wakeups can be driven into the core each cycle:
+#define MAX_WAKEUPS_PER_CYCLE 2
+
+#ifndef STATS_ONLY
 
 // non-debugging only:
 #define __RELEASE__
@@ -49,9 +57,6 @@
 // Allow up to 16 outstanding lines in the L2 awaiting service:
 #define MISSBUF_COUNT 16
 #define MAIN_MEM_LATENCY 140
-
-// How many load wakeups can be driven into the core each cycle:
-#define MAX_WAKEUPS_PER_CYCLE 2
 
 // TLBs
 #define USE_TLB
@@ -419,3 +424,8 @@ extern DataCache::ITLB itlb;
 #endif
 
 void issueload_slowpath(IssueState& state, DataCache::L1CacheLine* L1line, W64 addr, W64 origaddr, W64 data, SFR& sfra, W64 lsi);
+
+#endif // STATS_ONLY
+
+#endif // _DCACHEINT_H_
+

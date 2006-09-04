@@ -350,8 +350,9 @@ void PTLsimConfig::reset() {
   pseudo_real_time_clock = 0;
   realtime = 0;
   mask_interrupts = 0;
-
   console_mfn = 0;
+
+  perfect_cache = 0;
 }
 
 PTLsimConfig config;
@@ -405,10 +406,13 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(pseudo_real_time_clock,       "pseudo-rtc",           "Real time clock always starts at time saved in checkpoint");
   add(realtime,                     "realtime",             "Operate in real time: no time dilation (not accurate for I/O intensive workloads!)");
   add(mask_interrupts,              "maskints",             "Mask all interrupts (required for guaranteed deterministic behavior)");
+  add(console_mfn,                  "console-mfn",          "Track the specified Xen console MFN");
+
+  section("Out of Order Core (ooocore)");
+  add(perfect_cache,                "perfect-cache",        "Perfect cache performance: all loads and stores hit in L1");
 
   section("Miscellaneous");
   add(dumpcode_filename,            "dumpcode",             "Save page of user code at final rip to file <dumpcode>");
-  add(console_mfn,                  "console-mfn",          "Track the specified Xen console MFN");
 };
 
 ostream& operator <<(ostream& os, const PTLsimConfig& config) {
