@@ -313,9 +313,10 @@ ostream& operator <<(ostream& os, const shared_info& si) {
 void PTLsimConfig::reset() {
   domain = (W64)(-1);
   run = 0;
+  stop = 0;
   native = 0;
-  pause = 0;
   kill = 0;
+  pause = 0;
 
   core_name = "seq";
 
@@ -363,15 +364,15 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   section("PTLmon Control");
   add(domain,                       "domain",               "Domain to access");
 
-  section("Action");
+  section("Action (specify only one)");
   add(run,                          "run",                  "Run under simulation");
+  add(stop,                         "stop",                 "Stop current simulation run and wait for command");
   add(native,                       "native",               "Switch to native mode");
-  add(pause,                        "pause",                "Pause domain after switching back to native mode");
   add(kill,                         "kill",                 "Kill PTLsim inside domain (and ptlmon), then shutdown domain");
 
   section("Simulation Control");
 
-  add(core_name,                    "core",                 "Run using specified core (-sim <corename>)");
+  add(core_name,                    "core",                 "Run using specified core (-core <corename>)");
 
   section("Logging Control");
   add(quiet,                        "quiet",                "Do not print PTLsim system information banner");
@@ -400,13 +401,14 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(insns_in_last_basic_block,    "bbinsns",              "In final basic block, only translate <bbinsns> user instructions");
   add(flush_interval,               "flushevery",           "Flush the pipeline every N committed instructions");
 
-  section("Timers");
+  section("Timers and Interrupts");
   add(core_freq_hz,                 "corefreq",             "Core clock frequency in Hz (default uses host system frequency)");
   add(timer_interrupt_freq_hz,      "timerfreq",            "Timer interrupt frequency in Hz");
   add(pseudo_real_time_clock,       "pseudo-rtc",           "Real time clock always starts at time saved in checkpoint");
   add(realtime,                     "realtime",             "Operate in real time: no time dilation (not accurate for I/O intensive workloads!)");
   add(mask_interrupts,              "maskints",             "Mask all interrupts (required for guaranteed deterministic behavior)");
   add(console_mfn,                  "console-mfn",          "Track the specified Xen console MFN");
+  add(pause,                        "pause",                "Pause domain after using -native");
 
   section("Out of Order Core (ooocore)");
   add(perfect_cache,                "perfect-cache",        "Perfect cache performance: all loads and stores hit in L1");

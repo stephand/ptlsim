@@ -1497,6 +1497,50 @@ void print_perfctrs(ostream& os) {
 #endif // ! ENABLE_KERNEL_PERFCTRS
 
 //
+// Get the processor core frequency in cycles/second:
+//
+W64 get_core_freq_hz() {
+  W64 hz = 0;
+
+  istream cpufreqis("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
+  if (cpufreqis) {
+    char s[256];
+    cpufreqis >> readline(s, sizeof(s));      
+    
+    int khz;
+    int n = sscanf(s, "%d", &khz);
+    
+    if (n == 1) {
+      hz = khz * 1000.0;
+      return hz;
+    }
+  }
+  
+  istream is("/proc/cpuinfo");
+  
+  if (!is) {
+    cerr << "get_core_freq_hz(): warning: cannot open /proc/cpuinfo. Is this a Linux machine?", endl;
+    return hz;
+  }
+  
+  while (is) {
+    char s[256];
+    is >> readline(s, sizeof(s));
+    
+    int mhz;
+    int n = sscanf(s, "cpu MHz : %d", &mhz);
+    if (n == 1) {
+      hz = (W64)mhz * 1000000;
+      return hz;
+    }
+  }
+
+  // Can't read either of these procfiles: abort
+  abort();
+  return 0;
+}
+
+//
 // Injection into target process
 //
 

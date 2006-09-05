@@ -1335,7 +1335,11 @@ void BasicBlockCache::invalidate(const RIPVirtPhys& rvp, int reason) {
 int BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
   BasicBlockChunkList* pagelist = bbpages.get(mfn);
 
-  //static const bool log_code_page_ops = 0;
+  //
+  // We may try to invalidate the special invalid mfn if SMC
+  // occurs on a page where the high virtual page is invalid. 
+  //
+  if (mfn == RIPVirtPhys::INVALID) return 0;
 
   if (logable(3) | log_code_page_ops) logfile << "Invalidate page mfn ", mfn, ": pagelist ", pagelist, " has ", (pagelist ? pagelist->count() : 0), " entries (dirty? ", smc_isdirty(mfn), ")", endl;
 
@@ -1706,7 +1710,7 @@ ostream& printflags(ostream& os, W64 flags) {
 }
 
 BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
-  if unlikely (rip == config.start_log_at_rip) {
+  if unlikely ((rip == config.start_log_at_rip) && (rip != 0xffffffffffffffffULL)) {
     config.start_log_at_iteration = 0;
     logenable = 1;
   }

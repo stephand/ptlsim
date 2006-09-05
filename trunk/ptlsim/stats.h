@@ -121,6 +121,7 @@ struct PTLsimStats { // rootnode:
   struct ooocore {
     struct fetch {
       struct stop { // node: summable
+        W64 stalled;
         W64 icache_miss;
         W64 fetchq_full;
         W64 bogus_rip;

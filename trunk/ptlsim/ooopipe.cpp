@@ -157,63 +157,6 @@ static byte bit_indices_set_8bits[1<<8][8] = {
   {1, 2, 3, 4, 5, 6, 7, 1}, {0, 1, 2, 3, 4, 5, 6, 7},
 };
 
-//
-// Physical Register Recycling Complications
-//
-// Consider the following scenario:
-//
-// - uop U3 is renamed and found to depend on physical register R from an earlier uop U1.
-// - U1 commits to architectural register A and moves R to the arch state
-// - U2, which updates the same architectural register A as U1, also commits. Since the
-//   mapping of A is being logically overwritten by U2, U1's physical register R is freed.
-// - U3 finally issues, but finds that operand physical register R for U1 no longer exists.
-//
-// Additionally, in x86 processors the flags attached to a given physical register may 
-// be referenced by three additional rename table entries (for ZAPS, CF, OF) so simply
-// freeing the old physical register mapping when the RRT is updated doesn't work.
-//
-// For these reasons, we need to prevent U2's register from being freed if it is still
-// referenced by anything still in the pipeline; the normal reorder buffer mechanism
-// cannot always handle this situation in a very long pipeline.
-//
-// The solution is to give each physical register a reference counter. As each uop operand
-// is renamed, the counter for the corresponding physical register is incremented. As each
-// uop commits, the counter for each of its operands is decremented, but the counter for
-// the target physical register itself is incremented before that register is moved to
-// the arch state during commitment (since the committed state now owns that register).
-//
-// As we update the committed RRT during the commit stage, the old register R mapped
-// to the destination architectural register A of the uop being committed is examined.
-// The register R is only moved to the free state iff its reference counter is zero.
-// Otherwise, it is moved to the pendingfree state. The hardware examines all counters
-// every cycle and moves physical registers to the free state only when their counters
-// become zero and they are in the pendingfree state.
-//
-// An additional complication arises for x86 since we maintain three separate rename 
-// table entries for the ZAPS, CF, OF flags in addition to the register rename table
-// entry. Therefore, each speculative RRT and commit RRT entry adds to the refcount.
-//
-// Hardware Implementation
-//
-// The hardware implementation of this scheme is straightforward and low complexity.
-// The counters can have a very small number of bits since it is very unlikely a given
-// physical register would be referenced by all 100+ uops in the ROB; 3 bits should be
-// enough to handle the typical maximum of < 8 uops sharing a given operand. Counter
-// overflows can simply stall renaming or flush the pipeline since they are so rare.
-//
-// The counter table can be updated in bulk each cycle by adding/subtracting the
-// appropriate sum or just adding zero if the corresponding register wasn't used.
-// Since there are several stages between renaming and commit, the same counter is never
-// both incremented and decremented in the same cycle, so race conditions are not an 
-// issue. 
-//
-// In real processors, the Pentium 4 uses a scheme similar to this one but uses bit
-// vectors instead. For smaller physical register files, this may be a better solution.
-// Each physical register has a bit vector with one bit per ROB entry. If a given
-// physical register P is still used by ROB entry E in the pipeline, P's bit vector
-// bit R is set. Register P cannot be freed until all bits in its vector are zero.
-//
-
 const byte archdest_is_visible[TRANSREG_COUNT] = {
   // Integer registers
   1, 1, 1, 1, 1, 1, 1, 1,
@@ -232,7 +175,7 @@ const byte archdest_is_visible[TRANSREG_COUNT] = {
   0, 0, 0, 0, 0, 0, 0, 0,
 };
 
-const byte archdest_can_rename[TRANSREG_COUNT] = {
+const byte archdest_can_commit[TRANSREG_COUNT] = {
   // Integer registers
   1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1,
@@ -270,16 +213,16 @@ W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
 
 #ifdef UNIFIED_INT_FP_PHYS_REG_FILE
   return
-    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
-    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
-    PHYS_REG_FILE_MASK_INT;
+    (c & OPCLASS_STORE) ? OutOfOrderCore::PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? OutOfOrderCore::PHYS_REG_FILE_MASK_BR :
+    OutOfOrderCore::PHYS_REG_FILE_MASK_INT;
 #else
   return
-    (c & OPCLASS_STORE) ? PHYS_REG_FILE_MASK_ST :
-    (c & OPCLASS_BRANCH) ? PHYS_REG_FILE_MASK_BR :
-    (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? PHYS_REG_FILE_MASK_INT : PHYS_REG_FILE_MASK_FP) :
-    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_ctx)) ? PHYS_REG_FILE_MASK_FP :
-    PHYS_REG_FILE_MASK_INT;
+    (c & OPCLASS_STORE) ? OutOfOrderCore::PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? OutOfOrderCore::PHYS_REG_FILE_MASK_BR :
+    (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? OutOfOrderCore::PHYS_REG_FILE_MASK_INT : OutOfOrderCore::PHYS_REG_FILE_MASK_FP) :
+    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_ctx)) ? OutOfOrderCore::PHYS_REG_FILE_MASK_FP :
+    OutOfOrderCore::PHYS_REG_FILE_MASK_INT;
 #endif
 }
 
@@ -323,8 +266,6 @@ void OutOfOrderCore::flush_pipeline(W64 realrip) {
   stores_in_flight = 0;
 
   foreach (i, PHYS_REG_FILE_COUNT) physregfiles[i].reset();
-  commitrrt.reset();
-  specrrt.reset();
 
   foreach_issueq(reset(coreid));
 
@@ -421,6 +362,10 @@ void OutOfOrderCore::external_to_core_state() {
 #endif
 }
 
+//
+// Re-dispatch all uops in the ROB that have not yet generated
+// a result or are otherwise stalled.
+//
 void OutOfOrderCore::redispatch_deadlock_recovery() {
   if (logable(6)) {
     logfile << padstring("", 20), " recovr all recover from deadlock", endl;
@@ -469,14 +414,37 @@ void OutOfOrderCore::redispatch_deadlock_recovery() {
 //
 // Fetch Stage
 //
+// Fetch a stream of x86 instructions from the L1 i-cache along predicted
+// branch paths.
+//
+// Internally, up to N uops per clock corresponding to instructions in
+// the current basic block are fetched per cycle and placed in the uopq
+// as TransOps. When we run out of uops in one basic block, we proceed
+// to lookup or translate the next basic block.
+//
+
+//
+// Used to debug crashes when cycle to start logging can't be determined:
+//
+W64 fetch_bb_address_ringbuf[64];
+W64 fetch_bb_address_ringbuf_head = 0;
+
+void print_fetch_bb_address_ringbuf(ostream& os) {
+  os << "Head: ", fetch_bb_address_ringbuf_head, endl;
+  foreach (i, lengthof(fetch_bb_address_ringbuf)) {
+    int j = (fetch_bb_address_ringbuf_head + i) % lengthof(fetch_bb_address_ringbuf);
+    Waddr addr = fetch_bb_address_ringbuf[j];
+    os << "  ", intstring(i, 16), ": ", (void*)addr, endl;
+  }
+}
+
 void OutOfOrderCore::fetch() {
   int fetchcount = 0;
   int taken_branch_count = 0;
 
-  start_timer(ctfetch);
-
   if unlikely (stall_frontend) {
     if (logable(6)) logfile << padstring("", 20), " fetch  frontend stalled", endl;
+    stats.ooocore.fetch.stop.stalled++;
     return;
   }
 
@@ -496,12 +464,14 @@ void OutOfOrderCore::fetch() {
       break;
     }
 
-    if unlikely (fetchrip == config.start_log_at_rip) {
+    if unlikely ((fetchrip == config.start_log_at_rip) && (fetchrip != 0xffffffffffffffffULL)) {
       config.start_log_at_iteration = 0;
       logenable = 1;
     }
 
     if unlikely ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
+      fetch_bb_address_ringbuf[fetch_bb_address_ringbuf_head] = fetchrip;
+      fetch_bb_address_ringbuf_head = add_index_modulo(fetch_bb_address_ringbuf_head, +1, lengthof(fetch_bb_address_ringbuf));
       fetch_or_translate_basic_block(ctx, fetchrip);
     }
 
@@ -580,6 +550,12 @@ void OutOfOrderCore::fetch() {
       stats.ooocore.fetch.user_insns++;
     }
 
+    if unlikely (isclass(transop.opcode, OPCLASS_BARRIER)) {
+      // We've hit an assist: stall the frontend until we resume or redirect
+      if (logable(6)) logfile << padstring("", 20), " fetch  rip ", fetchrip, ": branch into assist microcode: ", transop, endl;
+      stall_frontend = 1;      
+    }
+
     stats.ooocore.fetch.uops++;
 
     Waddr predrip = 0;
@@ -620,8 +596,6 @@ void OutOfOrderCore::fetch() {
     } else if unlikely (isclass(transop.opcode, OPCLASS_INDIR_BRANCH)) {
       transop.riptaken = predrip;
       transop.ripseq = predrip;
-    } else if unlikely (isclass(transop.opcode, OPCLASS_UNCOND_BRANCH)) { // unconditional branches need no special handling
-      assert(predrip == transop.riptaken);
     }
 
     stats.ooocore.fetch.opclass[opclassof(transop.opcode)]++;
@@ -661,7 +635,6 @@ void OutOfOrderCore::fetch() {
 
   stats.ooocore.fetch.stop.full_width += (fetchcount == FETCH_WIDTH);
   stats.ooocore.fetch.width[fetchcount]++;
-  stop_timer(ctfetch);
 }
 
 BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const RIPVirtPhys& rvp) {  
@@ -670,10 +643,8 @@ BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const R
   if likely (bb) {
     current_basic_block = bb;
   } else {
-    start_timer(cttrans);
     current_basic_block = bbcache.translate(ctx, rvp);
     assert(current_basic_block);
-    stop_timer(cttrans);
     
     if (logable(6)) logfile << padstring("", 20), " xlate  rip ", rvp, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
   }
@@ -692,8 +663,6 @@ BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const R
 //
 void OutOfOrderCore::rename() {
   int prepcount = 0;
-
-  start_timer(ctrename);
 
   while (prepcount < FRONTEND_WIDTH) {
     if unlikely (fetchq.empty()) {
@@ -862,7 +831,7 @@ void OutOfOrderCore::rename() {
       logfile << "; renamed";
     }
 
-    if likely (archdest_can_rename[transop.rd]) {
+    if likely (archdest_can_commit[transop.rd]) {
       if (logable(6)) logfile << " ", arch_reg_names[transop.rd], " (old r", specrrt[transop.rd]->index(), ")";
 
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
@@ -932,14 +901,10 @@ void OutOfOrderCore::rename() {
   }
 
   stats.ooocore.frontend.width[prepcount]++;
-
-  stop_timer(ctrename);
 }
 
 void OutOfOrderCore::frontend() {
   ReorderBufferEntry* rob;
-  
-  start_timer(ctfrontend);
   
   foreach_list_mutable(rob_frontend_list, rob, entry, nextentry) {
     if unlikely (rob->cycles_left <= 0) {
@@ -951,8 +916,6 @@ void OutOfOrderCore::frontend() {
     
     rob->cycles_left--;
   }
-  
-  stop_timer(ctfrontend);
 }
 
 //
@@ -1073,9 +1036,11 @@ int ReorderBufferEntry::select_cluster() {
   return cluster;
 }
 
+//
+// Dispatch any uops in the rob_ready_to_dispatch_list by locating
+// their source operands and adding entries to the issue queues.
+//
 int OutOfOrderCore::dispatch() {
-  start_timer(ctdispatch);
-
   int dispatchcount = 0;
 
   ReorderBufferEntry* rob;
@@ -1123,8 +1088,6 @@ int OutOfOrderCore::dispatch() {
 
   stats.ooocore.dispatch.width[dispatchcount]++;
 
-  stop_timer(ctdispatch);
-
   if likely (dispatchcount) {
     dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
   } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
@@ -1141,14 +1104,79 @@ int OutOfOrderCore::dispatch() {
 }
 
 //
+// Issue Stage
+// (see oooexec.cpp for issue stages)
+//
+
+//
+// Complete Stage
+//
+// Process any ROB entries that just finished producing a result, forwarding
+// data within the same cluster directly to the waiting instructions.
+//
+// Note that we use the target physical register as a temporary repository
+// for the data. In a modern hardware implementation, this data would exist
+// only "on the wire" such that back to back ALU operations within a cluster
+// can occur using local forwarding.
+//
+int OutOfOrderCore::complete(int cluster) {
+  int completecount = 0;
+  ReorderBufferEntry* rob;
+
+  // 
+  // Check the list of issued ROBs. If a given ROB is complete (i.e., is ready
+  // for writeback and forwarding), move it to rob_completed_list.
+  //
+  foreach_list_mutable(rob_issued_list[cluster], rob, entry, nextentry) {
+    rob->cycles_left--;
+
+    if unlikely (rob->cycles_left <= 0) {
+      if (logable(6)) {
+        stringbuf rdstr; print_value_and_flags(rdstr, rob->physreg->data, rob->physreg->flags);
+        logfile << intstring(rob->uop.uuid, 20), " complt rob ", intstring(rob->index(), -3), " on ", padstring(FU[rob->fu].name, -4), ": r", intstring(rob->physreg->index(), -3), " = ", rdstr, endl;
+      }
+
+      rob->changestate(rob_completed_list[cluster]);
+      rob->physreg->complete();
+      rob->forward_cycle = 0;
+      rob->fu = 0;
+      completecount++;
+    }
+  }
+
+  return 0;
+}
+
+//
+// Transfer Stage
+//
+// Process ROBs in flight between completion and global forwarding/writeback.
+//
+int OutOfOrderCore::transfer(int cluster) {
+  int wakeupcount = 0;
+  ReorderBufferEntry* rob;
+
+  foreach_list_mutable(rob_completed_list[cluster], rob, entry, nextentry) {
+    rob->forward();
+    rob->forward_cycle++;
+    if unlikely (rob->forward_cycle > MAX_FORWARDING_LATENCY) {
+      rob->forward_cycle = MAX_FORWARDING_LATENCY;
+      rob->changestate(rob_ready_to_writeback_list[rob->cluster]);
+    }
+  }
+
+  return 0;
+}
+
+//
 // Writeback Stage
+//
+// Writeback at most WRITEBACK_WIDTH ROBs on rob_ready_to_writeback_list.
 //
 int OutOfOrderCore::writeback(int cluster) {
   int writecount = 0;
   int wakeupcount = 0;
   ReorderBufferEntry* rob;
-
-  start_timer(ctwriteback);
 
   foreach_list_mutable(rob_ready_to_writeback_list[cluster], rob, entry, nextentry) {
     if unlikely (writecount >= WRITEBACK_WIDTH)
@@ -1214,20 +1242,75 @@ int OutOfOrderCore::writeback(int cluster) {
 
   per_cluster_stats_update(stats.ooocore.writeback.width, cluster, [writecount]++);
 
-  stop_timer(ctwriteback);
-
   return writecount;
 }
 
 //
 // Commit Stage
 //
+// Commit at most COMMIT_WIDTH ready to commit instructions from ROB queue,
+// and commits any stores by writing to the L1 cache with write through.
+//
+// Returns:
+//    -1 if we are supposed to abort the simulation
+//  >= 0 for the number of instructions actually committed
+//
+// Physical Register Recycling Complications
+//
+// Consider the following scenario:
+//
+// - uop U3 is renamed and found to depend on physical register R from an earlier uop U1.
+// - U1 commits to architectural register A and moves R to the arch state
+// - U2, which updates the same architectural register A as U1, also commits. Since the
+//   mapping of A is being logically overwritten by U2, U1's physical register R is freed.
+// - U3 finally issues, but finds that operand physical register R for U1 no longer exists.
+//
+// Additionally, in x86 processors the flags attached to a given physical register may 
+// be referenced by three additional rename table entries (for ZAPS, CF, OF) so simply
+// freeing the old physical register mapping when the RRT is updated doesn't work.
+//
+// For these reasons, we need to prevent U2's register from being freed if it is still
+// referenced by anything still in the pipeline; the normal reorder buffer mechanism
+// cannot always handle this situation in a very long pipeline.
+//
+// The solution is to give each physical register a reference counter. As each uop operand
+// is renamed, the counter for the corresponding physical register is incremented. As each
+// uop commits, the counter for each of its operands is decremented, but the counter for
+// the target physical register itself is incremented before that register is moved to
+// the arch state during commitment (since the committed state now owns that register).
+//
+// As we update the committed RRT during the commit stage, the old register R mapped
+// to the destination architectural register A of the uop being committed is examined.
+// The register R is only moved to the free state iff its reference counter is zero.
+// Otherwise, it is moved to the pendingfree state. The hardware examines all counters
+// every cycle and moves physical registers to the free state only when their counters
+// become zero and they are in the pendingfree state.
+//
+// An additional complication arises for x86 since we maintain three separate rename 
+// table entries for the ZAPS, CF, OF flags in addition to the register rename table
+// entry. Therefore, each speculative RRT and commit RRT entry adds to the refcount.
+//
+// Hardware Implementation
+//
+// The hardware implementation of this scheme is straightforward and low complexity.
+// The counters can have a very small number of bits since it is very unlikely a given
+// physical register would be referenced by all 100+ uops in the ROB; 3 bits should be
+// enough to handle the typical maximum of < 8 uops sharing a given operand. Counter
+// overflows can simply stall renaming or flush the pipeline since they are so rare.
+//
+// The counter table can be updated in bulk each cycle by adding/subtracting the
+// appropriate sum or just adding zero if the corresponding register wasn't used.
+// Since there are several stages between renaming and commit, the same counter is never
+// both incremented and decremented in the same cycle, so race conditions are not an 
+// issue. 
+//
+// In real processors, the Pentium 4 uses a scheme similar to this one but uses bit
+// vectors instead. For smaller physical register files, this may be a better solution.
+// Each physical register has a bit vector with one bit per ROB entry. If a given
+// physical register P is still used by ROB entry E in the pipeline, P's bit vector
+// bit R is set. Register P cannot be freed until all bits in its vector are zero.
+//
 int OutOfOrderCore::commit() {
-  //
-  // See notes above on Physical Register Recycling Complications
-  //
-  start_timer(ctcommit);
-
   foreach (rfid, PHYS_REG_FILE_COUNT) {
     StateList& statelist = physregfiles[rfid].states[PHYSREG_PENDINGFREE];
     PhysicalRegister* physreg;
@@ -1257,7 +1340,6 @@ int OutOfOrderCore::commit() {
       commitcount++;
       last_commit_at_cycle = sim_cycle;
       if (total_user_insns_committed >= config.stop_at_user_insns) {
-        stop_timer(ctcommit);
         rc = COMMIT_RESULT_STOP;
         break;
       }
@@ -1268,9 +1350,10 @@ int OutOfOrderCore::commit() {
 
   stats.ooocore.commit.width[commitcount]++;
 
-  stop_timer(ctcommit);
   return rc;
 }
+
+extern W64 last_guest_rip_triggering_walk;
 
 int ReorderBufferEntry::commit() {
   OutOfOrderCore& core = coreof(coreid);
@@ -1310,9 +1393,32 @@ int ReorderBufferEntry::commit() {
       break;
     }
 
-    if unlikely (subrob.has_exception()) {
-      core.ctx.exception = subrob.physreg->data;
+    if unlikely (subrob.physreg->flags & FLAG_INV) {
+      //
+      // The exception is definitely going to happen, since the
+      // excepting instruction is at the head of the ROB. However,
+      // we don't know which uop within the instruction actually
+      // had the problem, e.g. if it's a load-alu-store insn, the
+      // load is OK but the store has PageFaultOnWrite. We take
+      // the first exception in uop order.
+      //
+      core.ctx.exception = LO32(subrob.physreg->data);
+      core.ctx.error_code = HI32(subrob.physreg->data);
+#ifdef PTLSIM_HYPERVISOR
+      // Capture the faulting virtual address for page faults
+      if ((core.ctx.exception == EXCEPTION_PageFaultOnRead) |
+          (core.ctx.exception == EXCEPTION_PageFaultOnWrite)) {
+        core.ctx.cr2 = subrob.origvirt;
+      }
+#endif
+
       macro_op_has_exceptions = true;
+
+      if (logable(6)) {
+        logfile << intstring(subrob.uop.uuid, 20), " excdet rob ", intstring(subrob.index(), -3),
+          " exception ", exception_name(ctx.exception), " (", ctx.exception, "), error code ", hexstring(core.ctx.error_code, 16), 
+          ", cr2 ", (void*)(Waddr)core.ctx.cr2, endl;
+      }
       break;
     }
     
@@ -1459,6 +1565,8 @@ int ReorderBufferEntry::commit() {
     smc_setdirty(mfn);
 #ifdef PERFECT_CACHE
     if (lsq->bytemask) {
+      last_guest_rip_triggering_walk = uop.rip;
+      barrier();
       storemask(lsq->physaddr << 3, lsq->data, lsq->bytemask);
     }
 #else
@@ -1564,7 +1672,7 @@ int ReorderBufferEntry::commit() {
   core.ROB.commit(*this);
 
   if unlikely (isclass(uop.opcode, OPCLASS_BARRIER)) {
-    if (logable(6)) logfile << intstring(uop.uuid, 20), " commit barrier: jump to microcode address ", hexstring(uop.riptaken, 48), endl;
+    if (logable(6)) logfile << intstring(uop.uuid, 20), " commit barrier: jump to microcode address ", (void*)uop.riptaken, endl;
     stats.ooocore.commit.result.barrier++;
     return COMMIT_RESULT_BARRIER;
   }

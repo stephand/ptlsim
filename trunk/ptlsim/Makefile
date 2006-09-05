@@ -18,7 +18,7 @@ endif
 #
 # (Presently this is an experimental x86-64 only feature!)
 #
-PTLSIM_HYPERVISOR=1
+# PTLSIM_HYPERVISOR=1
 
 CC = g++
 

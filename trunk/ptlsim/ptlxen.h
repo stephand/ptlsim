@@ -470,9 +470,11 @@ extern "C" {
 struct PTLsimConfig {
   W64 domain;
   bool run;
+  bool stop;
   bool native;
-  bool pause;
   bool kill;
+
+  bool pause;
   stringbuf core_name;
 
   W64 clock_adj_factor;

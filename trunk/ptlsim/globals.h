@@ -6,8 +6,8 @@
 // GNU General Public License, Version 2.
 //
 
-#ifndef _GLOBALS_H
-#define _GLOBALS_H
+#ifndef _GLOBALS_H_
+#define _GLOBALS_H_
 
 extern "C" {
 #include <sys/ptrace.h>
@@ -705,4 +705,4 @@ ostream& operator ,(ostream& os, const vec8w& v);
 
 #endif // __cplusplus
 
-#endif // _GLOBALS_H
+#endif // _GLOBALS_H_

@@ -103,6 +103,24 @@ void PhysicalRegisterFile::init(const char* name, int coreid, int rfid, int size
   }
 }
 
+PhysicalRegister* PhysicalRegisterFile::alloc(int r) {
+  PhysicalRegister* physreg = (PhysicalRegister*)((r >= 0) ? states[PHYSREG_FREE].remove(&(*this)[r]) : states[PHYSREG_FREE].dequeue());
+  if unlikely (!physreg) return null;
+  physreg->state = PHYSREG_NONE;
+  physreg->changestate(PHYSREG_WAITING);
+  physreg->flags = FLAG_WAIT;
+  allocations++;
+  return physreg;
+}
+
+ostream& PhysicalRegisterFile::print(ostream& os) const {
+  os << "PhysicalRegisterFile<", name, ", rfid ", rfid, ", size ", size, ">:", endl;
+  foreach (i, size) {
+    os << (*this)[i], endl;
+  }
+  return os;
+}
+
 void PhysicalRegisterFile::reset() {
   foreach (i, MAX_PHYSREG_STATE) {
     states[i].reset();
@@ -128,73 +146,14 @@ ostream& operator <<(ostream& os, const PhysicalRegister& physreg) {
   return os;
 }
 
-//
-// Process any ROB entries that just finished producing a result, forwarding
-// data within the same cluster directly to the waiting instructions.
-//
-// Note that we use the target physical register as a temporary repository
-// for the data. In a modern hardware implementation, this data would exist
-// only "on the wire" such that back to back ALU operations within a cluster
-// can occur using local forwarding.
-//
-
-CycleTimer ctcomplete;
-
-int OutOfOrderCore::complete(int cluster) {
-  int completecount = 0;
-  ReorderBufferEntry* rob;
-
-  start_timer(ctcomplete);
-
-  // 
-  // Check the list of issued ROBs. If a given ROB is complete (i.e., is ready
-  // for writeback and forwarding), move it to rob_completed_list.
-  //
-  foreach_list_mutable(rob_issued_list[cluster], rob, entry, nextentry) {
-    rob->cycles_left--;
-
-    if unlikely (rob->cycles_left <= 0) {
-      if (logable(6)) {
-        stringbuf rdstr; print_value_and_flags(rdstr, rob->physreg->data, rob->physreg->flags);
-        logfile << intstring(rob->uop.uuid, 20), " complt rob ", intstring(rob->index(), -3), " on ", padstring(FU[rob->fu].name, -4), ": r", intstring(rob->physreg->index(), -3), " = ", rdstr, endl;
-      }
-
-      rob->changestate(rob_completed_list[cluster]);
-      rob->physreg->complete();
-      rob->forward_cycle = 0;
-      rob->fu = 0;
-      completecount++;
-    }
+ostream& RegisterRenameTable::print(ostream& os) const {
+  foreach (i, TRANSREG_COUNT) {
+    if ((i % 8) == 0) os << " ";
+    os << " ", padstring(arch_reg_names[i], -6), " r", intstring((*this)[i]->index(), -3), " | ";
+    if (((i % 8) == 7) || (i == TRANSREG_COUNT-1)) os << endl;
   }
-
-  stop_timer(ctcomplete);
-  return 0;
+  return os;
 }
-
-//
-// Process ROBs in flight between completion and global forwarding/writeback.
-//
-
-int OutOfOrderCore::transfer(int cluster) {
-  int wakeupcount = 0;
-  ReorderBufferEntry* rob;
-
-  start_timer(cttransfer);
-
-  foreach_list_mutable(rob_completed_list[cluster], rob, entry, nextentry) {
-    rob->forward();
-    rob->forward_cycle++;
-    if unlikely (rob->forward_cycle > MAX_FORWARDING_LATENCY) {
-      rob->forward_cycle = MAX_FORWARDING_LATENCY;
-      rob->changestate(rob_ready_to_writeback_list[rob->cluster]);
-    }
-  }
-
-  stop_timer(cttransfer);
-
-  return 0;
-}
-
 
 //
 // Execute one cycle of the entire core state machine
@@ -216,8 +175,8 @@ bool OutOfOrderCore::runcycle() {
   for_each_cluster(i) { issue(i); complete(i); }
     
   int dispatchrc = dispatch();
-    
-  if likely ((!stall_frontend) && (dispatchrc >= 0)) {
+
+  if likely (dispatchrc >= 0) {
     frontend();
     rename();
     fetch();
@@ -288,10 +247,10 @@ void ReorderBufferEntry::reset() {
 }
 
 bool ReorderBufferEntry::ready_to_issue() const {
-  bool raready = operand_ready(0);
-  bool rbready = operand_ready(1);
-  bool rcready = operand_ready(2);
-  bool rsready = operand_ready(3);
+  bool raready = operands[0]->ready();
+  bool rbready = operands[1]->ready();
+  bool rcready = operands[2]->ready();
+  bool rsready = operands[3]->ready();
   
   if (isstore(uop.opcode)) {
     return (load_store_second_phase) ? (raready & rbready & rcready & rsready) : (raready & rbready);
@@ -314,15 +273,9 @@ StateList& ReorderBufferEntry::get_ready_to_issue_list() const {
     core.rob_ready_to_issue_list[cluster];
 }
 
-bool ReorderBufferEntry::has_exception() const {
-  return ((physreg->flags & FLAG_INV) != 0);
-}
-
-bool ReorderBufferEntry::operand_ready(int operand) const {
-  return operands[operand]->ready();
-}
-
-
+//
+// Reorder Buffer
+//
 stringbuf& ReorderBufferEntry::get_operand_info(stringbuf& sb, int operand) const {
   PhysicalRegister& physreg = *operands[operand];
   ReorderBufferEntry& sourcerob = *physreg.rob;
@@ -413,7 +366,7 @@ void OutOfOrderCore::log_forwarding(const ReorderBufferEntry* source, const Reor
     " => ", "uuid ", target->uop.uuid, " rob ", target->index(), " (", clusters[target->cluster].name, ") r", target->physreg->index(), " operand ", operand;
   if (isstore(target->uop.opcode)) logfile << " => st", target->lsq->index();
   logfile << " [still waiting?";
-  foreach (i, MAX_OPERANDS) { if (!target->operand_ready(i)) logfile << " r", (char)('a' + i); }
+  foreach (i, MAX_OPERANDS) { if (!target->operands[i]->ready()) logfile << " r", (char)('a' + i); }
   if (target->ready_to_issue()) logfile << " READY";
   logfile << "]";
   logfile << endl;
@@ -612,7 +565,6 @@ bool OutOfOrderCore::handle_exception() {
     ctx.commitarf[REG_rip] = chk_recovery_rip;
     if (logable(6)) logfile << "SkipBlock pseudo-exception: skipping to ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
     flush_pipeline(ctx.commitarf[REG_rip]);
-    cttotal.start();
     return true;
   }
 
@@ -715,7 +667,7 @@ struct OutOfOrderMachine: public PTLsimMachine {
       logfile << "cores[", i, "] = ", cores[i], " (size ", sizeof(OutOfOrderCore), ", issueq at ", &cores[i]->issueq_int0, endl;
       cores[i]->init();
       //
-      // Note: in a real cycle accurate model, config may
+      // Note: in a multi-processor model, config may
       // specify various ways of slicing contextcount up
       // into threads, cores and sockets; the appropriate
       // interconnect and cache hierarchy parameters may
@@ -751,6 +703,11 @@ struct OutOfOrderMachine: public PTLsimMachine {
     }
 
     W64 last_printed_status_at_cycle = 0;
+    W64 last_printed_status_at_user_insn = 0;
+    CycleTimer ctprint;
+    ctprint.start();
+    ctprint.stop();
+
     bool exiting = false;
 
     while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
@@ -759,12 +716,26 @@ struct OutOfOrderMachine: public PTLsimMachine {
         logenable = 1;
       }
 
-      if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 1000000) {
-        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " total commits", endl, flush;
+      if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 2000000) {
+        ctprint.stop();
+        double seconds = ctprint.seconds();
+        double cycles_per_sec = (sim_cycle - last_printed_status_at_cycle) / seconds;
+        double insns_per_sec = (total_user_insns_committed - last_printed_status_at_user_insn) / seconds;
+
+        stringbuf sb;
+        sb << "Completed ", intstring(sim_cycle, 13), " cycles, ", intstring(total_user_insns_committed, 13), " commits: ", 
+          intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
+        //(delta ", (sim_cycle - last_printed_status_at_cycle), " cycles, ", ((W64)(seconds * 1000)), " msec, ", W64(CycleTimer::gethz()), " hz)";
+
+        logfile << sb, endl, flush;
+        cerr << "\r  ", sb, flush;
+
         last_printed_status_at_cycle = sim_cycle;
+        last_printed_status_at_user_insn = total_user_insns_committed;
+        ctprint.reset();
+        ctprint.start();
       }
 
-      //if (logable(6)) logfile << "Cycle ", sim_cycle, ((stall_frontend) ? " (frontend stalled)" : ""), ": commit rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
       if (logable(6)) logfile << "Cycle ", sim_cycle, ":", endl;
 
       inject_events();
@@ -788,7 +759,8 @@ struct OutOfOrderMachine: public PTLsimMachine {
       if unlikely (exiting) break;
     }
 
-    logfile << "Exiting sequential mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
+    cerr << endl, flush;
+    logfile << "Exiting out of order mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
 
     foreach (i, contextcount) {
       OutOfOrderCore& core =* cores[i];

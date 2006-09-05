@@ -17,6 +17,8 @@ typedef unsigned long pte_t;
 #define PML4_SHIFT (12+9+9+9)
 #define PTLSIM_VIRT_BASE 0xffffff0000000000ULL // PML4 entry 510
 #define PHYS_VIRT_BASE   0xfffffe0000000000ULL // PML4 entry 508 (enough for 2^39 bytes physical RAM)
+#define PTLSIM_RESERVED_VIRT_BASE 0xfffffe0000000000ULL // Start of guest-inaccessible PTLsim region
+#define PTLSIM_RESERVED_VIRT_END  0xffffff7fffffffffULL // End of guest-inaccessible PTLsim region
 // PML4 entry 511 is usually occupied by Linux itself
 
 #define virt_is_inside_ptlsim(x) ((((W64)(x)) >> PML4_SHIFT) == (PTLSIM_VIRT_BASE >> PML4_SHIFT))

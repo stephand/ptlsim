@@ -180,12 +180,13 @@ ostream& IssueQueue<size, operandcount>::print(ostream& os) const {
 // Instantiate all methods in the specific IssueQueue sizes we're using:
 declare_issueq_templates;
 
-CycleTimer ctsubexec;
-CycleTimer ctload;
-CycleTimer ctstore;
-
 //
-// Issue the selected ROB
+// Issue a single ROB. 
+//
+// Returns:
+//  +1 if issue was successful
+//   0 if no functional unit was available
+//  -1 if there was an exception and we should stop issuing this cycle
 //
 int ReorderBufferEntry::issue() {
   OutOfOrderCore& core = coreof(coreid);
@@ -211,8 +212,6 @@ int ReorderBufferEntry::issue() {
     issueq_operation_on_cluster(core, cluster, replay(iqslot));
     return ISSUE_NEEDS_REPLAY;
   }
-
-  start_timer(ctsubexec);
 
   PhysicalRegister& ra = *operands[RA];
   PhysicalRegister& rb = *operands[RB];
@@ -292,9 +291,7 @@ int ReorderBufferEntry::issue() {
       state.reg.rddata = EXCEPTION_FloatingPointNotAvailable;
       state.reg.rdflags = FLAG_INV;
     } else if unlikely (ld|st) {
-      start_timer((ld ? ctload : ctstore));
-      int completed = (ld) ? issueload(*lsq, origvirt, radata, rbdata, rcdata, pteupdate) : issuestore(*lsq, origvirt, radata, rbdata, rcdata, operand_ready(2), pteupdate);
-      stop_timer((ld ? ctload : ctstore));
+      int completed = (ld) ? issueload(*lsq, origvirt, radata, rbdata, rcdata, pteupdate) : issuestore(*lsq, origvirt, radata, rbdata, rcdata, operands[2]->ready(), pteupdate);
       if unlikely (completed == ISSUE_MISSPECULATED) {
         stats.ooocore.issue.result.misspeculated++;
         return -1;
@@ -309,25 +306,14 @@ int ReorderBufferEntry::issue() {
         stats.ooocore.issue.result.replay++;
         return 0;
       }
-    } else if unlikely (br) {
-      state.brreg.riptaken = uop.riptaken;
-      state.brreg.ripseq = uop.ripseq;
-      uop.synthop(state, radata, rbdata, rcdata, ra.flags, rb.flags, rc.flags); 
-      /*
-        ++MTY CHECKME is fault rip at branch itself or target of branch?
-
-      if ((!isclass(uop.opcode, OPCLASS_BARRIER)) && (!asp.check((void*)(Waddr)state.reg.rddata, PROT_EXEC))) {
-        // bogus branch
-        state.reg.rdflags |= FLAG_INV;
-        state.reg.rddata = EXCEPTION_PageFaultOnExec;
-      }
-      */
     } else {
+      if unlikely (br) {
+        state.brreg.riptaken = uop.riptaken;
+        state.brreg.ripseq = uop.ripseq;
+      }
       uop.synthop(state, radata, rbdata, rcdata, ra.flags, rb.flags, rc.flags); 
     }
   }
-
-  stop_timer(ctsubexec);
 
   physreg->flags = state.reg.rdflags;
   physreg->data = state.reg.rddata;
@@ -524,6 +510,9 @@ void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
   exception = 0;
 
+  // For debugging use only:
+  // if (logable(6)) logfile << intstring(uop.uuid, 20), " adrgen", " rip ", (void*)(Waddr)uop.rip, ": origaddr ", (void*)(Waddr)origaddr, ", virtaddr ", (void*)(Waddr)addr, endl;
+
   void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, st, uop.internal, exception, pfec, pteupdate);
   return mapped;
 }
@@ -582,6 +571,21 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
   return true;
 }
 
+//
+// Stores have special dependency rules: they may issue as soon as operands ra and rb are ready,
+// even if rc (the value to store) or rs (the store buffer to inherit from) is not yet ready or
+// even known.
+//
+// After both ra and rb are ready, the store is moved to [ready_to_issue] as a first phase store.
+// When the store issues, it generates its physical address [ra+rb] and establishes an SFR with
+// the address marked valid but the data marked invalid.
+//
+// The sole purpose of doing this is to allow other loads and stores to create an rs dependency
+// on the SFR output of the store.
+//
+// The store is then marked as a second phase store, since the address has been generated.
+// When the store is replayed and rescheduled, it must now have all operands ready this time.
+//
 int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate) {
   OutOfOrderCore& core = coreof(coreid);
   int sizeshift = uop.size;
@@ -681,13 +685,32 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   }
 
   //
+  // Load/Store Aliasing Prevention
+  //
+  // We always issue loads as soon as possible even if some entries in the
+  // store queue have unresolved addresses. If a load gets erroneously
+  // issued before an earlier store in program order to the same address,
+  // this is considered load/store aliasing.
+  // 
+  // Aliasing is detected when stores issue: the load queue is scanned
+  // for earlier loads in program order which collide with the store's
+  // address. In this case all uops in program order after and including
+  // the store (and by extension, the colliding load) must be annulled.
+  //
+  // To keep this from happening repeatedly, whenever a collision is
+  // detected, the store looks up the rip of the colliding load and adds
+  // it to a small table called the LSAP (load/store alias predictor).
+  //
+  // Loads query the LSAP with the rip of the load; if a matching entry
+  // is found in the LSAP and the store address is unresolved, the load
+  // is not allowed to proceed.
+  //
   // Check all later loads in LDQ to see if any have already issued
   // and have already obtained their data but really should have 
   // depended on the data generated by this store. If so, mark the
   // store as invalid (EXCEPTION_LoadStoreAliasing) so it annuls
   // itself and the load after it in program order at commit time.
   //
-
   foreach_forward_after (core.LSQ, lsq, i) {
     LoadStoreQueueEntry& ldbuf = core.LSQ[i];
     //
@@ -811,6 +834,9 @@ static inline W64 extract_bytes(void* target, int SIZESHIFT, bool SIGNEXT) {
   return data;
 }
 
+extern W64 last_guest_rip_triggering_walk;
+extern W64 last_guest_uuid_triggering_walk;
+
 int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
   OutOfOrderCore& core = coreof(coreid);
   int sizeshift = uop.size;
@@ -842,6 +868,10 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   // cache lines around...
   //
 
+  last_guest_rip_triggering_walk = uop.rip;
+  last_guest_uuid_triggering_walk = uop.uuid;
+
+  barrier();
   W64 data = (annul) ? 0 : *((W64*)(Waddr)floor(signext64((Waddr)mapped, 48), 8));
 
   LoadStoreQueueEntry* sfra = null;
@@ -1160,11 +1190,12 @@ void ReorderBufferEntry::release() {
   iqslot = -1;
 }
 
+//
+// Process the ready to issue queue and issue as many ROBs as possible
+//
 int OutOfOrderCore::issue(int cluster) {
   int issuecount = 0;
   ReorderBufferEntry* rob;
-
-  start_timer(ctissue);
 
   int maxwidth = clusters[cluster].issue_width;
 
@@ -1187,8 +1218,6 @@ int OutOfOrderCore::issue(int cluster) {
   }
 
   per_cluster_stats_update(stats.ooocore.issue.width, cluster, [min(issuecount, MAX_ISSUE_WIDTH)]++);
-
-  stop_timer(ctissue);
 
   return issuecount;
 }
@@ -1249,12 +1278,8 @@ int ReorderBufferEntry::forward() {
 // being retained as occurs with mispredicted branches.
 //
 
-CycleTimer ctannul;
-
 W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_rip) {
   OutOfOrderCore& core = coreof(coreid);
-
-  start_timer(ctannul);
 
   int idx;
 
@@ -1412,8 +1437,6 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
   }
 
   assert(core.ROB[startidx].uop.som);
-
-  stop_timer(ctannul);
 
   if (return_first_annulled_rip) return core.ROB[startidx].uop.rip;
 

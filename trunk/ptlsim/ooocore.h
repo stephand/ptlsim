@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Out-of-Order Core Simulator Configuration
 //
-// Copyright 2003-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 // With these disabled, simulation is faster
@@ -71,8 +71,8 @@
 //
 // Load and Store Queues
 //
-#define LDQ_SIZE 40
-#define STQ_SIZE 24
+#define LDQ_SIZE 32
+#define STQ_SIZE 32
 
 //
 // Fetch
@@ -84,7 +84,7 @@
 // Frontend (Rename and Decode)
 //
 #define FRONTEND_WIDTH 4
-#define FRONTEND_STAGES 6
+#define FRONTEND_STAGES 1
 
 //
 // Dispatch
@@ -235,11 +235,6 @@ static inline ostream& operator <<(ostream& os, const IssueQueue<size, operandco
 
 #define foreach_list_mutable(L, obj, entry, nextentry) foreach_list_mutable_linktype(L, obj, entry, nextentry, selfqueuelink)
 
-//
-// Each ROB's state_link member can be linked into at most one of the
-// following rob_xxx_list lists at any given time; the ROB's current_state_list
-// points back to the list it belongs to.
-//
 struct StateList;
 
 struct ListOfStateLists: public array<StateList*, 64> {
@@ -370,12 +365,17 @@ struct OutOfOrderCore;
 struct PhysicalRegister;
 struct LoadStoreQueueEntry;
 
+//
+// Reorder Buffer (ROB) structure, used for tracking all uops in flight.
+// This same structure is used to represent both dispatched but not yet issued 
+// uops as well as issued uops.
+//
 struct ReorderBufferEntry: public selfqueuelink {
+  FetchBufferEntry uop;
   struct StateList* current_state_list;
   PhysicalRegister* physreg;
   PhysicalRegister* operands[MAX_OPERANDS];
   LoadStoreQueueEntry* lsq;
-  FetchBufferEntry uop;
   W16s idx;
   W16s cycles_left; // execution latency counter, decremented every cycle when executing
   W16s forward_cycle; // forwarding cycle after completion
@@ -400,13 +400,11 @@ struct ReorderBufferEntry: public selfqueuelink {
     if (place_at_head) newqueue.enqueue_after(this, prevrob); else newqueue.enqueue(this);
   }
 
-  bool operand_ready(int operand) const;
   void init(int idx);
   void reset();
   bool ready_to_issue() const;
   bool ready_to_commit() const;
   StateList& get_ready_to_issue_list() const;
-  bool has_exception() const;
   bool find_sources();
   int forward();
   int select_cluster();
@@ -433,12 +431,6 @@ struct ReorderBufferEntry: public selfqueuelink {
 static inline ostream& operator <<(ostream& os, const ReorderBufferEntry& rob) {
   return rob.print(os);
 }
-
-struct Cluster {
-  char* name;
-  W16 issue_width;
-  W32 fu_mask;
-};
 
 //
 // Load/Store Queue
@@ -486,9 +478,7 @@ static inline ostream& operator <<(ostream& os, const LoadStoreQueueEntry& lsq) 
 //
 // Physical Register File
 //
-
 struct PhysicalRegister: public selfqueuelink {
-public:
   ReorderBufferEntry* rob;
   W64 data;
   W16 flags;
@@ -501,7 +491,6 @@ public:
   W16s refcount;
 
   StateList& get_state_list(int state) const;
-
   StateList& get_state_list() const { return get_state_list(this->state); }
 
   void changestate(int newstate) {
@@ -519,7 +508,6 @@ public:
 
   void addref() { refcount++; }
   void unref() { refcount--; assert(refcount >= 0); }
-
   void addref(const ReorderBufferEntry& rob) { addref(); }
   void unref(const ReorderBufferEntry& rob) { unref(); }
   void addspecref(int archreg) { addref(); }
@@ -527,10 +515,8 @@ public:
   void addcommitref(int archreg) { addref(); }
   void uncommitref(int archreg) { unref(); }
   bool referenced() const { return (refcount > 0); }
-
   bool nonnull() const { return (index() != PHYS_REG_NULL); }
   bool allocated() const { return (state != PHYSREG_FREE); }
-
   void commit() { changestate(PHYSREG_ARCH); }
   void complete() { changestate(PHYSREG_BYPASS); }
   void writeback() { changestate(PHYSREG_WRITTEN); }
@@ -549,12 +535,8 @@ public:
   }
 
   int index() const { return idx; }
-
-  bool valid() const { return ((flags & FLAG_INV) == 0);  }
-
-  bool ready() const {
-    return ((flags & FLAG_WAIT) == 0);
-  }
+  bool valid() const { return ((flags & FLAG_INV) == 0); }
+  bool ready() const { return ((flags & FLAG_WAIT) == 0); }
 };
 
 ostream& operator <<(ostream& os, const PhysicalRegister& physreg);
@@ -571,68 +553,32 @@ struct PhysicalRegisterFile: public array<PhysicalRegister, MAX_PHYS_REG_FILE_SI
   PhysicalRegisterFile() { }
 
   PhysicalRegisterFile(const char* name, int coreid, int rfid, int size) {
-    init(name, coreid, rfid, size);
-    reset();
+    init(name, coreid, rfid, size); reset();
   }
 
   PhysicalRegisterFile& operator ()(const char* name, int coreid, int rfid, int size) {
-    init(name, coreid, rfid, size);
-    reset();
-    return *this;
+    init(name, coreid, rfid, size); reset(); return *this;
   }
 
   void init(const char* name, int coreid, int rfid, int size);
-
+  bool remaining() const { return (!states[PHYSREG_FREE].empty()); }
+  PhysicalRegister* alloc(int r = -1);
   void reset();
-
-  bool remaining() const {
-    return (!states[PHYSREG_FREE].empty());
-  }
-
-  PhysicalRegister* alloc(int r = -1) {
-    PhysicalRegister* physreg = (PhysicalRegister*)((r >= 0) ? states[PHYSREG_FREE].remove(&(*this)[r]): states[PHYSREG_FREE].dequeue());
-    if unlikely (!physreg) return null;
-    physreg->state = PHYSREG_NONE;
-    physreg->changestate(PHYSREG_WAITING);
-    physreg->flags = FLAG_WAIT;
-    allocations++;
-    return physreg;
-  }
-
-  ostream& print(ostream& os) const {
-    os << "PhysicalRegisterFile<", name, ", rfid ", rfid, ", size ", size, ">:", endl;
-    foreach (i, size) {
-      os << (*this)[i], endl;
-    }
-    return os;
-  }
+  ostream& print(ostream& os) const;
 };
 
 static inline ostream& operator <<(ostream& os, const PhysicalRegisterFile& physregs) {
   return physregs.print(os);
 }
 
+//
+// Register Rename Table
+//
 struct RegisterRenameTable: public array<PhysicalRegister*, TRANSREG_COUNT> {
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
   bitvec<TRANSREG_COUNT> renamed_in_this_basic_block;
 #endif
-
-  RegisterRenameTable() {
-    reset();
-  }
-  
-  void reset() {
-    // external_to_core_state() does this instead
-  }
-  
-  ostream& print(ostream& os) const {
-    foreach (i, TRANSREG_COUNT) {
-      if ((i % 8) == 0) os << " ";
-      os << " ", padstring(arch_reg_names[i], -6), " r", intstring((*this)[i]->index(), -3), " | ";
-      if (((i % 8) == 7) || (i == TRANSREG_COUNT-1)) os << endl;
-    }
-    return os;
-  }
+  ostream& print(ostream& os) const;
 };
 
 static inline ostream& operator <<(ostream& os, const RegisterRenameTable& rrt) {
@@ -647,12 +593,12 @@ enum {
 };
 
 enum {
-  COMMIT_RESULT_NONE = 0,
-  COMMIT_RESULT_OK = 1,
-  COMMIT_RESULT_EXCEPTION = 2,
-  COMMIT_RESULT_BARRIER = 3,
-  COMMIT_RESULT_SMC = 4,
-  COMMIT_RESULT_STOP = 5
+  COMMIT_RESULT_NONE = 0,   // no instructions committed: some uops not ready
+  COMMIT_RESULT_OK = 1,     // committed
+  COMMIT_RESULT_EXCEPTION = 2, // exception
+  COMMIT_RESULT_BARRIER = 3,// barrier; branch to microcode (brp uop)
+  COMMIT_RESULT_SMC = 4,    // self modifying code detected
+  COMMIT_RESULT_STOP = 5    // stop processor model (shutdown)
 };
 
 // Branch predictor outcomes:
@@ -661,12 +607,21 @@ enum { MISPRED = 0, CORRECT = 1 };
 //
 // Lookup tables (LUTs):
 //
+struct Cluster {
+  char* name;
+  W16 issue_width;
+  W32 fu_mask;
+};
+
 extern const Cluster clusters[MAX_CLUSTERS];
 extern byte uop_executable_on_cluster[OP_MAX_OPCODE];
 extern W32 forward_at_cycle_lut[MAX_CLUSTERS][MAX_FORWARDING_LATENCY+1];
-extern const byte archdest_can_rename[TRANSREG_COUNT];
+extern const byte archdest_can_commit[TRANSREG_COUNT];
 extern const byte archdest_is_visible[TRANSREG_COUNT];
 
+//
+// Out-of-order core
+//
 struct OutOfOrderCore {
   int coreid;
   Context& ctx;
@@ -676,13 +631,8 @@ struct OutOfOrderCore {
   ListOfStateLists lsq_states;
 
   //
-  // Reorder Buffer (ROB) structure, used for tracking all instructions in flight.
-  // This same structure is used to represent both dispatched but not yet issued 
-  // instructions (traditionally held in an instruction dispatch buffer, IDB) 
-  // as well as issued instructions. The descriptions below have much more
-  // detail on this.
+  // Issue Queues (one per cluster)
   //
-
   IssueQueue<16> issueq_int0;
   IssueQueue<16> issueq_int1;
   IssueQueue<16> issueq_ld;
@@ -729,6 +679,11 @@ struct OutOfOrderCore {
 #define for_each_cluster(iter) foreach (iter, MAX_CLUSTERS)
 #define for_each_operand(iter) foreach (iter, MAX_OPERANDS)
 
+  //
+  // Each ROB's state can be linked into at most one of the
+  // following rob_xxx_list lists at any given time; the ROB's
+  // current_state_list points back to the list it belongs to.
+  //
   StateList rob_free_list;                             // Free ROB entyry
   StateList rob_frontend_list;                         // Frontend in progress (artificial delay)
   StateList rob_ready_to_dispatch_list;                // Ready to dispatch
@@ -742,9 +697,11 @@ struct OutOfOrderCore {
   StateList rob_cache_miss_list;                       // Loads only: wait for cache miss to be serviced
   StateList rob_ready_to_commit_queue;                 // Ready to commit
 
-#define ROB_STATE_READY (1 << 0)
-#define ROB_STATE_IN_ISSUE_QUEUE (1 << 1)
-#define ROB_STATE_PRE_READY_TO_DISPATCH (1 << 2)
+  enum {
+    ROB_STATE_READY = (1 << 0),
+    ROB_STATE_IN_ISSUE_QUEUE = (1 << 1),
+    ROB_STATE_PRE_READY_TO_DISPATCH = (1 << 2)
+  };
 
 #define InitClusteredROBList(name, description, flags) \
   name[0](description "-int0", rob_states, flags); \
@@ -752,8 +709,12 @@ struct OutOfOrderCore {
   name[2](description "-ld", rob_states, flags); \
   name[3](description "-fp", rob_states, flags)
 
+  // Default constructor to bind a core to a specific hardware context
   OutOfOrderCore(int coreid_, Context& ctx_): coreid(coreid_), ctx(ctx_) { }
 
+  //
+  // Initialize all structures for the first time
+  //
   void init() {
     //
     // ROB states
@@ -787,249 +748,96 @@ struct OutOfOrderCore {
     smc_invalidate_pending = 0;
   }
 
-  int loads_in_flight;
-  int stores_in_flight;
-
   //
   // Physical Registers
   //
 
-  //
-  // Physical register file parameters
-  //
-  
-  enum {
-    PHYS_REG_FILE_INT,
-    PHYS_REG_FILE_FP,
-    PHYS_REG_FILE_ST,
-    PHYS_REG_FILE_BR
+  enum { PHYS_REG_FILE_INT, PHYS_REG_FILE_FP, PHYS_REG_FILE_ST, PHYS_REG_FILE_BR };
+
+  enum {  
+    PHYS_REG_FILE_MASK_INT = (1 << 0),
+    PHYS_REG_FILE_MASK_FP  = (1 << 1),
+    PHYS_REG_FILE_MASK_ST  = (1 << 2),
+    PHYS_REG_FILE_MASK_BR  = (1 << 3)
   };
-  
+
+  // Major core structures
   PhysicalRegisterFile physregfiles[PHYS_REG_FILE_COUNT];
-
-#define PHYS_REG_FILE_MASK_INT (1 << 0)
-#define PHYS_REG_FILE_MASK_FP  (1 << 1)
-#define PHYS_REG_FILE_MASK_ST  (1 << 2)
-#define PHYS_REG_FILE_MASK_BR  (1 << 3)
-
   Queue<ReorderBufferEntry, ROB_SIZE> ROB;
   Queue<LoadStoreQueueEntry, LSQ_SIZE> LSQ;
-
-  void reset_fetch_unit(W64 realrip);
-  void flush_pipeline(W64 realrip);
-  void external_to_core_state();
-  void core_to_external_state() {
-    // External state in ctx.commitarf is updated at each commit: no action here
-  }
-
   RegisterRenameTable specrrt;
   RegisterRenameTable commitrrt;
 
-  void print_rename_tables(ostream& os);
-  void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand);
-
-  //
-  // Fetch Stage
-  //
-
+  // Fetch-related structures
+  Queue<FetchBufferEntry, FETCH_QUEUE_SIZE> fetchq;
+  RIPVirtPhys fetchrip;
   BasicBlock* current_basic_block;
   int current_basic_block_transop_index;
   int bytes_in_current_insn;
-
-  RIPVirtPhys fetchrip;
   int uop_in_basic_block;
-
-  //
-  // Fetch a stream of x86 instructions from the L1 i-cache along predicted
-  // branch paths.
-  //
-  // Internally, up to N uops per clock corresponding to instructions in
-  // the current basic block are fetched per cycle and placed in the uopq
-  // as TransOps. When we run out of uops in one basic block, we proceed
-  // to lookup or translate the next basic block.
-  //
-
   bool stall_frontend;
-  Queue<FetchBufferEntry, FETCH_QUEUE_SIZE> fetchq;
   bool waiting_for_icache_fill;
-
-  void annul_ras_updates_in_fetchq();
-
-  CycleTimer cttrans;
-
-  BasicBlock* fetch_or_translate_basic_block(Context& ctx, const RIPVirtPhys& rvp);
-
-  W64 fetch_uuid;
-
-  CycleTimer ctfetch;
-
   // How many bytes of x86 code to fetch into decode buffer at once
-#define ICACHE_FETCH_GRANULARITY 16
-
+  static const int ICACHE_FETCH_GRANULARITY = 16;
   // Last block in icache we fetched into our buffer
   W64 current_icache_block;
+  W64 fetch_uuid;
+  int loads_in_flight;
+  int stores_in_flight;
 
-  void fetch();
-
-#define archdest_can_commit archdest_can_rename
-
-  CycleTimer ctrename;
-
-  //
-  // Physical register file ID (rfid) where the search
-  // for a free register should begin each cycle:
-  //
+  // Dispatch
   int round_robin_reg_file_offset;
-
-  void rename();
-  CycleTimer ctfrontend;
-
-  void frontend();
-
-  void print_rob(ostream& os);
-  void print_lsq(ostream& os);
-
-
-  //
-  // Dispatch any instructions in the rob_ready_to_dispatch_list by locating
-  // their source operands, updating any wait queues and expanding immediates.
-  //
-
-  CycleTimer ctdispatch;
-
   static const int DISPATCH_DEADLOCK_COUNTDOWN_CYCLES = 64;
-
   int dispatch_deadlock_countdown;
 
-  void redispatch_deadlock_recovery();
-
-  int dispatch();
-
+  // Issue
   W32 fu_avail;
   ReorderBufferEntry* robs_on_fu[FU_COUNT];
-
-  //
-  // Load/Store Aliasing Prevention
-  //
-  // We always issue loads as soon as possible even if some entries in the
-  // store queue have unresolved addresses. If a load gets erroneously
-  // issued before an earlier store in program order to the same address,
-  // this is considered load/store aliasing.
-  // 
-  // Aliasing is detected when stores issue: the load queue is scanned
-  // for earlier loads in program order which collide with the store's
-  // address. In this case all uops in program order after and including
-  // the store (and by extension, the colliding load) must be annulled.
-  //
-  // To keep this from happening repeatedly, whenever a collision is
-  // detected, the store looks up the rip of the colliding load and adds
-  // it to a small table called the LSAP (load/store alias predictor).
-  //
-  // Loads query the LSAP with the rip of the load; if a matching entry
-  // is found in the LSAP and the store address is unresolved, the load
-  // is not allowed to proceed.
-  //
-
   struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 8> { };
   LoadStoreAliasPredictor lsap;
-
-  //
-  // Stores have special dependency rules: they may issue as soon as operands ra and rb are ready,
-  // even if rc (the value to store) or rs (the store buffer to inherit from) is not yet ready or
-  // even known.
-  //
-  // After both ra and rb are ready, the store is moved to [ready_to_issue] as a first phase store.
-  // When the store issues, it generates its physical address [ra+rb] and establishes an SFR with
-  // the address marked valid but the data marked invalid.
-  //
-  // The sole purpose of doing this is to allow other loads and stores to create an rs dependency
-  // on the SFR output of the store.
-  //
-  // The store is then marked as a second phase store, since the address has been generated.
-  // When the store is replayed and rescheduled, it must now have all operands ready this time.
-  //
-
-  CycleTimer ctstore;
-
   int loads_in_this_cycle;
   W32 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
 
-  //
-  // Re-dispatch all uops in the ROB that have not yet generated
-  // a result or are otherwise stalled.
-  //
-
-
-  //
-  // Issue a single ROB. 
-  //
-  // Returns:
-  //  +1 if issue was successful
-  //   0 if no functional unit was available
-  //  -1 if there was an exception and we should stop issuing this cycle
-  //
-
-  CycleTimer ctsubexec;
-  CycleTimer ctsubexec2;
-
-
-  //
-  // Process the ready to issue queue and issue as many ROBs as possible
-  //
-
-  CycleTimer ctissue;
-
-  int issue(int cluster);
-  int complete(int cluster);
-
-  CycleTimer cttransfer;
-
-  int transfer(int cluster);
-
-  //
-  // Writeback at most WRITEBACK_WIDTH ROBs on rob_ready_to_writeback_list.
-  //
-
-  CycleTimer ctwriteback;
-
-  int writeback(int cluster);
-
-  //
-  // Commit at most COMMIT_WIDTH ready to commit instructions from ROB queue,
-  // and commits any stores by writing to the L1 cache with write through.
-  // Returns:
-  //    -1 if we are supposed to abort the simulation
-  //  >= 0 for the number of instructions actually committed
-  //
-
-  // See notes in handle_exception():
+  // Commit
   W64 chk_recovery_rip;
-
   W64 last_commit_at_cycle;
-
-  CycleTimer ctcommit;
-
   bool smc_invalidate_pending;
   RIPVirtPhys smc_invalidate_rvp;
 
+  // Pipeline Stages
+  bool runcycle();
+  void fetch();
+  void rename();
+  void frontend();
+  int dispatch();
+  int issue(int cluster);
+  int complete(int cluster);
+  int transfer(int cluster);
+  int writeback(int cluster);
   int commit();
 
-  //
-  // Total simulation time, excluding syscalls on behalf of user program,
-  // logging activity and other non-simulation operations:
-  //
-  CycleTimer cttotal;
-
+  // Pipeline Flush Handling
   bool handle_barrier();
   bool handle_exception();
   bool handle_interrupt();
 
-  void dump_ooo_state();
+  // Pipeline Control and Fetching
+  void reset_fetch_unit(W64 realrip);
+  void flush_pipeline(W64 realrip);
+  void external_to_core_state();
+  void core_to_external_state() { }
+  void annul_ras_updates_in_fetchq();
+  BasicBlock* fetch_or_translate_basic_block(Context& ctx, const RIPVirtPhys& rvp);
+  void redispatch_deadlock_recovery();
 
+  // Debugging
+  void dump_ooo_state();
+  void print_rob(ostream& os);
+  void print_lsq(ostream& os);
   void check_refcounts();
   void check_rob();
-
-  bool runcycle();
+  void print_rename_tables(ostream& os);
+  void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand);
 };
 
 #endif // STATS_ONLY

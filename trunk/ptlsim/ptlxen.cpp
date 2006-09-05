@@ -986,8 +986,13 @@ void find_all_mappings_of_mfn(mfn_t mfn) {
 
 Waddr xen_m2p_map_end;
 
+Waddr last_virtaddr_triggering_walk = 0;
+Waddr last_guest_rip_triggering_walk = 0;
+Waddr last_guest_uuid_triggering_walk = 0;
+
 Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
   VirtAddr virt(rawvirt);
+  last_virtaddr_triggering_walk = rawvirt;
 
   bool acc_bit_up_to_date = 0;
 
@@ -1014,6 +1019,12 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
     pte.a = 1; // don't try to update accessed bits again
     pte.d = 0;
 
+    return pte;
+  }
+
+  if unlikely ((rawvirt >= PTLSIM_RESERVED_VIRT_BASE) & (rawvirt <= PTLSIM_RESERVED_VIRT_END)) {
+    // PTLsim space is inaccessible to the guest
+    Level1PTE pte = 0;
     return pte;
   }
 
@@ -1258,8 +1269,9 @@ bool is_mfn_ptpage(mfn_t mfn) {
     // will fault it in for us.
     //
     force_internal_page_fault(mfn << 12);
+    barrier();
     if (!pte.p) {
-      logfile << "PTE for mfn ", mfn, " is still not present!", endl, flush;
+      logfile << "PTE for mfn ", mfn, " is still not present (around sim_cycle ", sim_cycle, ")!", endl, flush;
       abort();
     }
   } else if unlikely (!pte.rw) {
@@ -1497,12 +1509,9 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
   bool page_kernel_only = ((!kernel_mode) & (!pte.us));
 
   if unlikely (page_not_present | page_read_only | page_kernel_only) {
-    if (logable(4)) logfile << "virt ", (void*)virtaddr, ", mfn ", pte.mfn, ": store ", store, ", page_not_present ",
-      page_not_present, ", page_kernel_only ", page_kernel_only, ", page_read_only ", page_read_only, endl;
-
     if unlikely (store && (!page_not_present) && (!page_kernel_only) &&
                  page_read_only && is_mfn_ptpage(pte.mfn)) {
-      if (logable(4)) {
+      if (logable(5)) {
         logfile << "Page is a page table page: special semantics", endl;
       }
       //
@@ -1951,6 +1960,15 @@ static inline mfn_t get_cr3_mfn() {
 // this case, for loads at least, we simply make it a read only
 // mapping, which is always allowed.
 //
+extern void print_fetch_bb_address_ringbuf(ostream& os);
+
+//
+// Dummy page for speculative faults: this page of all zeros
+// is mapped in whenever we try to access physical memory
+// that doesn't exist, isn't ours, or is part of Xen itself.
+//
+void* zeropage;
+
 asmlinkage void do_page_fault(W64* regs) {
   static const bool force_page_fault_logging = 0;
   int rc;
@@ -2018,16 +2036,38 @@ asmlinkage void do_page_fault(W64* regs) {
       //
       pte.rw = 0;
       rc = update_ptl_pte(l1pte, pte);
-      
-      if (rc) {
-        logfile << "ERROR: Cannot map mfn ", mfn, " (for virt ", (void*)faultaddr, ") into the address space (requested from rip ", (void*)regs[REG_rip], "). Does it belong to the domain?", endl;
-        logfile << "Stopped at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
-        logfile << flush;
-        cerr << flush;
-        shutdown(SHUTDOWN_crash);
-      }
 
-      if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+      if (rc) {
+        //
+        // We still can't map the page! Most likely we got here after
+        // attempting to follow a virtaddr in the Xen reserved area,
+        // and we can't map some Xen-internal page table page that
+        // the native processor can see but the domain cannot.
+        //
+        // This can happen on speculative out-of-order accesses
+        // that never make it to the architectural state but
+        // nonetheless still must have *some* page to access
+        // or PTLsim will deadlock.
+        //
+        // Map in a zero page (to terminate all page table walks)
+        // and print a warning in the log. This is the same
+        // behavior as if invalid physical memory were accessed
+        // (but in that case the page is all 1's, not all 0's).
+        //
+        logfile << "Warning: failed to map mfn ", mfn, " (for virt ", (void*)faultaddr, ", requested by rip ", (void*)regs[REG_rip], " at cycle ", sim_cycle, ")", endl;
+        logfile << "  Either it doesn't exist, isn't ours, or is part of Xen itself.", endl;
+        logfile << "  Mapping a zero page in its place and hoping the access is speculative.", endl;
+        logfile << "  The last page table walk was for virtual address ", (void*)last_virtaddr_triggering_walk, endl;
+
+        if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added dummy zero PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+        logfile << flush;
+
+        pte.mfn = ptl_virt_to_mfn(zeropage);
+        rc = update_ptl_pte(l1pte, pte);
+        assert(rc == 0);
+      } else {
+        if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+      }
     } else {
       if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
     }
@@ -3425,6 +3465,27 @@ W64 get_core_freq_hz(const vcpu_time_info_t& timeinfo) {
   return core_freq_hz;
 }
 
+//
+// Get the core frequency of the current physical processor
+//
+// This assumes the frequency is fixed at bootup and does not
+// change dynamically; currently PTLsim is unable to get accurate
+// timing info from non-monotonic TSCs.
+//
+// Technically Xen provides info accurate to 10 milisec (100/sec)
+// in the time.system_time or wc_sec/wc_nsec fields, but these
+// are only updated 100 times per second; forcing an update
+// via a hypercall would take too long.
+//
+W64 get_core_freq_hz() {
+  return get_core_freq_hz(shinfo.vcpu_info[0].time);
+}
+
+//
+// Convert timestamp counter to monotonic count according
+// to the current physical CPU frequency.
+//
+
 void init_virqs() {
   logfile << "Calibrate internal time conversions:", endl;
 
@@ -3827,12 +3888,15 @@ void ptlsim_init() {
   build_physmap_page_tables();
   inject_ptlsim_into_toplevel(bootinfo.toplevel_page_table_mfn, true);
   switch_page_table(contextof(0).cr3 >> 12);
+  zeropage = ptl_alloc_private_page();
+  memset(zeropage, 0, 4096);
 
   //
   // Initialize the non-trivial parts of the VCPU contexts.
   // This must go AFTER physical memory is accessible since
   // we're refilling descriptor caches and TLBs here.
   //
+  CycleTimer::gethz();
   foreach (i, bootinfo.vcpu_count) {
     Context& ctx = contextof(i);
     ctx.vcpuid = i;

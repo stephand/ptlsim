@@ -11,8 +11,8 @@
 // GNU General Public License, Version 2.
 //
 
-#ifndef _SUPERSTL_H
-#define _SUPERSTL_H
+#ifndef _SUPERSTL_H_
+#define _SUPERSTL_H_
 
 //
 // Formatting
@@ -2815,6 +2815,12 @@ namespace superstl {
       return (double)total / hz;
     }
 
+    inline void reset() {
+      stop();
+      tstart = 0;
+      total = 0;
+    }
+
   public:
     W64 total;
     W64 tstart;
@@ -2838,4 +2844,4 @@ namespace superstl {
 
 } // namespace superstl
 
-#endif // _SUPERSTL_H
+#endif // _SUPERSTL_H_

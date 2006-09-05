@@ -233,10 +233,10 @@ struct CombinedPredictor {
   }
 
   void updateras(PredictorUpdate& predinfo, W64 rip) {
-    if (predinfo.flags & BRANCH_HINT_RET) {
+    if unlikely (predinfo.flags & BRANCH_HINT_RET) {
       predinfo.ras_push = 0;
       ras.pop(predinfo.ras_old);
-    } else if (predinfo.flags & BRANCH_HINT_CALL) {
+    } else if likely (predinfo.flags & BRANCH_HINT_CALL) {
       predinfo.ras_push = 1;
       ras.push(predinfo.uuid, rip, predinfo.ras_old);
     }
@@ -252,7 +252,12 @@ struct CombinedPredictor {
     update.cpmeta = null;
     update.flags = type;
 
-    if (type & BRANCH_HINT_COND) {
+    if unlikely (!type) {
+      // Unconditional: always return target
+      return target;
+    }
+
+    if likely (type & BRANCH_HINT_COND) {
       byte& bimodalctr = *bimodal.predict(branchaddr);
       byte& twolevelctr = *twolevel.predict(branchaddr);
       byte& metactr = *meta.predict(branchaddr);
@@ -275,7 +280,7 @@ struct CombinedPredictor {
     // RAS once annulable resources have been allocated for this
     // return insn.
     //
-    if (type & BRANCH_HINT_RET) {
+    if unlikely (type & BRANCH_HINT_RET) {
 #ifdef DEBUG_RAS
       if (logable(5)) logfile << "Peeking RAS for uuid ", update.uuid, ":", endl;
 #endif
@@ -285,7 +290,7 @@ struct CombinedPredictor {
     BTBEntry* pbtb = btb.probe(branchaddr);
 
     // if this is a jump, ignore predicted direction; we know it's taken.
-    if (!(type & BRANCH_HINT_COND)) {
+    if unlikely (!(type & BRANCH_HINT_COND)) {
       return (pbtb ? pbtb->target : target);
     }
 
@@ -304,14 +309,14 @@ struct CombinedPredictor {
     // keep stats about JMPs; also, but don't change any pred state for JMPs
     // which are returns.
     //
-    if (type & BRANCH_HINT_INDIRECT) {
-      if (type & BRANCH_HINT_RET) return;
+    if unlikely (type & BRANCH_HINT_INDIRECT) {
+      if unlikely (type & BRANCH_HINT_RET) return;
     }
 
     //
     // L1 table is updated unconditionally for combining predictor too:
     //
-    if (type & BRANCH_HINT_COND) {
+    if likely (type & BRANCH_HINT_COND) {
       int l1index = lowbits(branchaddr, log2(L1SIZE));
       twolevel.shiftregs[l1index] = lowbits((twolevel.shiftregs[l1index] << 1) | taken, SHIFTWIDTH);
     }
@@ -330,7 +335,7 @@ struct CombinedPredictor {
     //
     // update state (but not for jumps)
     //
-    if (update.cp1) {
+    if likely (update.cp1) {
       byte& counter = *update.cp1;
       counter = clipto(counter + (taken ? +1 : -1), 0, 3);
     }
@@ -339,7 +344,7 @@ struct CombinedPredictor {
     // combining predictor also updates second predictor and meta predictor
     // second direction predictor
     //
-    if (update.cp2) {
+    if likely (update.cp2) {
       byte& counter = *update.cp2;
       counter = clipto(counter + (taken ? +1 : -1), 0, 3);
     }
@@ -347,7 +352,7 @@ struct CombinedPredictor {
     //
     // Update meta predictor
     //
-    if (update.cpmeta) {
+    if likely (update.cpmeta) {
       if (update.bimodal != update.twolevel) {
         //
         // We only update meta predictor if directions were different.
@@ -363,7 +368,7 @@ struct CombinedPredictor {
     //
     // update BTB (but only for taken branches)
     //
-    if (pbtb) {
+    if likely (pbtb) {
       // Update either the entry selected above, or if not found, use the LRU entry:
       pbtb->target = target;
     }

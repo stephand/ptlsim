@@ -13,6 +13,9 @@
 // For debugging of messages before crashes:
 bool force_synchronous_streams = false;
 
+// Defined differently depending on the (usermode vs bare hardware in kernel mode):
+W64 get_core_freq_hz();
+
 namespace superstl {
   //
   // odstream
@@ -694,42 +697,7 @@ namespace superstl {
     if (hz)
       return hz;
 
-    istream cpufreqis("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
-    if (cpufreqis) {
-      char s[256];
-      cpufreqis >> readline(s, sizeof(s));      
-
-      int khz;
-      int n = sscanf(s, "%d", &khz);
-
-      if (n == 1) {
-        CycleTimer::hz = khz * 1000.0;
-        return hz;
-      }
-    }
-
-    istream is("/proc/cpuinfo");
-
-    double hz = 1.0;
-
-    if (!is) {
-      cerr << "CycleTimer::gethz(): warning: cannot open /proc/cpuinfo. Is this a Linux machine?", endl;
-      return hz;
-    }
-
-    while (is) {
-      char s[256];
-      is >> readline(s, sizeof(s));
-
-      int mhz;
-      int n = sscanf(s, "cpu MHz : %d", &mhz);
-      if (n == 1) {
-        hz = (W64)mhz * 1000000;
-        //cout << "CycleTimer::gethz(): core frequency is ", hz, " hz", endl;
-        CycleTimer::hz = hz;
-        return hz;
-      }
-    }
+    hz = get_core_freq_hz();
 
     return hz;
   }
