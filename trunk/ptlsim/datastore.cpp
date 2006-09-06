@@ -826,7 +826,7 @@ DataStoreNodeTemplate::DataStoreNodeTemplate(const char* name, int type, int cou
   histogramarray = 0;
   identical_subtrees = 0;
   labeled_histogram = 0;
-  labels = null;
+  this->labels = null;
 
   histomin = 0;
   histomax = 0;
@@ -858,60 +858,57 @@ DataStoreNodeTemplate::~DataStoreNodeTemplate() {
 ostream& DataStoreNodeTemplate::generate_struct_def(ostream& os, int depth) const {
   foreach (i, depth) os << "  ";
 
-  if (labeled_histogram) {
-    assert(subnodes);
-    os << "W64 ", name, "[", subnodes.length, "];", endl;
-  } else {
-    switch (type) {
-    case DS_NODE_TYPE_NULL: {
-      os << "struct ", name, " {";
-      if (summable | identical_subtrees) os << " // node:";
-      if (summable) os << " summable";
-      if (identical_subtrees) os << " identical";
-      os << endl;
-      break;
-    }
-    case DS_NODE_TYPE_INT: {
-      os << "W64 ", name;
-      if (count > 1) os << "[", count, "]";
-      os << ";";
-      if (histogramarray) os << "// histo: ", histomin, " ", histomax, " ", histostride, endl;
-      if (labeled_histogram) {
-        os << "// label:";
-        foreach (i, count) { os << " ", labels[i]; }
-      }
-      os << endl;
-      break;
-    }
-    case DS_NODE_TYPE_FLOAT: {
-      os << "double ", name;
-      if (count > 1) os << "[", count, "]";
-      os << ";", endl;
-      break;
-    }
-    case DS_NODE_TYPE_STRING: {
-      os << "char ", name;
-      if (count > 1) os << "[", count, "]";
-      os << "[", limit, "]";
-      os << ";", endl;
-      break;
-    }
-    default:
-      assert(false);
+  switch (type) {
+  case DS_NODE_TYPE_NULL: {
+    os << "struct ", name, " {";
+    if (summable | identical_subtrees) os << " // node:";
+    if (summable) os << " summable";
+    if (identical_subtrees) os << " identical";
+    os << endl;
+    break;
+  }
+  case DS_NODE_TYPE_INT: {
+    os << "W64 ", name;
+    if (count > 1) os << "[", count, "]";
+    os << ";";
+    if (labeled_histogram) {
+      os << " // label:";
+      foreach (i, count) { os << " ", labels[i]; }
+    } else if (histogramarray) {
+      os << " // histo: ", histomin, " ", histomax, " ", histostride;
     }
 
-    //os << "// subnodes = ", subnodes, endl;
-    foreach (i, subnodes.length) {
-      subnodes[i]->generate_struct_def(os, depth + 1);
-    }
+    os << endl;
+    break;
+  }
+  case DS_NODE_TYPE_FLOAT: {
+    os << "double ", name;
+    if (count > 1) os << "[", count, "]";
+    os << ";", endl;
+    break;
+  }
+  case DS_NODE_TYPE_STRING: {
+    os << "char ", name;
+    if (count > 1) os << "[", count, "]";
+    os << "[", limit, "]";
+    os << ";", endl;
+    break;
+  }
+  default:
+    assert(false);
+  }
 
-    if (type == DS_NODE_TYPE_NULL) {
-      foreach (i, depth) os << "  ";
-      if (depth) {
-        os << "} ", (name ?: "UNKNOWN"), ";", endl;
-      } else {
-        os << "};", endl;
-      }
+  //os << "// subnodes = ", subnodes, endl;
+  foreach (i, subnodes.length) {
+    subnodes[i]->generate_struct_def(os, depth + 1);
+  }
+
+  if (type == DS_NODE_TYPE_NULL) {
+    foreach (i, depth) os << "  ";
+    if (depth) {
+      os << "} ", (name ?: "UNKNOWN"), ";", endl;
+    } else {
+      os << "};", endl;
     }
   }
 
@@ -982,6 +979,8 @@ DataStoreNode* DataStoreNodeTemplate::reconstruct(const W64*& p) {
   switch (type) {
   case DS_NODE_TYPE_NULL: {
     ds = new DataStoreNode(name);
+    ds->summable = summable;
+    ds->identical_subtrees = identical_subtrees;
     foreach (i, subnodes.length) {
       ds->add(subnodes[i]->reconstruct(p));
     }

@@ -68,15 +68,12 @@ void assist_syscall(Context& ctx) {
   // in the Linux sense, and Xen just relays control back
   // to the guest domain's kernel.
   //
-  // When executed from kernel mode, it's interpreted as a
-  // hypercall into Xen itself.
-  //
 
   if (ctx.kernel_mode) {
-    handle_xen_hypercall_assist(ctx);
-  } else {
-    handle_syscall_assist(ctx);
+    logfile << ctx, endl, flush;
+    assert(!ctx.kernel_mode);
   }
+  handle_syscall_assist(ctx);
 #else
   if (ctx.use64) {
 #ifdef __x86_64__
@@ -87,6 +84,22 @@ void assist_syscall(Context& ctx) {
   }
 #endif
   // REG_rip is filled out for us
+}
+
+void assist_hypercall(Context& ctx) {
+#ifdef PTLSIM_HYPERVISOR
+  //
+  // SYSCALL has two distinct sets of semantics on Xen x86-64.
+  //
+  // When executed from kernel mode, it's interpreted as a
+  // hypercall into Xen itself.
+  //
+  if (!ctx.kernel_mode) {
+    logfile << ctx, endl, flush;
+    assert(ctx.kernel_mode);
+  }
+  handle_xen_hypercall_assist(ctx);
+#endif
 }
 
 void assist_sysenter(Context& ctx) {
@@ -1955,11 +1968,11 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x105: {
-    // syscall
+    // syscall or hypercall
     // Saves return address into %rcx and jumps to MSR_LSTAR
     CheckInvalid();
     immediate(REG_rcx, 3, (Waddr)rip);
-    microcode_assist(ASSIST_SYSCALL, ripstart, rip);
+    microcode_assist((kernel) ? ASSIST_HYPERCALL : ASSIST_SYSCALL, ripstart, rip);
     end_of_block = 1;
     break;
   }

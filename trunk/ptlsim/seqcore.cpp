@@ -613,7 +613,7 @@ struct SequentialCore {
 
     RIPVirtPhys rvp(arf[REG_rip]);
 
-    assert(bb->rip == arf[REG_rip]);
+    assert(bb->rip.rip == arf[REG_rip]);
 
     // See comment below about idempotent updates
     W64 saved_flags = 0;

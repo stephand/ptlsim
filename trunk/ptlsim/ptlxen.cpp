@@ -3357,6 +3357,8 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
 void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virtaddr) {
   assert(exception < lengthof(idt));
 
+  stats.external.traps[exception]++;
+
   if (logable(2)) {
     logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", RIPVirtPhys(commitarf[REG_rip]).update(*this), ": error code ";
     if likely (exception == EXCEPTION_x86_page_fault) {
@@ -4052,15 +4054,10 @@ bool handle_config_change(PTLsimConfig& config) {
     first_time = false;
   }
   
-  if (config.run) {
-    if (config.native) logfile << "Warning: when specifying -run, cannot also specify -native", endl, flush;
-    // act on it
-  }
-  
-  if (config.native) {
-    if (config.run) {
-      logfile << "Warning: when specifying -native, cannot also specify -run", endl, flush;
-    }
+  int total = config.run + config.stop + config.native + config.kill;
+  if (total > 1) {
+    logfile << "Warning: only one action (from -run, -stop, -native, -kill) can be specified at once", endl, flush;
+    cerr << "Warning: only one action (from -run, -stop, -native, -kill) can be specified at once", endl, flush;
   }
 
   return true;
@@ -4114,7 +4111,7 @@ bool check_for_async_sim_break() {
     complete_upcall(requuid);
   }
 
-  if unlikely (config.native | config.pause | config.kill) {
+  if unlikely (config.native | config.stop | config.kill) {
     logfile << "Requested exit from simulation loop", endl, flush;
     return true;
   }
@@ -4266,10 +4263,8 @@ int main(int argc, char** argv) {
     complete_upcall(requuid);
 
     if (config.native) {
-      bool pause = config.pause;
-      bool kill = config.kill;
       config.native = 0;
-      config.pause = 0;
+      config.stop = 0;
       config.kill = 0;
       logfile << "Switching to native (pause? ", pause, ", kill? ", kill, ")...", endl, flush;
       logfile << "Final context:", endl, contextof(0), flush;
@@ -4290,7 +4285,9 @@ int main(int argc, char** argv) {
       logfile << "Done!", endl;
       logfile << flush;
 
-      switch_to_native(pause);
+      bool pause = config.pause;
+      config.pause = 0;
+      switch_to_native(config.pause);
 
       foreach (i, bootinfo.vcpu_count) {
         Context& ctx = contextof(i);
@@ -4303,6 +4300,11 @@ int main(int argc, char** argv) {
       logfile << "Killing PTLsim...", endl, flush;
       shutdown(SHUTDOWN_poweroff);
     }
+
+    config.run = 0;
+    config.stop = 0;
+    config.native = 0;
+    config.kill = 0;
   }
 
   // We should never get here!

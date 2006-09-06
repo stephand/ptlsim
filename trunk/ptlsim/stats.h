@@ -395,6 +395,10 @@ struct PTLsimStats { // rootnode:
       } store;
     } dcache;
   } ooocore;
+  struct external {
+    W64 assists[ASSIST_COUNT]; // label: assist_names
+    W64 traps[256]; // label: x86_exception_names
+  } external;
 };
 
 extern struct PTLsimStats stats;

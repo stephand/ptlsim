@@ -464,7 +464,7 @@ void OutOfOrderCore::fetch() {
       break;
     }
 
-    if unlikely ((fetchrip == config.start_log_at_rip) && (fetchrip != 0xffffffffffffffffULL)) {
+    if unlikely ((fetchrip.rip == config.start_log_at_rip) && (fetchrip.rip != 0xffffffffffffffffULL)) {
       config.start_log_at_iteration = 0;
       logenable = 1;
     }
@@ -655,6 +655,9 @@ BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const R
   current_basic_block_transop_index = 0;
 
   current_basic_block->use(sim_cycle);  
+
+  assert(current_basic_block->rip == rvp);
+
   return current_basic_block;
 }
 

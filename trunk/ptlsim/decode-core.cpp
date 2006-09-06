@@ -41,6 +41,11 @@ CycleTimer translate_timer("translate");
 //
 
 const assist_func_t assistid_to_func[ASSIST_COUNT] = {
+  // Forced assists based on decode context
+  assist_invalid_opcode,
+  assist_exec_page_fault,
+  assist_gp_fault,
+  // Integer arithmetic
   assist_div<byte>,
   assist_div<W16>,
   assist_div<W32>,
@@ -49,6 +54,7 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_idiv<W16>,
   assist_idiv<W32>,
   assist_idiv<W64>,
+  // x87
   assist_x87_fprem,
   assist_x87_fyl2xp1,
   assist_x87_fsqrt,
@@ -70,21 +76,25 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_x87_frstor,
   assist_x87_finit,
   assist_x87_fclex,
+  // SSE save/restore
   assist_ldmxcsr,
   assist_fxsave,
   assist_fxrstor,
+  // Interrupts, system calls, etc.
   assist_int,
   assist_syscall,
+  assist_hypercall,
+  assist_ptlcall,
   assist_sysenter,
+  assist_iret16,
+  assist_iret32,
+  assist_iret64,
+  // Control register updates
   assist_cpuid,
-  assist_invalid_opcode,
-  assist_exec_page_fault,
-  assist_gp_fault,
-  assist_write_segreg,
-  assist_popf,
   assist_cld,
   assist_std,
-  assist_ptlcall,
+  assist_popf,
+  assist_write_segreg,
   assist_wrmsr,
   assist_rdmsr,
   assist_write_cr0,
@@ -92,123 +102,9 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_write_cr3,
   assist_write_cr4,
   assist_write_debug_reg,
-  assist_iret16,
-  assist_iret32,
-  assist_iret64,
+  // I/O and legacy
   assist_ioport_in,
   assist_ioport_out,
-};
-
-const char* assist_names[ASSIST_COUNT] = {
-  "div8",
-  "div16",
-  "div32",
-  "div64",
-  "idiv8",
-  "idiv16",
-  "idiv32",
-  "idiv64",
-  "x87_fprem",
-  "x87_fyl2xp1",
-  "x87_fsqrt",
-  "x87_fsincos",
-  "x87_frndint",
-  "x87_fscale",
-  "x87_fsin",
-  "x87_fcos",
-  "x87_fxam",
-  "x87_f2xm1",
-  "x87_fyl2x",
-  "x87_fptan",
-  "x87_fpatan",
-  "x87_fxtract",
-  "x87_fprem1",
-  "x87_fld80",
-  "x87_fstp80",
-  "fsave",
-  "frstor",
-  "finit",
-  "fclex",
-  "ldmxcsr",
-  "fxsave",
-  "fxrstor",
-  "int",
-  "syscall",
-  "sysenter",
-  "cpuid",
-  "invalid_opcode",
-  "exec_page_fault",
-  "gp_fault",
-  "write_segreg",
-  "popf",
-  "cld",
-  "std",
-  "ptlcall",
-  "wrmsr",
-  "rdmsr",
-  "write_cr0",
-  "write_cr2",
-  "write_cr3",
-  "write_cr4",
-  "write_debug_reg",
-  "iret16",
-  "iret32",
-  "iret64",
-  "in",
-  "out"
-};
-
-const char* x86_exception_names[256] = {
-  "divide",
-  "debug",
-  "nmi",
-  "breakpoint",
-  "overflow",
-  "bounds",
-  "invalid opcode",
-  "fpu not avail",
-  "double fault",
-  "coproc overrun",
-  "invalid tss",
-  "seg not present",
-  "stack fault",
-  "gp fault",
-  "page fault",
-  "spurious int",
-  "fpu",
-  "unaligned",
-  "machine check",
-  "sse",
-  "int14h", "int15h", "int16h", "int17h",
-  "int18h", "int19h", "int1Ah", "int1Bh", "int1Ch", "int1Dh", "int1Eh", "int1Fh",
-  "int20h", "int21h", "int22h", "int23h", "int24h", "int25h", "int26h", "int27h",
-  "int28h", "int29h", "int2Ah", "int2Bh", "int2Ch", "int2Dh", "int2Eh", "int2Fh",
-  "int30h", "int31h", "int32h", "int33h", "int34h", "int35h", "int36h", "int37h",
-  "int38h", "int39h", "int3Ah", "int3Bh", "int3Ch", "int3Dh", "int3Eh", "int3Fh",
-  "int40h", "int41h", "int42h", "int43h", "int44h", "int45h", "int46h", "int47h",
-  "int48h", "int49h", "int4Ah", "int4Bh", "int4Ch", "int4Dh", "int4Eh", "int4Fh",
-  "int50h", "int51h", "int52h", "int53h", "int54h", "int55h", "int56h", "int57h",
-  "int58h", "int59h", "int5Ah", "int5Bh", "int5Ch", "int5Dh", "int5Eh", "int5Fh",
-  "int60h", "int61h", "int62h", "int63h", "int64h", "int65h", "int66h", "int67h",
-  "int68h", "int69h", "int6Ah", "int6Bh", "int6Ch", "int6Dh", "int6Eh", "int6Fh",
-  "int70h", "int71h", "int72h", "int73h", "int74h", "int75h", "int76h", "int77h",
-  "int78h", "int79h", "int7Ah", "int7Bh", "int7Ch", "int7Dh", "int7Eh", "int7Fh",
-  "int80h", "int81h", "int82h", "int83h", "int84h", "int85h", "int86h", "int87h",
-  "int88h", "int89h", "int8Ah", "int8Bh", "int8Ch", "int8Dh", "int8Eh", "int8Fh",
-  "int90h", "int91h", "int92h", "int93h", "int94h", "int95h", "int96h", "int97h",
-  "int98h", "int99h", "int9Ah", "int9Bh", "int9Ch", "int9Dh", "int9Eh", "int9Fh",
-  "intA0h", "intA1h", "intA2h", "intA3h", "intA4h", "intA5h", "intA6h", "intA7h",
-  "intA8h", "intA9h", "intAAh", "intABh", "intACh", "intADh", "intAEh", "intAFh",
-  "intB0h", "intB1h", "intB2h", "intB3h", "intB4h", "intB5h", "intB6h", "intB7h",
-  "intB8h", "intB9h", "intBAh", "intBBh", "intBCh", "intBDh", "intBEh", "intBFh",
-  "intC0h", "intC1h", "intC2h", "intC3h", "intC4h", "intC5h", "intC6h", "intC7h",
-  "intC8h", "intC9h", "intCAh", "intCBh", "intCCh", "intCDh", "intCEh", "intCFh",
-  "intD0h", "intD1h", "intD2h", "intD3h", "intD4h", "intD5h", "intD6h", "intD7h",
-  "intD8h", "intD9h", "intDAh", "intDBh", "intDCh", "intDDh", "intDEh", "intDFh",
-  "intE0h", "intE1h", "intE2h", "intE3h", "intE4h", "intE5h", "intE6h", "intE7h",
-  "intE8h", "intE9h", "intEAh", "intEBh", "intECh", "intEDh", "intEEh", "intEFh",
-  "intF0h", "intF1h", "intF2h", "intF3h", "intF4h", "intF5h", "intF6h", "intF7h",
-  "intF8h", "intF9h", "intFAh", "intFBh", "intFCh", "intFDh", "intFEh", "intFFh"
 };
 
 int assist_index(assist_func_t assist) {
@@ -231,37 +127,11 @@ const char* assist_name(assist_func_t assist) {
   return "unknown";
 }
 
-W64 assist_histogram[ASSIST_COUNT];
-/*
-W64 decoder_type_fast;
-W64 decoder_type_complex;
-W64 decoder_type_x87;
-W64 decoder_type_sse;
-*/
-
 void update_assist_stats(assist_func_t assist) {
   int idx = assist_index(assist);
   assert(inrange(idx, 0, ASSIST_COUNT-1));
-  assist_histogram[idx]++;
+  stats.external.assists[idx]++;
 }
-
-void reset_assist_stats() {
-  setzero(assist_histogram);
-}
-
-/*
-void save_assist_stats(DataStoreNode& root) {
-  root.histogram("assists", assist_names, assist_histogram, ASSIST_COUNT);
-  DataStoreNode& decoder = root("decoder"); {
-    decoder.summable = 1;
-    decoder.add("fast", decoder_type_fast);
-    decoder.add("complex", decoder_type_complex);
-    decoder.add("x87", decoder_type_x87);
-    decoder.add("sse", decoder_type_sse);
-  }
-
-}
-*/
 
 void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
   assert(transop.unaligned);

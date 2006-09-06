@@ -224,6 +224,14 @@ struct RIPVirtPhys {
 
   // Update use64, kernelmode, mfnlo and mfnhi by translating rip and (rip + 4095), respectively:
   RIPVirtPhys& update(Context& ctx, int bytes = PAGE_SIZE);
+
+  // Make sure we don't accidentally cast to W64 for comparisons
+  bool operator ==(const RIPVirtPhys& b) const {
+    const W64* ap = (const W64*)this;
+    const W64* bp = (const W64*)&b;
+
+    return ((ap[0] == bp[0]) & (ap[1] == bp[1]));
+  }
 };
 
 ostream& operator <<(ostream& os, const RIPVirtPhys& rvp);

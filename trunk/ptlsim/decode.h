@@ -226,6 +226,11 @@ enum {
 #define MakeInvalid() { invalid |= true; CheckInvalid(); }
 
 enum {
+  // Forced assists based on decode context
+  ASSIST_INVALID_OPCODE,
+  ASSIST_EXEC_PAGE_FAULT,
+  ASSIST_GP_FAULT,
+  // Integer arithmetic
   ASSIST_DIV8,
   ASSIST_DIV16,
   ASSIST_DIV32,
@@ -234,6 +239,7 @@ enum {
   ASSIST_IDIV16,
   ASSIST_IDIV32,
   ASSIST_IDIV64,
+  // x87
   ASSIST_X87_FPREM,
   ASSIST_X87_FYL2XP1,
   ASSIST_X87_FSQRT,
@@ -255,21 +261,25 @@ enum {
   ASSIST_X87_FRSTOR,
   ASSIST_X87_FINIT,
   ASSIST_X87_FCLEX,
+  // SSE save/restore
   ASSIST_LDMXCSR,
   ASSIST_FXSAVE,
   ASSIST_FXRSTOR,
+  // Interrupts, system calls, etc.
   ASSIST_INT,
   ASSIST_SYSCALL,
+  ASSIST_HYPERCALL,
+  ASSIST_PTLCALL,
   ASSIST_SYSENTER,
+  ASSIST_IRET16,
+  ASSIST_IRET32,
+  ASSIST_IRET64,
+  // Control register updates
   ASSIST_CPUID,
-  ASSIST_INVALID_OPCODE,
-  ASSIST_EXEC_PAGE_FAULT,
-  ASSIST_GP_FAULT,
-  ASSIST_WRITE_SEGREG,
-  ASSIST_POPF,
   ASSIST_CLD,
   ASSIST_STD,
-  ASSIST_PTLCALL,
+  ASSIST_POPF,
+  ASSIST_WRITE_SEGREG,
   ASSIST_WRMSR,
   ASSIST_RDMSR,
   ASSIST_WRITE_CR0,
@@ -277,25 +287,102 @@ enum {
   ASSIST_WRITE_CR3,
   ASSIST_WRITE_CR4,
   ASSIST_WRITE_DEBUG_REG,
-  ASSIST_IRET16,
-  ASSIST_IRET32,
-  ASSIST_IRET64,
+  // Interrupts and I/O
   ASSIST_IOPORT_IN,
   ASSIST_IOPORT_OUT,
   ASSIST_COUNT,
 };
 
+
 extern const assist_func_t assistid_to_func[ASSIST_COUNT];
 
-extern const char* assist_names[ASSIST_COUNT];
+//
+// These need to be in the header file so dstbuild can
+// pick them up without having to link every file in PTLsim
+// just to build the data store template. The linker will
+// eliminate duplicates.
+//
+static const char* assist_names[ASSIST_COUNT] = {
+  // Forced assists based on decode context
+  "invalid_opcode",
+  "exec_page_fault",
+  "gp_fault",
+  // Integer arithmetic
+  "div<byte>",
+  "div<W16>",
+  "div<W32>",
+  "div<W64>",
+  "idiv<byte>",
+  "idiv<W16>",
+  "idiv<W32>",
+  "idiv<W64>",
+  // x87
+  "x87_fprem",
+  "x87_fyl2xp1",
+  "x87_fsqrt",
+  "x87_fsincos",
+  "x87_frndint",
+  "x87_fscale",
+  "x87_fsin",
+  "x87_fcos",
+  "x87_fxam",
+  "x87_f2xm1",
+  "x87_fyl2x",
+  "x87_fptan",
+  "x87_fpatan",
+  "x87_fxtract",
+  "x87_fprem1",
+  "x87_fld80",
+  "x87_fstp80",
+  "x87_fsave",
+  "x87_frstor",
+  "x87_finit",
+  "x87_fclex",
+  // SSE save/restore
+  "ldmxcsr",
+  "fxsave",
+  "fxrstor",
+  // Interrupts", system calls", etc.
+  "int",
+  "syscall",
+  "hypercall",
+  "ptlcall",
+  "sysenter",
+  "iret16",
+  "iret32",
+  "iret64",
+  // Control register updates
+  "cpuid",
+  "cld",
+  "std",
+  "popf",
+  "write_segreg",
+  "wrmsr",
+  "rdmsr",
+  "write_cr0",
+  "write_cr2",
+  "write_cr3",
+  "write_cr4",
+  "write_debug_reg",
+  // I/O and legacy
+  "ioport_in",
+  "ioport_out",
+};
 
 int propagate_exception_during_assist(Context& ctx, byte exception, W32 errorcode, Waddr virtaddr = 0, bool intN = 0);
 
 //
 // Microcode assists
 //
+
+// Forced assists based on decode context
+void assist_invalid_opcode(Context& ctx);
+void assist_exec_page_fault(Context& ctx);
+void assist_gp_fault(Context& ctx);
+// Integer arithmetic
 template <typename T> void assist_div(Context& ctx);
 template <typename T> void assist_idiv(Context& ctx);
+// x87
 void assist_x87_fprem(Context& ctx);
 void assist_x87_fyl2xp1(Context& ctx);
 void assist_x87_fsqrt(Context& ctx);
@@ -317,21 +404,25 @@ void assist_x87_fsave(Context& ctx);
 void assist_x87_frstor(Context& ctx);
 void assist_x87_finit(Context& ctx);
 void assist_x87_fclex(Context& ctx);
+// SSE save/restore
+void assist_ldmxcsr(Context& ctx);
 void assist_fxsave(Context& ctx);
 void assist_fxrstor(Context& ctx);
-void assist_ldmxcsr(Context& ctx);
+// Interrupts, system calls, etc.
 void assist_int(Context& ctx);
 void assist_syscall(Context& ctx);
-void assist_sysenter(Context& ctx);
-void assist_cpuid(Context& ctx);
-void assist_invalid_opcode(Context& ctx);
-void assist_exec_page_fault(Context& ctx);
-void assist_gp_fault(Context& ctx);
-void assist_write_segreg(Context& ctx);
+void assist_hypercall(Context& ctx);
 void assist_ptlcall(Context& ctx);
-void assist_popf(Context& ctx);
+void assist_sysenter(Context& ctx);
+void assist_iret16(Context& ctx);
+void assist_iret32(Context& ctx);
+void assist_iret64(Context& ctx);
+// Control registe rupdates
+void assist_cpuid(Context& ctx);
 void assist_cld(Context& ctx);
 void assist_std(Context& ctx);
+void assist_popf(Context& ctx);
+void assist_write_segreg(Context& ctx);
 void assist_wrmsr(Context& ctx);
 void assist_rdmsr(Context& ctx);
 void assist_write_cr0(Context& ctx);
@@ -339,9 +430,7 @@ void assist_write_cr2(Context& ctx);
 void assist_write_cr3(Context& ctx);
 void assist_write_cr4(Context& ctx);
 void assist_write_debug_reg(Context& ctx);
-void assist_iret16(Context& ctx);
-void assist_iret32(Context& ctx);
-void assist_iret64(Context& ctx);
+// I/O and legacy
 void assist_ioport_in(Context& ctx);
 void assist_ioport_out(Context& ctx);
 
