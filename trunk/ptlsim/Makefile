@@ -18,7 +18,7 @@ endif
 #
 # (Presently this is an experimental x86-64 only feature!)
 #
-# PTLSIM_HYPERVISOR=1
+PTLSIM_HYPERVISOR=1
 
 CC = g++
 
@@ -34,7 +34,7 @@ INCFLAGS += -DPTLSIM_HYPERVISOR -D__XEN__
 endif
 
 ifdef __x86_64__
-CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
+CFLAGS = -O1 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
 #CFLAGS = -O1 -g3 -march=k8 -falign-functions=16 $
 CFLAGS32BIT = $(CFLAGS) -m32
 else

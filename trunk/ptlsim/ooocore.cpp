@@ -26,9 +26,12 @@
 #define logable(level) (0)
 #endif
 
-byte uop_executable_on_cluster[OP_MAX_OPCODE];
+using namespace OutOfOrderModel;
 
-W32 forward_at_cycle_lut[MAX_CLUSTERS][MAX_FORWARDING_LATENCY+1];
+namespace OutOfOrderModel {
+  byte uop_executable_on_cluster[OP_MAX_OPCODE];
+  W32 forward_at_cycle_lut[MAX_CLUSTERS][MAX_FORWARDING_LATENCY+1];
+};
 
 static void init_luts() {
   // Initialize opcode maps
@@ -54,7 +57,7 @@ static void init_luts() {
 }
 
 template <typename T> 
-void print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title) {
+static void OutOfOrderModel::print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title) {
   os << title, ":", endl;
   foreach (i, lol.count) {
     StateList& list = *lol[i];
@@ -95,7 +98,7 @@ void PhysicalRegisterFile::init(const char* name, int coreid, int rfid, int size
   this->frees = 0;
 
   foreach (i, MAX_PHYSREG_STATE) {
-    states[i].init(physreg_state_names[i], coreof(coreid).physreg_states);
+    states[i].init(physreg_state_names[i], getcore().physreg_states);
   }
 
   foreach (i, size) {
@@ -132,19 +135,21 @@ void PhysicalRegisterFile::reset() {
 }
 
 StateList& PhysicalRegister::get_state_list(int s) const {
-  return coreof(coreid).physregfiles[rfid].states[s];
+  return getcore().physregfiles[rfid].states[s];
 }
 
-ostream& operator <<(ostream& os, const PhysicalRegister& physreg) {
-  stringbuf sb;
-  print_value_and_flags(sb, physreg.data, physreg.flags);
-
-  os << "  r", intstring(physreg.index(), -3), " state ", padstring(physreg.get_state_list().name, -12), " ", sb;
-  if (physreg.rob) os << " rob ", physreg.rob->index(), " (uuid ", physreg.rob->uop.uuid, ")";
-  os << " refcount ", physreg.refcount;
-
-  return os;
-}
+namespace OutOfOrderModel {
+  ostream& operator <<(ostream& os, const PhysicalRegister& physreg) {
+    stringbuf sb;
+    print_value_and_flags(sb, physreg.data, physreg.flags);
+    
+    os << "  r", intstring(physreg.index(), -3), " state ", padstring(physreg.get_state_list().name, -12), " ", sb;
+    if (physreg.rob) os << " rob ", physreg.rob->index(), " (uuid ", physreg.rob->uop.uuid, ")";
+    os << " refcount ", physreg.refcount;
+    
+    return os;
+  }
+};
 
 ostream& RegisterRenameTable::print(ostream& os) const {
   foreach (i, TRANSREG_COUNT) {
@@ -262,11 +267,11 @@ bool ReorderBufferEntry::ready_to_issue() const {
 }
 
 bool ReorderBufferEntry::ready_to_commit() const {
-  return (current_state_list == &coreof(coreid).rob_ready_to_commit_queue);
+  return (current_state_list == &getcore().rob_ready_to_commit_queue);
 }
 
 StateList& ReorderBufferEntry::get_ready_to_issue_list() const {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
   return 
     isload(uop.opcode) ? core.rob_ready_to_load_list[cluster] :
     isstore(uop.opcode) ? core.rob_ready_to_store_list[cluster] :
@@ -281,7 +286,7 @@ stringbuf& ReorderBufferEntry::get_operand_info(stringbuf& sb, int operand) cons
   ReorderBufferEntry& sourcerob = *physreg.rob;
 
   sb << "r", physreg.index();
-  if (PHYS_REG_FILE_COUNT > 1) sb << "@", coreof(coreid).physregfiles[physreg.rfid].name;
+  if (PHYS_REG_FILE_COUNT > 1) sb << "@", getcore().physregfiles[physreg.rfid].name;
 
   switch (physreg.state) {
   case PHYSREG_WRITTEN:
@@ -471,7 +476,7 @@ ostream& LoadStoreQueueEntry::print(ostream& os) const {
   os << "uuid ", intstring(rob->uop.uuid, 10), " ";
   os << "rob ", intstring(rob->index(), -3), " ";
   os << "r", intstring(rob->physreg->index(), -3);
-  if (PHYS_REG_FILE_COUNT > 1) os << "@", coreof(coreid).physregfiles[rob->physreg->rfid].name;
+  if (PHYS_REG_FILE_COUNT > 1) os << "@", getcore().physregfiles[rob->physreg->rfid].name;
   os << " ";
   if (invalid) {
     os << "< Invalid: fault 0x", hexstring(data, 8), " > ";
@@ -781,6 +786,6 @@ struct OutOfOrderMachine: public PTLsimMachine {
 
 OutOfOrderMachine ooomodel("ooo");
 
-OutOfOrderCore& coreof(int coreid) {
+OutOfOrderCore& OutOfOrderModel::coreof(int coreid) {
   return *ooomodel.cores[coreid];
 }

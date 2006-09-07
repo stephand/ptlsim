@@ -18,6 +18,7 @@
 #include <decode.h>
 #include <ooocore.h>
 #include <dcacheint.h>
+#include <branchpred.h>
 #undef STATS_ONLY
 
 //
@@ -130,7 +131,7 @@ struct PTLsimStats { // rootnode:
       } stop;
 
       W64 opclass[OPCLASS_COUNT]; // label: opclass_names
-      W64 width[FETCH_WIDTH+1]; // histo: 0, FETCH_WIDTH, 1
+      W64 width[OutOfOrderModel::FETCH_WIDTH+1]; // histo: 0, OutOfOrderModel::FETCH_WIDTH, 1
 
       W64 blocks;
       W64 uops;
@@ -146,7 +147,7 @@ struct PTLsimStats { // rootnode:
         W64 stq_full;
       } status;
 
-      W64 width[FRONTEND_WIDTH+1]; // histo: 0, FRONTEND_WIDTH, 1
+      W64 width[OutOfOrderModel::FRONTEND_WIDTH+1]; // histo: 0, OutOfOrderModel::FRONTEND_WIDTH, 1
 
       struct renamed {
         W64 none;
@@ -166,22 +167,22 @@ struct PTLsimStats { // rootnode:
       W64 consumer_count[256]; // histo: 0, 255, 1
     } frontend;
     struct dispatch {
-      W64 width[DISPATCH_WIDTH+1]; // histo: 0, DISPATCH_WIDTH, 1
+      W64 width[OutOfOrderModel::DISPATCH_WIDTH+1]; // histo: 0, OutOfOrderModel::DISPATCH_WIDTH, 1
 
       struct source { // node: summable
-        W64 integer[MAX_PHYSREG_STATE]; // label: physreg_state_names
-        W64 fp[MAX_PHYSREG_STATE]; // label: physreg_state_names
-        W64 st[MAX_PHYSREG_STATE]; // label: physreg_state_names
-        W64 br[MAX_PHYSREG_STATE]; // label: physreg_state_names
+        W64 integer[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+        W64 fp[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+        W64 st[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+        W64 br[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
       } source;
 
-      W64 cluster[MAX_CLUSTERS]; // label: cluster_names
+      W64 cluster[OutOfOrderModel::MAX_CLUSTERS]; // label: OutOfOrderModel::cluster_names
 
       struct redispatch {
         W64 trigger_uops;
         W64 deadlock_flushes;
         W64 deadlock_uops_flushed;
-        W64 dependent_uops[ROB_SIZE+1]; // histo: 0, ROB_SIZE, 1
+        W64 dependent_uops[OutOfOrderModel::ROB_SIZE+1]; // histo: 0, OutOfOrderModel::ROB_SIZE, 1
       } redispatch;
 
     } dispatch;
@@ -196,10 +197,10 @@ struct PTLsimStats { // rootnode:
         W64 complete;
       } result;
       struct width {
-        W64 int0[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
-        W64 int1[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
-        W64 ld[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
-        W64 fp[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 int0[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+        W64 int1[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+        W64 ld[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+        W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
       } width;
       W64 opclass[OPCLASS_COUNT]; // label: opclass_names
 
@@ -207,10 +208,10 @@ struct PTLsimStats { // rootnode:
     struct writeback {
       W64 total_writebacks;
       struct width {
-        W64 int0[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
-        W64 int1[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
-        W64 ld[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
-        W64 fp[MAX_ISSUE_WIDTH+1]; // histo: 0, MAX_ISSUE_WIDTH, 1
+        W64 int0[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+        W64 int1[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+        W64 ld[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+        W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
       } width;
     } writeback;
 
@@ -239,7 +240,7 @@ struct PTLsimStats { // rootnode:
         W64 no;
       } setflags;
 
-      W64 width[COMMIT_WIDTH+1]; // histo: 0, COMMIT_WIDTH, 1
+      W64 width[OutOfOrderModel::COMMIT_WIDTH+1]; // histo: 0, OutOfOrderModel::COMMIT_WIDTH, 1
       W64 opclass[OPCLASS_COUNT]; // label: opclass_names
     } commit;
 

@@ -26,6 +26,8 @@
 #define logable(level) (0)
 #endif
 
+using namespace OutOfOrderModel;
+
 //
 // Issue Queue
 //
@@ -76,7 +78,7 @@ template <int size, int operandcount>
 void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, operandcount>::tag_t sourceid, const bitvec<size>& mask, int operand) const {
   if likely (!logable(5)) return;
 
-  const ReorderBufferEntry* source = &coreof(coreid).ROB[sourceid];
+  const ReorderBufferEntry* source = &getcore().ROB[sourceid];
 
   bitvec<size> temp = mask;
 
@@ -84,9 +86,9 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
     int slot = temp.lsb();
     int robid = uopof(slot);
     assert(inrange(robid, 0, ROB_SIZE-1));
-    const ReorderBufferEntry* target = &coreof(coreid).ROB[robid];
+    const ReorderBufferEntry* target = &getcore().ROB[robid];
 
-    coreof(coreid).log_forwarding(source, target, operand);
+    getcore().log_forwarding(source, target, operand);
     temp[slot] = 0;
   }
 }
@@ -189,7 +191,7 @@ declare_issueq_templates;
 //  -1 if there was an exception and we should stop issuing this cycle
 //
 int ReorderBufferEntry::issue() {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
 
   struct FunctionalUnit* FU_assigned = null;
 
@@ -447,7 +449,7 @@ int ReorderBufferEntry::issue() {
 // Address generation common to both loads and stores
 //
 void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul) {
-  Context& ctx = coreof(coreid).ctx;
+  Context& ctx = getcore().ctx;
   bool st = isstore(uop.opcode);
 
   int sizeshift = uop.size;
@@ -518,7 +520,7 @@ void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W
 }
 
 bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec) {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
 
   bool st = isstore(uop.opcode);
   int aligntype = uop.cond;
@@ -587,7 +589,7 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
 // When the store is replayed and rescheduled, it must now have all operands ready this time.
 //
 int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate) {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
   int sizeshift = uop.size;
   int aligntype = uop.cond;
   
@@ -838,7 +840,7 @@ extern W64 last_guest_rip_triggering_walk;
 extern W64 last_guest_uuid_triggering_walk;
 
 int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
   int sizeshift = uop.size;
   int aligntype = uop.cond;
   bool signext = (uop.opcode == OP_ldx);
@@ -1091,7 +1093,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 //
 // Data cache has delivered a load: wake up corresponding ROB/LSQ/physreg entries
 //
-W64 load_filled_callback(LoadStoreInfo lsi, W64 addr) {
+static W64 load_filled_callback(LoadStoreInfo lsi, W64 addr) {
   if unlikely (lsi.info.rd == PHYS_REG_NULL)
                 return 0; // ignore prefetches
   /*  
@@ -1112,7 +1114,7 @@ void ReorderBufferEntry::loadwakeup() {
 
   lsq->datavalid = 1;
 
-  changestate(coreof(coreid).rob_completed_list[cluster]);
+  changestate(getcore().rob_completed_list[cluster]);
   cycles_left = 0;
   lfrqslot = -1;
   forward_cycle = 0;
@@ -1134,7 +1136,7 @@ void ReorderBufferEntry::loadwakeup() {
 // a deadlock if there is not enough room in the issue queue.
 //
 void ReorderBufferEntry::replay() {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
 
   if (logable(6)) {
     logfile << intstring(uop.uuid, 20), " replay rob ", intstring(index(), -3), " r", intstring(physreg->index(), -3);
@@ -1186,7 +1188,7 @@ void ReorderBufferEntry::replay() {
 // replay or annulment.
 //
 void ReorderBufferEntry::release() {
-  issueq_operation_on_cluster(coreof(coreid), cluster, release(iqslot));
+  issueq_operation_on_cluster(getcore(), cluster, release(iqslot));
   iqslot = -1;
 }
 
@@ -1201,13 +1203,13 @@ int OutOfOrderCore::issue(int cluster) {
 
   while (issuecount < maxwidth) {
     int iqslot;
-    issueq_operation_on_cluster_with_result(coreof(coreid), cluster, iqslot, issue());
+    issueq_operation_on_cluster_with_result(getcore(), cluster, iqslot, issue());
   
     // Is anything ready?
     if unlikely (iqslot < 0) break;
 
     int robid;
-    issueq_operation_on_cluster_with_result(coreof(coreid), cluster, robid, uopof(iqslot));
+    issueq_operation_on_cluster_with_result(getcore(), cluster, robid, uopof(iqslot));
     assert(inrange(robid, 0, ROB_SIZE-1));
     ReorderBufferEntry& rob = ROB[robid];
     rob.iqslot = iqslot;
@@ -1241,7 +1243,7 @@ int ReorderBufferEntry::forward() {
     if likely (!bit(targets, i)) continue;
     if (logable(6)) logfile << intstring(uop.uuid, 20), " brcast rob ", intstring(index(), -3), " from cluster ", clusters[cluster].name, " to cluster ", clusters[i].name, " on forwarding cycle ", forward_cycle, endl;
 
-    issueq_operation_on_cluster(coreof(coreid), i, broadcast(index()));
+    issueq_operation_on_cluster(getcore(), i, broadcast(index()));
   }
 
   return 0;
@@ -1279,7 +1281,7 @@ int ReorderBufferEntry::forward() {
 //
 
 W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_rip) {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
 
   int idx;
 
@@ -1465,10 +1467,8 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 // re-dispatched, <prevrob> should be null.
 //
 
-W64 redispatch_total_trigger_uops;
-
 void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob) {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
 
   if (logable(6)) {
     logfile << intstring(uop.uuid, 20), " redisp rob ", intstring(index(), -3), " from state ", current_state_list->name, ": dep on ";
@@ -1489,12 +1489,12 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     logfile << "; redispatch ";
   }
 
-  redispatch_total_trigger_uops++;
+  stats.ooocore.dispatch.redispatch.trigger_uops++;
 
   // Remove from issue queue, if it was already in some issue queue
   if unlikely (cluster >= 0) {
     bool found = 0;
-    issueq_operation_on_cluster_with_result(coreof(coreid), cluster, found, annuluop(index()));
+    issueq_operation_on_cluster_with_result(getcore(), cluster, found, annuluop(index()));
     if (found) {
       if (logable(6)) logfile << " [iqslot]";
     }
@@ -1545,15 +1545,12 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
   if (logable(6)) logfile << endl;
 }
 
-W64 redispatch_dependent_uop_count_histogram[ROB_SIZE+1];
-W64 redispatch_total_dependent_uops;
-
 //
 // Find all uops dependent on the specified uop, and 
 // redispatch each of them.
 //
 void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
 
   bitvec<ROB_SIZE> depmap;
   depmap = 0;
@@ -1598,7 +1595,6 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
 
     if unlikely (dep) {
       count++;
-      redispatch_total_dependent_uops += (robidx != index());
       depmap[reissuerob.index()] = 1;
       reissuerob.redispatch(dependent_operands, prevrob);
       prevrob = &reissuerob;
@@ -1606,7 +1602,7 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
   }
 
   assert(inrange(count, 1, ROB_SIZE));
-  redispatch_dependent_uop_count_histogram[count-1]++;
+  stats.ooocore.dispatch.redispatch.dependent_uops[count-1]++;
 
   if (logable(6)) {
     logfile << intstring(uop.uuid, 20), " redisp rob ", intstring(index(), -3), " redispatched ", (count-1), " dependent uops", endl;
@@ -1614,7 +1610,7 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
 }
 
 int ReorderBufferEntry::pseudocommit() {
-  OutOfOrderCore& core = coreof(coreid);
+  OutOfOrderCore& core = getcore();
 
   if (logable(6)) {
     logfile << intstring(uop.uuid, 20), " pseucm rob ", intstring(index(), -3), ":";
