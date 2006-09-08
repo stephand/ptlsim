@@ -1971,7 +1971,7 @@ extern ostream logfile;
 extern "C" void abort() {
   cout.flush();
   cerr.flush();
-  if (logfile) logfile.flush();
+  if (logfile) logfile.close();
   asm("ud2a" : : "a" (__builtin_return_address(0)));
   for (;;) { asm("nop"); }
 }

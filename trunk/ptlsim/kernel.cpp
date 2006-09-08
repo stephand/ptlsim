@@ -17,37 +17,9 @@
 #include <asm/prctl.h>
 #endif
 
-//
-// Performance Counter Support:
-//
-// If you have a kernel compiled with the perfctr library (see below)
-// and have installed the appropriate userspace headers, edit the
-// Makefile to uncomment "ENABLE_KERNEL_PERFCTRS = 1".
-//
-// This will let PTLsim profile the native CPU for cycle counts,
-// cache hit rate, uop and x86 instruction counts, etc. This mode
-// is enabled by the "-profonly" configuration option, and can be
-// useful for comparing PTLsim against a real processor.
-//
-// Note that you will need a modified kernel that allows hooking
-// the native exit() syscall so PTLsim can regain control and
-// print the performance counters. If you don't have this, you'll
-// need to use ptlcall_switch_to_native() at the end of the
-// benchmark being profiled to make the perfctr support work.
-//
-// The perfctr library can be obtained here:
-// http://www.csd.uu.se/~mikpe/linux/perfctr
-// 
-
-#ifdef ENABLE_KERNEL_PERFCTRS
-extern "C" {
-#include <libperfctr.h>
-#include <perfctr_event_codes.h>
-}
-#endif
-
 #include <ptlsim.h>
 #include <config.h>
+#include <stats.h>
 #include <kernel.h>
 #include <loader.h>
 
@@ -233,9 +205,8 @@ extern "C" void assert_fail(const char *__assertion, const char *__file, unsigne
 
   if (logfile) {
     logfile << sb, flush;
-    if (config.use_out_of_order_core)
-      dump_ooo_state();
-
+    PTLsimMachine* machine = PTLsimMachine::getcurrent();
+    if (machine) machine->dump_state(logfile);
     logfile.close();
   }
   abort();
@@ -940,8 +911,6 @@ bool remove_switch_to_sim_breakpoint() {
   return false;
 }
 
-extern void switch_to_sim();
-
 extern "C" void switch_to_native_restore_context_lowlevel(const UserContext& ctx, int switch_64_to_32);
 
 void switch_to_native_restore_context() {
@@ -971,6 +940,9 @@ void switch_to_native_restore_context() {
   logfile << endl, "=== Switching to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " ===", endl, endl, flush;
   switch_to_native_restore_context_lowlevel(ctx.commitarf, !ctx.use64);
 }
+
+// Main function (see below)
+void switch_to_sim();
 
 // Called by save_context_switch_to_sim_lowlevel
 extern "C" void save_context_switch_to_sim() {
@@ -1364,11 +1336,10 @@ W64 handle_ptlcall(W64 rip, W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, 
   case PTLCALL_CAPTURE_STATS: {
     const char* snapshotname = (const char*)(Waddr)arg1;
     if (asp.check((void*)snapshotname, PROT_READ)) {
-      logfile << "  Capturing statistics snapshot ", snapshotname, " id ", snapshotid, endl;
-      ooo_capture_stats(snapshotname);
+      capture_stats_snapshot(snapshotname);
     } else {
-      logfile << "WARNING: invalid snapshotname pointer (", snapshotname, "); using default snapshot ID ", snapshotid, endl;
-      ooo_capture_stats(null);
+      logfile << "WARNING: invalid snapshotname pointer (", snapshotname, "); using default snapshot ID", endl;
+      capture_stats_snapshot(null);
     }
     break;
   }
@@ -1387,115 +1358,6 @@ void assist_ptlcall(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
-CycleTimer ctperfctrs;
-
-//
-// Performance counters
-//
-#ifdef ENABLE_KERNEL_PERFCTRS
-static struct vperfctr* perfctrset = null;
-
-static void setup_perfctr_control(struct perfctr_cpu_control *cpu_control, int eventcount, const W64* events) {
-  memset(cpu_control, 0, sizeof(*cpu_control));
-  /* count at CPL > 0, Enable */
-  static const W64 FLAGS_USERMODE_AND_ENABLED = ((1 << 16) | (1 << 22));
-  cpu_control->tsc_on = 1;
-  cpu_control->nractrs = eventcount;
-  cpu_control->nrictrs = 0;
-  foreach (i, eventcount) {
-    cpu_control->evntsel[i] = events[i] | FLAGS_USERMODE_AND_ENABLED;
-    cpu_control->pmc_map[i] = i;
-  }
-}
-
-static struct perfctr_sum_ctrs baseline_perfctrs;
-
-void init_perfctrs() {
-  int rc;
-
-  perfctrset = vperfctr_open();
-#if 0
-  // Don't abort, just don't use the counters
-  if (!perfctrset) {
-    cerr << endl;
-    cerr << "ptlsim: Error: cannot access CPU performance counters!", endl;
-    cerr << "ptlsim: Cannot initialize virtual machine; aborting", endl;
-    cerr << endl, flush;
-    exit(1);
-  }
-#endif
-}
-
-void start_perfctrs() {
-  if (!perfctrset) return;
-  static struct vperfctr_control perfctrcontrol;
-  const int eventcount = 4;
-  W64 events[4] = { K7_RETIRED_INSTRUCTIONS, K7_RETIRED_OPS, K7_DATA_CACHE_ACCESSES, K7_DATA_CACHE_MISSES };
-  setup_perfctr_control(&perfctrcontrol.cpu_control, eventcount, events);
-  assert(vperfctr_control(perfctrset, &perfctrcontrol) >= 0);
-  vperfctr_read_ctrs(perfctrset, &baseline_perfctrs);
-  ctperfctrs.start();
-}
-
-void stop_perfctrs() {
-  if (!perfctrset) return;
-  static struct vperfctr_control perfctrcontrol;
-  memset(&perfctrcontrol.cpu_control, 0, sizeof(perfctrcontrol.cpu_control));
-  assert(vperfctr_control(perfctrset, &perfctrcontrol) >= 0);
-  vperfctr_read_ctrs(perfctrset, &baseline_perfctrs);
-}
-
-void print_perfctrs(ostream& os) {
-#define deltaof(member) (perfctrs.member - baseline_perfctrs.member)
-  if (!perfctrset) return;
-
-  struct perfctr_sum_ctrs perfctrs;
-  vperfctr_read_ctrs(perfctrset, &perfctrs);
-  ctperfctrs.stop();
-  W64 cycles = deltaof(tsc);
-  double seconds = (double)cycles / CycleTimer::gethz();
-  W64 x86insns = deltaof(pmc[0]);
-  W64 uops = deltaof(pmc[1]);
-  W64 dcache_accesses = deltaof(pmc[2]);
-  W64 dcache_misses = deltaof(pmc[3]);
-  W64 dcache_hits = dcache_accesses - dcache_misses;
-
-  os << "Performance Counters (K8 core):", endl;
-  os << "  Total cycles:                   ", intstring(cycles, 15), " = ", floatstring(seconds, 0, 6), " seconds", endl;
-  os << "  Total cycles (by rdtsc):        ", intstring(ctperfctrs.cycles(), 15), " = ", floatstring(ctperfctrs.seconds(), 0, 6), " seconds", endl;
-  os << "  Total x86 instructions retired: ", intstring(x86insns, 15), " = IPC ", floatstring((double)uops / (double)cycles, 5, 3), endl;
-  os << "  Total uops retired:             ", intstring(uops, 15),     " = IPC ", floatstring((double)x86insns / (double)cycles, 5, 3), endl;
-  os << "  uops-to-x86 ratio:              ", floatstring((double)uops / (double)x86insns, 15, 3), endl;
-  os << "  L1 accesses:                    ", intstring(dcache_accesses, 15), endl;
-  os << "  L1 hits:                        ", intstring(dcache_hits, 15), " = ", floatstring(percent(dcache_hits, dcache_accesses), 6, 3), "% hit rate", endl;
-#undef deltaof
-}
-#else // ! ENABLE_KERNEL_PERFCTRS
-
-void init_perfctrs() {
-  // (No operation unless we have a perfctr-enabled kernel)
-}
-
-void start_perfctrs() {
-  // Use the TSC based userspace counter only
-  ctperfctrs.start();
-}
-
-void stop_perfctrs() {
-  // Use the TSC based userspace counter only
-  ctperfctrs.stop();
-}
-
-void print_perfctrs(ostream& os) {
-  W64 cycles = ctperfctrs.cycles();
-  double seconds = (double)cycles / CycleTimer::gethz();
-
-  os << "Performance Counters (K8 core):", endl;
-  os << "  Total cycles (by rdtsc):        ", intstring(ctperfctrs.cycles(), 15), " = ", floatstring(ctperfctrs.seconds(), 0, 6), " seconds", endl;
-}
-
-#endif // ! ENABLE_KERNEL_PERFCTRS
-
 //
 // Get the processor core frequency in cycles/second:
 //
@@ -1511,7 +1373,7 @@ W64 get_core_freq_hz() {
     int n = sscanf(s, "%d", &khz);
     
     if (n == 1) {
-      hz = khz * 1000.0;
+      hz = (W64)khz * 1000;
       return hz;
     }
   }
@@ -1538,6 +1400,18 @@ W64 get_core_freq_hz() {
   // Can't read either of these procfiles: abort
   abort();
   return 0;
+}
+
+const char* get_full_exec_filename() {
+  static char full_exec_filename[1024];
+  int rc = sys_readlink("/proc/self/exe", full_exec_filename, sizeof(full_exec_filename)-1);
+  assert(inrange(rc, 0, (int)sizeof(full_exec_filename)-1));
+  full_exec_filename[rc] = 0;
+  return full_exec_filename;
+}
+
+void print_sysinfo(ostream& os) {
+  // Nothing special on userspace PTLsim
 }
 
 //
@@ -1616,7 +1490,7 @@ int is_elf_64bit(const char* filename) {
   return (h.class3264 == ELFCLASS64);
 }
 
-int ptlsim_inject(int argc, const char** argv) {
+int ptlsim_inject(int argc, char** argv) {
   static const bool DEBUG = 0;
 
   const char* filename = argv[1];
@@ -1806,7 +1680,7 @@ int is_elf_valid(const char* filename) {
   return 1;
 }
 
-int ptlsim_inject(int argc, const char** argv) {
+int ptlsim_inject(int argc, char** argv) {
   static const bool DEBUG = 0;
   int status;
   int rc;
@@ -1969,14 +1843,89 @@ void init_signal_callback() {
   if (!ctx.use64) return;
 #endif
 
-  //cerr << "sizeof(sigset_t) == ", sizeof(sigset_t), endl, flush;
-
-  //assert(sizeof(sigset_t) == (_NSIG / 8));
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = external_signal_callback;
   sa.sa_flags = SA_SIGINFO;
   assert(sys_rt_sigaction(SIGXCPU, &sa, NULL, sizeof(W64)) == 0);
+}
+
+//
+// Collect system information into the stats structure
+//
+void collect_sysinfo(PTLsimStats& stats, int argc, char** argv) {
+  collect_common_sysinfo(stats);
+
+#define strput(x, y) (strncpy((x), (y), sizeof(x)))
+  stringbuf sb;
+
+  const char* execname = get_full_exec_filename();
+  strput(stats.simulator.run.executable, execname);
+
+  sb.reset();
+  foreach (i, argc) {
+    sb << argv[i];
+    if (i != (argc-1)) sb << ' ';
+  }
+
+  strput(stats.simulator.run.args, sb);
+}
+
+//
+// Read per-process configuration
+//
+int init_config(int argc, char** argv) {
+  collect_sysinfo(stats, argc, argv);
+
+  char confroot[1024] = "";
+  stringbuf sb;
+
+  char* homedir = getenv("HOME");
+
+  const char* execname = get_full_exec_filename();
+
+  sb << (homedir ? homedir : "/etc"), "/.ptlsim", execname, ".conf";
+
+  char args[4096];
+  istream is(sb);
+  if (!is) {
+    cerr << "ptlsim: Warning: could not find '", sb, "', using defaults", endl;
+  }
+
+  const char* simname = "ptlsim";
+
+  for (;;) {
+    is >> readline(args, sizeof(args));
+    if (!is) break;
+    char* p = args;
+    while (*p && (*p != '#')) p++;
+    if (*p == '#') *p = 0;
+    if (args[0]) break;
+  }
+
+  is.close();
+
+  char* ptlargs[1024];
+
+  ptlargs[0] = strdup(simname);
+  int ptlargc = 0;
+  char* p = args;
+  while (*p && (ptlargc < (lengthof(ptlargs)-1))) {
+    char* pbase = p;
+    while ((*p != 0) && (*p != ' ')) p++;
+    ptlargc++;
+    ptlargs[ptlargc] = strndup(pbase, p - pbase);
+    if (*p == 0) break;
+    *p++;
+    while ((*p != 0) && (*p == ' ')) p++;
+  }
+
+  // skip the leading argv[0]; just parse the options:
+  configparser.parse(config, ptlargc, ptlargs+1);
+  handle_config_change(config, argc, argv);
+  logfile << config;
+
+  return 0;
 }
 
 //
@@ -2098,8 +2047,6 @@ byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
   return (byte*)destauxv;
 }
 
-extern time_t ptlsim_build_timestamp;
-
 //
 // The real PTLsim entry point called by the kernel immediately after injecting
 // the ptlsim image into the target process is ptlsim_preinit_entry. This in
@@ -2126,7 +2073,6 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
 #endif
 
   inside_ptlsim = (ptlsim_ehdr->e_type == ET_PTLSIM);
-  ptlsim_build_timestamp = (time_t)ptlsim_ehdr->e_version;
 
   ptl_mm_init();
 
@@ -2227,4 +2173,136 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   tls->stack = (void*)sp;
 
   return sp;
+}
+
+void user_process_terminated(int rc) {
+  x86_set_mxcsr(MXCSR_DEFAULT);
+  logfile << "user_process_terminated(rc = ", rc, "): initiating shutdown at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits...", endl, flush;
+  capture_stats_snapshot("final");
+  flush_stats();
+  logfile << "PTLsim exiting...", endl, flush;
+  shutdown_subsystems();
+  logfile.close();
+  sys_exit(rc);
+}
+
+//
+// Main simulation driver function
+//
+void switch_to_sim() {
+  static const bool DEBUG = 0;
+
+  logfile << "Baseline state:", endl;
+  logfile << ctx;
+
+  Waddr origrip = (Waddr)ctx.commitarf[REG_rip];
+
+  bool done = false;
+
+  //
+  // Swap the FP control registers to the user process version, so FP uopimpls
+  // can use the real rounding control bits.
+  //
+  x86_set_mxcsr(ctx.mxcsr | MXCSR_EXCEPTION_DISABLE_MASK);
+
+  simulate(config.core_name);
+  capture_stats_snapshot("final");
+  flush_stats();
+
+  done |= (config.dump_at_end | config.overshoot_and_dump);
+
+  // Sanitize flags (AMD and Intel CPUs also use bits 1 and 3 for reserved bits, but not for INV and WAIT like we do).
+  ctx.commitarf[REG_flags] &= FLAG_NOT_WAIT_INV;
+
+  logfile << "Switching to native: returning to rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
+
+  x86_set_mxcsr(MXCSR_DEFAULT);
+
+  if (config.exit_after_fullsim) {
+    logfile << endl, "=== Exiting after full simulation on tid ", sys_gettid(), " at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], " (", 
+      sim_cycle, " cycles, ", total_user_insns_committed, " user commits, ", iterations, " iterations) ===", endl, endl;
+    shutdown_subsystems();
+    logfile.flush();
+    sys_exit(0);
+  }
+
+  if (config.overshoot_and_dump | config.dump_at_end) {
+    RIPVirtPhys rip(ctx.commitarf[REG_rip]);
+    rip.update(ctx);
+
+    BasicBlock* bb = bbcache(rip);
+    if (!bb) {
+      bb = bbcache.translate(ctx, rip);
+    }
+
+    assert(bb->transops[0].som);
+    int bytes = bb->transops[0].bytes;
+    Waddr ripafter = rip + (config.overshoot_and_dump ? bytes : 0);
+
+    logfile << endl;
+    logfile << "Overshoot and dump enabled:", endl;
+    logfile << "- Return to rip ", rip, " in native mode", endl;
+    if (config.overshoot_and_dump) logfile << "- Execute one x86 insn of ", bytes, " bytes at rip ", rip, endl;
+    logfile << "- Breakpoint and dump core at rip ", (void*)ripafter, endl, endl, flush;
+
+    int rc = sys_mprotect((void*)floor(ripafter, PAGE_SIZE), PAGE_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC);
+    assert(!rc);
+
+    *((byte*)ripafter) = 0xfb; // x86 invalid opcode
+  }
+
+  logfile.flush();
+  switch_to_native_restore_context();
+}
+
+//
+// PTLsim main: called after ptlsim_preinit() brings up boot subsystems
+//
+int main(int argc, char** argv) {
+  configparser.setup();
+  config.reset();
+
+  if (!inside_ptlsim) {
+    int rc = 0;
+    if (argc < 2) {
+      print_banner(cout, stats, argc, argv);
+      configparser.printusage(cout, config);
+    } else {
+      rc = ptlsim_inject(argc, argv);
+    }
+    cout.flush();
+    cerr.flush();
+    sys_exit(rc);
+  }
+
+  init_config(argc, argv);
+  init_signal_callback();
+
+  if (config.pause_at_startup) {
+    logfile << "ptlsim: Paused for ", config.pause_at_startup, " seconds; attach debugger to PID ", sys_getpid(), " now...", endl, flush;
+    cerr << "ptlsim: Paused for ", config.pause_at_startup, " seconds; attach debugger to PID ", sys_getpid(), " now...", endl, flush;
+    sys_nanosleep((W64)config.pause_at_startup * 1000000000);
+    cerr << "ptlsim: Continuing...", endl, flush;
+    logfile << "ptlsim: Continuing...", endl, flush;
+  }
+
+  init_cache();
+  init_uops();
+  init_decode();
+
+  void* interp_entry = (void*)(Waddr)ctx.commitarf[REG_rip];
+  void* program_entry = (void*)(Waddr)find_auxv_entry(AT_ENTRY)->a_un.a_val;
+
+  logfile << "loader: interp_entry ", interp_entry, ", program_entry ", program_entry, endl, flush;
+
+  if (!config.trigger_mode) {
+    if (config.start_at_rip != INVALIDRIP)
+      set_switch_to_sim_breakpoint((void*)(Waddr)config.start_at_rip);
+    else if (config.include_dyn_linker)
+      set_switch_to_sim_breakpoint(interp_entry);
+    else set_switch_to_sim_breakpoint(program_entry);
+  }
+
+  // Context switch into virtual machine:
+  switch_to_native_restore_context();
 }

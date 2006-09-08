@@ -18,7 +18,7 @@ endif
 #
 # (Presently this is an experimental x86-64 only feature!)
 #
-PTLSIM_HYPERVISOR=1
+# PTLSIM_HYPERVISOR=1
 
 CC = g++
 
@@ -34,7 +34,7 @@ INCFLAGS += -DPTLSIM_HYPERVISOR -D__XEN__
 endif
 
 ifdef __x86_64__
-CFLAGS = -O1 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
+CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
 #CFLAGS = -O1 -g3 -march=k8 -falign-functions=16 $
 CFLAGS32BIT = $(CFLAGS) -m32
 else
@@ -57,7 +57,7 @@ STDOBJS = glibc.o
 ifdef __x86_64__
 # IMPORTANT: linkstart.o and linkend.o must be at opposite ends of the list to set up constructor tables properly:
 ifdef PTLSIM_HYPERVISOR
-COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o ooocore.o ooopipe.o oooexec.o branchpred.o dcache.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlsim.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o ooocore.o ooopipe.o oooexec.o branchpred.o dcache.o linkend.o
 else
 COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o dcache.o datastore.o injectcode-32bit.o injectcode-64bit.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
@@ -73,7 +73,7 @@ COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h decode.h dcache.h config.h ptlsi
 OOOINCLUDES = branchpred.h ooocore.h cpthwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
-COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-core.cpp decode-fast.cpp decode-complex.cpp decode-x87.cpp decode-sse.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp
+COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-core.cpp decode-fast.cpp decode-complex.cpp decode-x87.cpp decode-sse.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp makeusage.cpp
 
 ifdef PTLSIM_HYPERVISOR
 COMMONCPPFILES += lowlevel-64bit-xen.S ptlxen.cpp ptlxen-common.cpp ptlmon.cpp
@@ -138,6 +138,13 @@ ptlsim.dst: dstbuild stats.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
 	dstbuild.temp > ptlsim.dst
 	rm -f dstbuild.temp destbuild.temp.cpp stats.i
 
+makeusage: makeusage.o $(BASEOBJS) $(STDOBJS)
+	g++ $(CFLAGS) $(INCFLAGS) $(BASEOBJS) $(STDOBJS) makeusage.o -o makeusage
+
+usage.o: makeusage Makefile
+	makeusage > usage.txt
+	objcopy -I binary -O elf32-i386 -B i386 --rename-section .data=.usage,alloc,load,readonly,data,contents usage.txt usage.o
+
 ptlsim.dst.o: ptlsim.dst
 	objcopy -I binary -O elf64-x86-64 -B i386 --rename-section .data=.dst,alloc,load,readonly,data,contents ptlsim.dst ptlsim.dst.o
 
@@ -153,8 +160,8 @@ endif
 
 ifdef __x86_64__
 ifdef PTLSIM_HYPERVISOR
-ptlsim: ptlmon.o ptlxen.bin.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o ptlmon.lds Makefile
-	g++ $(CFLAGS) ptlmon.o ptlxen.bin.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -Wl,-T,ptlmon.lds -static -o ptlsim
+ptlsim: ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o ptlmon.lds Makefile
+	g++ $(CFLAGS) ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -Wl,-T,ptlmon.lds -static -o ptlsim
 else
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
 	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`
@@ -184,7 +191,7 @@ test.dat-32bit.S: test.dat Makefile
 	$(CC) $(CFLAGS) $(INCFLAGS) -c $<
 
 clean:
-	rm -fv ptlsim ptlstats ptlxen.bin cpuid *.o core core.[0-9]* .depend *.gch
+	rm -fv ptlsim ptlstats ptlxen.bin cpuid dstbuild.temp destbuild.temp.cpp stats.i makeusage *.o core core.[0-9]* .depend *.gch
 
 OBJFILES = $(COMMONOBJS) $(PT2XOBJS) $(OOOOBJS)
 INCLUDEFILES = $(COMMONINCLUDES) $(PT2XINCLUDES) $(OOOINCLUDES)

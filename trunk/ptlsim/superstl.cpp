@@ -13,38 +13,62 @@
 // For debugging of messages before crashes:
 bool force_synchronous_streams = false;
 
-// Defined differently depending on the (usermode vs bare hardware in kernel mode):
-W64 get_core_freq_hz();
-
 namespace superstl {
   //
   // odstream
   //
+  odstream::odstream() {
+    fd = -1;
+    buf = null;
+    bufsize = 0;
+    tail = 0;
+    close_on_destroy = 1;
+    ringbuf_mode = 0;
+    ringbuf = null;
+    ringbuf_tail = 0;
+    chain = null;
+    offset = 0;
+  }
+
+  odstream::~odstream() {
+    close();
+  }
+
   bool odstream::open(const char* filename, bool append, int bufsize) {
     if (fd >= 0) close();
     fd = sys_open(filename, O_RDWR | O_CREAT | ((append) ? O_APPEND : O_TRUNC), 0644);
     if (fd < 0) return false;
+    buf = null;
+    this->bufsize = 0;
     setbuf(bufsize);
     close_on_destroy = 1;
+    ringbuf_mode = 0;
+    ringbuf = null;
     chain = null;
     offset = 0;
     return true;
   }
 
-  int odstream::setbuf(int bufsize) {
-    this->bufsize = bufsize;
+  int odstream::setbuf(int newbufsize) {
+    if (fd < 0) return 0;
+    if (bufsize == newbufsize) return bufsize;
+    if (buf) delete buf;
+    bufsize = newbufsize;
     if (!bufsize) return 0;
     tail = 0;
     buf = new byte[bufsize];
-    if (buf) bufsize = 0;
     return bufsize;
   }
 
   bool odstream::open(int fd, int bufsize) {
     if (this->fd >= 0) close();
     this->fd = fd;
+    buf = null;
+    this->bufsize = 0;
     setbuf(bufsize);
     close_on_destroy = 0;
+    ringbuf_mode = 0;
+    ringbuf = null;
     chain = null;
     offset = 0;
     return ok();
@@ -52,16 +76,68 @@ namespace superstl {
 
   void odstream::close() {
     if (fd < 0) return;
+    if (ringbuf_mode) set_ringbuf_mode(0);
     flush();
-    if (buf) delete[] buf;
+    if (buf) delete buf;
     buf = null;
     tail = 0;
-    sys_close(fd);
+    if (close_on_destroy) sys_close(fd);
     fd = -1;
   }
 
+  //
+  // Copy all writes to secondary stream 'chain'.
+  //
   void odstream::setchain(odstream* chain) {
     this->chain = chain;
+  }
+
+  //
+  // If tail mode is enabled, every time the buffer fills,
+  // copy it to a backup buffer of the same size, then
+  // discard the current buffer, rather than writing its
+  // contents to the backing file.
+  //
+  // The first time tail mode is enabled, the buffer
+  // is flushed to the file first before starting
+  // this behavior. Similarly, when disabling tail
+  // mode, both the backup buffer and the real
+  // buffer are flushed to the stream (otherwise
+  // there would be no way to get the saved data).
+  // Flushes while in tail mode are no-ops.
+  //
+  // This mode is useful for log files where massive
+  // amounts of data would be generated but only
+  // the very last batch of log entries before a
+  // crash or assert failure are interesting.
+  //
+  void odstream::set_ringbuf_mode(bool new_ringbuf_mode) {
+    if (fd < 0) return;
+    if (ringbuf_mode == new_ringbuf_mode) return;
+
+    if (new_ringbuf_mode) {
+      // Transition from off -> on: first flush, then alloc
+      flush();
+      assert(!ringbuf);
+      
+      ringbuf = new byte[bufsize];
+      memset(ringbuf, 0, bufsize);
+      ringbuf_tail = 0;
+      ringbuf_mode = 1;
+    } else {
+      // Transition from on -> off: turn off, then flush
+      assert(ringbuf);
+      sys_write(fd, ringbuf, ringbuf_tail);
+      delete ringbuf;
+
+
+      ringbuf = null;
+      ringbuf_tail = 0;
+
+      ringbuf_mode = 0;
+      // Flush out last part of circular buffer: 
+      flush();
+    }
   }
 
   int odstream::write(const void* data, int count) {
@@ -86,9 +162,7 @@ namespace superstl {
       total += n;
       p += n;
       if unlikely (!n) {
-        // buffer full
-        assert(sys_write(fd, buf, tail) == tail);
-        tail = 0;
+        flush();
       }
     }
 
@@ -101,6 +175,19 @@ namespace superstl {
 
   void odstream::flush() {
     if unlikely (chain) chain->flush();
+
+    if unlikely (ringbuf_mode) {
+      // Ignore partial flushes
+      if (tail < bufsize) return;
+
+      byte* temp = ringbuf;
+      ringbuf = buf;
+      buf = temp;
+
+      ringbuf_tail = tail;
+      tail = 0;
+      return;
+    }
 
     if likely (buf) {
       int rc = 0;
@@ -446,6 +533,7 @@ namespace superstl {
       int hibytes = bufsize - tail;
 
       int hin = sys_read(fd, &buf[tail], hibytes);
+      if (hin < 0) hin = 0;
       if ((hibytes > 0) & (hin == 0)) eos = 1; // end of stream?
 
       tail = addmod(tail, hin);
@@ -454,6 +542,7 @@ namespace superstl {
       if (hin == hibytes) {
         // do low part
         int lon = sys_read(fd, &buf[0], lobytes);
+        if (lon < 0) lon = 0;
         if ((lobytes > 0) & (lon == 0)) eos = 1; // end of stream?
         tail = addmod(tail, lon);
         bufused += lon;
@@ -465,6 +554,7 @@ namespace superstl {
 
       int bytes = (head - tail);
       int n = sys_read(fd, &buf[tail], bytes);
+      if (n < 0) n = 0;
 
       if ((bytes > 0) & (n == 0)) eos = 1; // end of stream?
       tail = addmod(tail, n);
@@ -479,6 +569,7 @@ namespace superstl {
         // buffer empty
         int bytes = bufsize;
         int n = sys_read(fd, &buf[0], bytes);
+        if (n < 0) n = 0;
 
         if ((bytes > 0) & (n == 0)) eos = 1; // end of stream?
         head = 0;

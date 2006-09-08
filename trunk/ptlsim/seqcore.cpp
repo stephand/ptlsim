@@ -946,9 +946,9 @@ struct SequentialMachine: public PTLsimMachine {
         logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " total commits", endl, flush;
         last_printed_status_at_cycle = sim_cycle;
       }
-
+#ifdef PTLSIM_HYPERVISOR
       inject_events();
-
+#endif
       foreach (i, contextcount) {
         SequentialCore& core =* cores[i];
         Context& ctx = contextof(i);

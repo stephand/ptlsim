@@ -669,7 +669,6 @@ struct OutOfOrderMachine: public PTLsimMachine {
   virtual bool init(PTLsimConfig& config) {
     foreach (i, contextcount) {
       cores[i] = new OutOfOrderCore(i, contextof(i));
-      logfile << "cores[", i, "] = ", cores[i], " (size ", sizeof(OutOfOrderCore), ", issueq at ", &cores[i]->issueq_int0, endl;
       cores[i]->init();
       //
       // Note: in a multi-processor model, config may
@@ -742,9 +741,9 @@ struct OutOfOrderMachine: public PTLsimMachine {
       }
 
       if (logable(6)) logfile << "Cycle ", sim_cycle, ":", endl;
-
+#ifdef PTLSIM_HYPERVISOR
       inject_events();
-
+#endif
       foreach (i, contextcount) {
         OutOfOrderCore& core =* cores[i];
         Context& ctx = contextof(i);

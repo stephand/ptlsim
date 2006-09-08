@@ -1212,12 +1212,14 @@ DataStoreNode* StatsFileReader::get(W64 uuid) {
 
 DataStoreNode* StatsFileReader::get(const char* name) {
   bool all_nums = 1;
+  W64 id = 0;
   foreach (i, strlen(name)) {
     all_nums &= inrange(name[i], '0', '9');
+    id = (id * 10) + (int)(name[i] - '0');
   }
 
   if unlikely (all_nums) {
-    return get(atoi(name));
+    return get(id);
   }
 
   W64* uuidp = name_to_uuid(name);

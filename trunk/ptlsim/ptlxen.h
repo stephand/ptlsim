@@ -464,75 +464,7 @@ extern "C" {
 
 };
 
-// 
-// Configuration Options:
-//
-struct PTLsimConfig {
-  W64 domain;
-  bool run;
-  bool stop;
-  bool native;
-  bool kill;
-
-  bool pause;
-  stringbuf core_name;
-
-  W64 clock_adj_factor;
-
-  // Logging
-  bool quiet;
-  stringbuf log_filename;
-  W64 loglevel;
-  W64 start_log_at_iteration;
-  W64 start_log_at_rip;
-  bool log_ptlsim_boot;
-  bool log_on_console;
-
-  // Statistics Database
-  stringbuf stats_filename;
-  W64 snapshot_cycles;
-  stringbuf snapshot_now;
-
-  // Stopping Point
-  W64 stop_at_user_insns;
-  W64 stop_at_iteration;
-  W64 stop_at_rip;
-  W64 insns_in_last_basic_block;
-  W64 stop_at_user_insns_relative;
-  W64 flush_interval;
-
-  // Event tracing
-  stringbuf event_trace_record_filename;
-  bool event_trace_record_stop;
-  stringbuf event_trace_replay_filename;
-
-  // Core features
-  W64 core_freq_hz;
-  W64 timer_interrupt_freq_hz;
-  bool pseudo_real_time_clock;
-  bool realtime;
-  bool mask_interrupts;
-
-  // Out of order core features
-  bool perfect_cache;
-
-  // Other info
-  stringbuf dumpcode_filename;
-
-  W64 console_mfn;
-
-  void reset();
-};
-
-extern PTLsimConfig config;
-
-extern ConfigurationParser<PTLsimConfig> configparser;
-
-ostream& operator <<(ostream& os, const PTLsimConfig& config);
-
 ostream& operator <<(ostream& os, const shared_info& si);
-
-void print_banner(ostream& os);
 
 //
 // Mode switch requests initiated within the simulation

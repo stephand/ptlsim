@@ -56,7 +56,13 @@ struct PTLsimStats { // rootnode:
     struct run {
       W64 timestamp;
       char hostname[64];
+      char kernel_version[32];
+#ifdef PTLSIM_HYPERVISOR
       char hypervisor_version[32];
+#else
+      char executable[128];
+      char args[256];
+#endif
       W64 native_cpuid;
       W64 native_hz;
     } run;

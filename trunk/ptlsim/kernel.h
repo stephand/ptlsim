@@ -50,6 +50,7 @@ typedef Elf64_auxv_t native_auxv_t;
 typedef Elf32_auxv_t native_auxv_t;
 #endif
 
+const char* get_full_exec_filename();
 native_auxv_t* find_auxv_entry(int type);
 
 void switch_stack_and_jump_32_or_64(void* code, void* stack, bool use64);
@@ -58,16 +59,7 @@ void set_switch_to_sim_breakpoint(void* addr);
 void enable_ptlsim_call_gate();
 void disable_ptlsim_call_gate();
 
-int ptlsim_inject(int argc, const char** argv);
-
-//
-// Performance counters
-//
-void init_perfctrs();
-void start_perfctrs();
-void stop_perfctrs();
-void print_perfctrs(ostream& os);
-void flush_cpu_caches();
+int ptlsim_inject(int argc, char** argv);
 
 //
 // Signal callbacks
@@ -373,7 +365,7 @@ static inline W64 storemask(Waddr addr, W64 data, byte bytemask) {
 }
 
 // In userspace PTLsim, virtual == physical:
-RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
+inline RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
   use64 = ctx.use64;
   kernel = 0;
   df = ((ctx.internal_eflags & FLAG_DF) != 0);

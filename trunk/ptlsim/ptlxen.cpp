@@ -12,21 +12,6 @@
 #include <ptlsim.h>
 #include <stats.h>
 
-PTLsimStats stats;
-
-//
-// Global variables
-//
-ostream logfile;
-W64 loglevel = 0;
-bool logenable = 0;
-W64 sim_cycle = 0;
-W64 iterations = 0;
-W64 total_uops_executed = 0;
-W64 total_uops_committed = 0;
-W64 total_user_insns_committed = 0;
-W64 total_basic_blocks_committed = 0;
-
 //
 // Xen hypercalls
 //
@@ -623,9 +608,9 @@ void assist_ptlcall(Context& ctx) {
   //++MTY TODO
 }
 
-void initiate_prefetch(W64 addr, int cachelevel) {
+//void initiate_prefetch(W64 addr, int cachelevel) {
   // (dummy for now)
-}
+//}
 
 asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
@@ -633,6 +618,8 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
 
   logfile << sb, flush;
   cerr << sb, flush;
+  // Make sure the ring buffer is flushed too:
+  logfile.close();
   asm("ud2a");
   abort();
 }
@@ -736,6 +723,7 @@ int query_pages(page_type_t* pt, int count) {
   return HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF);
 }
 
+int map_phys_page(mfn_t mfn, Waddr rip = 0);
 void unmap_phys_page(mfn_t mfn);
 
 page_type_t query_page(mfn_t mfn) {
@@ -809,7 +797,7 @@ asmlinkage void ptl_internal_trap(int trapid, const char* name, W64* regs) {
   print_regs(cerr, regs);
   cerr << flush;
   print_stack(cerr, regs[REG_rsp]);
-  if (logfile) logfile.flush();
+  if (logfile) logfile.close();
   cerr.flush();
   cout.flush();
 
@@ -937,15 +925,6 @@ void find_all_mappings_of_mfn(mfn_t mfn) {
 
   force_readonly_physmap = 1;
 
-  //
-  // Nothing so far - where's the refcount from?
-  // Print out the page table page we're trying to pin,
-  // and see if there's a problem there.
-  //
-  // Since it's an L4 pin attempt, maybe something
-  // else other than a page table is pointing to it?
-  //
-
   foreach (i, bootinfo.total_machine_pages) {
     const page_type_t& pt = pagetypes[i];
 
@@ -967,8 +946,6 @@ void find_all_mappings_of_mfn(mfn_t mfn) {
   force_readonly_physmap = 0;
   unmap_address_space();
 }
-
-
 
 //
 // Walk the page table tree, accumulating the relevant permissions
@@ -1255,11 +1232,28 @@ byte force_internal_page_fault(Waddr phys) {
   return z;
 }
 
+//
+// Find out of the specified mfn is a valid page
+// in main memory (and hence can be a page table)
+// or if false, it's either invalid or is part
+// of the Xen reserved space (equivalent to being
+// mapped as a ROM or memory mapped device)
+//
+bool is_mfn_mainmem(mfn_t mfn) {
+  return (mfn < bootinfo.total_machine_pages);
+}
+
+//
+// Find out if the specified mfn needs to commit stores
+// through Xen (to do a checked page table update)
+// rather than direct memory stores. 
+//
 bool is_mfn_ptpage(mfn_t mfn) {
-  if unlikely (mfn >= bootinfo.total_machine_pages) {
-    logfile << "Invalid MFN ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl, flush;
-    abort();
+  if unlikely (!is_mfn_mainmem(mfn)) {
+    // logfile << "Invalid MFN ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl, flush;
+    return false;
   }
+
   Level1PTE& pte = bootinfo.phys_pagedir[mfn];
 
   if unlikely (!pte.p) {
@@ -1268,9 +1262,9 @@ bool is_mfn_ptpage(mfn_t mfn) {
     // Pretend we're reading from it so PTLsim's page fault handler
     // will fault it in for us.
     //
-    force_internal_page_fault(mfn << 12);
-    barrier();
-    if (!pte.p) {
+    map_phys_page(mfn);
+    if unlikely (!pte.p) {
+      // This should never occur: errors are caught while mapping
       logfile << "PTE for mfn ", mfn, " is still not present (around sim_cycle ", sim_cycle, ")!", endl, flush;
       abort();
     }
@@ -1295,12 +1289,23 @@ bool is_mfn_ptpage(mfn_t mfn) {
 W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
   W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
   W64 merged = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+  mfn_t mfn = physaddr >> 12;
 
-  if unlikely (physaddr >> 40) {
-    // Physical address is inside of PTLsim: apply directly
+  if unlikely (!is_mfn_mainmem(mfn)) {
+    //
+    // Physical address is inside of PTLsim: apply directly.
+    //
+    // Technically the address could also be inside of Xen,
+    // however the guest itself is literally unable to generate
+    // such an address through page tables, so we don't need
+    // to worry about that here.
+    //
     mem = merged;
-  } else if unlikely (is_mfn_ptpage(physaddr >> 12)) {
-    // MFN is pinned: force Xen to do the store for us
+  } else if unlikely (is_mfn_ptpage(mfn)) {
+    //
+    // MFN is read-only and could not be promoted to
+    // writable: force Xen to do the store for us
+    //
     mmu_update_t u;
     u.ptr = physaddr;
     u.val = merged;
@@ -1510,7 +1515,7 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
 
   if unlikely (page_not_present | page_read_only | page_kernel_only) {
     if unlikely (store && (!page_not_present) && (!page_kernel_only) &&
-                 page_read_only && is_mfn_ptpage(pte.mfn)) {
+                 page_read_only && is_mfn_mainmem(pte.mfn) && is_mfn_ptpage(pte.mfn)) {
       if (logable(5)) {
         logfile << "Page is a page table page: special semantics", endl;
       }
@@ -1960,6 +1965,10 @@ static inline mfn_t get_cr3_mfn() {
 // this case, for loads at least, we simply make it a read only
 // mapping, which is always allowed.
 //
+// When we attempt to commit user stores, we check the pte.rw
+// bit for the mapped page and if it's 0, we let Xen validate
+// and commit the store for us.
+//
 extern void print_fetch_bb_address_ringbuf(ostream& os);
 
 //
@@ -1969,8 +1978,110 @@ extern void print_fetch_bb_address_ringbuf(ostream& os);
 //
 void* zeropage;
 
+//
+// Map physical pages, building page tables as we go
+//
+static const bool force_page_fault_logging = 0;
+
+int map_phys_page(mfn_t mfn, Waddr rip) {
+  int level2_slot_index = mfn / PTES_PER_PAGE;
+  W64 faultaddr = mfn << 12;
+  Level2PTE& l2pte = bootinfo.phys_level2_pagedir[level2_slot_index];
+  Level1PTE& l1pte = bootinfo.phys_pagedir[mfn];
+
+  if unlikely (!l2pte.p) {
+    //
+    // Level 2 PTE was not present: either this is the first
+    // access or it was fast cleared by unmap_address_space().
+    // In any case, re-establish it after clearing any old
+    // PTEs from the corresponding L1 page.
+    //
+    Level1PTE* l1page = floorptr(&l1pte, PAGE_SIZE);
+    assert(make_ptl_page_writable(l1page, 1) == 0);
+    ptl_zero_private_page(l1page);
+    assert(make_ptl_page_writable(l1page, 0) == 0);
+        
+    assert(update_ptl_pte(l2pte, l2pte.P(1)) == 0);
+        
+    if (logable(2) | force_page_fault_logging) {
+      logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ",
+        (void*)faultaddr, ": added L2 PTE slot ", level2_slot_index, " (L1 mfn ",
+        l2pte.mfn, ") to PTLsim physmap", endl;
+    }
+  }
+   
+  //
+  // Page was not present: try to map the page read-write
+  //
+  Level1PTE pte = 0;
+  pte.p = 1;
+  pte.rw = 1;
+  pte.us = 1;
+  pte.mfn = mfn;
+      
+  int rc = (force_readonly_physmap) ? -EINVAL : update_ptl_pte(l1pte, pte);
+      
+  if unlikely (rc) {
+    //
+    // It's a special page and must be marked read-only:
+    //
+    pte.rw = 0;
+    rc = update_ptl_pte(l1pte, pte);
+        
+    if unlikely (rc) {
+      //
+      // We still can't map the page! Most likely we got here after
+      // attempting to follow a virtaddr in the Xen reserved area,
+      // and we can't map some Xen-internal page table page that
+      // the native processor can see but the domain cannot.
+      //
+      // This can happen on speculative out-of-order accesses
+      // that never make it to the architectural state but
+      // nonetheless still must have *some* page to access
+      // or PTLsim will deadlock.
+      //
+      // Map in a zero page (to terminate all page table walks)
+      // and print a warning in the log. This is the same
+      // behavior as if invalid physical memory were accessed
+      // (but in that case the page is all 1's, not all 0's).
+      //
+      if unlikely (logable(2) | force_page_fault_logging) {
+        logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ",
+          (void*)faultaddr, ": added dummy zero PTE for guest mfn ", mfn, 
+          " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+
+        logfile << "Warning: failed to map mfn ", mfn, " (for virt ", (void*)faultaddr, ", requested by rip ", (void*)rip, " at cycle ", sim_cycle, ")", endl;
+        logfile << "  Either it doesn't exist, isn't ours, or is part of Xen itself.", endl;
+        logfile << "  Mapping a zero page in its place and hoping the access is speculative.", endl;
+        logfile << "  The last page table walk was for virtual address ", (void*)last_virtaddr_triggering_walk, endl;
+        logfile << flush;
+      }
+
+      pte.mfn = ptl_virt_to_mfn(zeropage);
+      rc = update_ptl_pte(l1pte, pte);
+      assert(rc == 0);
+      return 3;
+    } else {
+      if unlikely (logable(2) | force_page_fault_logging) {
+        logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ", 
+          (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn,
+          " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+      }
+      return 2;
+    }
+  } else {
+    if unlikely (logable(2) | force_page_fault_logging) {
+      logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip,
+        "] ", (void*)faultaddr, ": added L1 PTE for guest mfn ", mfn, 
+        " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+    }
+    return 1;
+  }
+
+  return 0;
+}
+
 asmlinkage void do_page_fault(W64* regs) {
-  static const bool force_page_fault_logging = 0;
   int rc;
   Waddr faultaddr = read_cr2();
   //
@@ -1994,83 +2105,7 @@ asmlinkage void do_page_fault(W64* regs) {
 
   if likely (inrange(faultaddr, PHYS_VIRT_BASE, (PHYS_VIRT_BASE + ((Waddr)bootinfo.total_machine_pages * PAGE_SIZE) - 1))) {
     mfn_t mfn = (faultaddr - (Waddr)PHYS_VIRT_BASE) >> 12;
-    int level2_slot_index = mfn / PTES_PER_PAGE;
-    Level2PTE& l2pte = bootinfo.phys_level2_pagedir[level2_slot_index];
-    Level1PTE& l1pte = bootinfo.phys_pagedir[mfn];
-
-    if unlikely (!l2pte.p) {
-      //
-      // Level 2 PTE was not present: either this is the first
-      // access or it was fast cleared by unmap_address_space().
-      // In any case, re-establish it after clearing any old
-      // PTEs from the corresponding L1 page.
-      //
-      Level1PTE* l1page = floorptr(&l1pte, PAGE_SIZE);
-      assert(make_ptl_page_writable(l1page, 1) == 0);
-      ptl_zero_private_page(l1page);
-      assert(make_ptl_page_writable(l1page, 0) == 0);
-
-      assert(update_ptl_pte(l2pte, l2pte.P(1)) == 0);
-
-      if (logable(2) | force_page_fault_logging) {
-        logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ",
-          (void*)faultaddr, ": added L2 PTE slot ", level2_slot_index, " (L1 mfn ",
-          l2pte.mfn, ") to PTLsim physmap", endl;
-      }
-    }
-
-    //
-    // Page was not present: try to map the page read-write
-    //
-    Level1PTE pte = 0;
-    pte.p = 1;
-    pte.rw = 1;
-    pte.us = 1;
-    pte.mfn = mfn;
-    
-    rc = (force_readonly_physmap) ? -EINVAL : update_ptl_pte(l1pte, pte);
-
-    if unlikely (rc) {
-      //
-      // It's a special page and must be marked read-only:
-      //
-      pte.rw = 0;
-      rc = update_ptl_pte(l1pte, pte);
-
-      if (rc) {
-        //
-        // We still can't map the page! Most likely we got here after
-        // attempting to follow a virtaddr in the Xen reserved area,
-        // and we can't map some Xen-internal page table page that
-        // the native processor can see but the domain cannot.
-        //
-        // This can happen on speculative out-of-order accesses
-        // that never make it to the architectural state but
-        // nonetheless still must have *some* page to access
-        // or PTLsim will deadlock.
-        //
-        // Map in a zero page (to terminate all page table walks)
-        // and print a warning in the log. This is the same
-        // behavior as if invalid physical memory were accessed
-        // (but in that case the page is all 1's, not all 0's).
-        //
-        logfile << "Warning: failed to map mfn ", mfn, " (for virt ", (void*)faultaddr, ", requested by rip ", (void*)regs[REG_rip], " at cycle ", sim_cycle, ")", endl;
-        logfile << "  Either it doesn't exist, isn't ours, or is part of Xen itself.", endl;
-        logfile << "  Mapping a zero page in its place and hoping the access is speculative.", endl;
-        logfile << "  The last page table walk was for virtual address ", (void*)last_virtaddr_triggering_walk, endl;
-
-        if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added dummy zero PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
-        logfile << flush;
-
-        pte.mfn = ptl_virt_to_mfn(zeropage);
-        rc = update_ptl_pte(l1pte, pte);
-        assert(rc == 0);
-      } else {
-        if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
-      }
-    } else {
-      if (logable(2) | force_page_fault_logging) logfile << "[PTLsim Page Fault Handler from rip ", (void*)regs[REG_rip], "] ", (void*)faultaddr, ": added L1 PTE for guest mfn ", mfn, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
-    }
+    map_phys_page(mfn, regs[REG_rip]);
   } else {
     cerr << "PTLsim Internal Error: page fault @ rip ", (void*)regs[REG_rip], " while accessing ", (void*)faultaddr, " (error code ", pfec, "); rsp ", get_rsp(), endl;
     cerr << "Registers:", endl;
@@ -3755,6 +3790,20 @@ extern Waddr xen_m2p_map_end;
 
 extern bool enable_mm_logging;
 
+void collect_sysinfo(PTLsimStats& stats) {
+  collect_common_sysinfo(stats);
+
+  xen_capabilities_info_t xen_caps = "";
+  HYPERVISOR_xen_version(XENVER_capabilities, &xen_caps);
+#define strput(x, y) (strncpy((x), (y), sizeof(x)))
+  strput(stats.simulator.run.hypervisor_version, xen_caps);
+}
+
+//
+// Bring up PTLsim subsystems on the bare hardware,
+// using only Xen hypercalls until we can establish
+// the channel to PTLmon in domain 0. 
+//
 void ptlsim_init() {
   stringbuf sb;
   int rc;
@@ -3880,7 +3929,7 @@ void ptlsim_init() {
   configparser.setup();
 
   init_uops();
-  init_translate();
+  init_decode();
 
   //
   // Build the physical memory map page tables, inject
@@ -3905,6 +3954,8 @@ void ptlsim_init() {
     ctx.init();
   }
 
+  collect_sysinfo(stats);
+
   // Tell PTLmon we're now up and running
   bootinfo.ptlsim_state = PTLSIM_STATE_RUNNING;
 }
@@ -3914,16 +3965,12 @@ void print_meminfo_line(ostream& os, const char* name, W64 pages) {
 }
 
 void print_sysinfo(ostream& os) {
-  xen_capabilities_info_t xen_caps = "";
   xen_platform_parameters_t xen_params;
-
   HYPERVISOR_xen_version(XENVER_platform_parameters, &xen_params);
-  HYPERVISOR_xen_version(XENVER_capabilities, &xen_caps);
-
   Waddr xen_hypervisor_start_va = xen_params.virt_start;
 
   os << "System Information:", endl;
-  os << "  Running on hypervisor version ", xen_caps, endl;
+  os << "  Running on hypervisor version ", stats.simulator.run.hypervisor_version, endl;
   os << "  Xen is mapped at virtual address ", (void*)(Waddr)xen_hypervisor_start_va, endl;
   os << "  PTLsim is running across ", bootinfo.vcpu_count, " VCPUs:", endl;
 
@@ -3948,119 +3995,7 @@ void print_sysinfo(ostream& os) {
   os << "  Console mfn:        ", intstring(bootinfo.console_mfn, 10), ", event channel ", intstring(bootinfo.console_evtchn, 4), endl;
   os << "  PTLsim hostcall:    ", padstring("", 10), "  event channel ", intstring(bootinfo.hostcall_port, 4), endl;
   os << "  PTLsim upcall:      ", padstring("", 10), "  event channel ", intstring(bootinfo.upcall_port, 4), endl;
-
   os << endl;
-
-  stringbuf sb;
-#define strput(x, y) (strncpy((x), (y), sizeof(x)))
-
-  sb.reset(); sb << __DATE__, " ", __TIME__;
-  strput(stats.simulator.version.build_timestamp, sb);
-  // stats.simulator.version.svn_revision = SVNREV;
-  // strput(stats.simulator.version.svn_timestamp, stringify(SVNDATE));
-  strput(stats.simulator.version.build_hostname, stringify(BUILDHOST));
-  sb.reset(); sb << "gcc-", __GNUC__, ".", __GNUC_MINOR__;
-  strput(stats.simulator.version.build_compiler, sb);
-
-  stats.simulator.run.timestamp = shinfo.wc_sec;
-
-  utsname hostinfo; sys_uname(&hostinfo);
-  sb.reset(); sb << hostinfo.nodename, ".", hostinfo.domainname;
-  strput(stats.simulator.run.hostname, sb);
-  strput(stats.simulator.run.hypervisor_version, xen_caps);
-  stats.simulator.run.native_hz = get_core_freq_hz(shinfo.vcpu_info[0].time);
-}
-
-stringbuf current_stats_filename;
-
-stringbuf current_log_filename;
-
-//
-// Statistics collection
-//
-extern byte _binary_ptlsim_dst_start;
-extern byte _binary_ptlsim_dst_end;
-
-StatsFileWriter statswriter;
-
-W64 next_stats_snapshot_uuid = 1;
-
-void capture_stats_snapshot(const char* name = null) {
-  if unlikely (!statswriter) return;
-
-  if (logable(1)|1) {
-    logfile << "Making stats snapshot uuid ", next_stats_snapshot_uuid;
-    if (name) logfile << " named ", name;
-    logfile << " at cycle ", sim_cycle, endl;
-  }
-
-  setzero(stats.snapshot_name);
-
-  if (name) {
-    stringbuf sb;
-    strncpy(stats.snapshot_name, name, sizeof(stats.snapshot_name));
-  }
-
-  stats.snapshot_uuid = next_stats_snapshot_uuid++;
-  statswriter.write(&stats, stats.snapshot_uuid, name);
-}
-
-bool handle_config_change(PTLsimConfig& config) {
-  static bool first_time = true;
-
-  if (config.log_filename.set() && (config.log_filename != current_log_filename)) {
-    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    backup_and_reopen_logfile();
-    current_log_filename = config.log_filename;
-  }
-
-  logfile.setchain((config.log_on_console) ? &cout : null);
-
-  if (config.stats_filename.set() && (config.stats_filename != current_stats_filename)) {
-    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    logfile << "Writing statistics to ", config.stats_filename, endl, flush;
-    statswriter.open(config.stats_filename, &_binary_ptlsim_dst_start,
-                     &_binary_ptlsim_dst_end - &_binary_ptlsim_dst_start,
-                     sizeof(PTLsimStats));
-    current_stats_filename = config.stats_filename;
-  }
-
-  //
-  // Fix up parameter defaults:
-  //
-  if (config.start_log_at_rip != 0xffffffffffffffffULL) {
-    config.start_log_at_iteration = infinity;
-    logenable = 0;
-    // logfile << "Start logging at level ", config.loglevel, " at rip ", (void*)(Waddr)config.start_log_at_rip, endl;
-  } else if (config.start_log_at_iteration != infinity) {
-    config.start_log_at_rip = 0xffffffffffffffffULL;
-    logenable = 0;
-    // logfile << "Start logging at level ", config.loglevel, " at cycle ", (void*)(Waddr)config.start_log_at_iteration, endl;
-  }
-
-  if (first_time) {
-    if (!config.quiet) {
-      print_banner(cerr);
-      print_sysinfo(cerr);
-
-      if (!(config.run | config.native))
-        cerr << "PTLsim is now waiting for a command.", endl, flush;
-    }
-    print_banner(logfile);
-    print_sysinfo(logfile);
-    cerr << flush;
-    logfile << config;
-    logfile.flush();
-    first_time = false;
-  }
-  
-  int total = config.run + config.stop + config.native + config.kill;
-  if (total > 1) {
-    logfile << "Warning: only one action (from -run, -stop, -native, -kill) can be specified at once", endl, flush;
-    cerr << "Warning: only one action (from -run, -stop, -native, -kill) can be specified at once", endl, flush;
-  }
-
-  return true;
 }
 
 W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
@@ -4129,122 +4064,6 @@ bool check_for_async_sim_break() {
   return false;
 }
 
-
-Hashtable<const char*, PTLsimMachine*, 1> machinetable;
-
-PTLsimMachine basemachine;
-
-bool PTLsimMachine::init(PTLsimConfig& config) { return false; }
-int PTLsimMachine::run(PTLsimConfig& config) { return 0; }
-void PTLsimMachine::update_stats(PTLsimStats& stats) { return; }
-
-void PTLsimMachine::addmachine(const char* name, PTLsimMachine* machine) {
-  machinetable.add(name, machine);
-}
-
-PTLsimMachine* PTLsimMachine::getmachine(const char* name) {
-  PTLsimMachine** p = machinetable.get(name);
-  if (!p) return null;
-  return *p;
-}
-
-bool simulate(const char* machinename) {
-  PTLsimMachine* machine = PTLsimMachine::getmachine(machinename);
-
-  if (!machine) {
-    logfile << "Cannot find core named '", machinename, "'", endl;
-    return 0;
-  }
-
-  if (!machine->initialized) {
-    logfile << "Initializing core '", machinename, "'", endl;
-    if (!machine->init(config)) {
-      logfile << "Cannot initialize core model; check its configuration!", endl;
-      return 0;
-    }
-    machine->initialized = 1;
-  }
-
-  logfile << "Switching to simulation core '", machinename, "'...", endl, flush;
-  logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
-  cerr << "Switching to simulation core '", machinename, "'...", endl, flush;
-  cerr << "  Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
-
-  // For debugging memory leaks:
-  // enable_mm_logging = 1;
-
-  sim_cycle = 0;
-
-  init_virqs();
-  update_time();
-
-  machine->run(config);
-  machine->update_stats(stats);
-
-  //sequential_core_toplevel_loop();
-
-  logfile << "Hypercall usage:", endl;
-  logfile << "  ", padstring("Hypercall", -40), " ", padstring("Total", 10), " ", padstring("Guest", 10), endl;
-  foreach (i, lengthof(hypercall_names)) {
-    logfile << "  ", padstring(hypercall_names[i], -40), " ",
-      intstring(ptlsim_hypercall_histogram[i], 10), " ", intstring(guest_hypercall_histogram[i], 10), endl;
-  }
-
-  logfile << "Hostcalls: ", hostreq_calls, endl;
-  logfile << "Spins: ", hostreq_spins, endl;
-
-#if 0
-  //
-  // Debugging support code, to crash domain at specific point
-  //
-
-  Waddr patch_entry = 0xffffffff8xxxxxxx;
-  //Waddr patch_entry = signext64(contextof(0).idt[EXCEPTION_x86_page_fault].rip, 48);
-
-  byte trigger_code[] = {0x0f, 0x0b}; // ud2a
-
-  PageFaultErrorCode pfec;
-  Waddr faultaddr;
-  W64 oldcr3 = contextof(0).cr3;
-  contextof(0).cr3 = (contextof(0).kernel_ptbase_mfn << 12);
-  int n = contextof(0).copy_to_user(patch_entry, &trigger_code, sizeof(trigger_code), pfec, faultaddr);
-
-  logfile << "Copied ", n, " bytes to patch entry rip ", (void*)patch_entry, endl, flush;
-
-  contextof(0).cr3 = oldcr3;
-
-  /*
-  // Force Xen to directly handle the exception:
-  contextof(0).idt[EXCEPTION_x86_page_fault].rip = 0;
-  contextof(0).idt[EXCEPTION_x86_page_fault].cs = 0;
-  contextof(0).idt[EXCEPTION_x86_invalid_opcode].rip = 0;
-  contextof(0).idt[EXCEPTION_x86_invalid_opcode].cs = 0;
-  contextof(0).idt[EXCEPTION_x86_gp_fault].rip = 0;
-  contextof(0).idt[EXCEPTION_x86_gp_fault].cs = 0;
-  contextof(0).idt[EXCEPTION_x86_seg_not_present].rip = 0;
-  contextof(0).idt[EXCEPTION_x86_seg_not_present].cs = 0;
-
-  contextof(0).failsafe_callback_rip = 0;
-  */
-#endif
-
-  if (config.dumpcode_filename.set()) {
-    byte insnbuf[256];
-    PageFaultErrorCode pfec;
-    Waddr faultaddr;
-    Waddr rip = contextof(0).commitarf[REG_rip];
-    int n = contextof(0).copy_from_user(insnbuf, rip, sizeof(insnbuf), pfec, faultaddr);
-    logfile << "Saving ", n, " bytes from rip ", (void*)rip, " to ", config.dumpcode_filename, endl, flush;
-    ostream(config.dumpcode_filename).write(insnbuf, n);
-  }
-
-  unmap_address_space();
-
-  cerr << "  Done", endl, flush;
-
-  return 0;
-}
-
 int main(int argc, char** argv) {
   ptlsim_init();
 
@@ -4255,9 +4074,12 @@ int main(int argc, char** argv) {
 
     if (config.run) {
       config.run = 0;
+      init_virqs();
+      update_time();
       simulate(config.core_name);
       capture_stats_snapshot("final");
-      statswriter.flush();
+      flush_stats();
+      unmap_address_space();
     }
 
     complete_upcall(requuid);
@@ -4266,7 +4088,7 @@ int main(int argc, char** argv) {
       config.native = 0;
       config.stop = 0;
       config.kill = 0;
-      logfile << "Switching to native (pause? ", pause, ", kill? ", kill, ")...", endl, flush;
+      logfile << "Switching to native (pause? ", config.pause, ")...", endl, flush;
       logfile << "Final context:", endl, contextof(0), flush;
       logfile << "Final shared info page:", endl, sshinfo, endl, flush;
 

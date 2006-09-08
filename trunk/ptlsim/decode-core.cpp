@@ -1626,7 +1626,6 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   smc_cleardirty(bb->rip.mfnlo);
   pagelist = bbpages.get(bb->rip.mfnlo);
   if (!pagelist) {
-    //++MTY FIXME: This is allocated but never freed!
     pagelist = new BasicBlockChunkList(bb->rip.mfnlo);
     bbpages.add(pagelist);
     stats.decoder.pagecache.inserts++;
@@ -1642,7 +1641,6 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
     smc_cleardirty(bb->rip.mfnhi);
     pagelist = bbpages.get(bb->rip.mfnhi);
     if (!pagelist) {
-      //++MTY FIXME: This is allocated but never freed!
       pagelist = new BasicBlockChunkList(bb->rip.mfnhi);
       bbpages.add(pagelist);
       stats.decoder.pagecache.inserts++;
@@ -1692,6 +1690,6 @@ void bbcache_reclaim(size_t bytes, int urgency) {
   bbcache.reclaim(bytes, urgency);
 }
 
-void init_translate() {
+void init_decode() {
   ptl_mm_register_reclaim_handler(bbcache_reclaim);
 }

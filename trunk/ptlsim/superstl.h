@@ -165,10 +165,13 @@ namespace superstl {
     int tail;
     odstream* chain;
     W64 offset;
+    bool ringbuf_mode;
+    byte* ringbuf;
+    int ringbuf_tail;
   public:
     bool close_on_destroy;
 
-    odstream() { fd = -1; buf = null; bufsize = 0; tail = 0; close_on_destroy = 1; chain = null; offset = 0; }
+    odstream();
 
     bool open(const char* filename, bool append = false, int bufsize = 65536);
 
@@ -180,9 +183,9 @@ namespace superstl {
 
     void setchain(odstream* chain);
 
-    ~odstream() {
-      if likely (close_on_destroy) close();
-    }
+    void set_ringbuf_mode(bool new_ringbuf_mode);
+
+    ~odstream();
 
     odstream(int fd) {
       this->fd = -1;
@@ -2843,5 +2846,11 @@ namespace superstl {
   ostream& operator <<(ostream& os, const CycleTimer& ct);
 
 } // namespace superstl
+
+//
+// Get the frequency of the CPU core(s) in cycles per second
+// Defined differently depending on the (usermode vs bare hardware in kernel mode)
+//
+W64 get_core_freq_hz();
 
 #endif // _SUPERSTL_H_

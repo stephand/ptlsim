@@ -6,6 +6,11 @@
 // Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
+//++MTY TODO: whenever we reclaim some blocks from the bbcache,
+// we must flush the pipeline, in case we held refs to any of
+// those blocks! This is simpler than having to keep a queue
+// with bb->acquire() on rename and bb->release() on commit
+
 #include <globals.h>
 #include <elf.h>
 #include <ptlsim.h>
@@ -261,15 +266,15 @@ void OutOfOrderCore::redispatch_deadlock_recovery() {
 //
 // Used to debug crashes when cycle to start logging can't be determined:
 //
-static W64 fetch_bb_address_ringbuf[64];
+static RIPVirtPhys fetch_bb_address_ringbuf[256];
 static W64 fetch_bb_address_ringbuf_head = 0;
 
 static void print_fetch_bb_address_ringbuf(ostream& os) {
   os << "Head: ", fetch_bb_address_ringbuf_head, endl;
   foreach (i, lengthof(fetch_bb_address_ringbuf)) {
     int j = (fetch_bb_address_ringbuf_head + i) % lengthof(fetch_bb_address_ringbuf);
-    Waddr addr = fetch_bb_address_ringbuf[j];
-    os << "  ", intstring(i, 16), ": ", (void*)addr, endl;
+    const RIPVirtPhys& addr = fetch_bb_address_ringbuf[j];
+    os << "  ", intstring(i, 16), ": ", addr, endl;
   }
 }
 
@@ -331,7 +336,6 @@ void OutOfOrderCore::fetch() {
       bool hit = 1;
 #else
       bool hit = probe_icache(fetchrip, physaddr);
-#endif
       hit |= config.perfect_cache;
       if unlikely (!hit) {
         int missbuf = initiate_icache_miss(physaddr);
@@ -345,7 +349,7 @@ void OutOfOrderCore::fetch() {
         stats.ooocore.fetch.stop.icache_miss++;
         break;
       }
-
+#endif
       stats.ooocore.fetch.blocks++;
       current_icache_block = req_icache_block;
       stats.ooocore.dcache.fetch.hit.L1++;
@@ -1383,8 +1387,12 @@ int ReorderBufferEntry::commit() {
 
       if (logable(6)) {
         logfile << intstring(subrob.uop.uuid, 20), " excdet rob ", intstring(subrob.index(), -3),
-          " exception ", exception_name(ctx.exception), " (", ctx.exception, "), error code ", hexstring(core.ctx.error_code, 16), 
+          " exception ", exception_name(ctx.exception), " (", ctx.exception, "), error code ", hexstring(core.ctx.error_code, 16),
+#ifdef PTLSIM_HYPERVISOR
           ", cr2 ", (void*)(Waddr)core.ctx.cr2, endl;
+#else
+        endl;
+#endif
       }
       break;
     }
@@ -1465,7 +1473,8 @@ int ReorderBufferEntry::commit() {
 
   if likely (uop.som) { 
     if unlikely (ctx.commitarf[REG_rip] != uop.rip) {
-      logfile << "RIP mismatch: ctx.commitarf[REG_rip] = ", (void*)(Waddr)ctx.commitarf[REG_rip], " vs uop.rip ", (void*)(Waddr)uop.rip, endl;
+      logfile << "RIP mismatch (cycle ", sim_cycle, ", commits ", total_user_insns_committed, "): ctx.commitarf[REG_rip] = ", (void*)(Waddr)ctx.commitarf[REG_rip], " vs uop.rip ", (void*)(Waddr)uop.rip, endl;
+      print_fetch_bb_address_ringbuf(logfile);
       assert(ctx.commitarf[REG_rip] == uop.rip); 
     }
   }

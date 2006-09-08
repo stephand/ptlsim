@@ -374,6 +374,9 @@ int propagate_exception_during_assist(Context& ctx, byte exception, W32 errorcod
 //
 // Microcode assists
 //
+const char* assist_name(assist_func_t func);
+int assist_index(assist_func_t func);
+void update_assist_stats(assist_func_t assist);
 
 // Forced assists based on decode context
 void assist_invalid_opcode(Context& ctx);
@@ -433,6 +436,74 @@ void assist_write_debug_reg(Context& ctx);
 // I/O and legacy
 void assist_ioport_in(Context& ctx);
 void assist_ioport_out(Context& ctx);
+
+//
+// Global functions
+//
+void init_decode();
+
+static const int BB_CACHE_SIZE = 16384;
+
+namespace superstl {
+  template <int setcount>
+  struct HashtableKeyManager<RIPVirtPhys, setcount> {
+    static inline int hash(const RIPVirtPhys& key) {
+      W64 slot = 0;
+
+      W64 rip = key.rip;
+      foreach (i, (64 / log2(setcount))+1) {
+        slot ^= rip;
+        rip >>= log2(setcount);
+      }
+#ifdef PTLSIM_HYPERVISOR
+      slot ^= key.mfnlo;
+#endif
+      return slot;
+    }
+
+    static inline bool equal(const RIPVirtPhys& a, const RIPVirtPhys& b) { return (a == b); }
+    static inline RIPVirtPhys dup(const RIPVirtPhys& key) { return key; }
+    static inline void free(RIPVirtPhys& key) { }
+  };
+};
+
+struct BasicBlockHashtableLinkManager {
+  static inline BasicBlock& objof(selflistlink* link) {
+    return *(BasicBlock*)(((byte*)link) - offsetof(BasicBlock, hashlink));
+  }
+
+  static inline RIPVirtPhys& keyof(BasicBlock& obj) {
+    return obj.rip;
+  }
+
+  static inline selflistlink& linkof(BasicBlock& obj) {
+    return obj.hashlink;
+  }
+};
+
+enum {
+  INVALIDATE_REASON_SMC = 0,
+  INVALIDATE_REASON_DMA,
+  INVALIDATE_REASON_SPURIOUS,
+  INVALIDATE_REASON_RECLAIM,
+  INVALIDATE_REASON_DIRTY,
+  INVALIDATE_REASON_EMPTY,
+  INVALIDATE_REASON_COUNT
+};
+
+struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE> {
+  BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE>() { }
+
+  BasicBlock* translate(Context& ctx, Waddr rip);
+  void invalidate(const RIPVirtPhys& rvp, int reason);
+  void invalidate(BasicBlock* bb, int reason);
+  int invalidate_page(Waddr mfn, int reason);
+  int reclaim(size_t reqbytes = 0, int urgency = 0);
+
+  ostream& print(ostream& os);
+};
+
+extern BasicBlockCache bbcache;
 
 //
 // This part is used when parsing stats.h to build the

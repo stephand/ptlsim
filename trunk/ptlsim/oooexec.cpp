@@ -836,9 +836,6 @@ static inline W64 extract_bytes(void* target, int SIZESHIFT, bool SIGNEXT) {
   return data;
 }
 
-extern W64 last_guest_rip_triggering_walk;
-extern W64 last_guest_uuid_triggering_walk;
-
 int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
   OutOfOrderCore& core = getcore();
   int sizeshift = uop.size;
@@ -869,10 +866,6 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   // only arrives later, but it saves us from having to copy
   // cache lines around...
   //
-
-  last_guest_rip_triggering_walk = uop.rip;
-  last_guest_uuid_triggering_walk = uop.uuid;
-
   barrier();
   W64 data = (annul) ? 0 : *((W64*)(Waddr)floor(signext64((Waddr)mapped, 48), 8));
 
