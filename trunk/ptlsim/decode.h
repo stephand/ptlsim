@@ -494,10 +494,11 @@ enum {
 struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE> {
   BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE>() { }
 
-  BasicBlock* translate(Context& ctx, Waddr rip);
-  void invalidate(const RIPVirtPhys& rvp, int reason);
-  void invalidate(BasicBlock* bb, int reason);
-  int invalidate_page(Waddr mfn, int reason);
+  BasicBlock* translate(Context& ctx, const RIPVirtPhys& rvp);
+  bool invalidate(const RIPVirtPhys& rvp, int reason);
+  bool invalidate(BasicBlock* bb, int reason);
+  bool invalidate_page(Waddr mfn, int reason);
+  int get_page_bb_count(Waddr mfn);
   int reclaim(size_t reqbytes = 0, int urgency = 0);
 
   ostream& print(ostream& os);

@@ -252,7 +252,7 @@ struct CombinedPredictor {
     update.cpmeta = null;
     update.flags = type;
 
-    if unlikely (!type) {
+    if unlikely ((type & (BRANCH_HINT_COND|BRANCH_HINT_INDIRECT)) == 0) {
       // Unconditional: always return target
       return target;
     }

@@ -2264,15 +2264,19 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       //
 
       Level1PTE newpte(req.val);
+
+      if (debug) logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", newpte, endl, flush;
+
       if (newpte.p) {
         unmap_phys_page(newpte.mfn);
         // (See notes about DMA and self-modifying code for update_va_mapping)
         //++MTY FIXME We need a more intelligent mechanism to avoid constant flushing
         // as new processes are started.
-        bbcache.invalidate_page(newpte.mfn, INVALIDATE_REASON_DMA);
+        if unlikely ((!smc_isdirty(newpte.mfn)) && (bbcache.get_page_bb_count(newpte.mfn) > 0)) {
+          if (debug) logfile << "  Target mfn ", newpte.mfn, " was clean and had ", bbcache.get_page_bb_count(newpte.mfn), " cached translations; making dirty", endl;
+          smc_setdirty(newpte.mfn);
+        }
       }
-
-      if (debug) logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", newpte, endl, flush;
 
       int update_count;
       rc = HYPERVISOR_mmu_update(&req, 1, &update_count, arg4);
@@ -2505,7 +2509,10 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       //
       //++MTY FIXME We need a more intelligent mechanism to avoid constant flushing
       // as new processes are started.      
-      bbcache.invalidate_page(targetmfn, INVALIDATE_REASON_DMA);
+      if ((!smc_isdirty(targetmfn)) && (bbcache.get_page_bb_count(targetmfn) > 0)) {
+        if (debug) logfile << "  Target mfn ", targetmfn, " was clean and had ", bbcache.get_page_bb_count(targetmfn), " cached translations; making dirty", endl;
+        smc_setdirty(targetmfn);
+      }
     }
 
     if (debug) logfile << "  New PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), " (rc ", rc, ")", endl, flush;

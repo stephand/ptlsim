@@ -186,21 +186,21 @@ bool OutOfOrderCore::runcycle() {
     rename();
     fetch();
   }
-    
+
   if likely (dispatchrc >= 0) { foreach_issueq(clock()); }
     
 #ifdef ENABLE_CHECKS
   // This significantly slows down simulation; only enable it if absolutely needed:
   //check_refcounts();
 #endif
-    
+
   if unlikely (commitrc == COMMIT_RESULT_BARRIER) {
     exiting = !handle_barrier();
   } else if unlikely (commitrc == COMMIT_RESULT_EXCEPTION) {
     exiting = !handle_exception();
   } else if unlikely (commitrc == COMMIT_RESULT_SMC) {
-    core_to_external_state();
-    flush_pipeline(ctx.commitarf[REG_rip]);
+    if (logable(3)) logfile << "Potentially cross-modifying SMC detected: global flush required (cycle ", sim_cycle, ", ", total_user_insns_committed, " commits)", endl, flush;
+    machine.flush_all_pipelines();
     exiting = 0;
   } else if (commitrc == COMMIT_RESULT_STOP) {
     exiting = 1;
@@ -377,21 +377,21 @@ void OutOfOrderCore::log_forwarding(const ReorderBufferEntry* source, const Reor
   logfile << endl;
 }
 
-void OutOfOrderCore::dump_ooo_state() {
-  print_rename_tables(logfile);
-  print_rob(logfile);
-  print_list_of_state_lists<PhysicalRegister>(logfile, physreg_states, "Physical register states");
-  print_list_of_state_lists<ReorderBufferEntry>(logfile, rob_states, "ROB entry states");
-  print_lsq(logfile);
-  logfile << "Issue Queues:", endl;
-  foreach_issueq(print(logfile));
+void OutOfOrderCore::dump_ooo_state(ostream& os) {
+  print_rename_tables(os);
+  print_rob(os);
+  print_list_of_state_lists<PhysicalRegister>(os, physreg_states, "Physical register states");
+  print_list_of_state_lists<ReorderBufferEntry>(os, rob_states, "ROB entry states");
+  print_lsq(os);
+  os << "Issue Queues:", endl;
+  foreach_issueq(print(os));
   foreach (i, PHYS_REG_FILE_COUNT) {
-    logfile << physregfiles[i];
+    os << physregfiles[i];
   }
 #ifndef PERFECT_CACHE
-  dcache_print(logfile);
+  dcache_print(os);
 #endif
-  logfile << flush;
+  os << flush;
 }
 
 //
@@ -464,7 +464,7 @@ void OutOfOrderCore::check_rob() {
       assert(rob->current_state_list == &list);
       if (!((rob->current_state_list != &rob_free_list) ? rob->entry_valid : (!rob->entry_valid))) {
         logfile << "ROB ", rob->index(), " list = ", rob->current_state_list->name, " entry_valid ", rob->entry_valid, endl, flush;
-        dump_ooo_state();
+        dump_ooo_state(logfile);
         assert(false);
       }
     }
@@ -499,7 +499,10 @@ ostream& LoadStoreQueueEntry::print(ostream& os) const {
 // handling the barrier in microcode.
 //
 bool OutOfOrderCore::handle_barrier() {
+  // Release resources of everything in the pipeline:
   core_to_external_state();
+  flush_pipeline();
+
   assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
   
   if (logable(4)) {
@@ -529,7 +532,8 @@ bool OutOfOrderCore::handle_barrier() {
 #endif
   }
 
-  flush_pipeline(ctx.commitarf[REG_rip]);
+  // Flush again, but restart at possibly modified rip
+  flush_pipeline();
 
 #ifndef PTLSIM_HYPERVISOR
   if (requested_switch_to_native) {
@@ -541,7 +545,9 @@ bool OutOfOrderCore::handle_barrier() {
 }
 
 bool OutOfOrderCore::handle_exception() {
+  // Release resources of everything in the pipeline:
   core_to_external_state();
+  flush_pipeline();
 
   if (logable(4)) {
     logfile << "Exception ", exception_name(ctx.exception), " called from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], 
@@ -569,7 +575,7 @@ bool OutOfOrderCore::handle_exception() {
   if (ctx.exception == EXCEPTION_SkipBlock) {
     ctx.commitarf[REG_rip] = chk_recovery_rip;
     if (logable(6)) logfile << "SkipBlock pseudo-exception: skipping to ", (void*)(Waddr)ctx.commitarf[REG_rip], endl, flush;
-    flush_pipeline(ctx.commitarf[REG_rip]);
+    flush_pipeline();
     return true;
   }
 
@@ -603,7 +609,8 @@ bool OutOfOrderCore::handle_exception() {
 
   ctx.propagate_x86_exception(ctx.x86_exception, ctx.error_code, ctx.cr2);
 
-  flush_pipeline(ctx.commitarf[REG_rip]);
+  // Flush again, but restart at modified rip
+  flush_pipeline();
 
   return true;
 #else
@@ -628,7 +635,9 @@ bool OutOfOrderCore::handle_exception() {
 
 #ifdef PTLSIM_HYPERVISOR
 bool OutOfOrderCore::handle_interrupt() {
+  // Release resources of everything in the pipeline:
   core_to_external_state();
+  flush_pipeline();
 
   if (logable(6)) {
     logfile << "Interrupts pending at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
@@ -647,141 +656,171 @@ bool OutOfOrderCore::handle_interrupt() {
     logfile.flush();
   }
 
-  flush_pipeline(ctx.commitarf[REG_rip]);
+  // Flush again, but restart at modified rip
+  flush_pipeline();
 
   return true;
 }
 #endif
 
-struct OutOfOrderMachine: public PTLsimMachine {
-  OutOfOrderCore* cores[MAX_CONTEXTS];
+OutOfOrderMachine::OutOfOrderMachine(const char* name) {
+  // Add to the list of available core types
+  addmachine(name, this);
+}
 
-  OutOfOrderMachine(const char* name) {
-    // Add to the list of available core types
-    addmachine(name, this);
+//
+// Construct all the structures necessary to configure
+// the cores. This function is only called once, after
+// all other PTLsim subsystems are brought up.
+//
+bool OutOfOrderMachine::init(PTLsimConfig& config) {
+  foreach (i, contextcount) {
+    cores[i] = new OutOfOrderCore(i, contextof(i), *this);
+    cores[i]->init();
+    //
+    // Note: in a multi-processor model, config may
+    // specify various ways of slicing contextcount up
+    // into threads, cores and sockets; the appropriate
+    // interconnect and cache hierarchy parameters may
+    // be specified here.
+    //
+  }
+  
+  init_luts();
+  return true;
+}
+
+//
+// Run the processor model, until a stopping point
+// is hit (as configured elsewhere in config).
+//
+int OutOfOrderMachine::run(PTLsimConfig& config) {
+  logfile << "Starting out-of-order core toplevel loop", endl, flush;
+
+  // wakeup_func = load_filled_callback;
+  // icache_wakeup_func = icache_filled_callback;
+
+  foreach (i, contextcount) {
+    OutOfOrderCore& core =* cores[i];
+    Context& ctx = contextof(i);
+
+    core.flush_pipeline();
+
+    if (logable(6)) {
+      logfile << "VCPU ", i, " initial state:", endl;
+      // core.print_state(logfile);
+      logfile << endl;
+    }
   }
 
-  //
-  // Construct all the structures necessary to configure
-  // the cores. This function is only called once, after
-  // all other PTLsim subsystems are brought up.
-  //
-  virtual bool init(PTLsimConfig& config) {
-    foreach (i, contextcount) {
-      cores[i] = new OutOfOrderCore(i, contextof(i));
-      cores[i]->init();
-      //
-      // Note: in a multi-processor model, config may
-      // specify various ways of slicing contextcount up
-      // into threads, cores and sockets; the appropriate
-      // interconnect and cache hierarchy parameters may
-      // be specified here.
-      //
+  W64 last_printed_status_at_cycle = 0;
+  W64 last_printed_status_at_user_insn = 0;
+  CycleTimer ctprint;
+  ctprint.start();
+  ctprint.stop();
+
+  bool exiting = false;
+
+  while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
+    if unlikely (iterations >= config.start_log_at_iteration) {
+      if unlikely (!logenable) logfile << "Start logging at level ", config.loglevel, " in cycle ", iterations, endl, flush;
+      logenable = 1;
     }
 
-    init_luts();
-    return true;
-  }
+    if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 2000000) {
+      ctprint.stop();
+      double seconds = ctprint.seconds();
+      double cycles_per_sec = (sim_cycle - last_printed_status_at_cycle) / seconds;
+      double insns_per_sec = (total_user_insns_committed - last_printed_status_at_user_insn) / seconds;
 
-  //
-  // Run the processor model, until a stopping point
-  // is hit (as configured elsewhere in config).
-  //
-  virtual int run(PTLsimConfig& config) {
-    logfile << "Starting out-of-order core toplevel loop", endl, flush;
+      stringbuf sb;
+      sb << "Completed ", intstring(sim_cycle, 13), " cycles, ", intstring(total_user_insns_committed, 13), " commits: ", 
+        intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
+      //(delta ", (sim_cycle - last_printed_status_at_cycle), " cycles, ", ((W64)(seconds * 1000)), " msec, ", W64(CycleTimer::gethz()), " hz)";
 
-    // wakeup_func = load_filled_callback;
-    // icache_wakeup_func = icache_filled_callback;
+      logfile << sb, endl, flush;
+      cerr << "\r  ", sb, flush;
 
-    foreach (i, contextcount) {
-      OutOfOrderCore& core =* cores[i];
-      Context& ctx = contextof(i);
-
-      core.flush_pipeline(ctx.commitarf[REG_rip]);
-
-      if (logable(6)) {
-        logfile << "VCPU ", i, " initial state:", endl;
-        // core.print_state(logfile);
-        logfile << endl;
-      }
+      last_printed_status_at_cycle = sim_cycle;
+      last_printed_status_at_user_insn = total_user_insns_committed;
+      ctprint.reset();
+      ctprint.start();
     }
 
-    W64 last_printed_status_at_cycle = 0;
-    W64 last_printed_status_at_user_insn = 0;
-    CycleTimer ctprint;
-    ctprint.start();
-    ctprint.stop();
-
-    bool exiting = false;
-
-    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
-      if unlikely (iterations >= config.start_log_at_iteration) {
-        if unlikely (!logenable) logfile << "Start logging at level ", config.loglevel, " in cycle ", iterations, endl, flush;
-        logenable = 1;
-      }
-
-      if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 2000000) {
-        ctprint.stop();
-        double seconds = ctprint.seconds();
-        double cycles_per_sec = (sim_cycle - last_printed_status_at_cycle) / seconds;
-        double insns_per_sec = (total_user_insns_committed - last_printed_status_at_user_insn) / seconds;
-
-        stringbuf sb;
-        sb << "Completed ", intstring(sim_cycle, 13), " cycles, ", intstring(total_user_insns_committed, 13), " commits: ", 
-          intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
-        //(delta ", (sim_cycle - last_printed_status_at_cycle), " cycles, ", ((W64)(seconds * 1000)), " msec, ", W64(CycleTimer::gethz()), " hz)";
-
-        logfile << sb, endl, flush;
-        cerr << "\r  ", sb, flush;
-
-        last_printed_status_at_cycle = sim_cycle;
-        last_printed_status_at_user_insn = total_user_insns_committed;
-        ctprint.reset();
-        ctprint.start();
-      }
-
-      if (logable(6)) logfile << "Cycle ", sim_cycle, ":", endl;
+    if (logable(6)) logfile << "Cycle ", sim_cycle, ":", endl;
 #ifdef PTLSIM_HYPERVISOR
-      inject_events();
+    inject_events();
 #endif
-      foreach (i, contextcount) {
-        OutOfOrderCore& core =* cores[i];
-        Context& ctx = contextof(i);
-
-#ifdef PTLSIM_HYPERVISOR
-        if unlikely (ctx.check_events()) core.handle_interrupt();
-        if unlikely (!ctx.running) continue;
-#endif
-        exiting |= core.runcycle();
-      }
-#ifdef PTLSIM_HYPERVISOR
-      exiting |= check_for_async_sim_break();
-#endif
-      sim_cycle++;
-      iterations++;
-
-      if unlikely (exiting) break;
-    }
-
-    cerr << endl, flush;
-    logfile << "Exiting out of order mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
-
     foreach (i, contextcount) {
       OutOfOrderCore& core =* cores[i];
       Context& ctx = contextof(i);
 
-      core.core_to_external_state();
-
-      if (logable(6) | ((sim_cycle - core.last_commit_at_cycle) > 1024)) {
-        logfile << "Core State at end:", endl;
-        logfile << ctx;
-        core.dump_ooo_state();
-      }
+#ifdef PTLSIM_HYPERVISOR
+      if unlikely (ctx.check_events()) core.handle_interrupt();
+      if unlikely (!ctx.running) continue;
+#endif
+      exiting |= core.runcycle();
     }
+#ifdef PTLSIM_HYPERVISOR
+    exiting |= check_for_async_sim_break();
+#endif
+    sim_cycle++;
+    iterations++;
 
-    return exiting;
+    if unlikely (exiting) break;
   }
-};
+
+  cerr << endl, flush;
+  logfile << "Exiting out of order mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
+
+  foreach (i, contextcount) {
+    OutOfOrderCore& core =* cores[i];
+    Context& ctx = contextof(i);
+
+    core.core_to_external_state();
+
+    if (logable(6) | ((sim_cycle - core.last_commit_at_cycle) > 1024)) {
+      logfile << "Core State at end:", endl;
+      logfile << ctx;
+      core.dump_ooo_state(logfile);
+    }
+  }
+
+  return exiting;
+}
+
+void OutOfOrderMachine::dump_state(ostream& os) {
+  foreach (i, contextcount) {
+    if (!cores[i]) continue;
+    OutOfOrderCore& core =* cores[i];
+    Context& ctx = contextof(i);
+    os << "Core ", i, ":", endl;
+    core.dump_ooo_state(os);
+  }
+}
+
+void OutOfOrderMachine::update_stats(PTLsimStats& stats) { }
+
+//
+// Flush all pipelines in every core, and process any
+// pending BB cache invalidates.
+//
+// Typically this is in response to some infrequent event
+// like cross-modifying SMC or cache coherence deadlocks.
+//
+void OutOfOrderMachine::flush_all_pipelines() {
+  foreach (i, contextcount) {
+    if (!cores[i]) continue;
+    OutOfOrderCore& core =* cores[i];
+    core.flush_pipeline();
+  }
+
+  foreach (i, contextcount) {
+    if (!cores[i]) continue;
+    OutOfOrderCore& core =* cores[i];
+    core.invalidate_smc();
+  }
+}
 
 OutOfOrderMachine ooomodel("ooo");
 

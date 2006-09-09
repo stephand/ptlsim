@@ -54,7 +54,6 @@ struct SequentialCore {
   SequentialCore(Context& ctx_): ctx(ctx_) { }
 
   BasicBlock* current_basic_block;
-  Waddr current_basic_block_rip;
   int current_basic_block_transop_index;
   int bytes_in_current_insn;
   int current_uop_in_macro_op;
@@ -91,7 +90,6 @@ struct SequentialCore {
     os << "  Bytes in macro-op:  ", bytes_in_current_insn, endl;
     os << "  Uop in macro-op:    ", current_uop_in_macro_op, endl;
     os << "Basic block state:", endl;
-    os << "  Basic block RIP:    ", (void*)current_basic_block_rip, endl;
     os << "  BBcache block:      ", current_basic_block, endl;
     os << "  uop in basic block: ", current_basic_block_transop_index, endl;
     os << "  uop count in block: ", (current_basic_block) ? current_basic_block->count : 0, endl;
@@ -110,7 +108,6 @@ struct SequentialCore {
   void reset_fetch(W64 realrip) {
     arf[REG_rip] = realrip;
     current_basic_block = null;
-    current_basic_block_rip = 0;
     current_basic_block_transop_index = 0;
   }
 
@@ -565,10 +562,8 @@ struct SequentialCore {
 
     if likely (bb) {
       current_basic_block = bb;
-      current_basic_block_rip = rip;
     } else {
-      current_basic_block = bbcache.translate(ctx, rip);
-      current_basic_block_rip = rip;
+      current_basic_block = bbcache.translate(ctx, rvp);
       assert(current_basic_block);
       synth_uops_for_bb(*current_basic_block);
       

@@ -6,11 +6,6 @@
 // Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
-//++MTY TODO: whenever we reclaim some blocks from the bbcache,
-// we must flush the pipeline, in case we held refs to any of
-// those blocks! This is simpler than having to keep a queue
-// with bb->acquire() on rename and bb->release() on commit
-
 #include <globals.h>
 #include <elf.h>
 #include <ptlsim.h>
@@ -66,7 +61,7 @@ static W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
 #endif
 }
 
-void OutOfOrderCore::annul_ras_updates_in_fetchq() {
+void OutOfOrderCore::annul_fetchq() {
   //
   // There may be return address stack (RAS) updates from calls and returns
   // in the fetch queue that never made it to renaming, so they have no ROB
@@ -79,17 +74,30 @@ void OutOfOrderCore::annul_ras_updates_in_fetchq() {
       if (logable(6)) logfile << intstring(fetchbuf.uuid, 20), " anlras rip ", (void*)(Waddr)fetchbuf.rip, ": annul RAS update still in fetchq", endl;
       branchpred.annulras(fetchbuf.predinfo);
     }
+    // Also release the reference to the uop's basic block
+    if (logable(6)) logfile << intstring(fetchbuf.uuid, 20), " anlbbc rip ", (void*)(Waddr)fetchbuf.rip, ": annul bb ", fetchbuf.bb, " (", fetchbuf.bb->refcount, " refs)", endl;
+    fetchbuf.bb->release();
   }
 }
 
 //
-// Flush everything in pipeline immediately
+// Flush entire pipeline immediately, reset all processor
+// structures to their initial state, and resume from the
+// state saved in ctx.commitarf.
 //
-void OutOfOrderCore::flush_pipeline(W64 realrip) {
+void OutOfOrderCore::flush_pipeline() {
 #ifndef PERFECT_CACHE
   dcache_complete();
 #endif
-  reset_fetch_unit(realrip);
+  annul_fetchq();
+  foreach_forward(ROB, i) {
+    ReorderBufferEntry& rob = ROB[i];
+    // Release our lock on the cached basic block containing each uop
+    if (logable(6)) logfile << intstring(rob.uop.uuid, 20), " flush  rob ", intstring(rob.index(), -3), " rip ", rob.uop.rip, " bb ", rob.uop.bb, " (", rob.uop.bb->refcount, " refs)", endl;
+    rob.uop.bb->release();
+  }
+
+  reset_fetch_unit(ctx.commitarf[REG_rip]);
   rob_states.reset();
   // physreg_states.reset();
 
@@ -117,10 +125,10 @@ void OutOfOrderCore::flush_pipeline(W64 realrip) {
 
 // call this in response to a branch mispredict:
 void OutOfOrderCore::reset_fetch_unit(W64 realrip) {
-  if (smc_invalidate_pending) {
-    bbcache.invalidate_page(smc_invalidate_rvp.mfnlo, INVALIDATE_REASON_SMC);
-    if unlikely (smc_invalidate_rvp.mfnlo != smc_invalidate_rvp.mfnhi) bbcache.invalidate_page(smc_invalidate_rvp.mfnhi, INVALIDATE_REASON_SMC);
-    smc_invalidate_pending = 0;
+  if (current_basic_block) {
+    // Release our lock on the cached basic block we're currently fetching
+    current_basic_block->release();
+    current_basic_block = null;
   }
 
   fetchrip = realrip;
@@ -128,8 +136,22 @@ void OutOfOrderCore::reset_fetch_unit(W64 realrip) {
   stall_frontend = 0;
   waiting_for_icache_fill = 0;
   fetchq.reset();
-  current_basic_block = null;
   current_basic_block_transop_index = 0;
+}
+
+//
+// Process any pending self-modifying code invalidate requests.
+// This must be called on all cores *after* flushing all pipelines,
+// to ensure no stale BBs are referenced, thus preventing them
+// from being freed.
+//
+void OutOfOrderCore::invalidate_smc() {
+  if unlikely (smc_invalidate_pending) {
+    if (logable(5)) logfile << "SMC invalidate pending on ", smc_invalidate_rvp, endl;
+    bbcache.invalidate_page(smc_invalidate_rvp.mfnlo, INVALIDATE_REASON_SMC);
+    if unlikely (smc_invalidate_rvp.mfnlo != smc_invalidate_rvp.mfnhi) bbcache.invalidate_page(smc_invalidate_rvp.mfnhi, INVALIDATE_REASON_SMC);
+    smc_invalidate_pending = 0;
+  }
 }
 
 //
@@ -211,11 +233,11 @@ void OutOfOrderCore::redispatch_deadlock_recovery() {
     logfile << padstring("", 20), " recovr all recover from deadlock", endl;
   }
 
-  if (logable(6)) dump_ooo_state();
+  if (logable(6)) dump_ooo_state(logfile);
 
   stats.ooocore.dispatch.redispatch.deadlock_flushes++;
 
-  flush_pipeline(ctx.commitarf[REG_rip]);
+  flush_pipeline();
 
   /*
   //
@@ -278,20 +300,20 @@ static void print_fetch_bb_address_ringbuf(ostream& os) {
   }
 }
 
-void OutOfOrderCore::fetch() {
+bool OutOfOrderCore::fetch() {
   int fetchcount = 0;
   int taken_branch_count = 0;
 
   if unlikely (stall_frontend) {
     if (logable(6)) logfile << padstring("", 20), " fetch  frontend stalled", endl;
     stats.ooocore.fetch.stop.stalled++;
-    return;
+    return true;
   }
 
   if unlikely (waiting_for_icache_fill) {
     if (logable(6)) logfile << padstring("", 20), " fetch  rip ", fetchrip, ": wait for icache fill", endl;
     stats.ooocore.fetch.stop.icache_miss++;
-    return;
+    return true;
   }
 
   TransOpBuffer unaligned_ldst_buf;
@@ -379,7 +401,9 @@ void OutOfOrderCore::fetch() {
       assert(unaligned_ldst_buf.get(transop, synthop));
     }
 
-    transop.origop = &current_basic_block->transops[current_basic_block_transop_index];
+    assert(transop.bbindex == current_basic_block_transop_index);
+    transop.bb = current_basic_block;
+    transop.bb->acquire();
     transop.synthop = synthop;
 
     current_basic_block_transop_index += (unaligned_ldst_buf.empty());
@@ -474,29 +498,44 @@ void OutOfOrderCore::fetch() {
 
   stats.ooocore.fetch.stop.full_width += (fetchcount == FETCH_WIDTH);
   stats.ooocore.fetch.width[fetchcount]++;
+
+  return true;
 }
 
 BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const RIPVirtPhys& rvp) {  
+  if likely (current_basic_block) {
+    // Release our ref to the old basic block being fetched
+    current_basic_block->release();
+    current_basic_block = null;
+  }
+
   BasicBlock* bb = bbcache(rvp);
 
   if likely (bb) {
     current_basic_block = bb;
   } else {
     current_basic_block = bbcache.translate(ctx, rvp);
-    assert(current_basic_block);
-    
+    assert(current_basic_block);    
     if (logable(6)) logfile << padstring("", 20), " xlate  rip ", rvp, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
   }
+
+  //
+  // Acquire a reference to the new basic block being fetched.
+  // This must be done right away so future allocations do not
+  // reclaim the BB while we still have a reference to it.
+  //
+  current_basic_block->acquire();
+  current_basic_block->use(sim_cycle);  
 
   if unlikely (!current_basic_block->synthops) synth_uops_for_bb(*current_basic_block);
   assert(current_basic_block->synthops);
   
   current_basic_block_transop_index = 0;
 
-  current_basic_block->use(sim_cycle);  
-
-  assert(current_basic_block->rip == rvp);
-
+  if (current_basic_block->rip != rvp) {
+    logfile << "Error: current_basic_block ", current_basic_block, " rip ", current_basic_block->rip, " vs rvp ", rvp, " @ cycle ", sim_cycle, endl, flush;
+    assert(current_basic_block->rip == rvp);
+  }
   return current_basic_block;
 }
 
@@ -1626,6 +1665,10 @@ int ReorderBufferEntry::commit() {
     core.branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip]);
     stats.ooocore.branchpred.updates++;
   }
+
+  // Release our lock on the cached basic block containing this uop
+  if (logable(6)) logfile << " [bb ", uop.bb, ", ", uop.bb->refcount, " refs]";
+  uop.bb->release();
 
   if (logable(6)) {
     if (uop.eom) logfile << " [EOM #", total_user_insns_committed, "]";

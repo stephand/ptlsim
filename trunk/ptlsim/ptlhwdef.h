@@ -1216,12 +1216,9 @@ enum {
 };
 extern const char* datatype_names[DATATYPE_COUNT];
 
-struct TransOpBase {
-  W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, is_sse:1, is_x87:1;
-  W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, datatype:4, unaligned:1, index:8;
-};
-
-struct TransOp: public TransOpBase {
+struct TransOp {
+  W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, is_sse:1, is_x87:1, pad1:7;
+  W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, datatype:4, unaligned:1, bbindex:8, pad2:31;
   W64s rbimm;
   W64s rcimm;
   W64 riptaken;
@@ -1262,7 +1259,7 @@ struct TransOp: public TransOpBase {
     this->unaligned = 0;
     this->is_sse = 0;
     this->is_x87 = 0;
-    this->index = 0;
+    this->bbindex = 0;
   }
 };
 

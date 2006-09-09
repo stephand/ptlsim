@@ -2,7 +2,7 @@
 //
 // Sequential Logic Primitives for C++
 //
-// Copyright 2000-2004 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _LOGIC_H_

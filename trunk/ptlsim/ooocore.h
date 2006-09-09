@@ -343,7 +343,6 @@ namespace OutOfOrderModel {
   struct FetchBufferEntry: public TransOp {
     RIPVirtPhys rip;
     W64 uuid;
-    TransOp* origop;
     uopimpl_func_t synthop;
     BranchPredictorUpdateInfo predinfo;
     BasicBlock* bb;
@@ -356,7 +355,6 @@ namespace OutOfOrderModel {
     
     FetchBufferEntry(const TransOp& transop) {
       *((TransOp*)this) = transop;
-      origop = null;
     }
   };
 
@@ -630,11 +628,14 @@ namespace OutOfOrderModel {
   extern const byte archdest_can_commit[TRANSREG_COUNT];
   extern const byte archdest_is_visible[TRANSREG_COUNT];
 
+  struct OutOfOrderMachine;
+
   //
   // Out-of-order core
   //
   struct OutOfOrderCore {
     int coreid;
+    OutOfOrderMachine& machine;
     Context& ctx;
     BranchPredictorInterface branchpred;
     ListOfStateLists rob_states;
@@ -721,7 +722,7 @@ namespace OutOfOrderModel {
   name[3](description "-fp", rob_states, flags)
 
     // Default constructor to bind a core to a specific hardware context
-    OutOfOrderCore(int coreid_, Context& ctx_): coreid(coreid_), ctx(ctx_) { }
+    OutOfOrderCore(int coreid_, Context& ctx_, OutOfOrderMachine& machine_): coreid(coreid_), ctx(ctx_), machine(machine_) { }
 
     //
     // Initialize all structures for the first time
@@ -817,7 +818,7 @@ namespace OutOfOrderModel {
 
     // Pipeline Stages
     bool runcycle();
-    void fetch();
+    bool fetch();
     void rename();
     void frontend();
     int dispatch();
@@ -834,15 +835,16 @@ namespace OutOfOrderModel {
 
     // Pipeline Control and Fetching
     void reset_fetch_unit(W64 realrip);
-    void flush_pipeline(W64 realrip);
+    void flush_pipeline();
+    void invalidate_smc();
     void external_to_core_state();
     void core_to_external_state() { }
-    void annul_ras_updates_in_fetchq();
+    void annul_fetchq();
     BasicBlock* fetch_or_translate_basic_block(Context& ctx, const RIPVirtPhys& rvp);
     void redispatch_deadlock_recovery();
 
     // Debugging
-    void dump_ooo_state();
+    void dump_ooo_state(ostream& os);
     void print_rob(ostream& os);
     void print_lsq(ostream& os);
     void check_refcounts();
@@ -850,6 +852,17 @@ namespace OutOfOrderModel {
     void print_rename_tables(ostream& os);
     void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand);
     OutOfOrderCore& getcore() const { return coreof(coreid); }
+  };
+
+  struct OutOfOrderMachine: public PTLsimMachine {
+    OutOfOrderCore* cores[MAX_CONTEXTS];
+
+    OutOfOrderMachine(const char* name);
+    virtual bool init(PTLsimConfig& config);
+    virtual int run(PTLsimConfig& config);
+    virtual void dump_state(ostream& os);
+    virtual void update_stats(PTLsimStats& stats);
+    void flush_all_pipelines();
   };
 
 #endif // STATS_ONLY

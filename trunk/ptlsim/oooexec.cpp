@@ -412,7 +412,7 @@ int ReorderBufferEntry::issue() {
         // Early misprediction handling. Annul everything after the
         // branch and restart fetching in the correct direction
         //
-        core.annul_ras_updates_in_fetchq();
+        core.annul_fetchq();
         annul_after();
 
         //
@@ -542,11 +542,10 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
     // of the x86 macro-op. The frontend will then split the uop into
     // low and high parts as it is refetched.
     //
-    if (logable(6)) logfile << intstring(uop.uuid, 20), " algnfx", " rip ", (void*)(Waddr)uop.rip, ": set unaligned bit for uop ", ((TransOp)uop).index, " (", uop.origop, ") in BB and refetch", endl;
-    assert(uop.origop);
-    uop.origop->unaligned = 1;
+    if (logable(6)) logfile << intstring(uop.uuid, 20), " algnfx", " rip ", (void*)(Waddr)uop.rip, ": set unaligned bit for uop ", ((TransOp)uop).bbindex, " in BB ", uop.bb, " and refetch", endl;
+    uop.bb->transops[uop.bbindex].unaligned = 1;
 
-    core.annul_ras_updates_in_fetchq();
+    core.annul_fetchq();
     W64 recoveryrip = annul_after_and_including();
     core.reset_fetch_unit(recoveryrip);
 
@@ -1418,6 +1417,10 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
       if (logable(6)) logfile << " annulras";
       core.branchpred.annulras(annulrob.uop.predinfo);
     }
+
+    // Release our lock on the cached basic block containing this uop
+    if (logable(6)) logfile << " annulbb(", annulrob.uop.bb, ", ", annulrob.uop.bb->refcount, " refs)";
+    annulrob.uop.bb->release();
 
     annulrob.reset();
     core.ROB.annul(annulrob);

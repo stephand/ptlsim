@@ -484,7 +484,7 @@ void TraceDecoder::lastop() {
 
     transop.unaligned = 0;
     transop.bytes = bytes;
-    transop.index = bb.count;
+    transop.bbindex = bb.count;
     transop.is_x87 = is_x87;
     transop.is_sse = is_sse;
     bb.transops[bb.count++] = transop;
@@ -1168,8 +1168,13 @@ void assist_invalid_opcode(Context& ctx) {
 
 static const bool log_code_page_ops = 0;
 
-void BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
+bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
   BasicBlockChunkList* pagelist;
+  if unlikely (bb->refcount) {
+    logfile << "Warning: basic block ", bb, " ", *bb, " is still in use somewhere (refcount ", bb->refcount, ")", endl;
+    return false;
+  }
+
   pagelist = bbpages.get(bb->rip.mfnlo);
   if (logable(3) | log_code_page_ops) logfile << "Remove bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) from low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
   assert(pagelist);
@@ -1188,12 +1193,26 @@ void BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
   stats.decoder.bbcache.invalidates[reason]++;
 
   bb->free();
+  return true;
 }
 
-void BasicBlockCache::invalidate(const RIPVirtPhys& rvp, int reason) {
+bool BasicBlockCache::invalidate(const RIPVirtPhys& rvp, int reason) {
   BasicBlock* bb = get(rvp);
-  if (!bb) return;
-  invalidate(bb, reason);
+  if (!bb) return true;
+  return invalidate(bb, reason);
+}
+
+//
+// Find the number of cached BBs on a given physical page
+//
+int BasicBlockCache::get_page_bb_count(Waddr mfn) {
+  if unlikely (mfn == RIPVirtPhys::INVALID) return 0;
+
+  BasicBlockChunkList* pagelist = bbpages.get(mfn);
+
+  if unlikely (!pagelist) return 0;
+
+  return pagelist->count();
 }
 
 //
@@ -1201,21 +1220,20 @@ void BasicBlockCache::invalidate(const RIPVirtPhys& rvp, int reason) {
 // This function is suitable for calling from a reclaim handler
 // when we run out of memory (it may not allocate any memory).
 //
-
-int BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
-  BasicBlockChunkList* pagelist = bbpages.get(mfn);
-
+bool BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
   //
   // We may try to invalidate the special invalid mfn if SMC
   // occurs on a page where the high virtual page is invalid. 
   //
-  if (mfn == RIPVirtPhys::INVALID) return 0;
+  if unlikely (mfn == RIPVirtPhys::INVALID) return 0;
+
+  BasicBlockChunkList* pagelist = bbpages.get(mfn);
 
   if (logable(3) | log_code_page_ops) logfile << "Invalidate page mfn ", mfn, ": pagelist ", pagelist, " has ", (pagelist ? pagelist->count() : 0), " entries (dirty? ", smc_isdirty(mfn), ")", endl;
 
   smc_cleardirty(mfn);
 
-  if (!pagelist) return 0;
+  if unlikely (!pagelist) return 0;
 
   int oldcount = pagelist->count();
   int n = 0;
@@ -1224,7 +1242,10 @@ int BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
   while (entry = iter.next()) {
     BasicBlock* bb = *entry;
     if (logable(3) | log_code_page_ops) logfile << "  Invalidate bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes)", endl;
-    bbcache.invalidate(bb, reason);
+    if unlikely (!bbcache.invalidate(bb, reason)) {
+      if (logable(3) | log_code_page_ops) logfile << "  Could not invalidate bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes): still has refcount ", bb->refcount, endl;
+      return false;
+    }
     n++;
   }
 
@@ -1235,7 +1256,7 @@ int BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
   stats.decoder.pagecache.count = bbpages.count;
   stats.decoder.pagecache.invalidates[reason]++;
 
-  return n;
+  return true;
 }
 
 //
@@ -1300,6 +1321,16 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
 
   iter.reset(this);
   while (bb = iter.next()) {
+    if unlikely (bb->refcount) {
+      //
+      // We cannot invalidate anything that's still in the pipeline.
+      // If this is required, the pipeline must be flushed before
+      // the forced invalidation can occur.
+      //
+      logfile << "Warning: eligible bb ", bb, " ", bb->rip, " (lastused ", bb->lastused, ") still has refcount ", bb->refcount, endl;
+      continue;
+    }
+
     // We use '<=' to guarantee even a uniform distribution will eventually be reclaimed:
     if likely (bb->lastused <= average) {
       reclaimed_bytes += ptl_mm_getsize(bb);
@@ -1385,7 +1416,7 @@ void TraceDecoder::invalidate() {
   if ((rip - bb.rip) > valid_byte_count) {
 #ifdef PTLSIM_HYPERVISOR
     Level1PTE pte = contextof(0).virt_to_pte(ripstart);
-    mfn_t mfn = (pte.p) ? pte.mfn : 0;
+    mfn_t mfn = (pte.p) ? pte.mfn : RIPVirtPhys::INVALID;
 #else
     int mfn = 0;
 #endif
@@ -1579,30 +1610,43 @@ ostream& printflags(ostream& os, W64 flags) {
   return os;
 }
 
-BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
-  if unlikely ((rip == config.start_log_at_rip) && (rip != 0xffffffffffffffffULL)) {
+//
+// Translate one basic block. This function always returns
+// a BasicBlock, except in the very rare case where one or
+// both covered mfns are dirty and must be invalidated, and
+// the invalidation fails because some other object has
+// references to some of the basic blocks..
+//
+BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
+  if unlikely ((rvp.rip == config.start_log_at_rip) && (rvp.rip != 0xffffffffffffffffULL)) {
     config.start_log_at_iteration = 0;
     logenable = 1;
   }
 
-  RIPVirtPhys rvp(rip);
-  rvp.update(ctx);
+  /*
+  if unlikely (smc_isdirty(rvp.mfnlo)) {
+    if (logable(5) | log_code_page_ops) logfile << "Pre-invalidate low mfn for ", rvp, endl;
+    if unlikely (!invalidate_page(rvp.mfnlo, INVALIDATE_REASON_DIRTY)) return null;
+  }
+
+  if unlikely (smc_isdirty(rvp.mfnhi)) {
+    if (logable(5) | log_code_page_ops) logfile << "Pre-invalidate high mfn for ", rvp, endl;
+    if unlikely (!invalidate_page(rvp.mfnhi, INVALIDATE_REASON_DIRTY)) return null;
+  }
+  */
 
   BasicBlock* bb = get(rvp);
-  if (bb) return bb;
-
-  if (smc_isdirty(rvp.mfnlo))
-    invalidate_page(rvp.mfnlo, INVALIDATE_REASON_DIRTY);
-
-  if (smc_isdirty(rvp.mfnhi))
-    invalidate_page(rvp.mfnhi, INVALIDATE_REASON_DIRTY);
+  if likely (bb) return bb;
 
   translate_timer.start();
 
   TraceDecoder trans(rvp);
   trans.fillbuf(ctx);
 
-  if (logable(5) | log_code_page_ops) logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+  if (logable(5) | log_code_page_ops) {
+    logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+    logfile << "Warning: ", rvp, " may cross dirty pages", endl;
+  }
 
   if (rvp.mfnlo == RIPVirtPhys::INVALID) {
     assert(trans.valid_byte_count == 0);
@@ -1614,6 +1658,12 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   }
 
   bb = trans.bb.clone();
+  //
+  // Acquire a reference to the new basic block right away,
+  // since we make allocations below that might reclaim it
+  // out from under us.
+  //
+  bb->acquire();
 
   add(bb);
   stats.decoder.bbcache.count = this->count;
@@ -1623,7 +1673,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
 
   BasicBlockChunkList* pagelist;
 
-  smc_cleardirty(bb->rip.mfnlo);
+  //smc_cleardirty(bb->rip.mfnlo);
   pagelist = bbpages.get(bb->rip.mfnlo);
   if (!pagelist) {
     pagelist = new BasicBlockChunkList(bb->rip.mfnlo);
@@ -1638,7 +1688,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes-1)) >> 12);
 
   if (page_crossing) {
-    smc_cleardirty(bb->rip.mfnhi);
+    //smc_cleardirty(bb->rip.mfnhi);
     pagelist = bbpages.get(bb->rip.mfnhi);
     if (!pagelist) {
       pagelist = new BasicBlockChunkList(bb->rip.mfnhi);
@@ -1657,6 +1707,9 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, Waddr rip) {
   }
 
   translate_timer.stop();
+
+  bb->release();
+
   return bb;
 }
 
