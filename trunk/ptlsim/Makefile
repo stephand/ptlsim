@@ -150,8 +150,8 @@ ptlsim.dst.o: ptlsim.dst
 
 ifdef PTLSIM_HYPERVISOR
 ifdef __x86_64__
-ptlxen.bin: $(COMMONOBJS) Makefile ptlxen.lds
-	ld -v -g -O2 $(COMMONOBJS) -o ptlxen.bin -static --allow-multiple-definition -T ptlxen.lds `gcc -print-libgcc-file-name`
+ptlxen.bin: $(OBJFILES) Makefile ptlxen.lds
+	ld -v -g -O2 $(OBJFILES) -o ptlxen.bin -static --allow-multiple-definition -T ptlxen.lds `gcc -print-libgcc-file-name`
 
 ptlxen.bin.o: ptlxen.bin Makefile
 	objcopy -I binary -O elf64-x86-64 -B i386 --rename-section .data=.ptlxen,alloc,load,readonly,data,contents ptlxen.bin ptlxen.bin.o
