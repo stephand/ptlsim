@@ -25,10 +25,10 @@ typedef W32 Wmax;
 // void uop_impl_bogus(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) { asm("int3"); }
 
 template <typename T>
-static inline T rotr(T r, int n) { asm("ror %%cl,%[r]" : [r] "+r" (r) : [n] "c" ((byte)n)); return r; }
+static inline T rotr(T r, int n) { asm("ror %%cl,%[r]" : [r] "+q" (r) : [n] "c" ((byte)n)); return r; }
 
 template <typename T>
-static inline T rotl(T r, int n) { asm("rol %%cl,%[r]" : [r] "+r" (r) : [n] "c" ((byte)n)); return r; }
+static inline T rotl(T r, int n) { asm("rol %%cl,%[r]" : [r] "+q" (r) : [n] "c" ((byte)n)); return r; }
 
 #ifndef __x86_64__
 // Need to emulate this on 32-bit x86
