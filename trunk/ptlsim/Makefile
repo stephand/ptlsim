@@ -18,7 +18,7 @@ endif
 #
 # (Presently this is an experimental x86-64 only feature!)
 #
-PTLSIM_HYPERVISOR=1
+# PTLSIM_HYPERVISOR=1
 
 CC = g++
 
@@ -101,10 +101,10 @@ all: ptlsim ptlstats ptlcalls.o ptlcalls-32bit.o cpuid
 	@echo "Compiled successfully..."
 
 cpuid: cpuid.o $(BASEOBJS) $(STDOBJS)
-	g++ -O2 cpuid.o $(BASEOBJS) $(STDOBJS) -o cpuid
+	$(CC) -O2 cpuid.o $(BASEOBJS) $(STDOBJS) -o cpuid
 
 ptlstats: ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) Makefile
-	g++ -g -O2 ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) -o ptlstats
+	$(CC) -g -O2 ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) -o ptlstats
 
 ifdef __x86_64__
 injectcode-64bit.o: injectcode.cpp
@@ -132,14 +132,14 @@ else
 endif
 
 ptlsim.dst: dstbuild stats.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
-	cpp $(CFLAGS) $(INCFLAGS) -C stats.h > stats.i
+	$(CC) $(CFLAGS) $(INCFLAGS) -E -C stats.h > stats.i
 	cat stats.i | dstbuild PTLsimStats > dstbuild.temp.cpp
-	g++ $(CFLAGS) $(INCFLAGS) -DDSTBUILD -include stats.h dstbuild.temp.cpp $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o -o dstbuild.temp
+	$(CC) $(CFLAGS) $(INCFLAGS) -DDSTBUILD -include stats.h dstbuild.temp.cpp $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o -o dstbuild.temp
 	dstbuild.temp > ptlsim.dst
 	rm -f dstbuild.temp destbuild.temp.cpp stats.i
 
 makeusage: makeusage.o $(BASEOBJS) $(STDOBJS)
-	g++ $(CFLAGS) $(INCFLAGS) $(BASEOBJS) $(STDOBJS) makeusage.o -o makeusage
+	$(CC) $(CFLAGS) $(INCFLAGS) $(BASEOBJS) $(STDOBJS) makeusage.o -o makeusage
 
 usage.o: makeusage Makefile
 	makeusage > usage.txt
@@ -161,7 +161,7 @@ endif
 ifdef __x86_64__
 ifdef PTLSIM_HYPERVISOR
 ptlsim: ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o ptlmon.lds Makefile
-	g++ $(CFLAGS) ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -Wl,-T,ptlmon.lds -static -o ptlsim
+	$(CC) $(CFLAGS) ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -Wl,-T,ptlmon.lds -static -o ptlsim
 else
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
 	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`

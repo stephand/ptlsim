@@ -981,7 +981,7 @@ void* ptl_mm_alloc(size_t bytes) {
       }
       genalloc.add_to_free_pool(newpool, pagebytes);
 
-      p = (Waddr*)genalloc.alloc(bytes);
+      p = (W64*)genalloc.alloc(bytes);
       assert(p);
     }
 
