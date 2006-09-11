@@ -2286,7 +2286,6 @@ int main(int argc, char** argv) {
     logfile << "ptlsim: Continuing...", endl, flush;
   }
 
-  init_cache();
   init_uops();
   init_decode();
 

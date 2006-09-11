@@ -17,7 +17,6 @@
 #include <kernel.h>
 #endif
 #include <ptlhwdef.h>
-#include <dcache.h>
 #include <config.h>
 #include <datastore.h>
 

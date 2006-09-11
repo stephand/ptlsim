@@ -13,6 +13,7 @@
 #include <datastore.h>
 #include <logic.h>
 
+#include <dcache.h>
 #include <ooocore.h>
 #include <stats.h>
 
@@ -991,13 +992,11 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   }
 
   // shift is how many bits to shift the 8-bit bytemask left by within the cache line;
-#ifndef PERFECT_CACHE
-  bool covered = covered_by_sfr(addr, sfra, sizeshift);
+  bool covered = core.caches.covered_by_sfr(addr, sfra, sizeshift);
   stats.ooocore.dcache.load.forward.cache += (sfra == null);
   stats.ooocore.dcache.load.forward.sfr += ((sfra != null) & covered);
   stats.ooocore.dcache.load.forward.sfr_and_cache += ((sfra != null) & (!covered));
   stats.ooocore.dcache.load.datatype[uop.datatype]++;
-#endif
 
   //
   // NOTE: Technically the data is valid right now for simulation purposes
@@ -1006,11 +1005,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   state.data = data;
   state.invalid = 0;
   state.bytemask = 0xff;
-#ifdef PERFECT_CACHE
-  bool L1hit = 1;
-#else
-  bool L1hit = (config.perfect_cache) ? 1 : probe_cache_and_sfr(addr, sfra, sizeshift);
-#endif
+  bool L1hit = (config.perfect_cache) ? 1 : core.caches.probe_cache_and_sfr(addr, sfra, sizeshift);
 
   if likely (L1hit) {    
     cycles_left = LOADLAT;
@@ -1039,24 +1034,20 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   changestate(core.rob_cache_miss_list);
 
   LoadStoreInfo lsi;
-  lsi.info.rd = physreg->index();
-  lsi.info.tag = index();
-  lsi.info.sizeshift = sizeshift;
-  lsi.info.aligntype = aligntype;
-  lsi.info.sfraused = (sfra != null);
-  lsi.info.internal = uop.internal;
-  lsi.info.signext = signext;
+  lsi.rob = index();
+  lsi.tid = 0; // for SMT
+  lsi.sizeshift = sizeshift;
+  lsi.aligntype = aligntype;
+  lsi.sfrused = (sfra != null);
+  lsi.internal = uop.internal;
+  lsi.signext = signext;
 
   //
   // NOTE: this state is not really used anywhere since load misses
   // will fill directly into the physical register instead.
   //
   IssueState tempstate;
-#ifdef PERFECT_CACHE
-  lfrqslot = 0;
-#else
-  lfrqslot = issueload_slowpath(tempstate, addr, origaddr, data, *sfra, lsi);
-#endif
+  lfrqslot = core.caches.issueload_slowpath(tempstate, addr, origaddr, data, *sfra, lsi);
 
   if (logable(6)) {
     logfile << intstring(uop.uuid, 20), " ldmis", (load_store_second_phase ? "2" : " "), " rob ", intstring(index(), -3), " ld", lsq->index(), 
@@ -1085,16 +1076,11 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 //
 // Data cache has delivered a load: wake up corresponding ROB/LSQ/physreg entries
 //
-static W64 load_filled_callback(LoadStoreInfo lsi, W64 addr) {
-  if unlikely (lsi.info.rd == PHYS_REG_NULL)
-                return 0; // ignore prefetches
-  /*  
-  assert(lsi.info.tag < ROB_SIZE);
-  ReorderBufferEntry& rob = ROB[lsi.info.tag];
-  assert(rob.current_state_list == &rob_cache_miss_list);
+void OutOfOrderCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
+  if (logable(6)) logfile << "D-cache wakeup of rob ", lsi.rob, " for physaddr ", (void*)(Waddr)physaddr, endl;
+  ReorderBufferEntry& rob = core.ROB[lsi.rob];
+  assert(rob.current_state_list == &core.rob_cache_miss_list);
   rob.loadwakeup();
-  */
-  return 0;
 }
 
 void ReorderBufferEntry::loadwakeup() {
@@ -1392,12 +1378,10 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
       core.LSQ.annul(annulrob.lsq);
     }
 
-#ifndef PERFECT_CACHE
     if unlikely (annulrob.lfrqslot >= 0) {
       if (logable(6)) logfile << " lfrq", annulrob.lfrqslot;
-      annul_lfrq_slot(annulrob.lfrqslot);
+      core.caches.annul_lfrq_slot(annulrob.lfrqslot);
     }
-#endif
 
     if unlikely (isbranch(annulrob.uop.opcode) && (annulrob.uop.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
       //
@@ -1497,13 +1481,11 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     cluster = -1;
   }
 
-#ifndef PERFECT_CACHE
   if unlikely (lfrqslot >= 0) {
     if (logable(6)) logfile << " [lfrqslot ", lfrqslot, "]";
-    annul_lfrq_slot(lfrqslot);
+    core.caches.annul_lfrq_slot(lfrqslot);
     lfrqslot = -1;
   }
-#endif
 
   if unlikely (lsq) {
     if (logable(6)) logfile << " [lsq ", lsq->index(), "]";

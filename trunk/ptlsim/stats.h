@@ -17,7 +17,7 @@
 #define STATS_ONLY
 #include <decode.h>
 #include <ooocore.h>
-#include <dcacheint.h>
+#include <dcache.h>
 #include <branchpred.h>
 #undef STATS_ONLY
 
@@ -362,7 +362,7 @@ struct PTLsimStats { // rootnode:
         W64 resets;
         W64 total_latency;
         double average_latency;
-        W64 width[MAX_WAKEUPS_PER_CYCLE+1]; // histo: 0, MAX_WAKEUPS_PER_CYCLE+1, 1
+        W64 width[CacheSubsystem::MAX_WAKEUPS_PER_CYCLE+1]; // histo: 0, CacheSubsystem::MAX_WAKEUPS_PER_CYCLE+1, 1
       } lfrq;
 
       struct store {

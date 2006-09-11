@@ -13,6 +13,7 @@
 #include <datastore.h>
 #include <logic.h>
 
+#include <dcache.h>
 #include <ooocore.h>
 #include <stats.h>
 
@@ -28,12 +29,9 @@
 
 using namespace OutOfOrderModel;
 
-static W64 icache_filled_callback(LoadStoreInfo lsi, W64 addr) {
-  if (logable(6)) 
-    logfile << "L1 i-cache wakeup on line ", (void*)(Waddr)addr, endl;
-  
-  //waiting_for_icache_fill = 0;
-  return 0;
+void OutOfOrderCoreCacheCallbacks::icache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
+  if (logable(6)) logfile << "I-cache wakeup of physaddr ", (void*)(Waddr)physaddr, endl;
+  core.waiting_for_icache_fill = 0;
 }
 
 //
@@ -86,9 +84,7 @@ void OutOfOrderCore::annul_fetchq() {
 // state saved in ctx.commitarf.
 //
 void OutOfOrderCore::flush_pipeline() {
-#ifndef PERFECT_CACHE
-  dcache_complete();
-#endif
+  caches.complete();
   annul_fetchq();
   foreach_forward(ROB, i) {
     ReorderBufferEntry& rob = ROB[i];
@@ -354,13 +350,10 @@ bool OutOfOrderCore::fetch() {
 
     W64 req_icache_block = floor(physaddr, ICACHE_FETCH_GRANULARITY);
     if ((!current_basic_block->invalidblock) && (req_icache_block != current_icache_block)) {
-#ifdef PERFECT_CACHE
-      bool hit = 1;
-#else
-      bool hit = probe_icache(fetchrip, physaddr);
+      bool hit = caches.probe_icache(fetchrip, physaddr);
       hit |= config.perfect_cache;
       if unlikely (!hit) {
-        int missbuf = initiate_icache_miss(physaddr);
+        int missbuf = caches.initiate_icache_miss(physaddr);
         if (logable(6)) logfile << padstring("", 20), " fetch  rip ", fetchrip, ": wait for icache fill of phys ", (void*)physaddr, " on missbuf ", missbuf, endl;
         if unlikely (missbuf < 0) {
           // Try to re-allocate a miss buffer on the next cycle
@@ -371,7 +364,7 @@ bool OutOfOrderCore::fetch() {
         stats.ooocore.fetch.stop.icache_miss++;
         break;
       }
-#endif
+
       stats.ooocore.fetch.blocks++;
       current_icache_block = req_icache_block;
       stats.ooocore.dcache.fetch.hit.L1++;
@@ -1583,7 +1576,7 @@ int ReorderBufferEntry::commit() {
       storemask(lsq->physaddr << 3, lsq->data, lsq->bytemask);
     }
 #else
-    if (lsq->bytemask) assert(commitstore_unlocked(*lsq) == 0);
+    if (lsq->bytemask) assert(core.caches.commitstore(*lsq) == 0);
 #endif
     if (logable(6)) logfile << " [mem ", (void*)(Waddr)(lsq->physaddr << 3), " = ", bytemaskstring((const byte*)&lsq->data, lsq->bytemask, 8), "]";
   }

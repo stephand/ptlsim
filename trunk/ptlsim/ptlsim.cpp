@@ -305,7 +305,6 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
 
   if (config.stats_filename.set() && (config.stats_filename != current_stats_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    logfile << "Writing statistics to ", config.stats_filename, endl, flush;
     statswriter.open(config.stats_filename, &_binary_ptlsim_dst_start,
                      &_binary_ptlsim_dst_end - &_binary_ptlsim_dst_start,
                      sizeof(PTLsimStats));

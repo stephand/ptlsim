@@ -836,7 +836,7 @@ make_condop_all_conds_all_sizes(chk_and, uop_impl_chk_and);
 
 template <int level>
 inline void uop_impl_prefetch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  //++MTY FIXME for PTLSIM_HYPERVISOR
+  //++MTY FIXME for PTLSIM_HYPERVISOR: needs to do virt->phys translation first!
   // initiate_prefetch(ra + rb, level);
   state.reg.rddata = 0;
   state.reg.rdflags = 0;

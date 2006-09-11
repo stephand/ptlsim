@@ -11,14 +11,14 @@ __x86_64__=1
 endif
 
 #
-# Build PTLsim/Xen full system simulator:
+# Build PTLsim/X full system simulator:
 #
 # Make sure you have Xen installed and have applied
 # xen-3.0-ptlsim.diff before doing this!
 #
-# (Presently this is an experimental x86-64 only feature!)
+# PTLsim/X only supports 64-bit processors.
 #
-# PTLSIM_HYPERVISOR=1
+PTLSIM_HYPERVISOR=1
 
 CC = g++
 
@@ -69,7 +69,7 @@ endif
 OOOOBJS = ooocore.o ooopipe.o oooexec.o branchpred.o dcache.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h dcacheint.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h xc_ptlsim.h
+COMMONINCLUDES = logic.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h xc_ptlsim.h
 OOOINCLUDES = branchpred.h ooocore.h cpthwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 

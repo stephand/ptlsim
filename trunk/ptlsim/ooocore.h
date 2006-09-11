@@ -28,8 +28,6 @@
 #define RC 2
 #define RS 3
 
-#define PERFECT_CACHE
-
 namespace OutOfOrderModel {
   //
   // NOTE: This file only specifies the configuration for the out of order core;
@@ -630,6 +628,13 @@ namespace OutOfOrderModel {
 
   struct OutOfOrderMachine;
 
+  struct OutOfOrderCoreCacheCallbacks: public CacheSubsystem::PerCoreCacheCallbacks {
+    OutOfOrderCore& core;
+    OutOfOrderCoreCacheCallbacks(OutOfOrderCore& core_): core(core_) { }
+    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
+    virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
+  };
+
   //
   // Out-of-order core
   //
@@ -722,7 +727,7 @@ namespace OutOfOrderModel {
   name[3](description "-fp", rob_states, flags)
 
     // Default constructor to bind a core to a specific hardware context
-    OutOfOrderCore(int coreid_, Context& ctx_, OutOfOrderMachine& machine_): coreid(coreid_), ctx(ctx_), machine(machine_) { }
+    OutOfOrderCore(int coreid_, Context& ctx_, OutOfOrderMachine& machine_): coreid(coreid_), ctx(ctx_), machine(machine_), cache_callbacks(*this) { }
 
     //
     // Initialize all structures for the first time
@@ -758,6 +763,8 @@ namespace OutOfOrderModel {
       current_icache_block = 0;
       round_robin_reg_file_offset = 0;
       smc_invalidate_pending = 0;
+      caches.reset();
+      caches.callback = &cache_callbacks;
     }
 
     //
@@ -815,6 +822,9 @@ namespace OutOfOrderModel {
     W64 last_commit_at_cycle;
     bool smc_invalidate_pending;
     RIPVirtPhys smc_invalidate_rvp;
+
+    CacheSubsystem::CacheHierarchy caches;
+    OutOfOrderCoreCacheCallbacks cache_callbacks;
 
     // Pipeline Stages
     bool runcycle();

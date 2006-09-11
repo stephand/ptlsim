@@ -11,6 +11,7 @@
 #include <branchpred.h>
 #include <datastore.h>
 #include <logic.h>
+#include <dcache.h>
 
 #define DECLARE_STRUCTURES
 #include <ooocore.h>
@@ -169,9 +170,8 @@ bool OutOfOrderCore::runcycle() {
   // All FUs are available at top of cycle:
   fu_avail = bitmask(FU_COUNT);
   loads_in_this_cycle = 0;
-#ifndef PERFECT_CACHE
-  dcache_clock();
-#endif
+  caches.clock();
+
   int commitrc = commit();
     
   for_each_cluster(i) { writeback(i); }
@@ -388,9 +388,7 @@ void OutOfOrderCore::dump_ooo_state(ostream& os) {
   foreach (i, PHYS_REG_FILE_COUNT) {
     os << physregfiles[i];
   }
-#ifndef PERFECT_CACHE
-  dcache_print(os);
-#endif
+  caches.print(os);
   os << flush;
 }
 
