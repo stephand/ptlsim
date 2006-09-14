@@ -51,7 +51,7 @@ void LoadFillReqQueue<size>::restart() {
   while (!freemap.allset()) {
     int idx = (~freemap).lsb();
     LoadFillReq& req = reqs[idx];
-    if (analyze_in_detail()) logfile << "iter ", iterations, ": force final wakeup/reset of LFRQ slot ", idx, ": ", req, endl;
+    if (logable(6)) logfile << "iter ", iterations, ": force final wakeup/reset of LFRQ slot ", idx, ": ", req, endl;
     annul(idx);
   }
   reset();
@@ -61,7 +61,7 @@ void LoadFillReqQueue<size>::restart() {
 template <int size>
 void LoadFillReqQueue<size>::annul(int lfrqslot) {
   LoadFillReq& req = reqs[lfrqslot];
-  if (analyze_in_detail()) logfile << "  Annul LFRQ slot ", lfrqslot, endl;
+  if (logable(6)) logfile << "  Annul LFRQ slot ", lfrqslot, endl;
   stats.ooocore.dcache.lfrq.annuls++;
   hierarchy.missbuf.annul_lfrq(lfrqslot);
   changestate(lfrqslot, ready, freemap);
@@ -89,7 +89,7 @@ int LoadFillReqQueue<size>::add(const LoadFillReq& req) {
 // 
 template <int size>
 void LoadFillReqQueue<size>::wakeup(W64 address, const bitvec<LFRQ_SIZE>& lfrqmask) {
-  if (analyze_in_detail()) logfile << "LFRQ.wakeup(", (void*)(Waddr)address, ", ", lfrqmask, ")", endl;
+  if (logable(6)) logfile << "LFRQ.wakeup(", (void*)(Waddr)address, ", ", lfrqmask, ")", endl;
   //assert(L2.probe(address));
   waiting &= ~lfrqmask;
   ready |= lfrqmask;
@@ -121,7 +121,7 @@ void LoadFillReqQueue<size>::clock() {
     int idx = ready.lsb();
     LoadFillReq& req = reqs[idx];
 
-    if (analyze_in_detail()) logfile << "iter ", iterations, ": wakeup LFRQ slot ", idx, ": ", req, endl;
+    if (logable(6)) logfile << "iter ", iterations, ": wakeup LFRQ slot ", idx, ": ", req, endl;
     // wakeup register and/or commitbuf here
     W64 delta = LO32(sim_cycle) - LO32(req.initcycle);
     if unlikely (delta >= 65536) {
@@ -191,7 +191,7 @@ int MissBuffer<SIZE>::find(W64 addr) {
 //
 template <int SIZE>
 int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache) {
-  bool DEBUG = analyze_in_detail();
+  bool DEBUG = logable(6);
 
   addr = floor(addr, L1_LINE_SIZE);
 
@@ -255,7 +255,7 @@ template <int SIZE>
 int MissBuffer<SIZE>::initiate_miss(const LoadFillReq& req, bool hit_in_L2) {
   int lfrqslot = hierarchy.lfrq.add(req);
 
-  if (analyze_in_detail()) logfile << "missbuf.initiate_miss(req ", req, ", L2hit? ", hit_in_L2, ") -> lfrqslot ", lfrqslot, endl;
+  if (logable(6)) logfile << "missbuf.initiate_miss(req ", req, ", L2hit? ", hit_in_L2, ") -> lfrqslot ", lfrqslot, endl;
 
   if unlikely (lfrqslot < 0)
                 return -1;
@@ -277,7 +277,7 @@ void MissBuffer<SIZE>::clock() {
   if (freemap.allset())
     return;
 
-  bool DEBUG = analyze_in_detail();
+  bool DEBUG = logable(6);
 
   foreach (i, SIZE) {
     Entry& mb = missbufs[i];

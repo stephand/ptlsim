@@ -223,9 +223,6 @@ extern ConfigurationParser<PTLsimConfig> configparser;
 
 ostream& operator <<(ostream& os, const PTLsimConfig& config);
 
-//inline bool analyze_in_detail() { return 0; }
-inline bool analyze_in_detail() { return (config.loglevel > 0); }
-
 extern bool logenable;
 #define logable(level) (unlikely (logenable && (config.loglevel >= level)))
 
