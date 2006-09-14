@@ -108,8 +108,9 @@ namespace OutOfOrderModel {
 
   enum { PHYSREG_NONE, PHYSREG_FREE, PHYSREG_WAITING, PHYSREG_BYPASS, PHYSREG_WRITTEN, PHYSREG_ARCH, PHYSREG_PENDINGFREE, MAX_PHYSREG_STATE };
   static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
+  static const char* short_physreg_state_names[MAX_PHYSREG_STATE] = {"-", "free", "wait", "byps", "wrtn", "arch", "pend"};
 
-#ifndef STATS_ONLY
+#ifdef INSIDE_OOOCORE
 
   struct OutOfOrderCore;
   OutOfOrderCore& coreof(int coreid);
@@ -363,6 +364,7 @@ namespace OutOfOrderModel {
   struct OutOfOrderCore;
   struct PhysicalRegister;
   struct LoadStoreQueueEntry;
+  struct OutOfOrderCoreEvent;
 
   //
   // Reorder Buffer (ROB) structure, used for tracking all uops in flight.
@@ -478,6 +480,18 @@ namespace OutOfOrderModel {
     return lsq.print(os);
   }
 
+  struct PhysicalRegisterOperandInfo {
+    W32 uuid;
+    W16 physreg;
+    W16 rob;
+    byte state;
+    byte rfid;
+    byte archreg;
+    byte pad1;
+  };
+
+  ostream& operator <<(ostream& os, const PhysicalRegisterOperandInfo& opinfo);
+
   //
   // Physical Register File
   //
@@ -540,6 +554,8 @@ namespace OutOfOrderModel {
     int index() const { return idx; }
     bool valid() const { return ((flags & FLAG_INV) == 0); }
     bool ready() const { return ((flags & FLAG_WAIT) == 0); }
+
+    void fill_operand_info(PhysicalRegisterOperandInfo& opinfo);
 
     OutOfOrderCore& getcore() const { return coreof(coreid); }
   };
@@ -636,12 +652,324 @@ namespace OutOfOrderModel {
   };
 
   //
+  // Event Tracing
+  //
+  enum {
+    EVENT_INVALID = 0,
+    EVENT_FETCH_STALLED,
+    EVENT_FETCH_ICACHE_WAIT,
+    EVENT_FETCH_FETCHQ_FULL,
+    EVENT_FETCH_BOGUS_RIP,
+    EVENT_FETCH_ICACHE_MISS,
+    EVENT_FETCH_SPLIT,
+    EVENT_FETCH_ASSIST,
+    EVENT_FETCH_TRANSLATE,
+    EVENT_FETCH_OK,
+    EVENT_RENAME_FETCHQ_EMPTY,
+    EVENT_RENAME_ROB_FULL,
+    EVENT_RENAME_PHYSREGS_FULL,
+    EVENT_RENAME_LDQ_FULL,
+    EVENT_RENAME_STQ_FULL,
+    EVENT_RENAME_MEMQ_FULL,
+    EVENT_RENAME_OK,
+    EVENT_FRONTEND,
+    EVENT_CLUSTER_NO_CLUSTER,
+    EVENT_CLUSTER_OK,
+    EVENT_DISPATCH_NO_CLUSTER,
+    EVENT_DISPATCH_DEADLOCK,
+    EVENT_DISPATCH_OK,
+    EVENT_ISSUE_NO_FU,
+    EVENT_ISSUE_OK,
+    EVENT_REPLAY,
+    EVENT_STORE_EXCEPTION,
+    EVENT_STORE_WAIT,
+    EVENT_STORE_PARALLEL_FORWARDING_MATCH,
+    EVENT_STORE_ALIASED_LOAD,
+    EVENT_STORE_ISSUED,
+    EVENT_LOAD_EXCEPTION,
+    EVENT_LOAD_WAIT,
+    EVENT_LOAD_HIGH_ANNULLED,
+    EVENT_LOAD_HIT,
+    EVENT_LOAD_MISS,
+    EVENT_LOAD_LFRQ_FULL,
+    EVENT_LOAD_WAKEUP,
+    EVENT_ALIGNMENT_FIXUP,
+    EVENT_ANNUL_NO_FUTURE_UOPS,
+    EVENT_ANNUL_MISSPECULATION,
+    EVENT_ANNUL_EACH_ROB,
+    EVENT_ANNUL_PSEUDOCOMMIT,
+    EVENT_ANNUL_FETCHQ_RAS,
+    EVENT_ANNUL_FETCHQ,
+    EVENT_ANNUL_FLUSH,
+    EVENT_REDISPATCH_DEPENDENTS,
+    EVENT_REDISPATCH_DEPENDENTS_DONE,
+    EVENT_REDISPATCH_EACH_ROB,
+    EVENT_COMPLETE,
+    EVENT_BROADCAST,
+    EVENT_FORWARD,
+    EVENT_WRITEBACK,
+    EVENT_COMMIT_EXCEPTION_DETECTED,
+    EVENT_COMMIT_EXCEPTION_ACKNOWLEDGED,
+    EVENT_COMMIT_SKIPBLOCK,
+    EVENT_COMMIT_SMC_DETECTED,
+    EVENT_COMMIT_ASSIST,
+    EVENT_COMMIT_OK,
+    EVENT_RECLAIM_PHYSREG,
+  };
+
+  //
+  // Event that gets written to the trace buffer
+  //
+  // In the interest of minimizing space, the cycle counters
+  // and uuids are only 32-bits; in practice wraparound is
+  // not likely to be a problem.
+  //
+  struct OutOfOrderCoreEvent {
+    W32 cycle;
+    W32 uuid;
+    RIPVirtPhysBase rip;
+    TransOpBase uop;
+    W16 rob;
+    W16 physreg;
+    W16 lsq;
+    W16 type;
+    W16s lfrqslot;
+    byte rfid;
+    byte cluster;
+    byte fu;
+
+    OutOfOrderCoreEvent* fill(int type) {
+      this->type = type;
+      cycle = sim_cycle;
+      uuid = 0;
+      return this;
+    }
+
+    OutOfOrderCoreEvent* fill(int type, const FetchBufferEntry& uop) {
+      fill(type);
+      uuid = uop.uuid;
+      rip = uop.rip;
+      this->uop = uop;
+      return this;
+    }
+
+    OutOfOrderCoreEvent* fill(int type, const RIPVirtPhys& rvp) {
+      fill(type);
+      rip = rvp;
+      return this;
+    }
+
+    OutOfOrderCoreEvent* fill(int type, const ReorderBufferEntry* rob) {
+      fill(type, rob->uop);
+      this->rob = rob->index();
+      physreg = rob->physreg->index();
+      lsq = (rob->lsq) ? rob->lsq->index() : 0;
+      rfid = rob->physreg->rfid;
+      cluster = rob->cluster;
+      fu = rob->fu;
+      lfrqslot = rob->lfrqslot;
+      return this;
+    }
+
+    OutOfOrderCoreEvent* fill_commit(int type, const ReorderBufferEntry* rob) {
+      fill(type, rob);
+      if unlikely (isstore(rob->uop.opcode)) {
+        commit.state.st = *rob->lsq;
+      } else {
+        commit.state.reg.rddata = rob->physreg->data;
+        commit.state.reg.rdflags = rob->physreg->flags;
+      }
+      // taken, predtaken only for branches
+      commit.pteupdate = rob->pteupdate;
+      // oldphysreg filled in later
+      // oldphysreg_refcount filled in later
+      commit.bb_refcount = rob->uop.bb->refcount;
+      commit.bb = rob->uop.bb;
+      commit.origvirt = rob->origvirt;
+      commit.total_user_insns_committed = total_user_insns_committed;
+      // target_rip filled in later
+      foreach (i, MAX_OPERANDS) commit.operand_physregs[i] = rob->operands[i]->index();
+      return this;
+    }
+
+    OutOfOrderCoreEvent* fill_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr, Waddr virtaddr) {
+      fill(type, rob);
+      loadstore.sfr = *rob->lsq;
+      loadstore.virtaddr = virtaddr;
+      loadstore.load_store_second_phase = rob->load_store_second_phase;
+      loadstore.inherit_sfr_used = (inherit_sfr != null);
+      if unlikely (inherit_sfr) {
+        loadstore.inherit_sfr = *inherit_sfr;
+        loadstore.inherit_sfr_lsq = inherit_sfr->rob->lsq->index();
+        loadstore.inherit_sfr_uuid = inherit_sfr->rob->uop.uuid;
+        loadstore.inherit_sfr_rob = inherit_sfr->rob->index();
+        loadstore.inherit_sfr_physreg = inherit_sfr->rob->physreg->index();
+        loadstore.inherit_sfr_rip = inherit_sfr->rob->uop.rip;
+      }
+      return this;
+    }
+
+    union {
+      struct {
+        W16s missbuf;
+        BasicBlock* bb;
+        W64 predrip;
+        W16 bb_uop_count;
+      } fetch;
+      struct {
+        W16  oldphys;
+        W16  oldzf;
+        W16  oldcf;
+        W16  oldof;
+        PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
+      } rename;
+      struct {
+        W16 cycles_left;
+      } frontend;
+      struct {
+        W16 allowed_clusters;
+        W16 iq_avail[MAX_CLUSTERS];
+      } select_cluster;
+      struct {
+        PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
+      } dispatch;
+      struct {
+        byte mispredicted:1;
+        IssueState state;
+        W16 cycles_left;
+        W64 operand_data[MAX_OPERANDS];
+        W16 operand_flags[MAX_OPERANDS];
+        W64 predrip;
+        W32 fu_avail;
+      } issue;
+      struct {
+        PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
+        byte ready;
+      } replay;
+      struct {
+        W16 cycles_left;
+        W64 virtaddr;
+        byte inherit_sfr_used:1, rcready:1, load_store_second_phase:1, predicted_alias:1;
+        SFR sfr;
+        SFR inherit_sfr;
+        W16 inherit_sfr_lsq;
+        W16 inherit_sfr_rob;
+        W16 inherit_sfr_physreg;
+        W64 inherit_sfr_uuid;
+        W64 inherit_sfr_rip;
+        W64 data_to_store;
+      } loadstore;
+      struct {
+        W16 somidx;
+        W16 eomidx;
+        W16 startidx;
+        W16 endidx;
+        W16 bb_refcount;
+        byte annulras;
+        BasicBlock* bb;
+      } annul;
+      struct {
+        StateList* current_state_list;
+        W16 iqslot;
+        W16 count;
+        byte dependent_operands;
+        PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
+      } redispatch;
+      struct {
+        W8  forward_cycle;
+        W8  operand;
+        W8  target_operands_ready;
+        W8  target_all_operands_ready;
+        W16 target_rob;
+        W16 target_physreg;
+        W8  target_rfid;
+        W8  target_cluster;
+        W64 target_uuid;
+        W16 target_lsq;
+        W8  target_st;
+      } forwarding;
+      struct {
+        W16 consumer_count;
+        W16 flags;
+        W64 data;
+        byte transient:1, all_consumers_sourced_from_bypass:1, no_branches_between_renamings:1, dest_renamed_before_writeback:1;
+      } writeback;
+      struct {
+        IssueState state;
+        byte taken:1, predtaken:1;
+        PTEUpdateBase pteupdate;
+        W16s oldphysreg;
+        W16 oldphysreg_refcount;
+        W16 bb_refcount;
+        BasicBlock* bb;
+        W64 origvirt;
+        W64 total_user_insns_committed;
+        W64 target_rip;
+        W16 operand_physregs[MAX_OPERANDS];
+      } commit;
+    };
+
+    ostream& print(ostream& os) const;
+  };
+
+  struct EventLog {
+    OutOfOrderCoreEvent* start;
+    OutOfOrderCoreEvent* end;
+    OutOfOrderCoreEvent* tail;
+    ostream* logfile;
+
+    EventLog() { start = null; end = null; tail = null; logfile = null; }
+
+    bool init(size_t bufsize);
+    void reset();
+
+    OutOfOrderCoreEvent* add() {
+      if unlikely (tail >= end) {
+        tail = start;
+        flush();
+      }
+      OutOfOrderCoreEvent* event = tail;
+      tail++;
+      return event;
+    }
+
+    void flush(bool only_to_tail = false);
+
+    OutOfOrderCoreEvent* add(int type) {
+      return add()->fill(type);
+    }
+
+    OutOfOrderCoreEvent* add(int type, const RIPVirtPhys& rvp) {
+      return add()->fill(type, rvp);
+    }
+
+    OutOfOrderCoreEvent* add(int type, const FetchBufferEntry& uop) {
+      return add()->fill(type, uop);
+    }
+
+    OutOfOrderCoreEvent* add(int type, const ReorderBufferEntry* rob) {
+      return add()->fill(type, rob);
+    }
+
+    OutOfOrderCoreEvent* add_commit(int type, const ReorderBufferEntry* rob) {
+      return add()->fill_commit(type, rob);
+    }
+
+    OutOfOrderCoreEvent* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
+      return add()->fill_load_store(type, rob, inherit_sfr, addr);
+    }
+
+    ostream& print(ostream& os, bool only_to_tail = false);
+  };
+
+  //
   // Out-of-order core
   //
   struct OutOfOrderCore {
     int coreid;
     OutOfOrderMachine& machine;
     Context& ctx;
+    EventLog eventlog;
     BranchPredictorInterface branchpred;
     ListOfStateLists rob_states;
     ListOfStateLists physreg_states;
@@ -730,24 +1058,16 @@ namespace OutOfOrderModel {
     OutOfOrderCore(int coreid_, Context& ctx_, OutOfOrderMachine& machine_): coreid(coreid_), ctx(ctx_), machine(machine_), cache_callbacks(*this) { }
 
     //
+    // Initialize structures independent of the core parameters
+    //
+    void init_generic();
+
+    //
     // Initialize all structures for the first time
     //
     void init() {
-      //
-      // ROB states
-      //
-      rob_free_list("free", rob_states, 0);
-      rob_frontend_list("frontend", rob_states, ROB_STATE_PRE_READY_TO_DISPATCH);
-      rob_ready_to_dispatch_list("ready-to-dispatch", rob_states, 0);
-      InitClusteredROBList(rob_dispatched_list, "dispatched", ROB_STATE_IN_ISSUE_QUEUE),
-        InitClusteredROBList(rob_ready_to_issue_list, "ready-to-issue", ROB_STATE_IN_ISSUE_QUEUE);
-      InitClusteredROBList(rob_ready_to_store_list, "ready-to-store", ROB_STATE_IN_ISSUE_QUEUE);
-      InitClusteredROBList(rob_ready_to_load_list, "ready-to-load", ROB_STATE_IN_ISSUE_QUEUE);
-      InitClusteredROBList(rob_issued_list, "issued", 0);
-      InitClusteredROBList(rob_completed_list, "completed", ROB_STATE_READY);
-      InitClusteredROBList(rob_ready_to_writeback_list, "ready-to-write", ROB_STATE_READY);
-      rob_cache_miss_list("cache-miss", rob_states, 0);
-      rob_ready_to_commit_queue("ready-to-commit", rob_states, ROB_STATE_READY);
+      init_generic();
+
       //
       // Physical register files
       //
@@ -755,16 +1075,6 @@ namespace OutOfOrderModel {
       physregfiles[1]("fp", coreid, 1, 128);
       physregfiles[2]("st", coreid, 2, STQ_SIZE);
       physregfiles[3]("br", coreid, 3, MAX_BRANCHES_IN_FLIGHT);
-      //
-      // Miscellaneous
-      //
-      branchpred.init();
-      fetch_uuid = 0;
-      current_icache_block = 0;
-      round_robin_reg_file_offset = 0;
-      smc_invalidate_pending = 0;
-      caches.reset();
-      caches.callback = &cache_callbacks;
     }
 
     //
@@ -792,8 +1102,6 @@ namespace OutOfOrderModel {
     RIPVirtPhys fetchrip;
     BasicBlock* current_basic_block;
     int current_basic_block_transop_index;
-    int bytes_in_current_insn;
-    int uop_in_basic_block;
     bool stall_frontend;
     bool waiting_for_icache_fill;
     // How many bytes of x86 code to fetch into decode buffer at once
@@ -860,7 +1168,6 @@ namespace OutOfOrderModel {
     void check_refcounts();
     void check_rob();
     void print_rename_tables(ostream& os);
-    void log_forwarding(const ReorderBufferEntry* source, const ReorderBufferEntry* target, int operand);
     OutOfOrderCore& getcore() const { return coreof(coreid); }
   };
 
@@ -874,8 +1181,6 @@ namespace OutOfOrderModel {
     virtual void update_stats(PTLsimStats& stats);
     void flush_all_pipelines();
   };
-
-#endif // STATS_ONLY
 
 #ifdef DECLARE_STRUCTURES
   //
@@ -908,14 +1213,15 @@ namespace OutOfOrderModel {
   };
 #endif // DECLARE_STRUCTURES
 
+#endif // INSIDE_OOOCORE
+
   //
   // This part is used when parsing stats.h to build the
   // data store template; these must be in sync with the
   // corresponding definitions elsewhere.
   //
-#ifdef DSTBUILD
   static const char* cluster_names[MAX_CLUSTERS] = {"int0", "int1", "ld", "fp"};
-#endif
+  static const char* phys_reg_file_names[PHYS_REG_FILE_COUNT] = {"int", "fp", "st", "br"};
 };
 
 #endif // _OOOCORE_H_

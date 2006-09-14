@@ -208,10 +208,12 @@ static inline const char* exception_name(W64 exception) {
 //
 struct Context;
 
-struct RIPVirtPhys {
+struct RIPVirtPhysBase {
   W64 rip;
   W64 mfnlo:28, use64:1, kernel:1, padlo:2, mfnhi:28, df:1, padhi:3;
+};
 
+struct RIPVirtPhys: public RIPVirtPhysBase {
   operator W64() const { return rip; }
 
   RIPVirtPhys() { }
@@ -238,7 +240,7 @@ struct RIPVirtPhys {
   }
 };
 
-ostream& operator <<(ostream& os, const RIPVirtPhys& rvp);
+ostream& operator <<(ostream& os, const RIPVirtPhysBase& rvp);
 
 //
 // Store Forwarding Register definition
@@ -531,7 +533,11 @@ ostream& operator <<(ostream& os, const PageFaultErrorCode& pfec);
 // written PTE value and emulate the store as if it was
 // to a normal read-write page.
 //
-struct PTEUpdate {
+struct PTEUpdateBase {
+  byte a:1, d:1, ptwrite:1;
+};
+
+struct PTEUpdate: public PTEUpdateBase {
   byte a:1, d:1, ptwrite:1;
   RawDataAccessors(PTEUpdate, byte);
 };
@@ -1216,14 +1222,16 @@ enum {
 };
 extern const char* datatype_names[DATATYPE_COUNT];
 
-struct TransOp {
+struct TransOpBase {
   W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, is_sse:1, is_x87:1, pad1:7;
   W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, datatype:4, unaligned:1, bbindex:8, pad2:31;
   W64s rbimm;
   W64s rcimm;
   W64 riptaken;
   W64 ripseq;
+};
 
+struct TransOp: public TransOpBase {
   TransOp() { }
 
   TransOp(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0) {
@@ -1263,8 +1271,8 @@ struct TransOp {
   }
 };
 
-ostream& operator <<(ostream& os, const TransOp& op);
-stringbuf& operator <<(stringbuf& os, const TransOp& op);
+ostream& operator <<(ostream& os, const TransOpBase& op);
+stringbuf& operator <<(stringbuf& os, const TransOpBase& op);
 
 struct BasicBlock;
 

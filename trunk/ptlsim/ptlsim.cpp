@@ -49,7 +49,8 @@ void PTLsimConfig::reset() {
   log_on_console = 0;
   log_ptlsim_boot = 0;
   log_buffer_size = 524288;
-  ring_buffer = 0;
+  event_log_ring_buffer_size = 32768;
+  flush_event_log_every_cycle = 0;
 
   stats_filename.reset();
   snapshot_cycles = infinity;
@@ -121,8 +122,9 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(start_log_at_rip,             "startlogrip",          "Start logging after first translation of basic block starting at rip");
   add(log_on_console,               "consolelog",           "Replicate log file messages to console");
   add(log_ptlsim_boot,              "bootlog",              "Log PTLsim early boot and injection process (for debugging)");
-  add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer");
-  add(ring_buffer,                  "ringbuf",              "Log file is ring buffer: only save last <logbufsize> bytes at end");
+  add(event_log_ring_buffer_size,   "ringbuf",              "Core event log ring buffer size: only save last <ringbuf> entries");
+  add(flush_event_log_every_cycle,  "flush-events",         "Flush event log ring buffer to logfile after every cycle");
+  add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
 
   section("Statistics Database");
   add(stats_filename,               "stats",                "Statistics data store hierarchy root");
@@ -312,7 +314,9 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
   }
 
   logfile.setbuf(config.log_buffer_size);
-  // logfile.set_ringbuf_mode(config.ring_buffer) is done at simulation time
+
+  // Force printing every cycle if loglevel >= 6:
+  if (config.loglevel >= 6) config.flush_event_log_every_cycle = 1;
 
   //
   // Fix up parameter defaults:
@@ -383,10 +387,6 @@ PTLsimMachine* PTLsimMachine::getcurrent() {
 bool simulate(const char* machinename) {
   PTLsimMachine* machine = PTLsimMachine::getmachine(machinename);
 
-  // Flush the ring buffer (if operating in ringbuf logging mode)
-  logfile.set_ringbuf_mode(0);
-  logfile.set_ringbuf_mode(config.ring_buffer);
-
   if (!machine) {
     logfile << "Cannot find core named '", machinename, "'", endl;
     return 0;
@@ -424,9 +424,6 @@ bool simulate(const char* machinename) {
   }
 
   cerr << "  Done", endl, flush;
-
-  // Flush the ring buffer (if operating in ringbuf logging mode)
-  logfile.set_ringbuf_mode(0);
 
   return 0;
 }

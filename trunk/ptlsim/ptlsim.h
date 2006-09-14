@@ -159,8 +159,9 @@ struct PTLsimConfig {
   W64 start_log_at_rip;
   bool log_on_console;
   bool log_ptlsim_boot;
+  W64 event_log_ring_buffer_size;
+  bool flush_event_log_every_cycle;
   W64 log_buffer_size;
-  bool ring_buffer;
 
   // Statistics Database
   stringbuf stats_filename;

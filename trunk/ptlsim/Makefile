@@ -18,7 +18,7 @@ endif
 #
 # PTLsim/X only supports 64-bit processors.
 #
-#PTLSIM_HYPERVISOR=1
+PTLSIM_HYPERVISOR=1
 
 CC = g++
 

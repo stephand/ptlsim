@@ -431,7 +431,7 @@ const W16 setflags_to_x86_flags[1<<3] = {
   FLAG_OF | FLAG_CF | FLAG_ZAPS, // 111 = ZCO
 };
 
-stringbuf& operator <<(stringbuf& sb, const TransOp& op) {
+stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   static const char* size_names[4] = {"b", "w", "d", ""};
   // e.g. addfp, addfv, addfd, xxx
   static const char* fptype_names[4] = {"p", "v", "d", "d"};
@@ -486,14 +486,15 @@ stringbuf& operator <<(stringbuf& sb, const TransOp& op) {
   return sb;
 }
 
-ostream& operator <<(ostream& os, const TransOp& op) {
+ostream& operator <<(ostream& os, const TransOpBase& op) {
   stringbuf sb;
   sb << op;
   os << sb;
   return os;
 }
 
-ostream& operator <<(ostream& os, const RIPVirtPhys& rvp) {
+ostream& operator <<(ostream& os, const RIPVirtPhysBase& rvp) {
+#ifdef PTLSIM_HYPERVISOR
   os << "[", (void*)(Waddr)rvp.rip;
   os << (rvp.use64 ? " 64b" : " 32b");
   os << (rvp.kernel ? " krn" : "");
@@ -501,6 +502,9 @@ ostream& operator <<(ostream& os, const RIPVirtPhys& rvp) {
   os << " mfn ", rvp.mfnlo;
   if (rvp.mfnlo != rvp.mfnhi) os << "|", rvp.mfnhi;
   os << "]";
+#else
+  os << (void*)(Waddr)rvp.rip;
+#endif
   return os;
 }
 
@@ -672,7 +676,7 @@ stringbuf& print_value_and_flags(stringbuf& sb, W64 value, W16 flags) {
   if (flags & FLAG_OF) flagsb << 'o';
 
   if (flags & FLAG_INV)
-    sb << " < ", padstring(exception_name(value), -14), " >";
+    sb << " < ", padstring(exception_name(LO32(value)), -14), " >";
   else sb << " 0x", hexstring(value, 64);
   sb << "|", padstring(flagsb, -5);
   return sb;
