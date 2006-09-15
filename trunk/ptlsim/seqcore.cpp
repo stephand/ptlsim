@@ -956,7 +956,9 @@ struct SequentialMachine: public PTLsimMachine {
           intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
 
         logfile << sb, endl, flush;
+#ifdef PTLSIM_HYPERVISOR
         cerr << "\r  ", sb, flush;
+#endif
 
         last_printed_status_at_ticks = ticks;
         last_printed_status_at_cycle = sim_cycle;

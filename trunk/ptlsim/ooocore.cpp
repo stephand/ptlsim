@@ -209,11 +209,12 @@ bool OutOfOrderCore::runcycle() {
   // x86 insn EOM uop to commit before redirecting
   // to the interrupt handler.
   //
+#ifdef PTLSIM_HYPERVISOR
   bool current_interrupts_pending = ctx.check_events();
   bool edge_triggered = ((!prev_interrupts_pending) & current_interrupts_pending);
-  if (edge_triggered) logfile << "Edge triggered at cycle ", sim_cycle, ": handle_interrupt_at_next_eom currently is ", handle_interrupt_at_next_eom, endl;
   handle_interrupt_at_next_eom |= edge_triggered;
   prev_interrupts_pending = current_interrupts_pending;
+#endif
 
   // All FUs are available at top of cycle:
   fu_avail = bitmask(FU_COUNT);
@@ -668,8 +669,8 @@ bool OutOfOrderCore::handle_exception() {
 #endif
 }
 
-#ifdef PTLSIM_HYPERVISOR
 bool OutOfOrderCore::handle_interrupt() {
+#ifdef PTLSIM_HYPERVISOR
   // Release resources of everything in the pipeline:
   core_to_external_state();
   flush_pipeline();
@@ -693,10 +694,9 @@ bool OutOfOrderCore::handle_interrupt() {
 
   // Flush again, but restart at modified rip
   flush_pipeline();
-
+#endif
   return true;
 }
-#endif
 
 //
 // Event Formatting
@@ -1241,7 +1241,9 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
         intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
 
       logfile << sb, endl, flush;
+#ifdef PTLSIM_HYPERVISOR
       cerr << "\r  ", sb, flush;
+#endif
 
       last_printed_status_at_ticks = ticks;
       last_printed_status_at_cycle = sim_cycle;
