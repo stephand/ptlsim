@@ -1468,7 +1468,6 @@ void Context::init() {
 
   if (kernel_mode) {
     seg[SEGID_GS].base = gs_base_kernel;
-    //++MTY CHECKME re unusual 32 bit processes that reload gs
     swapgs_base = gs_base_user;
   } else {
     // user mode
@@ -2376,7 +2375,6 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       unsigned int orig_nr_entries = req.nr_entries;
       rc = HYPERVISOR_memory_op(XENMEM_memory_map, &req);
       //++MTY CHECKME should we fixup the memory map to exclude the PTLsim reserved area?
-      // We cannot do this when starting from a checkpoint, but this may be different.
       if (debug) {
         logfile << "hypercall: memory_op (memory_map): {nr_entries = ", orig_nr_entries,
           ", buffer = ", req.buffer.p, "} => rc ", rc, ", ", req.nr_entries, " entries filled", endl;
@@ -2611,7 +2609,6 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     foreach (i, arg3) {
       switch (arg1) {
         //
-        //++MTY TODO:
         // map_grant_ref and unmap_grant_ref have a flag that says GNTMAP_contains_pte
         // which tells Xen to update the specified PTE to map the granted page.
         // However, Linux does not use this flag; instead, Xen internally generates
@@ -2619,8 +2616,10 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
         // has its own page table in effect, we need to do the virt->PTE-to-modify mapping
         // ourselves, replace the host_addr field and add in the GNTMAP_contains_pte flag.
         //
-        //++MTY NOTE: This is no longer required since we cohabitate the same virtual
-        // address space as the real page table base at all times.
+        // This is no longer required since we cohabitate the same virtual address
+        // space as the real page table base at all times. However, we keep it in place
+        // for SMT or multi-core use since switching the page table base every time
+        // may be too expensive and time consuming.
         //
       case GNTTABOP_map_grant_ref: {
         getreq(gnttab_map_grant_ref);
@@ -3401,8 +3400,11 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
 
   stats.external.traps[exception]++;
 
+  RIPVirtPhys rvp(commitarf[REG_rip]);
+  rvp.update(*this);
+
   if (logable(2)) {
-    logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", RIPVirtPhys(commitarf[REG_rip]).update(*this), ": error code ";
+    logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (RIPVirtPhys)rvp, ": error code ";
     if likely (exception == EXCEPTION_x86_page_fault) {
       logfile << PageFaultErrorCode(errorcode), " (", (void*)(Waddr)errorcode, ") @ virtaddr ", (void*)virtaddr;
     } else {
@@ -3514,7 +3516,9 @@ W64 get_core_freq_hz(const vcpu_time_info_t& timeinfo) {
 //
 // This assumes the frequency is fixed at bootup and does not
 // change dynamically; currently PTLsim is unable to get accurate
-// timing info from non-monotonic TSCs.
+// timing info from non-monotonic TSCs like those used in cpufreq
+// capable processors from Intel and AMD (at least prior to some
+// very recent cores exposing this via rdpmc).
 //
 // Technically Xen provides info accurate to 10 milisec (100/sec)
 // in the time.system_time or wc_sec/wc_nsec fields, but these
@@ -3814,12 +3818,6 @@ void collect_sysinfo(PTLsimStats& stats) {
 void ptlsim_init() {
   stringbuf sb;
   int rc;
-
-  byte startup_log_buffer[65536];
-  memset(startup_log_buffer, 0, sizeof(startup_log_buffer));
-  bootinfo.startup_log_buffer = startup_log_buffer;
-  bootinfo.startup_log_buffer_tail = 0;
-  bootinfo.startup_log_buffer_size = lengthof(startup_log_buffer);
 
   //
   // Initialize the page pools and memory management

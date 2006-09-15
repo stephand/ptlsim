@@ -493,17 +493,17 @@ ostream& operator <<(ostream& os, const TransOpBase& op) {
   return os;
 }
 
-ostream& operator <<(ostream& os, const RIPVirtPhysBase& rvp) {
+ostream& RIPVirtPhysBase::print(ostream& os) const {
 #ifdef PTLSIM_HYPERVISOR
-  os << "[", (void*)(Waddr)rvp.rip;
-  os << (rvp.use64 ? " 64b" : " 32b");
-  os << (rvp.kernel ? " krn" : "");
-  os << (rvp.df ? " df" : "");
-  os << " mfn ", rvp.mfnlo;
-  if (rvp.mfnlo != rvp.mfnhi) os << "|", rvp.mfnhi;
+  os << "[", (void*)(Waddr)rip;
+  os << (use64 ? " 64b" : " 32b");
+  os << (kernel ? " krn" : "");
+  os << (df ? " df" : "");
+  os << " mfn ", mfnlo;
+  if (mfnlo != mfnhi) os << "|", mfnhi;
   os << "]";
 #else
-  os << (void*)(Waddr)rvp.rip;
+  os << (void*)(Waddr)rip;
 #endif
   return os;
 }

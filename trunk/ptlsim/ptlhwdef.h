@@ -211,6 +211,11 @@ struct Context;
 struct RIPVirtPhysBase {
   W64 rip;
   W64 mfnlo:28, use64:1, kernel:1, padlo:2, mfnhi:28, df:1, padhi:3;
+
+  // 28 bits + 12 page offset bits = 40 bit physical addresses
+  static const Waddr INVALID = 0xfffffff;
+
+  ostream& print(ostream& os) const;
 };
 
 struct RIPVirtPhys: public RIPVirtPhysBase {
@@ -218,9 +223,6 @@ struct RIPVirtPhys: public RIPVirtPhysBase {
 
   RIPVirtPhys() { }
   RIPVirtPhys(W64 rip) { this->rip = rip; }
-
-  // 28 bits + 12 page offset bits = 40 bit physical addresses
-  static const Waddr INVALID = 0xfffffff;
 
   RIPVirtPhys(Waddr rip, Waddr mfnlo, Waddr mfnhi, bool use64, bool kernelmode);
 
@@ -240,7 +242,8 @@ struct RIPVirtPhys: public RIPVirtPhysBase {
   }
 };
 
-ostream& operator <<(ostream& os, const RIPVirtPhysBase& rvp);
+static inline ostream& operator <<(ostream& os, const RIPVirtPhysBase& rvp) { return rvp.print(os); }
+static inline ostream& operator <<(ostream& os, const RIPVirtPhys& rvp) { return rvp.print(os); }
 
 //
 // Store Forwarding Register definition

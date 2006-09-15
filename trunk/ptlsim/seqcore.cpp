@@ -929,18 +929,40 @@ struct SequentialMachine: public PTLsimMachine {
     }
 #endif
 
-    W64 last_printed_status_at_cycle = 0;
     bool exiting = false;
+
+    W64 last_printed_status_at_ticks = 0;
+    W64 last_printed_status_at_user_insn = 0;
+    W64 last_printed_status_at_cycle = 0;
+
+    // Update stats every half second:
+    W64 ticks_per_update = seconds_to_ticks(0.5);
 
     while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
       if unlikely (iterations >= config.start_log_at_iteration) {
         logenable = 1;
       }
 
-      if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 2000000) {
-        logfile << "Completed ", sim_cycle, " cycles, ", total_user_insns_committed, " total commits", endl, flush;
+      W64 ticks = rdtsc();
+      W64s delta = (ticks - last_printed_status_at_ticks);
+      if unlikely (delta < 0) delta = 0;
+      if unlikely (delta >= ticks_per_update) {
+        double seconds = ticks_to_seconds(delta);
+        double cycles_per_sec = (sim_cycle - last_printed_status_at_cycle) / seconds;
+        double insns_per_sec = (total_user_insns_committed - last_printed_status_at_user_insn) / seconds;
+
+        stringbuf sb;
+        sb << "Completed ", intstring(sim_cycle, 13), " cycles, ", intstring(total_user_insns_committed, 13), " commits: ", 
+          intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
+
+        logfile << sb, endl, flush;
+        cerr << "\r  ", sb, flush;
+
+        last_printed_status_at_ticks = ticks;
         last_printed_status_at_cycle = sim_cycle;
+        last_printed_status_at_user_insn = total_user_insns_committed;
       }
+
 #ifdef PTLSIM_HYPERVISOR
       inject_events();
 #endif
@@ -994,54 +1016,3 @@ struct SequentialMachine: public PTLsimMachine {
 
 SequentialMachine seqmodel("seq");
 
-/*
-++MTY FIXME
-int execute_sequential(BasicBlock* bb) {
-  seqcore.external_to_core_state();
-  int rc = seqcore.execute(bb, bb->count);
-  seqcore.core_to_external_state();
-  return rc;
-}
-
-int sequential_core_toplevel_loop() {
-  return seqcore.run();
-}
-*/
-
-
-
-
-
-  /*
-  void seq_capture_stats(DataStoreNode& root) {
-    DataStoreNode& summary = root("summary"); {
-      summary.add("basicblocks", seq_total_basic_blocks);
-      summary.add("cycles", seq_total_cycles);
-      summary.add("uops", seq_total_uops_committed);
-      summary.add("insns", seq_total_user_insns_committed);
-    }
-
-    DataStoreNode& simulator = root("simulator"); {
-      DataStoreNode& cycles = simulator("cycles"); {
-        cycles.summable = 1;
-        cycles.addfloat("exec", ctseq.seconds());
-      }
-
-      DataStoreNode& rate = simulator("rate"); {
-        rate.addfloat("total-secs", ctseq.seconds());
-        double seconds = ctseq.seconds();
-        rate.addfloat("commits-per-sec", (double)seq_total_uops_committed / seconds);
-        rate.addfloat("user-commits-per-sec", (double)seq_total_user_insns_committed / seconds);
-      }
-
-      DataStoreNode& bbcache = simulator("bbcache"); {
-        bbcache.add("count", bbcache.count);
-        bbcache.add("inserts", bbcache_inserts);
-        bbcache.add("removes", bbcache_removes);
-      }
-
-      root.histogram("opclass", opclass_names, fetch_opclass_histogram, OPCLASS_COUNT);
-      save_assist_stats(root("assist"));
-    }
-  }
-  */

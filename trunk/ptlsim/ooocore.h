@@ -621,7 +621,8 @@ namespace OutOfOrderModel {
     COMMIT_RESULT_EXCEPTION = 2, // exception
     COMMIT_RESULT_BARRIER = 3,// barrier; branch to microcode (brp uop)
     COMMIT_RESULT_SMC = 4,    // self modifying code detected
-    COMMIT_RESULT_STOP = 5    // stop processor model (shutdown)
+    COMMIT_RESULT_INTERRUPT = 5, // interrupt pending
+    COMMIT_RESULT_STOP = 6    // stop processor model (shutdown)
   };
 
   // Branch predictor outcomes:
@@ -1111,6 +1112,8 @@ namespace OutOfOrderModel {
     W64 fetch_uuid;
     int loads_in_flight;
     int stores_in_flight;
+    bool prev_interrupts_pending;
+    bool handle_interrupt_at_next_eom;
 
     // Dispatch
     int round_robin_reg_file_offset;

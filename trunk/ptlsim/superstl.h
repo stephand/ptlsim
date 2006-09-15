@@ -2831,12 +2831,6 @@ namespace superstl {
     const char* title;
     bool running;
 
-    static inline W64 rdtsc() {
-      W32 lo, hi;
-      asm volatile("rdtsc" : "=a" (lo), "=d" (hi));
-      return ((W64)lo) | (((W64)hi) << 32);
-    }
-
     static double gethz();
 
   protected:
@@ -2846,11 +2840,5 @@ namespace superstl {
   ostream& operator <<(ostream& os, const CycleTimer& ct);
 
 } // namespace superstl
-
-//
-// Get the frequency of the CPU core(s) in cycles per second
-// Defined differently depending on the (usermode vs bare hardware in kernel mode)
-//
-W64 get_core_freq_hz();
 
 #endif // _SUPERSTL_H_

@@ -1450,6 +1450,12 @@ int ReorderBufferEntry::commit() {
   //
   event = core.eventlog.add_commit(EVENT_COMMIT_OK, this);
 
+  if ((uop.rip.rip == config.log_backwards_from_trigger_rip) && (uop.som)) {
+    logfile << "Hit trigger rip ", (void*)(Waddr)config.log_backwards_from_trigger_rip, "; printing event ring buffer:", endl, flush;
+    core.eventlog.print(logfile);
+    logfile << "End of triggered event dump", endl, flush;
+  }
+
   if likely (archdest_can_commit[uop.rd]) {
     core.commitrrt[uop.rd]->uncommitref(uop.rd);
     core.commitrrt[uop.rd] = physreg;
@@ -1584,14 +1590,22 @@ int ReorderBufferEntry::commit() {
   total_uops_committed++;
   stats.ooocore.commit.total_uops_committed++;
 
+  bool uop_is_eom = uop.eom;
+  bool uop_is_barrier = isclass(uop.opcode, OPCLASS_BARRIER);
+
   changestate(core.rob_free_list);
   reset();
   core.ROB.commit(*this);
 
-  if unlikely (isclass(uop.opcode, OPCLASS_BARRIER)) {
+  if unlikely (uop_is_barrier) {
     core.eventlog.add(EVENT_COMMIT_ASSIST, RIPVirtPhys(ctx.commitarf[REG_rip]));
     stats.ooocore.commit.result.barrier++;
     return COMMIT_RESULT_BARRIER;
+  }
+
+  if unlikely (uop_is_eom & core.handle_interrupt_at_next_eom) {
+    core.handle_interrupt_at_next_eom = 0;
+    return COMMIT_RESULT_INTERRUPT;
   }
 
   stats.ooocore.commit.result.ok++;

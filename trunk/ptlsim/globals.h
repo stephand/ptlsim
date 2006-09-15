@@ -268,10 +268,30 @@ static inline T xadd(T& v, T incr) {
   return incr;
 }
 
-inline void prefetch(const void* x) { asm volatile("prefetcht0 (%0)" : : "r" (x)); }
+static inline void prefetch(const void* x) { asm volatile("prefetcht0 (%0)" : : "r" (x)); }
 
-inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
+static inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
 	asm("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "0" (op));
+}
+
+static inline W64 rdtsc() {
+  W32 lo, hi;
+  asm volatile("rdtsc" : "=a" (lo), "=d" (hi));
+  return ((W64)lo) | (((W64)hi) << 32);
+}
+
+//
+// Get the frequency of the CPU core(s) in cycles per second
+// Defined differently depending on the (usermode vs bare hardware in kernel mode)
+//
+W64 get_core_freq_hz();
+
+static inline double ticks_to_seconds(W64 ticks) {
+  return (double)ticks / (double)get_core_freq_hz();
+}
+
+static inline W64 seconds_to_ticks(double seconds) {
+  return (W64)(seconds * (double)get_core_freq_hz());
 }
 
 template <int n> struct lg { static const int value = 1 + lg<n/2>::value; };
@@ -491,13 +511,6 @@ static inline int popcount64(W64 x) {
 
 extern const W64 expand_8bit_to_64bit_lut[256];
 
-// Only call this for functions guaranteed to never return!
-#ifdef __x86_64__
-inline volatile void align_rsp() { asm volatile("and $-16,%rsp"); }
-#else
-inline volatile void align_rsp() { asm volatile("and $-16,%esp"); }
-#endif
-
 // LSB index:
 
 // Operand must be non-zero or result is undefined:
@@ -693,7 +706,7 @@ inline bool modulo_ranges_intersect(int a0, int a1, int b0, int b1, int size) {
 using namespace superstl;
 
 template <class scalar>
-inline ostream& operator <<(ostream& os, const range<scalar>& r) {
+static inline ostream& operator <<(ostream& os, const range<scalar>& r) {
   os << '[' << r.lo << ' ' << r.hi << ']';
   return os;
 }

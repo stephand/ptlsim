@@ -49,8 +49,10 @@ void PTLsimConfig::reset() {
   log_on_console = 0;
   log_ptlsim_boot = 0;
   log_buffer_size = 524288;
+
   event_log_ring_buffer_size = 32768;
   flush_event_log_every_cycle = 0;
+  log_backwards_from_trigger_rip = INVALIDRIP;
 
   stats_filename.reset();
   snapshot_cycles = infinity;
@@ -114,7 +116,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
 
   add(core_name,                    "core",                 "Run using specified core (-core <corename>)");
 
-  section("Logging Control");
+  section("General Logging Control");
   add(quiet,                        "quiet",                "Do not print PTLsim system information banner");
   add(log_filename,                 "logfile",              "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
   add(loglevel,                     "loglevel",             "Log level (0 to 99)");
@@ -122,9 +124,12 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(start_log_at_rip,             "startlogrip",          "Start logging after first translation of basic block starting at rip");
   add(log_on_console,               "consolelog",           "Replicate log file messages to console");
   add(log_ptlsim_boot,              "bootlog",              "Log PTLsim early boot and injection process (for debugging)");
+  add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
+
+  section("Event Ring Buffer Logging Control");
   add(event_log_ring_buffer_size,   "ringbuf",              "Core event log ring buffer size: only save last <ringbuf> entries");
   add(flush_event_log_every_cycle,  "flush-events",         "Flush event log ring buffer to logfile after every cycle");
-  add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
+  add(log_backwards_from_trigger_rip,"ringbuf-trigger-rip", "Print event ring buffer when first uop in this rip is committed");
 
   section("Statistics Database");
   add(stats_filename,               "stats",                "Statistics data store hierarchy root");

@@ -1361,7 +1361,11 @@ void assist_ptlcall(Context& ctx) {
 //
 // Get the processor core frequency in cycles/second:
 //
+static W64 core_freq_hz = 0;
+
 W64 get_core_freq_hz() {
+  if likely (core_freq_hz) return core_freq_hz;
+
   W64 hz = 0;
 
   istream cpufreqis("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
@@ -1374,6 +1378,7 @@ W64 get_core_freq_hz() {
     
     if (n == 1) {
       hz = (W64)khz * 1000;
+      core_freq_hz = hz;
       return hz;
     }
   }
@@ -1382,6 +1387,7 @@ W64 get_core_freq_hz() {
   
   if (!is) {
     cerr << "get_core_freq_hz(): warning: cannot open /proc/cpuinfo. Is this a Linux machine?", endl;
+    core_freq_hz = hz;
     return hz;
   }
   
@@ -1393,6 +1399,7 @@ W64 get_core_freq_hz() {
     int n = sscanf(s, "cpu MHz : %d", &mhz);
     if (n == 1) {
       hz = (W64)mhz * 1000000;
+      core_freq_hz = hz;
       return hz;
     }
   }

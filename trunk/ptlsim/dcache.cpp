@@ -18,10 +18,6 @@ using namespace CacheSubsystem;
 #define stoptimer(timer) (1)
 #endif
 
-//CycleTimer load_slowpath_timer("Load slow path");
-//CycleTimer store_slowpath_timer("Store slow path");
-//CycleTimer store_flush_timer("Store commit buffer flush");
-
 #ifdef TRACK_LINE_USAGE
 // Lifetime
 template <> W64 L1StatsCollectorBase::line_lifetime_histogram[DCACHE_L1_LINE_LIFETIME_SLOTS] = {};
@@ -391,9 +387,6 @@ ostream& CacheLineWithValidMask<linesize>::print(ostream& os, W64 tag) const {
 int CacheHierarchy::issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR& sfra, LoadStoreInfo lsi) {
   static const bool DEBUG = 0;
 
-  //bool SFRAUSED = lsi.sfrused;
-  //int sizeshift = lsi.sizeshift;
-
   starttimer(load_slowpath_timer);
 
   L1CacheLine* L1line = L1.probe(addr);
@@ -639,13 +632,6 @@ void CacheHierarchy::reset() {
   dtlb.reset();
 }
 
-/*
-  void init_cache() {
-  #ifndef PTLSIM_HYPERVISOR
-  ctx.virt_addr_mask = (ctx.use64 ? 0xffffffffffffffffLL : 0x00000000ffffffffLL);
-  #endif
-  }
-*/
 ostream& CacheHierarchy::print(ostream& os) {
   os << "Data Cache Subsystem:", endl;
   os << lfrq;

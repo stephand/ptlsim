@@ -89,6 +89,8 @@ void OutOfOrderCore::init_generic() {
   caches.callback = &cache_callbacks;
   eventlog.init(config.event_log_ring_buffer_size);
   eventlog.logfile = &logfile;
+  prev_interrupts_pending = 0;
+  handle_interrupt_at_next_eom = 0;
 }
 
 template <typename T> 
@@ -201,6 +203,18 @@ ostream& RegisterRenameTable::print(ostream& os) const {
 bool OutOfOrderCore::runcycle() {
   bool exiting = 0;
 
+  //
+  // Detect edge triggered transition from 0->1 for
+  // pending interrupt events, then wait for current
+  // x86 insn EOM uop to commit before redirecting
+  // to the interrupt handler.
+  //
+  bool current_interrupts_pending = ctx.check_events();
+  bool edge_triggered = ((!prev_interrupts_pending) & current_interrupts_pending);
+  if (edge_triggered) logfile << "Edge triggered at cycle ", sim_cycle, ": handle_interrupt_at_next_eom currently is ", handle_interrupt_at_next_eom, endl;
+  handle_interrupt_at_next_eom |= edge_triggered;
+  prev_interrupts_pending = current_interrupts_pending;
+
   // All FUs are available at top of cycle:
   fu_avail = bitmask(FU_COUNT);
   loads_in_this_cycle = 0;
@@ -232,15 +246,17 @@ bool OutOfOrderCore::runcycle() {
   //check_refcounts();
 #endif
 
-  if unlikely (commitrc == COMMIT_RESULT_BARRIER) {
-    exiting = !handle_barrier();
-  } else if unlikely (commitrc == COMMIT_RESULT_EXCEPTION) {
-    exiting = !handle_exception();
-  } else if unlikely (commitrc == COMMIT_RESULT_SMC) {
+  if unlikely (commitrc == COMMIT_RESULT_SMC) {
     if (logable(3)) logfile << "Potentially cross-modifying SMC detected: global flush required (cycle ", sim_cycle, ", ", total_user_insns_committed, " commits)", endl, flush;
     machine.flush_all_pipelines();
     exiting = 0;
-  } else if (commitrc == COMMIT_RESULT_STOP) {
+  } else if unlikely (commitrc == COMMIT_RESULT_EXCEPTION) {
+    exiting = !handle_exception();
+  } else if unlikely (commitrc == COMMIT_RESULT_BARRIER) {
+    exiting = !handle_barrier();
+  } else if unlikely (commitrc == COMMIT_RESULT_INTERRUPT) {
+    handle_interrupt();
+  } else if unlikely (commitrc == COMMIT_RESULT_STOP) {
     exiting = 1;
   }
 
@@ -1197,13 +1213,14 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
     }
   }
 
-  W64 last_printed_status_at_cycle = 0;
-  W64 last_printed_status_at_user_insn = 0;
-  CycleTimer ctprint;
-  ctprint.start();
-  ctprint.stop();
-
   bool exiting = false;
+
+  W64 last_printed_status_at_ticks = 0;
+  W64 last_printed_status_at_user_insn = 0;
+  W64 last_printed_status_at_cycle = 0;
+
+  // Update stats every half second:
+  W64 ticks_per_update = seconds_to_ticks(0.5);
 
   while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
     if unlikely (iterations >= config.start_log_at_iteration) {
@@ -1211,9 +1228,11 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
       logenable = 1;
     }
 
-    if unlikely ((sim_cycle - last_printed_status_at_cycle) >= 2000000) {
-      ctprint.stop();
-      double seconds = ctprint.seconds();
+    W64 ticks = rdtsc();
+    W64s delta = (ticks - last_printed_status_at_ticks);
+    if unlikely (delta < 0) delta = 0;
+    if unlikely (delta >= ticks_per_update) {
+      double seconds = ticks_to_seconds(delta);
       double cycles_per_sec = (sim_cycle - last_printed_status_at_cycle) / seconds;
       double insns_per_sec = (total_user_insns_committed - last_printed_status_at_user_insn) / seconds;
 
@@ -1224,10 +1243,9 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
       logfile << sb, endl, flush;
       cerr << "\r  ", sb, flush;
 
+      last_printed_status_at_ticks = ticks;
       last_printed_status_at_cycle = sim_cycle;
       last_printed_status_at_user_insn = total_user_insns_committed;
-      ctprint.reset();
-      ctprint.start();
     }
 
 #ifdef PTLSIM_HYPERVISOR
@@ -1238,8 +1256,10 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
       Context& ctx = contextof(i);
 
 #ifdef PTLSIM_HYPERVISOR
-      if unlikely (ctx.check_events()) core.handle_interrupt();
-      if unlikely (!ctx.running) continue;
+      if unlikely (!ctx.running) {
+        if (ctx.check_events()) core.handle_interrupt();
+        continue;
+      }
 #endif
       exiting |= core.runcycle();
     }
