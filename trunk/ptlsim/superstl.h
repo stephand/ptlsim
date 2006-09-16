@@ -2839,6 +2839,16 @@ namespace superstl {
 
   ostream& operator <<(ostream& os, const CycleTimer& ct);
 
+  //
+  // Automatically start cycle timer at top of block and
+  // stop it when this struct leaves the scope
+  // 
+  struct CycleTimerScope {
+    CycleTimer& ct;
+    CycleTimerScope(CycleTimer& ct_): ct(ct_) { ct.start(); }
+    ~CycleTimerScope() { ct.stop(); }
+  };
+
 } // namespace superstl
 
 #endif // _SUPERSTL_H_

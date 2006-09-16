@@ -70,12 +70,14 @@ void OutOfOrderCore::annul_fetchq() {
   foreach_backward (fetchq, i) {
     FetchBufferEntry& fetchbuf = fetchq[i];
     if unlikely (isbranch(fetchbuf.opcode) && (fetchbuf.predinfo.bptype & (BRANCH_HINT_CALL|BRANCH_HINT_RET))) {
-      eventlog.add(EVENT_ANNUL_FETCHQ_RAS, fetchbuf);
+      if unlikely (config.event_log_enabled) eventlog.add(EVENT_ANNUL_FETCHQ_RAS, fetchbuf);
       branchpred.annulras(fetchbuf.predinfo);
     }
     // Also release the reference to the uop's basic block
-    OutOfOrderCoreEvent* event = eventlog.add(EVENT_ANNUL_FETCHQ, fetchbuf);
-    event->annul.bb = fetchbuf.bb; event->annul.bb_refcount = fetchbuf.bb->refcount;
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent* event = eventlog.add(EVENT_ANNUL_FETCHQ, fetchbuf);
+      event->annul.bb = fetchbuf.bb; event->annul.bb_refcount = fetchbuf.bb->refcount;
+    }
     fetchbuf.bb->release();
   }
 }
@@ -91,8 +93,10 @@ void OutOfOrderCore::flush_pipeline() {
   foreach_forward(ROB, i) {
     ReorderBufferEntry& rob = ROB[i];
     // Release our lock on the cached basic block containing each uop
-    OutOfOrderCoreEvent* event = eventlog.add(EVENT_ANNUL_FLUSH, &rob);
-    event->annul.bb = rob.uop.bb; event->annul.bb_refcount = rob.uop.bb->refcount;
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent* event = eventlog.add(EVENT_ANNUL_FLUSH, &rob);
+      event->annul.bb = rob.uop.bb; event->annul.bb_refcount = rob.uop.bb->refcount;
+    }
     rob.uop.bb->release();
   }
 
@@ -297,19 +301,21 @@ static void print_fetch_bb_address_ringbuf(ostream& os) {
 }
 
 bool OutOfOrderCore::fetch() {
+  time_this_scope(ctfetch);
+
   int fetchcount = 0;
   int taken_branch_count = 0;
 
   OutOfOrderCoreEvent* event;
 
   if unlikely (stall_frontend) {
-    eventlog.add(EVENT_FETCH_STALLED);
+    if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_STALLED);
     stats.ooocore.fetch.stop.stalled++;
     return true;
   }
 
   if unlikely (waiting_for_icache_fill) {
-    eventlog.add(EVENT_FETCH_ICACHE_WAIT);
+    if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_ICACHE_WAIT);
     stats.ooocore.fetch.stop.icache_miss++;
     return true;
   }
@@ -318,7 +324,7 @@ bool OutOfOrderCore::fetch() {
 
   while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
     if unlikely (!fetchq.remaining()) {
-      if (!fetchcount) eventlog.add(EVENT_FETCH_FETCHQ_FULL);
+      if unlikely (config.event_log_enabled) { if (!fetchcount) eventlog.add(EVENT_FETCH_FETCHQ_FULL); }
       stats.ooocore.fetch.stop.fetchq_full++;
       break;
     }
@@ -335,7 +341,7 @@ bool OutOfOrderCore::fetch() {
     }
 
     if unlikely (current_basic_block->invalidblock) {
-      eventlog.add(EVENT_FETCH_BOGUS_RIP, fetchrip);
+      if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_BOGUS_RIP, fetchrip);
       stats.ooocore.fetch.stop.bogus_rip++;
       //
       // Keep fetching - the decoder has injected assist microcode that
@@ -355,7 +361,7 @@ bool OutOfOrderCore::fetch() {
       hit |= config.perfect_cache;
       if unlikely (!hit) {
         int missbuf = caches.initiate_icache_miss(physaddr);
-        eventlog.add(EVENT_FETCH_ICACHE_MISS, fetchrip)->fetch.missbuf = missbuf;
+        if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_ICACHE_MISS, fetchrip)->fetch.missbuf = missbuf;
 
         if unlikely (missbuf < 0) {
           // Try to re-allocate a miss buffer on the next cycle
@@ -392,7 +398,7 @@ bool OutOfOrderCore::fetch() {
     // until both uops are forced into the pipeline.
     //
     if unlikely (transop.unaligned) {
-      eventlog.add(EVENT_FETCH_SPLIT, transop);
+      if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_SPLIT, transop);
       split_unaligned(transop, unaligned_ldst_buf);
       assert(unaligned_ldst_buf.get(transop, synthop));
     }
@@ -408,7 +414,7 @@ bool OutOfOrderCore::fetch() {
 
     if unlikely (isclass(transop.opcode, OPCLASS_BARRIER)) {
       // We've hit an assist: stall the frontend until we resume or redirect
-      eventlog.add(EVENT_FETCH_ASSIST, transop);
+      if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_ASSIST, transop);
       stall_frontend = 1;      
     }
 
@@ -456,9 +462,11 @@ bool OutOfOrderCore::fetch() {
 
     stats.ooocore.fetch.opclass[opclassof(transop.opcode)]++;
 
-    event = eventlog.add(EVENT_FETCH_OK, transop);
-    event->fetch.bb = current_basic_block;
-    event->fetch.predrip = predrip;
+    if unlikely (config.event_log_enabled) {
+      event = eventlog.add(EVENT_FETCH_OK, transop);
+      event->fetch.bb = current_basic_block;
+      event->fetch.predrip = predrip;
+    }
 
     if likely (transop.eom) {
       fetchrip.rip += transop.bytes;
@@ -490,6 +498,8 @@ bool OutOfOrderCore::fetch() {
 }
 
 BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const RIPVirtPhys& rvp) {  
+  time_this_scope(ctdecode);
+
   if likely (current_basic_block) {
     // Release our ref to the old basic block being fetched
     current_basic_block->release();
@@ -503,8 +513,10 @@ BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const R
   } else {
     current_basic_block = bbcache.translate(ctx, rvp);
     assert(current_basic_block);
-    OutOfOrderCoreEvent* event = eventlog.add(EVENT_FETCH_TRANSLATE, rvp);
-    event->fetch.bb = current_basic_block; event->fetch.bb_uop_count = current_basic_block->count;
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent* event = eventlog.add(EVENT_FETCH_TRANSLATE, rvp);
+      event->fetch.bb = current_basic_block; event->fetch.bb_uop_count = current_basic_block->count;
+    }
   }
 
   //
@@ -529,17 +541,19 @@ BasicBlock* OutOfOrderCore::fetch_or_translate_basic_block(Context& ctx, const R
 //
 
 void OutOfOrderCore::rename() {
+  time_this_scope(ctrename);
+
   int prepcount = 0;
 
   while (prepcount < FRONTEND_WIDTH) {
     if unlikely (fetchq.empty()) {
-      if likely (!prepcount) eventlog.add(EVENT_RENAME_FETCHQ_EMPTY);
+      if unlikely (config.event_log_enabled) { if likely (!prepcount) eventlog.add(EVENT_RENAME_FETCHQ_EMPTY); }
       stats.ooocore.frontend.status.fetchq_empty++;
       break;
     } 
 
     if unlikely (!ROB.remaining()) {
-      if likely (!prepcount) eventlog.add(EVENT_RENAME_ROB_FULL);
+      if unlikely (config.event_log_enabled) { if likely (!prepcount) eventlog.add(EVENT_RENAME_ROB_FULL); }
       stats.ooocore.frontend.status.rob_full++;
       break;
     }
@@ -558,7 +572,7 @@ void OutOfOrderCore::rename() {
     }
 
     if (phys_reg_file < 0) {
-      if likely (!prepcount) eventlog.add()->fill(EVENT_RENAME_PHYSREGS_FULL);
+      if unlikely (config.event_log_enabled) { if likely (!prepcount) eventlog.add()->fill(EVENT_RENAME_PHYSREGS_FULL); }
       stats.ooocore.frontend.status.physregs_full++;
       break;
     }
@@ -568,19 +582,19 @@ void OutOfOrderCore::rename() {
     bool br = isbranch(fetchbuf.opcode);
 
     if unlikely (ld && (loads_in_flight >= LDQ_SIZE)) {
-      if likely (!prepcount) eventlog.add(EVENT_RENAME_LDQ_FULL);
+      if unlikely (config.event_log_enabled) { if likely (!prepcount) eventlog.add(EVENT_RENAME_LDQ_FULL); }
       stats.ooocore.frontend.status.ldq_full++;
       break;
     }
 
     if unlikely (st && (stores_in_flight >= STQ_SIZE)) {
-      if likely (!prepcount) eventlog.add(EVENT_RENAME_STQ_FULL);
+      if unlikely (config.event_log_enabled) { if likely (!prepcount) eventlog.add(EVENT_RENAME_STQ_FULL); }
       stats.ooocore.frontend.status.stq_full++;
       break;
     }
 
     if unlikely ((ld|st) && (!LSQ.remaining())) {
-      if likely (!prepcount) eventlog.add(EVENT_RENAME_MEMQ_FULL);
+      if unlikely (config.event_log_enabled) { if likely (!prepcount) eventlog.add(EVENT_RENAME_MEMQ_FULL); }
       break;
     }
 
@@ -674,14 +688,16 @@ void OutOfOrderCore::rename() {
     // Logging
     //
 
-    OutOfOrderCoreEvent* event = eventlog.add(EVENT_RENAME_OK, &rob);
-    foreach (i, MAX_OPERANDS) rob.operands[i]->fill_operand_info(event->rename.opinfo[i]);
-
-    if likely (archdest_can_commit[transop.rd]) {
-      event->rename.oldphys = specrrt[transop.rd]->index();
-      event->rename.oldzf = specrrt[REG_zf]->index();
-      event->rename.oldcf = specrrt[REG_cf]->index();
-      event->rename.oldof = specrrt[REG_of]->index();
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent* event = eventlog.add(EVENT_RENAME_OK, &rob);
+      foreach (i, MAX_OPERANDS) rob.operands[i]->fill_operand_info(event->rename.opinfo[i]);
+      
+      if likely (archdest_can_commit[transop.rd]) {
+        event->rename.oldphys = specrrt[transop.rd]->index();
+        event->rename.oldzf = specrrt[REG_zf]->index();
+        event->rename.oldcf = specrrt[REG_cf]->index();
+        event->rename.oldof = specrrt[REG_of]->index();
+      }
     }
 
     bool renamed_reg = 0;
@@ -751,6 +767,8 @@ void OutOfOrderCore::rename() {
 }
 
 void OutOfOrderCore::frontend() {
+  time_this_scope(ctfrontend);
+
   ReorderBufferEntry* rob;
   
   foreach_list_mutable(rob_frontend_list, rob, entry, nextentry) {
@@ -758,8 +776,10 @@ void OutOfOrderCore::frontend() {
       rob->cycles_left = -1;
       rob->changestate(rob_ready_to_dispatch_list);
     } else {
-      OutOfOrderCoreEvent* event = eventlog.add(EVENT_FRONTEND, rob);
-      event->frontend.cycles_left = rob->cycles_left;
+      if unlikely (config.event_log_enabled) {
+        OutOfOrderCoreEvent* event = eventlog.add(EVENT_FRONTEND, rob);
+        event->frontend.cycles_left = rob->cycles_left;
+      }
     }
     
     rob->cycles_left--;
@@ -957,6 +977,8 @@ bool ReorderBufferEntry::find_sources() {
 }
 
 int ReorderBufferEntry::select_cluster() {
+  OutOfOrderCoreEvent* event;
+
   if (MAX_CLUSTERS == 1) {
     int cluster_issue_queue_avail_count[MAX_CLUSTERS];
     getcore().sched_get_all_issueq_free_slots(cluster_issue_queue_avail_count);
@@ -986,12 +1008,14 @@ int ReorderBufferEntry::select_cluster() {
 
   executable_on_cluster &= cluster_issue_queue_avail_mask;
 
-  OutOfOrderCoreEvent* event = getcore().eventlog.add(EVENT_CLUSTER_OK, this);
-  event->select_cluster.allowed_clusters = executable_on_cluster_mask;
-  foreach (i, MAX_CLUSTERS) event->select_cluster.iq_avail[i] = cluster_issue_queue_avail_count[i];
+  if unlikely (config.event_log_enabled) {
+    event = getcore().eventlog.add(EVENT_CLUSTER_OK, this);
+    event->select_cluster.allowed_clusters = executable_on_cluster_mask;
+    foreach (i, MAX_CLUSTERS) event->select_cluster.iq_avail[i] = cluster_issue_queue_avail_count[i];
+  }
 
   if unlikely (!executable_on_cluster) {
-    event->type = EVENT_CLUSTER_NO_CLUSTER;
+    if unlikely (config.event_log_enabled) event->type = EVENT_CLUSTER_NO_CLUSTER;
     return -1;
   }
   
@@ -1007,7 +1031,7 @@ int ReorderBufferEntry::select_cluster() {
 
   stats.ooocore.dispatch.cluster[cluster]++;
 
-  event->cluster = cluster;
+  if unlikely (config.event_log_enabled) event->cluster = cluster;
 
   return cluster;
 }
@@ -1016,7 +1040,10 @@ int ReorderBufferEntry::select_cluster() {
 // Dispatch any uops in the rob_ready_to_dispatch_list by locating
 // their source operands and adding entries to the issue queues.
 //
+
 int OutOfOrderCore::dispatch() {
+  time_this_scope(ctdispatch);
+
   int dispatchcount = 0;
   OutOfOrderCoreEvent* event;
   ReorderBufferEntry* rob;
@@ -1035,8 +1062,10 @@ int OutOfOrderCore::dispatch() {
     // abort dispatching for this cycle.
     //
     if unlikely (rob->cluster < 0) {
-      event = eventlog.add(EVENT_DISPATCH_NO_CLUSTER, rob);
-      foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
+      if unlikely (config.event_log_enabled) {
+        event = eventlog.add(EVENT_DISPATCH_NO_CLUSTER, rob);
+        foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
+      }
       continue; // try the next uop to avoid deadlock on re-dispatches
     }
 
@@ -1048,8 +1077,10 @@ int OutOfOrderCore::dispatch() {
       rob->changestate(rob->get_ready_to_issue_list());
     }
 
-    event = eventlog.add(EVENT_DISPATCH_OK, rob);
-    foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
+    if unlikely (config.event_log_enabled) {
+      event = eventlog.add(EVENT_DISPATCH_OK, rob);
+      foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
+    }
 
     dispatchcount++;
   }
@@ -1087,7 +1118,10 @@ int OutOfOrderCore::dispatch() {
 // only "on the wire" such that back to back ALU operations within a cluster
 // can occur using local forwarding.
 //
+
 int OutOfOrderCore::complete(int cluster) {
+  time_this_scope(ctcomplete);
+
   int completecount = 0;
   ReorderBufferEntry* rob;
 
@@ -1099,7 +1133,7 @@ int OutOfOrderCore::complete(int cluster) {
     rob->cycles_left--;
 
     if unlikely (rob->cycles_left <= 0) {
-      eventlog.add(EVENT_COMPLETE, rob);
+      if unlikely (config.event_log_enabled) eventlog.add(EVENT_COMPLETE, rob);
       rob->changestate(rob_completed_list[cluster]);
       rob->physreg->complete();
       rob->forward_cycle = 0;
@@ -1116,7 +1150,10 @@ int OutOfOrderCore::complete(int cluster) {
 //
 // Process ROBs in flight between completion and global forwarding/writeback.
 //
+
 int OutOfOrderCore::transfer(int cluster) {
+  time_this_scope(cttransfer);
+
   int wakeupcount = 0;
   ReorderBufferEntry* rob;
 
@@ -1137,7 +1174,10 @@ int OutOfOrderCore::transfer(int cluster) {
 //
 // Writeback at most WRITEBACK_WIDTH ROBs on rob_ready_to_writeback_list.
 //
+
 int OutOfOrderCore::writeback(int cluster) {
+  time_this_scope(ctwriteback);
+
   int writecount = 0;
   int wakeupcount = 0;
   ReorderBufferEntry* rob;
@@ -1166,15 +1206,17 @@ int OutOfOrderCore::writeback(int cluster) {
     rob->transient = transient;
 #endif
 
-    if (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
-      OutOfOrderCoreEvent* event = eventlog.add(EVENT_WRITEBACK, rob);
-      event->writeback.data = rob->physreg->data;
-      event->writeback.flags = rob->physreg->flags;
-      event->writeback.consumer_count = rob->consumer_count;
-      event->writeback.transient = transient;
-      event->writeback.all_consumers_sourced_from_bypass = rob->physreg->all_consumers_sourced_from_bypass;
-      event->writeback.no_branches_between_renamings = rob->no_branches_between_renamings;
-      event->writeback.dest_renamed_before_writeback = rob->dest_renamed_before_writeback;
+    if likely (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
+      if unlikely (config.event_log_enabled) {
+        OutOfOrderCoreEvent* event = eventlog.add(EVENT_WRITEBACK, rob);
+        event->writeback.data = rob->physreg->data;
+        event->writeback.flags = rob->physreg->flags;
+        event->writeback.consumer_count = rob->consumer_count;
+        event->writeback.transient = transient;
+        event->writeback.all_consumers_sourced_from_bypass = rob->physreg->all_consumers_sourced_from_bypass;
+        event->writeback.no_branches_between_renamings = rob->no_branches_between_renamings;
+        event->writeback.dest_renamed_before_writeback = rob->dest_renamed_before_writeback;
+      }
     }
 
     //
@@ -1268,13 +1310,16 @@ int OutOfOrderCore::writeback(int cluster) {
 // physical register P is still used by ROB entry E in the pipeline, P's bit vector
 // bit R is set. Register P cannot be freed until all bits in its vector are zero.
 //
+
 int OutOfOrderCore::commit() {
+  time_this_scope(ctcommit);
+
   foreach (rfid, PHYS_REG_FILE_COUNT) {
     StateList& statelist = physregfiles[rfid].states[PHYSREG_PENDINGFREE];
     PhysicalRegister* physreg;
     foreach_list_mutable(statelist, physreg, entry, nextentry) {
       if unlikely (!physreg->referenced()) {
-        eventlog.add(EVENT_RECLAIM_PHYSREG)->physreg = physreg->index();
+        if unlikely (config.event_log_enabled) eventlog.add(EVENT_RECLAIM_PHYSREG)->physreg = physreg->index();
         physreg->free();
         stats.ooocore.commit.free_regs_recycled++;
       }
@@ -1374,7 +1419,7 @@ int ReorderBufferEntry::commit() {
       }
 #endif
 
-      core.eventlog.add_commit(EVENT_COMMIT_EXCEPTION_DETECTED, &subrob);
+      if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_EXCEPTION_DETECTED, &subrob);
 
       macro_op_has_exceptions = true;
       break;
@@ -1403,12 +1448,12 @@ int ReorderBufferEntry::commit() {
   stats.ooocore.commit.opclass[opclassof(uop.opcode)]++;
 
   if unlikely (macro_op_has_exceptions) {
-    event = core.eventlog.add_commit(EVENT_COMMIT_EXCEPTION_ACKNOWLEDGED, this);
+    if unlikely (config.event_log_enabled) event = core.eventlog.add_commit(EVENT_COMMIT_EXCEPTION_ACKNOWLEDGED, this);
 
     // See notes in handle_exception():
     if likely (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
       core.chk_recovery_rip = ctx.commitarf[REG_rip] + uop.bytes;
-      event->type = EVENT_COMMIT_SKIPBLOCK;
+      if unlikely (config.event_log_enabled) event->type = EVENT_COMMIT_SKIPBLOCK;
       stats.ooocore.commit.result.skipblock++;
     } else {
       stats.ooocore.commit.result.exception++;
@@ -1425,7 +1470,7 @@ int ReorderBufferEntry::commit() {
   // becomes visible after the store has committed.
   //
   if unlikely (smc_isdirty(uop.rip.mfnlo) | (smc_isdirty(uop.rip.mfnhi))) {
-    core.eventlog.add_commit(EVENT_COMMIT_SMC_DETECTED, this);
+    if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_SMC_DETECTED, this);
 
     //
     // Invalidate the pages only after the pipeline is flushed: we may still
@@ -1448,12 +1493,14 @@ int ReorderBufferEntry::commit() {
   //
   // The commit of all uops in the x86 macro-op is guaranteed to happen after this point
   //
-  event = core.eventlog.add_commit(EVENT_COMMIT_OK, this);
+  if unlikely (config.event_log_enabled) event = core.eventlog.add_commit(EVENT_COMMIT_OK, this);
 
-  if ((uop.rip.rip == config.log_backwards_from_trigger_rip) && (uop.som)) {
-    logfile << "Hit trigger rip ", (void*)(Waddr)config.log_backwards_from_trigger_rip, "; printing event ring buffer:", endl, flush;
-    core.eventlog.print(logfile);
-    logfile << "End of triggered event dump", endl, flush;
+  if unlikely (config.event_log_enabled) {
+    if unlikely ((uop.rip.rip == config.log_backwards_from_trigger_rip) && (uop.som)) {
+      logfile << "Hit trigger rip ", (void*)(Waddr)config.log_backwards_from_trigger_rip, "; printing event ring buffer:", endl, flush;
+      core.eventlog.print(logfile);
+      logfile << "End of triggered event dump", endl, flush;
+    }
   }
 
   if likely (archdest_can_commit[uop.rd]) {
@@ -1474,7 +1521,7 @@ int ReorderBufferEntry::commit() {
       assert(!isbranch(uop.opcode));
       ctx.commitarf[REG_rip] += uop.bytes;
     }
-    event->commit.target_rip = ctx.commitarf[REG_rip];
+    if unlikely (config.event_log_enabled) event->commit.target_rip = ctx.commitarf[REG_rip];
   }
 
   if unlikely (!uop.nouserflags) {
@@ -1484,7 +1531,7 @@ int ReorderBufferEntry::commit() {
     stats.ooocore.commit.setflags.no += (uop.setflags == 0);
     stats.ooocore.commit.setflags.yes += (uop.setflags != 0);
 
-    event->commit.state.reg.rdflags = ctx.commitarf[REG_flags];
+    if unlikely (config.event_log_enabled) event->commit.state.reg.rdflags = ctx.commitarf[REG_flags];
 
     if likely (uop.setflags & SETFLAG_ZF) {
       core.commitrrt[REG_zf]->uncommitref(REG_zf);
@@ -1526,10 +1573,12 @@ int ReorderBufferEntry::commit() {
   assert(archdest_can_commit[uop.rd]);
   assert(oldphysreg->state == PHYSREG_ARCH);
 
-  event->commit.oldphysreg = -1;
+  if unlikely (config.event_log_enabled) event->commit.oldphysreg = -1;
   if likely (oldphysreg->nonnull()) {
-    event->commit.oldphysreg = oldphysreg->index();
-    event->commit.oldphysreg_refcount = oldphysreg->refcount;
+    if unlikely (config.event_log_enabled) {
+      event->commit.oldphysreg = oldphysreg->index();
+      event->commit.oldphysreg_refcount = oldphysreg->refcount;
+    }
 
     if unlikely (oldphysreg->referenced()) {
       oldphysreg->changestate(PHYSREG_PENDINGFREE); 
@@ -1571,8 +1620,10 @@ int ReorderBufferEntry::commit() {
     bool taken = (ctx.commitarf[REG_rip] != end_of_branch_x86_insn);
     bool predtaken = (uop.riptaken != end_of_branch_x86_insn);
 
-    event->commit.taken = taken;
-    event->commit.predtaken = predtaken;
+    if unlikely (config.event_log_enabled) {
+      event->commit.taken = taken;
+      event->commit.predtaken = predtaken;
+    }
 
     core.branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip]);
     stats.ooocore.branchpred.updates++;
@@ -1583,12 +1634,13 @@ int ReorderBufferEntry::commit() {
 
   if likely (uop.eom) {
     total_user_insns_committed++;
-    stats.ooocore.commit.total_user_insns_committed++;
+    stats.ooocore.commit.insns++;
     stats.summary.insns++;
   }
 
+  stats.summary.uops++;
   total_uops_committed++;
-  stats.ooocore.commit.total_uops_committed++;
+  stats.ooocore.commit.uops++;
 
   bool uop_is_eom = uop.eom;
   bool uop_is_barrier = isclass(uop.opcode, OPCLASS_BARRIER);
@@ -1598,7 +1650,7 @@ int ReorderBufferEntry::commit() {
   core.ROB.commit(*this);
 
   if unlikely (uop_is_barrier) {
-    core.eventlog.add(EVENT_COMMIT_ASSIST, RIPVirtPhys(ctx.commitarf[REG_rip]));
+    if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_COMMIT_ASSIST, RIPVirtPhys(ctx.commitarf[REG_rip]));
     stats.ooocore.commit.result.barrier++;
     return COMMIT_RESULT_BARRIER;
   }

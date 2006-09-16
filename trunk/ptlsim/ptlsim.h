@@ -162,6 +162,7 @@ struct PTLsimConfig {
   W64 log_buffer_size;
 
   // Event Logging
+  bool event_log_enabled;
   W64 event_log_ring_buffer_size;
   bool flush_event_log_every_cycle;
   W64 log_backwards_from_trigger_rip;

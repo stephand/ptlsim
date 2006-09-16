@@ -78,7 +78,7 @@ bool IssueQueue<size, operandcount>::insert(tag_t uopid, const tag_t* operands, 
 
 template <int size, int operandcount>
 void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, operandcount>::tag_t sourceid, const bitvec<size>& mask, int operand) const {
-  if likely (!logable(5)) return;
+  if likely (!config.event_log_enabled) return;
 
   OutOfOrderCore& core = getcore();
   const ReorderBufferEntry* source = &core.ROB[sourceid];
@@ -90,6 +90,7 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
     int robid = uopof(slot);
     assert(inrange(robid, 0, ROB_SIZE-1));
     const ReorderBufferEntry* target = &core.ROB[robid];
+    temp[slot] = 0;
 
     OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_FORWARD, source);
     event->forwarding.operand = operand;
@@ -105,8 +106,6 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
     event->forwarding.target_operands_ready = 0;
     foreach (i, MAX_OPERANDS) event->forwarding.target_operands_ready |= ((target->operands[i]->ready()) << i);
     event->forwarding.target_all_operands_ready = target->ready_to_issue();
-
-    temp[slot] = 0;
   }
 }
 
@@ -117,7 +116,7 @@ bool IssueQueue<size, operandcount>::broadcast(tag_t uopid) {
   if (logable(6)) {
     foreach (operand, operandcount) {
       bitvec<size> mask = tags[operand].invalidate(tagvec);
-      tally_broadcast_matches(uopid, mask, operand);
+      if unlikely (config.event_log_enabled) tally_broadcast_matches(uopid, mask, operand);
     }
   } else {
     foreach (operand, operandcount) tags[operand].invalidate(tagvec);
@@ -209,14 +208,17 @@ declare_issueq_templates;
 //
 int ReorderBufferEntry::issue() {
   OutOfOrderCore& core = getcore();
-  OutOfOrderCoreEvent* event;
+  OutOfOrderCoreEvent* event = null;
 
   W32 executable_on_fu = opinfo[uop.opcode].fu & clusters[cluster].fu_mask & core.fu_avail;
 
   // Are any FUs available in this cycle?
   if unlikely (!executable_on_fu) {
-    event = core.eventlog.add(EVENT_ISSUE_NO_FU, this);
-    event->issue.fu_avail = core.fu_avail;
+    if unlikely (config.event_log_enabled) {
+      event = core.eventlog.add(EVENT_ISSUE_NO_FU, this);
+      event->issue.fu_avail = core.fu_avail;
+    }
+
     stats.ooocore.issue.result.no_fu++;
     //
     // When this (very rarely) happens, stop issuing uops to this cluster
@@ -238,6 +240,7 @@ int ReorderBufferEntry::issue() {
   //
 
   stats.summary.uops++;
+  stats.ooocore.issue.uops++;
 
   fu = lsbindex(executable_on_fu);
   clearbit(core.fu_avail, fu);
@@ -341,7 +344,7 @@ int ReorderBufferEntry::issue() {
 
   bool mispredicted = (physreg->data != uop.riptaken);
 
-  if unlikely (propagated_exception | (!(ld|st))) {
+  if unlikely (config.event_log_enabled && (propagated_exception | (!(ld|st)))) {
     event = core.eventlog.add(EVENT_ISSUE_OK, this);
     event->issue.state = state;
     event->issue.cycles_left = cycles_left;
@@ -527,7 +530,7 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
   state.data = exception | ((W64)pfec << 32);
   state.datavalid = 1;
 
-  core.eventlog.add_load_store((st) ? EVENT_STORE_EXCEPTION : EVENT_LOAD_EXCEPTION, this, null, addr);
+  if unlikely (config.event_log_enabled) core.eventlog.add_load_store((st) ? EVENT_STORE_EXCEPTION : EVENT_LOAD_EXCEPTION, this, null, addr);
 
   if unlikely (exception == EXCEPTION_UnalignedAccess) {
     //
@@ -537,7 +540,7 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
     // of the x86 macro-op. The frontend will then split the uop into
     // low and high parts as it is refetched.
     //
-    core.eventlog.add_load_store(EVENT_ALIGNMENT_FIXUP, this, null, addr);
+    if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_ALIGNMENT_FIXUP, this, null, addr);
 
     uop.bb->transops[uop.bbindex].unaligned = 1;
 
@@ -583,7 +586,10 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
 // The store is then marked as a second phase store, since the address has been generated.
 // When the store is replayed and rescheduled, it must now have all operands ready this time.
 //
+
 int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate) {
+  time_this_scope(ctissuestore);
+
   OutOfOrderCore& core = getcore();
   OutOfOrderCoreEvent* event;
 
@@ -658,8 +664,10 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   //
 
   if unlikely (!ready) {
-    event = core.eventlog.add_load_store(EVENT_STORE_WAIT, this, sfra, addr);
-    event->loadstore.rcready = rcready;
+    if unlikely (config.event_log_enabled) {
+      event = core.eventlog.add_load_store(EVENT_STORE_WAIT, this, sfra, addr);
+      event->loadstore.rcready = rcready;
+    }
 
     replay();
     load_store_second_phase = 1;
@@ -728,7 +736,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
       }
 
       if unlikely (parallel_forwarding_match) {
-        event = core.eventlog.add_load_store(EVENT_STORE_PARALLEL_FORWARDING_MATCH, this, &ldbuf, addr);
+        if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_STORE_PARALLEL_FORWARDING_MATCH, this, &ldbuf, addr);
         stats.ooocore.dcache.store.parallel_aliasing++;
         continue;
       }
@@ -737,7 +745,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
       state.data = EXCEPTION_LoadStoreAliasing;
       state.datavalid = 1;
 
-      event = core.eventlog.add_load_store(EVENT_STORE_ALIASED_LOAD, this, &ldbuf, addr);
+      if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_STORE_ALIASED_LOAD, this, &ldbuf, addr);
 
       // Add the rip to the load to the load/store alias predictor:
       core.lsap.select(ldbuf.rob->uop.rip);
@@ -784,8 +792,10 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   stats.ooocore.dcache.store.forward.sfr += (sfra != null);
   stats.ooocore.dcache.store.datatype[uop.datatype]++;
 
-  event = core.eventlog.add_load_store(EVENT_STORE_ISSUED, this, sfra, addr);
-  event->loadstore.data_to_store = rc;
+  if unlikely (config.event_log_enabled) {
+    event = core.eventlog.add_load_store(EVENT_STORE_ISSUED, this, sfra, addr);
+    event->loadstore.data_to_store = rc;
+  }
 
   load_store_second_phase = 1;
 
@@ -810,6 +820,8 @@ static inline W64 extract_bytes(void* target, int SIZESHIFT, bool SIGNEXT) {
 }
 
 int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
+  time_this_scope(ctissueload);
+
   OutOfOrderCore& core = getcore();
   OutOfOrderCoreEvent* event;
 
@@ -896,8 +908,10 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
     assert(sfra);
 
-    event = core.eventlog.add_load_store(EVENT_LOAD_WAIT, this, sfra, addr);
-    event->loadstore.predicted_alias = (load_is_known_to_alias_with_store && sfra && (!sfra->addrvalid));
+    if unlikely (config.event_log_enabled) {
+      event = core.eventlog.add_load_store(EVENT_LOAD_WAIT, this, sfra, addr);
+      event->loadstore.predicted_alias = (load_is_known_to_alias_with_store && sfra && (!sfra->addrvalid));
+    }
 
     stats.ooocore.dcache.load.issue.replay.sfr_addr_and_data_not_ready += ((!sfra->addrvalid) & (!sfra->datavalid));
     stats.ooocore.dcache.load.issue.replay.sfr_addr_not_ready += ((!sfra->addrvalid) & (sfra->datavalid));
@@ -949,7 +963,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
       state.invalid = 0;
       state.datavalid = 1;
 
-      core.eventlog.add_load_store(EVENT_LOAD_HIGH_ANNULLED, this, sfra, addr);
+      if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_HIGH_ANNULLED, this, sfra, addr);
 
       return ISSUE_COMPLETED;
     }
@@ -977,7 +991,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   if likely (L1hit) {    
     cycles_left = LOADLAT;
 
-    core.eventlog.add_load_store(EVENT_LOAD_HIT, this, sfra, addr);
+    if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_HIT, this, sfra, addr);
 
     assert(core.loads_in_this_cycle < LOAD_FU_COUNT);
     core.load_to_store_parallel_forwarding_buffer[core.loads_in_this_cycle++] = floor(addr, 8);
@@ -1011,10 +1025,10 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   IssueState tempstate;
   lfrqslot = core.caches.issueload_slowpath(tempstate, addr, origaddr, data, *sfra, lsi);
 
-  event = core.eventlog.add_load_store(EVENT_LOAD_MISS, this, sfra, addr);
+  if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_LOAD_MISS, this, sfra, addr);
 
   if unlikely (lfrqslot < 0) {
-    core.eventlog.add_load_store(EVENT_LOAD_LFRQ_FULL, this, null, addr);
+    if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_LFRQ_FULL, this, null, addr);
     stats.ooocore.dcache.load.issue.replay.missbuf_full++;
 
     state.addrvalid = 0;
@@ -1038,7 +1052,7 @@ void OutOfOrderCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr
 }
 
 void ReorderBufferEntry::loadwakeup() {
-  getcore().eventlog.add_load_store(EVENT_LOAD_WAKEUP, this);
+  if unlikely (config.event_log_enabled) getcore().eventlog.add_load_store(EVENT_LOAD_WAKEUP, this);
 
   physreg->flags &= ~FLAG_WAIT;
   physreg->complete();
@@ -1069,10 +1083,12 @@ void ReorderBufferEntry::loadwakeup() {
 void ReorderBufferEntry::replay() {
   OutOfOrderCore& core = getcore();
 
-  OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
-  foreach (i, MAX_OPERANDS) {
-    operands[i]->fill_operand_info(event->replay.opinfo[i]);
-    event->replay.ready |= (operands[i]->ready()) << i;
+  if unlikely (config.event_log_enabled) {
+    OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
+    foreach (i, MAX_OPERANDS) {
+      operands[i]->fill_operand_info(event->replay.opinfo[i]);
+      event->replay.ready |= (operands[i]->ready()) << i;
+    }
   }
 
   int operands_still_needed = 0;
@@ -1117,7 +1133,10 @@ void ReorderBufferEntry::release() {
 //
 // Process the ready to issue queue and issue as many ROBs as possible
 //
+
 int OutOfOrderCore::issue(int cluster) {
+  time_this_scope(ctissue);
+
   int issuecount = 0;
   ReorderBufferEntry* rob;
 
@@ -1163,9 +1182,11 @@ int ReorderBufferEntry::forward() {
   W32 targets = forward_at_cycle_lut[cluster][forward_cycle];
   foreach (i, MAX_CLUSTERS) {
     if likely (!bit(targets, i)) continue;
-    OutOfOrderCoreEvent* event = getcore().eventlog.add(EVENT_BROADCAST, this);
-    event->forwarding.target_cluster = i;
-    event->forwarding.forward_cycle = forward_cycle;
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent* event = getcore().eventlog.add(EVENT_BROADCAST, this);
+      event->forwarding.target_cluster = i;
+      event->forwarding.forward_cycle = forward_cycle;
+    }
 
     issueq_operation_on_cluster(getcore(), i, broadcast(index()));
   }
@@ -1175,7 +1196,6 @@ int ReorderBufferEntry::forward() {
 
 //
 // Exception recovery and redispatch
-//
 //
 // Remove any and all ROBs that entered the pipeline after and
 // including the misspeculated uop. Because we move all affected
@@ -1223,8 +1243,10 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
   if unlikely (startidx == core.ROB.tail) {
     // The uop causing the mis-speculation was the only uop in the ROB:
     // no action is necessary (but in practice this is generally not possible)
-    OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_ANNUL_NO_FUTURE_UOPS, this);
-    event->annul.somidx = somidx; event->annul.eomidx = eomidx;
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_ANNUL_NO_FUTURE_UOPS, this);
+      event->annul.somidx = somidx; event->annul.eomidx = eomidx;
+    }
 
     return uop.rip;
   }
@@ -1235,9 +1257,11 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
   // For branches, branch must always terminate the macro-op
   if (keep_misspec_uop) assert(eomidx == index());
 
-  event = core.eventlog.add(EVENT_ANNUL_MISSPECULATION, this);
-  event->annul.startidx = startidx; event->annul.endidx = endidx;
-  event->annul.somidx = somidx; event->annul.eomidx = eomidx;
+  if unlikely (config.event_log_enabled) {
+    event = core.eventlog.add(EVENT_ANNUL_MISSPECULATION, this);
+    event->annul.startidx = startidx; event->annul.endidx = endidx;
+    event->annul.somidx = somidx; event->annul.eomidx = eomidx;
+  }
 
   //
   // Pass 1: invalidate issue queue slot for the annulled ROB
@@ -1301,8 +1325,10 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 
     lastrob = &annulrob;
 
-    event = core.eventlog.add(EVENT_ANNUL_EACH_ROB, &annulrob);
-    event->annul.annulras = 0;
+    if unlikely (config.event_log_enabled) {
+      event = core.eventlog.add(EVENT_ANNUL_EACH_ROB, &annulrob);
+      event->annul.annulras = 0;
+    }
 
     //
     // Free the speculatively allocated physical register
@@ -1337,13 +1363,15 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
       // BR mispredicts, so everything after BR must be annulled.
       // RAS contains: C1 C3 C4, so we need to annul [C4 C3].
       //
-      event->annul.annulras = 1;
+      if unlikely (config.event_log_enabled) event->annul.annulras = 1;
       core.branchpred.annulras(annulrob.uop.predinfo);
     }
 
     // Release our lock on the cached basic block containing this uop
-    event->annul.bb = annulrob.uop.bb;
-    event->annul.bb_refcount = annulrob.uop.bb->refcount;
+    if unlikely (config.event_log_enabled) {
+      event->annul.bb = annulrob.uop.bb;
+      event->annul.bb_refcount = annulrob.uop.bb->refcount;
+    }
     annulrob.uop.bb->release();
 
     annulrob.reset();
@@ -1387,10 +1415,14 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 
 void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob) {
   OutOfOrderCore& core = getcore();
-  OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REDISPATCH_EACH_ROB, this);
-  event->redispatch.current_state_list = current_state_list;
-  event->redispatch.dependent_operands = dependent_operands.integer();
-  foreach (i, MAX_OPERANDS) operands[i]->fill_operand_info(event->redispatch.opinfo[i]);
+  OutOfOrderCoreEvent* event;
+
+  if unlikely (config.event_log_enabled) {
+    event = core.eventlog.add(EVENT_REDISPATCH_EACH_ROB, this);
+    event->redispatch.current_state_list = current_state_list;
+    event->redispatch.dependent_operands = dependent_operands.integer();
+    foreach (i, MAX_OPERANDS) operands[i]->fill_operand_info(event->redispatch.opinfo[i]);
+  }
 
   stats.ooocore.dispatch.redispatch.trigger_uops++;
 
@@ -1398,7 +1430,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
   if unlikely (cluster >= 0) {
     bool found = 0;
     issueq_operation_on_cluster_with_result(getcore(), cluster, found, annuluop(index()));
-    event->redispatch.iqslot = found;
+    if unlikely (config.event_log_enabled) event->redispatch.iqslot = found;
     cluster = -1;
   }
 
@@ -1446,7 +1478,8 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
   depmap = 0;
   depmap[index()] = 1;
 
-  OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REDISPATCH_DEPENDENTS, this);
+  OutOfOrderCoreEvent* event;
+  if unlikely (config.event_log_enabled) event = core.eventlog.add(EVENT_REDISPATCH_DEPENDENTS, this);
 
   //
   // Go through the ROB and identify the slice of all uops
@@ -1492,13 +1525,15 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
   assert(inrange(count, 1, ROB_SIZE));
   stats.ooocore.dispatch.redispatch.dependent_uops[count-1]++;
 
-  event = core.eventlog.add(EVENT_REDISPATCH_DEPENDENTS_DONE, this);
-  event->redispatch.count = count;
+  if unlikely (config.event_log_enabled) {
+    event = core.eventlog.add(EVENT_REDISPATCH_DEPENDENTS_DONE, this);
+    event->redispatch.count = count;
+  }
 }
 
 int ReorderBufferEntry::pseudocommit() {
   OutOfOrderCore& core = getcore();
-  core.eventlog.add(EVENT_ANNUL_PSEUDOCOMMIT, this);
+  if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_ANNUL_PSEUDOCOMMIT, this);
 
   if likely (archdest_can_commit[uop.rd]) {
     core.specrrt[uop.rd]->unspecref(uop.rd);

@@ -16,13 +16,14 @@ endif
 # Make sure you have Xen installed and have applied
 # xen-3.0-ptlsim.diff before doing this!
 #
-# PTLsim/X only supports 64-bit processors.
+# PTLsim/X only runs on 64-bit x86-64 processors,
+# but can still run 32-bit code and operating systems
+# under it. See the FAQ for details.
 #
 # PTLSIM_HYPERVISOR=1
 
 CC = g++
 
-# GCCVER_SPECIFIC = -fno-threadsafe-statics # eliminate __cxa_guard_acquire and __cxa_guard_release
 GCCVER_SPECIFIC =
 
 SVNREV=`svn info | grep "Last Changed Rev" | cut -d " " -f4`
@@ -55,7 +56,6 @@ BASEOBJS = superstl.o config.o mathlib.o syscalls.o
 STDOBJS = glibc.o
 
 ifdef __x86_64__
-# IMPORTANT: linkstart.o and linkend.o must be at opposite ends of the list to set up constructor tables properly:
 ifdef PTLSIM_HYPERVISOR
 COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlsim.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o linkend.o
 else
@@ -146,7 +146,7 @@ usage.o: makeusage Makefile
 	objcopy -I binary -O elf32-i386 -B i386 --rename-section .data=.usage,alloc,load,readonly,data,contents usage.txt usage.o
 
 ptlsim.dst.o: ptlsim.dst
-	objcopy -I binary -O elf64-x86-64 -B i386 --rename-section .data=.dst,alloc,load,readonly,data,contents ptlsim.dst ptlsim.dst.o
+	objcopy -I binary -O elf32-i386 -B i386 --rename-section .data=.dst,alloc,load,readonly,data,contents ptlsim.dst ptlsim.dst.o
 
 ifdef PTLSIM_HYPERVISOR
 ifdef __x86_64__

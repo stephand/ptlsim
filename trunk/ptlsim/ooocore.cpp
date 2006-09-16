@@ -87,8 +87,10 @@ void OutOfOrderCore::init_generic() {
   smc_invalidate_pending = 0;
   caches.reset();
   caches.callback = &cache_callbacks;
-  eventlog.init(config.event_log_ring_buffer_size);
-  eventlog.logfile = &logfile;
+  if unlikely (config.event_log_enabled) {
+    eventlog.init(config.event_log_ring_buffer_size);
+    eventlog.logfile = &logfile;
+  }
   prev_interrupts_pending = 0;
   handle_interrupt_at_next_eom = 0;
 }
@@ -222,12 +224,11 @@ bool OutOfOrderCore::runcycle() {
   caches.clock();
 
   int commitrc = commit();
-    
+
   for_each_cluster(i) { writeback(i); }
   for_each_cluster(i) { transfer(i); }
-    
   for_each_cluster(i) { issue(i); complete(i); }
-    
+
   int dispatchrc = dispatch();
 
   if likely (dispatchrc >= 0) {
@@ -238,10 +239,12 @@ bool OutOfOrderCore::runcycle() {
 
   if likely (dispatchrc >= 0) { foreach_issueq(clock()); }
 
-  if (config.flush_event_log_every_cycle) {
-    eventlog.flush(true);
+  if unlikely (config.event_log_enabled) {
+    if unlikely (config.flush_event_log_every_cycle) {
+      eventlog.flush(true);
+    }
   }
- 
+
 #ifdef ENABLE_CHECKS
   // This significantly slows down simulation; only enable it if absolutely needed:
   //check_refcounts();
@@ -1197,6 +1200,8 @@ bool OutOfOrderMachine::init(PTLsimConfig& config) {
 // is hit (as configured elsewhere in config).
 //
 int OutOfOrderMachine::run(PTLsimConfig& config) {
+  time_this_scope(cttotal);
+
   logfile << "Starting out-of-order core toplevel loop", endl, flush;
   logfile << "Event size: ", sizeof(OutOfOrderCoreEvent), " bytes", endl;
 
@@ -1208,7 +1213,7 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
 
     if (logable(6)) {
       logfile << "VCPU ", i, " initial state:", endl;
-      // core.print_state(logfile);
+      logfile << ctx;
       logfile << endl;
     }
   }
@@ -1268,6 +1273,8 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
 #ifdef PTLSIM_HYPERVISOR
     exiting |= check_for_async_sim_break();
 #endif
+    stats.summary.cycles++;
+    stats.ooocore.cycles++;
     sim_cycle++;
     iterations++;
 
@@ -1299,12 +1306,46 @@ void OutOfOrderMachine::dump_state(ostream& os) {
     OutOfOrderCore& core =* cores[i];
     Context& ctx = contextof(i);
     os << "Core ", i, ":", endl;
-    core.eventlog.print(logfile);
+    if unlikely (config.event_log_enabled) core.eventlog.print(logfile);
     core.dump_ooo_state(os);
   }
 }
 
-void OutOfOrderMachine::update_stats(PTLsimStats& stats) { }
+namespace OutOfOrderModel {
+  CycleTimer cttotal;
+  CycleTimer ctfetch;
+  CycleTimer ctdecode;
+  CycleTimer ctrename;
+  CycleTimer ctfrontend;
+  CycleTimer ctdispatch;
+  CycleTimer ctissue;
+  CycleTimer ctissueload;
+  CycleTimer ctissuestore;
+  CycleTimer ctcomplete;
+  CycleTimer cttransfer;
+  CycleTimer ctwriteback;
+  CycleTimer ctcommit;
+};
+
+void OutOfOrderMachine::update_stats(PTLsimStats& stats) {
+  stats.ooocore.issue.uipc = (double)stats.ooocore.issue.uops / (double)stats.ooocore.cycles;
+  stats.ooocore.commit.uipc = (double)stats.ooocore.commit.uops / (double)stats.ooocore.cycles;
+  stats.ooocore.commit.ipc = (double)stats.ooocore.commit.insns / (double)stats.ooocore.cycles;
+
+  stats.ooocore.simulator.total_time = cttotal.seconds();
+  stats.ooocore.simulator.cputime.fetch = ctfetch.seconds();
+  stats.ooocore.simulator.cputime.decode = ctdecode.seconds();
+  stats.ooocore.simulator.cputime.rename = ctrename.seconds();
+  stats.ooocore.simulator.cputime.frontend = ctfrontend.seconds();
+  stats.ooocore.simulator.cputime.dispatch = ctdispatch.seconds();
+  stats.ooocore.simulator.cputime.issue = ctissue.seconds() - (ctissueload.seconds() + ctissuestore.seconds());
+  stats.ooocore.simulator.cputime.issueload = ctissueload.seconds();
+  stats.ooocore.simulator.cputime.issuestore = ctissuestore.seconds();
+  stats.ooocore.simulator.cputime.complete = ctcomplete.seconds();
+  stats.ooocore.simulator.cputime.transfer = cttransfer.seconds();
+  stats.ooocore.simulator.cputime.writeback = ctwriteback.seconds();
+  stats.ooocore.simulator.cputime.commit = ctcommit.seconds();
+}
 
 //
 // Flush all pipelines in every core, and process any

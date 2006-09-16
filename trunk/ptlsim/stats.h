@@ -126,6 +126,7 @@ struct PTLsimStats { // rootnode:
   // Out of Order Core
   //
   struct ooocore {
+    W64 cycles;
     struct fetch {
       struct stop { // node: summable
         W64 stalled;
@@ -193,6 +194,8 @@ struct PTLsimStats { // rootnode:
 
     } dispatch;
     struct issue {
+      W64 uops;
+      double uipc;
       struct result { // node: summable
         W64 no_fu;
         W64 replay;
@@ -209,7 +212,6 @@ struct PTLsimStats { // rootnode:
         W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
       } width;
       W64 opclass[OPCLASS_COUNT]; // label: opclass_names
-
     } issue;
     struct writeback {
       W64 total_writebacks;
@@ -222,8 +224,10 @@ struct PTLsimStats { // rootnode:
     } writeback;
 
     struct commit {
-      W64 total_uops_committed;
-      W64 total_user_insns_committed;
+      W64 uops;
+      W64 insns;
+      double uipc;
+      double ipc;
       struct freereg { // node: summable
         W64 pending;
         W64 free;
@@ -401,6 +405,24 @@ struct PTLsimStats { // rootnode:
         W64 prefetches;
       } store;
     } dcache;
+
+    struct simulator {
+      double total_time;
+      struct cputime { // node: summable
+        double fetch;
+        double decode;
+        double rename;
+        double frontend;
+        double dispatch;
+        double issue;
+        double issueload;
+        double issuestore;
+        double complete;
+        double transfer;
+        double writeback;
+        double commit;
+      } cputime;
+    } simulator;
   } ooocore;
   struct external {
     W64 assists[ASSIST_COUNT]; // label: assist_names

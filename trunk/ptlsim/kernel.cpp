@@ -2284,6 +2284,7 @@ int main(int argc, char** argv) {
 
   init_config(argc, argv);
   init_signal_callback();
+  CycleTimer::gethz();
 
   if (config.pause_at_startup) {
     logfile << "ptlsim: Paused for ", config.pause_at_startup, " seconds; attach debugger to PID ", sys_getpid(), " now...", endl, flush;

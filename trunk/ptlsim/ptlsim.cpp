@@ -50,6 +50,7 @@ void PTLsimConfig::reset() {
   log_ptlsim_boot = 0;
   log_buffer_size = 524288;
 
+  event_log_enabled = 0;
   event_log_ring_buffer_size = 32768;
   flush_event_log_every_cycle = 0;
   log_backwards_from_trigger_rip = INVALIDRIP;
@@ -127,7 +128,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
 
   section("Event Ring Buffer Logging Control");
-  add(event_log_ring_buffer_size,   "ringbuf",              "Core event log ring buffer size: only save last <ringbuf> entries");
+  add(event_log_enabled,            "ringbuf",              "Log all core events to the ring buffer for backwards-in-time debugging");
+  add(event_log_ring_buffer_size,   "ringbuf-size",         "Core event log ring buffer size: only save last <ringbuf> entries");
   add(flush_event_log_every_cycle,  "flush-events",         "Flush event log ring buffer to logfile after every cycle");
   add(log_backwards_from_trigger_rip,"ringbuf-trigger-rip", "Print event ring buffer when first uop in this rip is committed");
 
@@ -320,8 +322,15 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
 
   logfile.setbuf(config.log_buffer_size);
 
+  if ((config.loglevel > 0) & (config.start_log_at_rip == INVALIDRIP) & (config.start_log_at_iteration == infinity)) {
+    config.start_log_at_iteration = 0;
+  }
+
   // Force printing every cycle if loglevel >= 6:
-  if (config.loglevel >= 6) config.flush_event_log_every_cycle = 1;
+  if (config.loglevel >= 6) {
+    config.event_log_enabled = 1;
+    config.flush_event_log_every_cycle = 1;
+  }
 
   //
   // Fix up parameter defaults:

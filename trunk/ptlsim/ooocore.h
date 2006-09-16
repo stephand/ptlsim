@@ -14,12 +14,15 @@
 #define _OOOCORE_H_
 
 #define ENABLE_SIM_TIMING
+
 #ifdef ENABLE_SIM_TIMING
+#define time_this_scope(ct) CycleTimerScope ctscope(ct)
 #define start_timer(ct) ct.start()
 #define stop_timer(ct) ct.stop()
 #else
-#define start_timer(ct)
-#define stop_timer(ct)
+#define time_this_scope(ct) (0)
+#define start_timer(ct) (0)
+#define stop_timer(ct) (0)
 #endif
 
 #define MAX_OPERANDS 4
@@ -54,8 +57,8 @@ namespace OutOfOrderModel {
   const int ROB_SIZE = 128;
   
   // Maximum number of branches in the pipeline at any given time
-  const int MAX_BRANCHES_IN_FLIGHT = 16;
-  
+  const int MAX_BRANCHES_IN_FLIGHT = 32;
+
   // Set this to combine the integer and FP phys reg files:
   // #define UNIFIED_INT_FP_PHYS_REG_FILE
   
@@ -70,7 +73,7 @@ namespace OutOfOrderModel {
   //
   // Load and Store Queues
   //
-  const int LDQ_SIZE = 32;
+  const int LDQ_SIZE = 48;
   const int STQ_SIZE = 32;
 
   //
@@ -83,7 +86,7 @@ namespace OutOfOrderModel {
   // Frontend (Rename and Decode)
   //
   const int FRONTEND_WIDTH = 4;
-  const int FRONTEND_STAGES = 1;
+  const int FRONTEND_STAGES = 5;
 
   //
   // Dispatch
@@ -1184,6 +1187,20 @@ namespace OutOfOrderModel {
     virtual void update_stats(PTLsimStats& stats);
     void flush_all_pipelines();
   };
+
+  extern CycleTimer cttotal;
+  extern CycleTimer ctfetch;
+  extern CycleTimer ctdecode;
+  extern CycleTimer ctrename;
+  extern CycleTimer ctfrontend;
+  extern CycleTimer ctdispatch;
+  extern CycleTimer ctissue;
+  extern CycleTimer ctissueload;
+  extern CycleTimer ctissuestore;
+  extern CycleTimer ctcomplete;
+  extern CycleTimer cttransfer;
+  extern CycleTimer ctwriteback;
+  extern CycleTimer ctcommit;
 
 #ifdef DECLARE_STRUCTURES
   //
