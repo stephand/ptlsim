@@ -113,14 +113,8 @@ void assist_sysenter(Context& ctx) {
   // REG_rip is filled out for us
 }
 
-//
-// For compatibility reasons, we now cheat and pretend to be a Pentium 4 Northwood CPU here.
-// Intel's C++ compiler insists on running on a genuine Intel CPU or it intentionally runs
-// incorrect or sub-optimal code. Intel has been harshly criticized for this anti-competitive 
-// practice. If you want to report the original PTLsim CPUID, uncomment the lines below.
-//
 //static const char cpuid_vendor[12+1] = "GenuineIntel";
-//static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
+//static const char cpuid_description[48+1] = "Intel(R) Xeon(TM) CPU 3.00 GHz                  ";
 
 static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
 static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
