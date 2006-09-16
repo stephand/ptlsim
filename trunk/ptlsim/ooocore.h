@@ -7,14 +7,13 @@
 //
 
 // With these disabled, simulation is faster
-#define ENABLE_CHECKS
+//#define ENABLE_CHECKS
 #define ENABLE_LOGGING
 
 #ifndef _OOOCORE_H_
 #define _OOOCORE_H_
 
-#define ENABLE_SIM_TIMING
-
+//#define ENABLE_SIM_TIMING
 #ifdef ENABLE_SIM_TIMING
 #define time_this_scope(ct) CycleTimerScope ctscope(ct)
 #define start_timer(ct) ct.start()
