@@ -273,13 +273,11 @@ extern byte _binary_ptlsim_dst_start;
 extern byte _binary_ptlsim_dst_end;
 StatsFileWriter statswriter;
 
-W64 next_stats_snapshot_uuid = 1;
-
 void capture_stats_snapshot(const char* name) {
   if unlikely (!statswriter) return;
 
   if (logable(1)|1) {
-    logfile << "Making stats snapshot uuid ", next_stats_snapshot_uuid;
+    logfile << "Making stats snapshot uuid ", statswriter.next_uuid();
     if (name) logfile << " named ", name;
     logfile << " at cycle ", sim_cycle, endl;
   }
@@ -291,8 +289,8 @@ void capture_stats_snapshot(const char* name) {
     strncpy(stats.snapshot_name, name, sizeof(stats.snapshot_name));
   }
 
-  stats.snapshot_uuid = next_stats_snapshot_uuid++;
-  statswriter.write(&stats, stats.snapshot_uuid, name);
+  stats.snapshot_uuid = statswriter.next_uuid();
+  statswriter.write(&stats, name);
 }
 
 void flush_stats() {

@@ -1042,70 +1042,87 @@ DataStoreNode* DataStoreNodeTemplate::reconstruct(const W64*& p) {
   return ds;
 }
 
-//
-// Stats index file header
-//
-struct StatsIndexHeader {
-  W32 magic;
-  W32 version;
-  W32 record_size;
-  W32 template_size;
-
-  static const W32 MAGIC = 0x734c5450; // 'PTLs'
-  static const W32 VERSION = 1;
-};
-
-//
-// Stats index file record, pointing to
-// snapshots in data portion of file.
-// These structures come immediately
-// after the index header and template
-// descriptor.
-//
-struct StatsIndexRecord {
-  W64 uuid;
-  W64 offset;
-  W16 namelen;
-};
 
 //
 // StatsFileWriter
 //
 void StatsFileWriter::open(const char* filename, const void* dst, size_t dstsize, int record_size) {
   close();
-  indexfile.open(filename);
+  os.open(filename);
 
-  stringbuf sb; sb << filename, ".data";
-  datafile.open(sb);
+  namelist = null;
 
-  StatsIndexHeader h;
-  h.magic = StatsIndexHeader::MAGIC;
-  h.version = StatsIndexHeader::VERSION;
-  h.record_size = record_size;
-  h.template_size = dstsize;
-  this->record_size = record_size;
+  header.magic = StatsFileHeader::MAGIC;
+  header.template_offset = sizeof(StatsFileHeader);
+  header.template_size = dstsize;
+  header.record_offset = ceil(header.template_offset + header.template_size, PAGE_SIZE);
+  header.record_size = record_size;
+  header.record_count = 0; // filled in later
+  header.index_offset = 0; // filled in later
+  header.index_count = 0; // filled in later
+  os << header;
 
-  indexfile << h;
-  indexfile.write(dst, dstsize);
-  indexfile.flush();
+  os.seek(header.template_offset);
+  os.write(dst, dstsize);
+
+  os.seek(header.record_offset);
 }
 
-void StatsFileWriter::write(const void* record, W64 uuid, const char* name) {
-  StatsIndexRecord idx;
-  idx.uuid = uuid;
-  idx.offset = datafile.where();
-  idx.namelen = (name) ? (strlen(name) + 1) : 0;
-  indexfile << idx;
-  if (idx.namelen) {
-    indexfile.write(name, idx.namelen);
+void StatsFileWriter::write(const void* record, const char* name) {
+  if (name) {
+    StatsIndexRecordLink* link = new StatsIndexRecordLink(next_uuid(), name);
+    link->addto((selflistlink*&)namelist);
+    header.index_count++;
   }
 
-  datafile.write(record, record_size);
+  os.write(record, header.record_size);
+  header.record_count++;
 }
 
 void StatsFileWriter::flush() {
-  if (indexfile) indexfile.flush();
-  if (datafile) datafile.flush();
+  header.index_offset = os.where();
+  assert(header.index_offset == (header.record_offset + (header.record_count * header.record_size)));
+
+  StatsIndexRecordLink* namelink = namelist;
+  int n = 0;
+
+  while (namelink) {
+    os << namelink->uuid;
+    W16 namelen = strlen(namelink->name) + 1;
+    os << namelen;
+    os.write(namelink->name, namelen);
+    namelink = (StatsIndexRecordLink*)namelink->next;
+    n++;
+  }
+
+  assert(n == header.index_count);
+
+  os.seek(0);
+  os << header;
+
+  os.seek(header.record_offset + (header.record_count * header.record_size));
+}
+
+void StatsFileWriter::close() {
+  flush();
+
+  StatsIndexRecordLink* namelink = namelist;
+  int n = 0;
+
+  while (namelink) {
+    StatsIndexRecordLink* next = (StatsIndexRecordLink*)namelink->next;
+    namelink->unlink();
+    delete namelink->name;
+    delete namelink;
+    namelink = next;
+    n++;
+  }
+
+  assert(n == header.index_count);
+  namelist = null;
+
+  os.flush();
+  os.close();
 }
 
 //
@@ -1114,98 +1131,73 @@ void StatsFileWriter::flush() {
 
 bool StatsFileReader::open(const char* filename) {
   close();
+  is.open(filename);
 
-  indexfile.open(filename);
-
-  if (!indexfile) {
+  if (!is) {
     cerr << "StatsFileReader: cannot open ", filename, endl;
     return false;
   }
 
-  stringbuf sb; sb << filename, ".data";
-  datafile.open(sb);
+  is >> header;
 
-  if (!datafile) {
-    cerr << "StatsFileReader: cannot open ", sb, endl;
+  if (!is) {
+    cerr << "StatsFileReader: error reading header", endl;
     close();
     return false;
   }
 
-  StatsIndexHeader h;
-  indexfile >> h;
-
-  if (!indexfile) {
-    cerr << "StatsFileReader: error reading index header", endl;
+  if (header.magic != StatsFileHeader::MAGIC) {
+    cerr << "StatsFileReader: header magic or version mismatch", endl;
     close();
     return false;
   }
 
-  if ((h.magic != StatsIndexHeader::MAGIC) | (h.version != StatsIndexHeader::VERSION)) {
-    cerr << "StatsFileReader: index header magic or version mismatch", endl;
-    close();
-    return false;
-  }
+  buf = new byte[header.record_size];
 
-  record_size = h.record_size;
-  buf = new byte[record_size];
+  is.seek(header.template_offset);
+  dst = new DataStoreNodeTemplate(is);
 
-  dst = new DataStoreNodeTemplate(indexfile);
-
-  if ((!indexfile) | (!dst)) {
+  if ((!is) | (!dst)) {
     cerr << "StatsFileReader: error while reading and parsing template", endl;
     close();
     return false;
   }
 
   //
-  // Read in the records
+  // Read in the index
   //
+  is.seek(header.index_offset);
 
-  int i = 0;
-  while (indexfile) {
-    StatsIndexRecord rec;
-    indexfile >> rec;
-    if (!indexfile) {
-      // Last record
-      return true;
-    }
-
-    //cerr << "  uuid ", intstring(rec.uuid, 12), " @ ", intstring(rec.offset, 12), endl;
-
-    if (rec.namelen) {
-      char* name = new char[rec.namelen];
-      // Already null-terminated in the file:
-      indexfile.read(name, rec.namelen);
-      name_to_uuid.add(name, rec.uuid);
-      //cerr << "    Name (", rec.namelen, ") = ", name, endl;
+  foreach (i, header.index_count) {
+    W64 uuid = 0;
+    is >> uuid;
+    assert(is.ok());
+    W16 namelen;
+    is >> namelen;
+    assert(is.ok());
+    if (namelen) {
+      char* name = new char(namelen);
+      is.read(name, namelen);
+      name_to_uuid.add(name, uuid);
       delete name;
     }
 
-    if (i == 0) { base_uuid = rec.uuid; }
-    uuid_to_offset.push(rec.offset);
-    i++;
+    assert(is.ok());
   }
 
   return true;
 }
 
 DataStoreNode* StatsFileReader::get(W64 uuid) {
-  //cerr << "seek to reconstruct uuid ", uuid, " (base ", base_uuid, ", offset ", offset, endl;
+  if unlikely (uuid >= header.record_count) return null;
+  W64 offset = header.record_offset + (header.record_size * uuid);
 
-  if unlikely (uuid < base_uuid) return null;
-  if unlikely ((uuid - base_uuid) >= uuid_to_offset.length) return null;
+  is.seek(offset);
 
-  W64 offset = uuid_to_offset[uuid - base_uuid];
-
-  //cerr << "seek to reconstruct uuid ", uuid, ", offset ", offset, endl;
-
-  datafile.seek(offset, SEEK_SET);
-  if unlikely (datafile.read(buf, record_size) != record_size) return null;
+  if unlikely (is.read(buf, header.record_size) != header.record_size) return null;
 
   const W64* p = (const W64*)buf;
   DataStoreNode* dsn = dst->reconstruct(p);
-
-  //cerr << "dsn ", dsn, " reconstructed from uuid ", uuid, ", offset ", offset, endl;
 
   return dsn;
 }
@@ -1227,7 +1219,6 @@ DataStoreNode* StatsFileReader::get(const char* name) {
 
   W64 uuid = *uuidp;
 
-  //cerr << "found uuid ", uuid, " for name ", name, endl;
   return get(uuid);
 }
 
@@ -1236,8 +1227,29 @@ void StatsFileReader::close() {
   if (buf) delete buf;
 
   name_to_uuid.clear();
-  uuid_to_offset.clear();
 
-  if (indexfile) indexfile.close();
-  if (datafile) datafile.close();
+  if (is) is.close();
+}
+
+ostream& StatsFileReader::print(ostream& os) const {
+  if unlikely (!is.ok()) {
+    os << "Data store is not open", endl;
+    return os;
+  }
+
+  char magic[9];
+  *((W64*)&magic) = header.magic;
+  magic[8] = 0;
+
+  os << "Data store header version '", magic, "'", endl;
+  os << "  Template at:  ", intstring(header.template_offset, 16), ", ", intstring(header.template_size, 16), " bytes", endl;
+  os << "  Records at:   ", intstring(header.record_offset, 16), ", ", intstring(header.record_size, 16), " bytes", endl;
+  os << "  Index at:     ", intstring(header.index_offset, 16), ", ", intstring(header.index_count, 16), " entries", endl;
+  os << "  Record count: ", intstring(header.record_count, 16), " records", endl;
+  os << endl;
+  os << "Index:", endl;
+  os << name_to_uuid;
+  os << endl;
+
+  return os;
 }

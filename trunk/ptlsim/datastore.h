@@ -575,39 +575,54 @@ static inline ostream& operator <<(ostream& os, const DataStoreNodeTemplate& nod
   return node.generate_struct_def(os);
 }
 
+struct StatsFileHeader {
+  W64 magic;
+  W64 template_offset;
+  W64 template_size;
+  W64 record_offset;
+  W64 record_size;
+  W64 record_count;
+  W64 index_offset;
+  W64 index_count;
+
+  static const W64 MAGIC = 0x31307473644c5450ULL; // 'PTLdst01'
+};
+
+struct StatsIndexRecordLink: public selflistlink {
+  W64 uuid;
+  char* name;
+
+  StatsIndexRecordLink() { }
+
+  StatsIndexRecordLink(W64 uuid, const char* name) {
+    this->uuid = uuid;
+    this->name = strdup(name);
+  }
+};
+
 struct StatsFileWriter {
-  odstream indexfile;
-  odstream datafile;
-  size_t record_size;
+  odstream os;
+  StatsFileHeader header;
+  StatsIndexRecordLink* namelist;
 
   StatsFileWriter() { }
 
   void open(const char* filename, const void* dst, size_t dstsize, int record_size);
 
-  operator bool() const {
-    return (indexfile.ok() & datafile.ok());
-  }
+  operator bool() const { return os.ok(); }
+  W64 next_uuid() const { return header.record_count; }
 
-  void close() {
-    flush();
-    if (indexfile) indexfile.close();
-    if (datafile) datafile.close();
-  }
-
-  void write(const void* record, W64 uuid, const char* name = null);
-
+  void write(const void* record, const char* name = null);
   void flush();
+  void close();
 };
 
 struct StatsFileReader {
-  idstream indexfile;
-  idstream datafile;
-  size_t record_size;
+  idstream is;
+  StatsFileHeader header;
   byte* buf;
   DataStoreNodeTemplate* dst;
-  dynarray<W64> uuid_to_offset;
-  Hashtable<const char*, W64> name_to_uuid;
-  W64 base_uuid;
+  Hashtable<const char*, W64, 256> name_to_uuid;
 
   StatsFileReader() { dst = null; buf = null; }
 
@@ -617,6 +632,12 @@ struct StatsFileReader {
 
   DataStoreNode* get(const char* name);
   DataStoreNode* get(W64 uuid);
+
+  ostream& print(ostream& os) const;
 };
+
+static inline ostream& print(ostream& os, const StatsFileReader& reader) {
+  return reader.print(os);
+}
 
 #endif // _DATASTORE_H_

@@ -196,6 +196,16 @@ namespace superstl {
     }
   }
 
+  W64 odstream::seek(W64 pos, int whence) {
+    flush();
+    offset = sys_seek(fd, pos, whence);    
+    return offset;
+  }
+
+  W64 odstream::where() const {
+    return offset;
+  }
+
   //
   // stringbuf
   //
@@ -722,8 +732,10 @@ namespace superstl {
     bufused = 0;
     head = 0;
     tail = 0;
-    offset = pos;
-    return sys_seek(fd, pos, whence);
+    error = 0;
+    eos = 0;
+    offset = sys_seek(fd, pos, whence);
+    return offset;
   }
 
   W64 idstream::where() const {

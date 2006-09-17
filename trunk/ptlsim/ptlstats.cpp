@@ -51,6 +51,9 @@ struct PTLstatsConfig {
   
   W64 invert_gains;
 
+  bool print_datastore_info;
+  bool print_template;
+
   void reset();
 };
 
@@ -94,6 +97,9 @@ void PTLstatsConfig::reset() {
   percent_of_toplevel = 0;
   
   invert_gains = 0;
+
+  print_datastore_info = 0;
+  print_template = 0;
 }
 
 PTLstatsConfig config;
@@ -141,6 +147,10 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(graph_logk,                       "logk",                      "Log scale constant");
   add(cumulative_histogram,             "cumulative-histogram",      "Cumulative histogram");
   add(histogram_thresh,                 "histogram-thresh",          "Histogram threshold (1.0 = print nothing, 0.0 = everything)");
+
+  section("Miscellaneous");
+  add(print_datastore_info,             "info",                      "Print information about the data store file");
+  add(print_template,                   "template",                  "Print template in C++ struct format");
 };
 
 struct RGBAColor {
@@ -1147,7 +1157,21 @@ int main(int argc, char* argv[]) {
 
   StatsFileReader reader;
 
-  if (config.mode_histogram.set()) {
+  if (config.print_datastore_info) {
+    if (!reader.open(filename)) {
+      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+      return 2;
+    }
+    reader.print(cout);
+    reader.close();
+  } else if (config.print_template) {
+    if (!reader.open(filename)) {
+      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+      return 2;
+    }
+    reader.dst->generate_struct_def(cout);
+    reader.close();
+  } else if (config.mode_histogram.set()) {
     if (!reader.open(filename)) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
       return 2;

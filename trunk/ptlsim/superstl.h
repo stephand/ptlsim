@@ -211,9 +211,9 @@ namespace superstl {
       return fd;
     }
 
-    W64 where() const {
-      return offset;
-    }
+    W64 seek(W64 pos, int whence = SEEK_SET);
+
+    W64 where() const;
 
     void flush();
   };
