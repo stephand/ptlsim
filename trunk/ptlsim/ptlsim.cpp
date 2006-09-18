@@ -282,6 +282,10 @@ void capture_stats_snapshot(const char* name) {
     logfile << " at cycle ", sim_cycle, endl;
   }
 
+  if (PTLsimMachine::getcurrent()) {
+    PTLsimMachine::getcurrent()->update_stats(stats);
+  }
+
   setzero(stats.snapshot_name);
 
   if (name) {
@@ -396,6 +400,35 @@ PTLsimMachine* PTLsimMachine::getcurrent() {
   return current_machine;
 }
 
+W64 last_printed_status_at_ticks;
+W64 last_printed_status_at_user_insn;
+W64 last_printed_status_at_cycle;
+W64 ticks_per_update;
+
+void update_progress() {
+  W64 ticks = rdtsc();
+  W64s delta = (ticks - last_printed_status_at_ticks);
+  if unlikely (delta < 0) delta = 0;
+  if unlikely (delta >= ticks_per_update) {
+    double seconds = ticks_to_seconds(delta);
+    double cycles_per_sec = (sim_cycle - last_printed_status_at_cycle) / seconds;
+    double insns_per_sec = (total_user_insns_committed - last_printed_status_at_user_insn) / seconds;
+    
+    stringbuf sb;
+    sb << "Completed ", intstring(sim_cycle, 13), " cycles, ", intstring(total_user_insns_committed, 13), " commits: ", 
+      intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
+    
+    logfile << sb, endl, flush;
+#ifdef PTLSIM_HYPERVISOR
+    cerr << "\r  ", sb, flush;
+#endif
+    
+    last_printed_status_at_ticks = ticks;
+    last_printed_status_at_cycle = sim_cycle;
+    last_printed_status_at_user_insn = total_user_insns_committed;
+  }
+}
+
 bool simulate(const char* machinename) {
   PTLsimMachine* machine = PTLsimMachine::getmachine(machinename);
 
@@ -415,10 +448,16 @@ bool simulate(const char* machinename) {
 
   logfile << "Switching to simulation core '", machinename, "'...", endl, flush;
   logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
+#ifdef PTLSIM_HYPERVISOR
   cerr << "Switching to simulation core '", machinename, "'...", endl, flush;
   cerr << "  Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
+#endif
 
-  sim_cycle = 0;
+  // Update stats every half second:
+  ticks_per_update = seconds_to_ticks(0.5);
+  last_printed_status_at_ticks = 0;
+  last_printed_status_at_user_insn = 0;
+  last_printed_status_at_cycle = 0;
 
   current_machine = machine;
   machine->run(config);
@@ -435,7 +474,10 @@ bool simulate(const char* machinename) {
     ostream(config.dumpcode_filename).write(insnbuf, n);
   }
 
-  cerr << "  Done", endl, flush;
+#ifdef PTLSIM_HYPERVISOR
+  cerr << endl;
+  cerr << "Done", endl, flush;
+#endif
 
   return 0;
 }

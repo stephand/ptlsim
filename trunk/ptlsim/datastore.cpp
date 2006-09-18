@@ -335,7 +335,9 @@ DataStoreNode::operator const char**() const {
 }
 
 DataStoreNodeDirectory& DataStoreNode::getentries() const {
-  return (subnodes) ? subnodes->getentries() : *(new DataStoreNodeDirectory());
+  DataStoreNodeDirectory& dir =* new DataStoreNodeDirectory();
+  if (subnodes) subnodes->getentries(dir);
+  return dir;
 }
 
 double DataStoreNode::total() const {
@@ -1069,6 +1071,8 @@ void StatsFileWriter::open(const char* filename, const void* dst, size_t dstsize
 }
 
 void StatsFileWriter::write(const void* record, const char* name) {
+  if (!os.ok()) return;
+
   if (name) {
     StatsIndexRecordLink* link = new StatsIndexRecordLink(next_uuid(), name);
     link->addto((selflistlink*&)namelist);
@@ -1080,6 +1084,8 @@ void StatsFileWriter::write(const void* record, const char* name) {
 }
 
 void StatsFileWriter::flush() {
+  if (!os.ok()) return;
+
   header.index_offset = os.where();
   assert(header.index_offset == (header.record_offset + (header.record_count * header.record_size)));
 
@@ -1104,6 +1110,8 @@ void StatsFileWriter::flush() {
 }
 
 void StatsFileWriter::close() {
+  if (!os.ok()) return;
+
   flush();
 
   StatsIndexRecordLink* namelink = namelist;

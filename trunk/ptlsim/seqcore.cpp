@@ -931,43 +931,14 @@ struct SequentialMachine: public PTLsimMachine {
 
     bool exiting = false;
 
-    W64 last_printed_status_at_ticks = 0;
-    W64 last_printed_status_at_user_insn = 0;
-    W64 last_printed_status_at_cycle = 0;
-
-    // Update stats every half second:
-    W64 ticks_per_update = seconds_to_ticks(0.5);
-
     while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
       if unlikely (iterations >= config.start_log_at_iteration) {
         logenable = 1;
       }
 
-      W64 ticks = rdtsc();
-      W64s delta = (ticks - last_printed_status_at_ticks);
-      if unlikely (delta < 0) delta = 0;
-      if unlikely (delta >= ticks_per_update) {
-        double seconds = ticks_to_seconds(delta);
-        double cycles_per_sec = (sim_cycle - last_printed_status_at_cycle) / seconds;
-        double insns_per_sec = (total_user_insns_committed - last_printed_status_at_user_insn) / seconds;
-
-        stringbuf sb;
-        sb << "Completed ", intstring(sim_cycle, 13), " cycles, ", intstring(total_user_insns_committed, 13), " commits: ", 
-          intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
-
-        logfile << sb, endl, flush;
-#ifdef PTLSIM_HYPERVISOR
-        cerr << "\r  ", sb, flush;
-#endif
-
-        last_printed_status_at_ticks = ticks;
-        last_printed_status_at_cycle = sim_cycle;
-        last_printed_status_at_user_insn = total_user_insns_committed;
-      }
-
-#ifdef PTLSIM_HYPERVISOR
+      update_progress();
       inject_events();
-#endif
+
       foreach (i, contextcount) {
         SequentialCore& core =* cores[i];
         Context& ctx = contextof(i);
@@ -978,9 +949,9 @@ struct SequentialMachine: public PTLsimMachine {
 #endif
         exiting |= core.execute();
       }
-#ifdef PTLSIM_HYPERVISOR
+
       exiting |= check_for_async_sim_break();
-#endif
+
       sim_cycle++;
       iterations++;
 

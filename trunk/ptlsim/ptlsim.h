@@ -88,6 +88,9 @@ void backup_and_reopen_logfile();
 void shutdown_subsystems();
 
 bool simulate(const char* machinename);
+int inject_events();
+bool check_for_async_sim_break();
+void update_progress();
 
 //
 // Sequential core

@@ -1857,6 +1857,15 @@ void init_signal_callback() {
   assert(sys_rt_sigaction(SIGXCPU, &sa, NULL, sizeof(W64)) == 0);
 }
 
+bool check_for_async_sim_break() {
+  return false;
+}
+
+int inject_events() {
+  // No events or interrupts to inject in userspace PTLsim
+  return 0;
+}
+
 //
 // Collect system information into the stats structure
 //

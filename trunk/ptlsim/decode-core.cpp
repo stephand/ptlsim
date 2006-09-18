@@ -14,20 +14,20 @@
 BasicBlockCache bbcache;
 
 struct BasicBlockChunkListHashtableLinkManager {
-  static inline BasicBlockChunkList& objof(selflistlink* link) {
+  static inline BasicBlockChunkList* objof(selflistlink* link) {
     return baseof(BasicBlockChunkList, hashlink, link);
   }
 
-  static inline W64& keyof(BasicBlockChunkList& obj) {
-    return obj.mfn;
+  static inline W64& keyof(BasicBlockChunkList* obj) {
+    return obj->mfn;
   }
 
-  static inline selflistlink& linkof(BasicBlockChunkList& obj) {
-    return obj.hashlink;
+  static inline selflistlink* linkof(BasicBlockChunkList* obj) {
+    return &obj->hashlink;
   }
 };
 
-typedef SelfHashtable<W64, BasicBlockChunkList, BasicBlockChunkListHashtableLinkManager, 16384> BasicBlockPageCache;
+typedef SelfHashtable<W64, BasicBlockChunkList, 16384, BasicBlockChunkListHashtableLinkManager> BasicBlockPageCache;
 
 BasicBlockPageCache bbpages;
 CycleTimer translate_timer("translate");

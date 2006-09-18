@@ -468,16 +468,16 @@ namespace superstl {
 };
 
 struct BasicBlockHashtableLinkManager {
-  static inline BasicBlock& objof(selflistlink* link) {
-    return *(BasicBlock*)(((byte*)link) - offsetof(BasicBlock, hashlink));
+  static inline BasicBlock* objof(selflistlink* link) {
+    return baseof(BasicBlock, hashlink, link);
   }
 
-  static inline RIPVirtPhys& keyof(BasicBlock& obj) {
-    return obj.rip;
+  static inline RIPVirtPhys& keyof(BasicBlock* obj) {
+    return obj->rip;
   }
 
-  static inline selflistlink& linkof(BasicBlock& obj) {
-    return obj.hashlink;
+  static inline selflistlink* linkof(BasicBlock* obj) {
+    return &obj->hashlink;
   }
 };
 
@@ -491,8 +491,8 @@ enum {
   INVALIDATE_REASON_COUNT
 };
 
-struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE> {
-  BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BasicBlockHashtableLinkManager, BB_CACHE_SIZE>() { }
+struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_SIZE, BasicBlockHashtableLinkManager> {
+  BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_SIZE, BasicBlockHashtableLinkManager>() { }
 
   BasicBlock* translate(Context& ctx, const RIPVirtPhys& rvp);
   bool invalidate(const RIPVirtPhys& rvp, int reason);

@@ -387,9 +387,6 @@ static inline void smc_cleardirty(Waddr mfn) {
   smc_setdirty_value(mfn, 0);
 }
 
-int inject_events();
-bool check_for_async_sim_break();
-
 extern mmu_update_t mmuqueue[1024];
 extern int mmuqueue_count;
 

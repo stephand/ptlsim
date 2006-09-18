@@ -33,6 +33,61 @@ asmlinkage {
 
 #undef DEBUG
 
+template <typename T, typename LM = superstl::ObjectLinkManager<T> >
+class queue: selflistlink {
+public:
+  void reset() { next = this; prev = this; }
+  queue() { reset(); }
+
+  void add_to_head(selflistlink* link) { addlink(this, link, next); }
+  void add_to_head(T& obj) { add_to_head(LM::linkof(&obj)); }
+  void add_to_head(T* obj) { add_to_head(LM::linkof(obj)); }
+
+  void add_to_tail(selflistlink* link) { addlink(prev, link, this); }
+  void add_to_tail(T& obj) { add_to_tail(LM::linkof(&obj)); }
+  void add_to_tail(T* obj) { add_to_tail(LM::linkof(obj)); }
+
+  T* remove_head() {
+    if unlikely (empty()) return null;
+    selflistlink* link = next;
+    link->unlink();
+    return LM::objof(link);
+  }
+
+  T* remove_tail() {
+    if unlikely (empty()) return null;
+    selflistlink* link = prev;
+    link->unlink();
+    return LM::objof(link);
+  }
+
+  void enqueue(T* obj) { add_to_tail(obj); }
+  T* dequeue() { return remove_head(); }
+
+  void push(T* obj) { add_to_tail(obj); }
+  void pop(T* obj) { remove_tail(); }
+
+  T* head() const {
+    return (unlikely (empty())) ? null : next;
+  }
+
+  T* tail() const {
+    return (unlikely (empty())) ? null : tail;
+  }
+
+  bool empty() const { return (next == this); }
+
+  operator bool() const { return (!empty()); }
+
+protected:
+  void addlink(selflistlink* prev, selflistlink* link, selflistlink* next) {
+    next->prev = link;
+    link->next = next;
+    link->prev = prev;
+    prev->next = link;
+  }
+};
+
 int domain = -1;
 bool log_ptlsim_boot = 0;
 
@@ -231,22 +286,26 @@ void ptl_zero_private_pages(void* addr, Waddr bytecount) {
 extern byte _binary_ptlxen_bin_start;
 extern byte _binary_ptlxen_bin_end;
 
-struct PendingRequest {
+struct PendingRequest: public selflistlink {
   W64 uuid;
   int fd;
   char* data;
-
-  void init(int i) { data = null; }
-  void validate() { }
 };
 
-Queue<PendingRequest, 16> requestq;
+struct PendingRequestLinkManager: public ObjectLinkManager<PendingRequest> {
+  static inline W64& keyof(PendingRequest* obj) {
+    return obj->uuid;
+  }
+};
 
-Hashtable<W64, PendingRequest, 16> pendingreqs;
+queue<PendingRequest, PendingRequestLinkManager> requestq;
+
+SelfHashtable<W64, PendingRequest, 16, PendingRequestLinkManager> pendingreqs;
 
 struct XenController;
 
 void complete_upcall(XenController& xc, W64 uuid);
+void fill_requestq_from_scriptq(XenController& xc);
 
 static inline bool thunk_ptr_valid(Waddr w) {
   //Waddr w = (Waddr)p;
@@ -889,6 +948,8 @@ struct XenController {
 
     bootinfo->hostreq.ready = 0;
 
+    // cerr << "procss_event: hostreq op ", bootinfo->hostreq.op, ", syscall_id ", bootinfo->hostreq.syscall.syscallid, ", pending_upcall_count ", bootinfo->queued_upcall_count, endl, flush;
+
     switch (bootinfo->hostreq.op) {
     case PTLSIM_HOST_SYSCALL: {
       W64 syscall = bootinfo->hostreq.syscall.syscallid;
@@ -993,6 +1054,10 @@ struct XenController {
       return 1;
     };
     case PTLSIM_HOST_ACCEPT_UPCALL: {
+      if (requestq.empty()) {
+        fill_requestq_from_scriptq(*this);
+      }
+
       if ((!requestq.empty()) | (!bootinfo->hostreq.accept_upcall.blocking)) complete_hostcall();
       //cout << "get_request: queue empty!", endl, flush;
       // Otherwise wait for user to add a request
@@ -1033,7 +1098,7 @@ struct XenController {
         *(ptlcore_ptr_to_ptlmon_ptr(bootinfo->hostreq.accept_upcall.buf + n)) = 0;
         bootinfo->hostreq.rc = req->uuid;
 
-        pendingreqs.add(req->uuid, *req);
+        pendingreqs.add(req);
       } else {
         if (bootinfo->hostreq.accept_upcall.blocking) {
           //cout << "Cannot complete get_request: queue empty!", endl, flush;
@@ -1052,13 +1117,11 @@ struct XenController {
     }
     }
 
-#if 1
     int rc;
     bootinfo->hostreq.ready = 1;
     ioctl_evtchn_notify notify;
     notify.port = ptlsim_hostcall_port;
     rc = ioctl(evtchnfd, IOCTL_EVTCHN_NOTIFY, &notify);
-#endif
     return 0;
   }
 
@@ -1246,26 +1309,55 @@ stringbuf& merge_string_list(stringbuf& sb, const char* sep, int n, char** list)
 
 W64 next_upcall_uuid = 1;
 
+queue<PendingRequest> scriptq;
+W64 script_list_uuid_currently_pending = 0;
+
+void fill_requestq_from_scriptq(XenController& xc) {
+  //if (req->uuid == script_list_uuid_currently_pending) {
+  script_list_uuid_currently_pending = 0;
+  PendingRequest* scriptreq;
+  if ((scriptreq = scriptq.dequeue())) {
+    assert(scriptreq); assert(scriptreq != (PendingRequest*)&scriptq);
+    
+    PendingRequest* newreq = new PendingRequest();
+    newreq->uuid = next_upcall_uuid++;
+    newreq->fd = -1;
+    newreq->data = scriptreq->data; // don't strdup here: we already have a copy
+    delete scriptreq;
+    cerr << "Queued request [", newreq->data, "]", endl;
+    script_list_uuid_currently_pending = newreq->uuid;
+    requestq.enqueue(newreq);
+    xadd(xc.bootinfo->queued_upcall_count, +1);
+  }
+}
+
 void complete_upcall(XenController& xc, W64 uuid) {
   //cout << "Completing upcall for uuid ", uuid, " -> ", endl;
 
-  PendingRequest req;
+  PendingRequest* req = pendingreqs.get(uuid);
 
-  if (!pendingreqs.remove(uuid, req)) {
+  if (!req) {
     cout << endl;
     cout << "Warning: PTLxen notified us of an unknown completed request (uuid ", uuid, ")", endl, flush;
     return;
   }
 
+  pendingreqs.remove(req);
+
   //cout << "uuid ", req.uuid, ", fd ", req.fd, ", data [", req.data, "]", endl, flush;
 
-  stringbuf reply;
-  reply << "OK", endl;
-  sys_write(req.fd, (char*)reply, strlen(reply));
-  sys_close(req.fd);
+  if (req->fd >= 0) {
+    stringbuf reply;
+    reply << "OK", endl;
+    sys_write(req->fd, (char*)reply, strlen(reply));
+    sys_close(req->fd);
+  }
 
-  delete req.data;
-  req.data = null;
+  delete req->data;
+  req->data = null;
+  delete req;
+
+  fill_requestq_from_scriptq(xc);
 }
 
 void handle_upcall(XenController& xc, int fd) {
@@ -1292,27 +1384,25 @@ void handle_upcall(XenController& xc, int fd) {
   if (run) {
     // If it's in the native state, switch to PTLsim first, then send the command
     if (xc.bootinfo->ptlsim_state == PTLSIM_STATE_NATIVE) {
-      cout << "Switching domain from native mode back to PTLsim mode...", endl, flush;
+      cerr << "Switching domain from native mode back to PTLsim mode...", endl, flush;
       xc.switch_to_ptlsim();
       reply << "Domain ", domain, " switched back to PTLsim mode.", endl;
-      cout << reply, flush;
+      cerr << reply, flush;
     } else {
       // PTLsim may be in the idle state: send it anyway
       //reply << "ptlmon: Warning: cannot switch to simulation mode: domain ", domain, " was already in state ", xc.bootinfo->ptlsim_state, endl;
-      //cout << reply, flush;
+      //cerr << reply, flush;
     }
   }
 
-  if (PendingRequest* req = requestq.alloc()) {
-    req->uuid = next_upcall_uuid++;
-    req->fd = fd;
-    req->data = strdup(sb);
-    cerr << "Received request ", req->uuid, " [", req->data, "]", endl, flush;
-    xadd(xc.bootinfo->queued_upcall_count, +1);
-    xc.complete_hostcall();
-  } else {
-    reply << "ptlmon: Warning: Request queue FIFO is full. PTLsim may not be responding", endl;
-  }
+  PendingRequest* req = new PendingRequest();
+  req->uuid = next_upcall_uuid++;
+  req->fd = fd;
+  req->data = strdup(sb);
+  cerr << "Received request ", req->uuid, " [", req->data, "]", endl, flush;
+  requestq.enqueue(req);
+  xadd(xc.bootinfo->queued_upcall_count, +1);
+  xc.complete_hostcall();
 
   return;
 }
@@ -1349,11 +1439,15 @@ int main(int argc, char** argv) {
 
   argc--; argv++;
 
+  char* listfile = null;
+
   foreach (i, argc) {
     if (strequal(argv[i], "-domain")) {
       if (argc > i) { domain = atoi(argv[i+1]); }
     } else if (strequal(argv[i], "-bootlog")) {
       log_ptlsim_boot = 1;
+    } else if (argv[i][0] == '@') {
+      listfile = argv[i] + 1;
     }
   }
 
@@ -1364,7 +1458,7 @@ int main(int argc, char** argv) {
   }
 
   if (domain < 0) {
-    cout << "Please use the -domain XXX option to specify a Xen domain to access.", endl, endl;
+    cerr << "Please use the -domain XXX option to specify a Xen domain to access.", endl, endl;
     return -2;
   }
 
@@ -1397,13 +1491,13 @@ int main(int argc, char** argv) {
     strncpy(addr.sun_path, (char*)sockname, sizeof(addr.sun_path)-1);
 
     if (bind(sd, (struct sockaddr*)&addr, sizeof(struct sockaddr_un)) < 0) {
-      cout << "ERROR: Cannot bind control socket '", sockname, "': error ", strerror(errno), endl;
+      cerr << "ERROR: Cannot bind control socket '", sockname, "': error ", strerror(errno), endl;
       return 0;
     }
 
     // Start listening in pre-fork to avoid race:
     if ((rc = listen(sd, 0)) < 0) {
-      cout << "ERROR: Cannot bind control socket '", sockname, "': error ", strerror(errno), endl;
+      cerr << "ERROR: Cannot bind control socket '", sockname, "': error ", strerror(errno), endl;
       return 0;
     }
 
@@ -1432,14 +1526,36 @@ int main(int argc, char** argv) {
     assert(epoll_ctl(waitfd, EPOLL_CTL_ADD, xc.evtchnfd, &eventctl) == 0);
 
     // Add the initial command line to the request queue.
-    PendingRequest* initreq = requestq.alloc();
-    assert(initreq);
+    PendingRequest* initreq = new PendingRequest();
     stringbuf cmdsb;
     initreq->uuid = next_upcall_uuid++;
     initreq->fd = -1;
     initreq->data = strdup(merge_string_list(cmdsb, " ", argc, argv));
+    requestq.enqueue(initreq);
     xadd(xc.bootinfo->queued_upcall_count, +1);
     xc.complete_hostcall();
+
+    if (listfile) {
+      istream is(listfile);
+      if (is) {
+        stringbuf line;
+        for (;;) {
+          line.reset();
+          is >> line;
+          if (!is) break;
+
+          char* p = strrchr(line, '#');
+          if (p) *p = 0;
+          if (!strlen(line)) continue;
+
+          PendingRequest* req = new PendingRequest();
+          req->data = strdup(line);
+          scriptq.enqueue(req);
+        }
+      } else {
+        cerr << "Warning: cannot open command list file '", listfile, "'", endl;
+      }
+    }
 
     for (;;) {
       epoll_event event;
@@ -1467,12 +1583,12 @@ int main(int argc, char** argv) {
       }
     }
 
-    cout << "Process ", sys_gettid(), " exiting loop...", endl, flush;
+    cerr << "PTLsim monitor process ", sys_gettid(), " exiting...", endl, flush;
 
     xc.unpause();
     xc.detach();
 
-    cout << "All done!", endl, flush;
+    cerr << "Done", endl, flush;
     cerr << flush;
 
     sys_exit(0);

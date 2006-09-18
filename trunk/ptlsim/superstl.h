@@ -938,59 +938,12 @@ namespace superstl {
     return crc << v;
   }
 
-  /*
-   * listlink class
-   * Double linked list with self-referential operations from single root
-   */
-  template <class T>
-  class listlink {
-  public:
-    listlink<T>* next;
-    listlink<T>** prevnp;
-    T* data;
-  public:
-    void reset() { next = null; prevnp = null; data = null; }
-    listlink() { reset(); data = null; }
-    listlink(const T& t) { reset(); data = &t; }
-    listlink(const T* t) { reset(); data = t; }
-    listlink<T>& operator ()(T* t) { data = t; return *this; }
-
-    T& unlink() {
-      if likely (prevnp) *prevnp = next;
-      if likely (next) next->prevnp = prevnp;
-      prevnp = NULL;
-      next = NULL;  
-      return *data;
-    }
-
-    void addto(listlink<T>*& root) {
-      this->next = root;
-      if likely (root)
-        root->prevnp = &this->next;
-      root = this;
-      this->prevnp = &root;
-    }
-
-    bool linked() const {
-      return (next || prevnp);
-    }
-
-    bool unlinked() const {
-      return !linked();
-    }
-
-    //T* operator->*() const { return data; }
-    T* operator->() const { return data; }
-    operator T*() const { return data; }
-    operator T&() const { return *data; }
-  };
-
-  /*
-   * selflistlink class
-   * Double linked list without pointer: useful as root
-   * of inheritance hierarchy for another class to save
-   * space, since object pointed to is implied
-   */
+  //
+  // selflistlink class
+  // Double linked list without pointer: useful as root
+  // of inheritance hierarchy for another class to save
+  // space, since object pointed to is implied
+  //
   class selflistlink {
   public:
     selflistlink* next;
@@ -1123,6 +1076,27 @@ namespace superstl {
     }
   };
 
+  //
+  // Default link manager for objects in which the
+  // very first member (or superclass) is selflistlink.
+  //
+  template <typename T>
+  struct ObjectLinkManager {
+    static inline T* objof(selflistlink* link) { return (T*)link; }
+    static inline selflistlink* linkof(T* obj) { return (selflistlink*)obj; }
+    //
+    // Example:
+    //
+    // T* objof(selflistlink* link) {
+    //   return baseof(T, hashlink, link); // a.k.a. (T*)((byte*)link) - offsetof(T, hashlink);
+    // }
+    //
+    // selflistlink* linkof(T* obj) {
+    //   return &obj->link;
+    // }
+    //
+  };
+
   template <class T>
   class queuelink {
   public:
@@ -1131,7 +1105,7 @@ namespace superstl {
     T* data;
   public:
     void reset() { next = this; prev = this; data = null; }
-    queuelink() { }
+    queuelink() { reset(); }
     queuelink(const T& t) { reset(); data = &t; }
     queuelink(const T* t) { reset(); data = t; }
     queuelink<T>& operator ()(T* t) { reset(); data = t; return *this; }
@@ -1145,7 +1119,7 @@ namespace superstl {
       return *data;
     }
 
-    void addhead(queuelink<T>& root) {
+    void add_to_head(queuelink<T>& root) {
       addlink(&root, root.next);
     }
 
@@ -1153,17 +1127,17 @@ namespace superstl {
       addhead(root);
     }
 
-    void addtail(queuelink<T>& root) {
+    void add_to_tail(queuelink<T>& root) {
       addlink(root.prev, &root);
     }
 
-    queuelink<T>* removehead() {
+    queuelink<T>* remove_head() {
       queuelink<T>* link = next;
       link->unlink();
       return link;
     }
 
-    queuelink<T>* removetail() {
+    queuelink<T>* remove_tail() {
       queuelink<T>* link = prev;
       link->unlink();
       return link;
@@ -2015,10 +1989,10 @@ namespace superstl {
 #define foreachlink(list, type, iter) \
   for (type* iter = (type*)((list)->first); (iter != NULL); prefetch(iter->next), iter = (type*)(iter->next)) \
 
-  template <typename A, typename B>
+  template <typename K, typename T>
   struct KeyValuePair {
-    A key;
-    B value;
+    T value;
+    K key;
   };
 
   template <typename K, int setcount>
@@ -2028,141 +2002,6 @@ namespace superstl {
     static inline K dup(const K& key);
     static inline void free(K& key);
   };
-
-  template <typename K, typename T, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
-  class Hashtable {
-  protected:
-    struct Entry: public KeyValuePair<K, T> {
-      listlink<Entry> link;
-
-      Entry() { }
-
-      Entry(const K key, const T& value) {
-        link(this);
-        this->key = KM::dup(key);
-        this->value = value;
-      }
-
-      ~Entry() {
-        link.unlink();
-        KM::free(this->key);
-      }
-    };
-
-    listlink<Entry>* sets[setcount];
-
-    Entry* findentry(const K key) {
-      listlink<Entry>* tlink = sets[lowbits(KM::hash(key), log2(setcount))];
-      while (tlink) {
-        Entry* entry = tlink->data;
-        if likely (KM::equal(entry->key, key)) return entry;
-        tlink = tlink->next;
-      }
-
-      return null;
-    }
-
-  public:
-    int count;
-
-    dynarray<KeyValuePair<K, T> >& getentries() const {
-      dynarray<KeyValuePair<K, T> >& a = *(new dynarray<KeyValuePair<K, T> >(count, 1));
-      a.resize(count);
-      int n = 0;
-      foreach (i, setcount) {
-        listlink<Entry>* tlink = sets[i];
-        while (tlink) {
-          assert(n < count);
-          Entry* entry = tlink->data;
-          KeyValuePair<K, T>& kvp = a[n];
-          kvp.key = entry->key;
-          kvp.value = entry->value;
-          tlink = tlink->next;
-          n++;
-        }
-      }
-      return a;
-    }
-
-    Hashtable() {
-      count = 0;
-      foreach (i, setcount) { sets[i] = null; }
-    }
-
-    void clear() {
-      foreach (i, setcount) {
-        listlink<Entry>* tlink = sets[i];
-        while (tlink) {
-          listlink<Entry>* tnext = tlink->next;
-          delete tlink->data;
-          tlink = tnext;
-        }
-        sets[i] = null;
-      }
-      count = 0;
-    }
-
-    T* get(const K key) {
-      Entry* entry = findentry(key);
-      if unlikely (!entry) return null;
-      return &entry->value;
-    }
-
-    T* operator ()(const K key) {
-      return get(key);
-    }
-
-    T* add(const K key, const T& value) { 
-      Entry* entry = findentry(key);
-      if unlikely (entry) {
-        entry->value = value;
-        return &entry->value;
-      }
-
-      entry = new Entry(key, value);
-      entry->link.addto(sets[lowbits(KM::hash(key), log2(setcount))]);
-      count++;
-      return &entry->value;
-    }
-
-    bool remove(const K key, T& value) {
-      Entry* entry = findentry(key);
-      if unlikely (!entry) return false;
-
-      value = entry->value;
-      delete entry;
-      count--;
-      return true;
-    }
-
-    bool remove(const K key) {
-      T dummy;
-      return remove(key, dummy);
-    }
-
-    ostream& print(ostream& os) const {
-      os << "Hashtable of ", setcount, " sets containing ", count, " entries:", endl;
-      foreach (i, setcount) {
-        listlink<Entry>* tlink = sets[i];
-        if (!tlink)
-          continue;
-        os << "  Set ", i, ":", endl;
-        int n = 0;
-        while likely (tlink) {
-          Entry* entry = tlink->data;
-          os << "    ", entry->key, " -> ", entry->value, endl;
-          tlink = tlink->next;
-          n++;
-        }
-      }
-      return os;
-    }
-  };
-
-  template <typename K, typename T, int setcount, typename KM>
-  static inline ostream& operator <<(ostream& os, const Hashtable<K, T, setcount, KM>& ht) {
-    return ht.print(os);
-  }
 
   template <int setcount>
   struct HashtableKeyManager<W64, setcount> {
@@ -2205,21 +2044,21 @@ namespace superstl {
   };
 
   template <typename T, typename K>
-  struct SelfHashtableLinkManager {
-    static inline T& objof(selflistlink* link);
-    static inline K& keyof(T& obj);
-    static inline selflistlink& linkof(T& obj);
+  struct HashtableLinkManager {
+    static inline T* objof(selflistlink* link);
+    static inline K& keyof(T* obj);
+    static inline selflistlink* linkof(T* obj);
     //
     // Example:
     //
-    // T& objof(selflistlink* link) {
+    // T* objof(selflistlink* link) {
     //   return baseof(T, hashlink, link); // a.k.a. *(T*)((byte*)link) - offsetof(T, hashlink);
     // }
     //
   };
 
-  template <typename K, typename T, typename LM, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
-  class SelfHashtable {
+  template <typename K, typename T, int setcount = 64, typename LM = ObjectLinkManager<T>, typename KM = HashtableKeyManager<K, setcount> >
+  struct SelfHashtable {
   protected:
     selflistlink* sets[setcount];
   public:
@@ -2228,8 +2067,8 @@ namespace superstl {
     T* get(const K& key) {
       selflistlink* tlink = sets[lowbits(KM::hash(key), log2(setcount))];
       while (tlink) {
-        T& obj = LM::objof(tlink);
-        if likely (KM::equal(LM::keyof(obj), key)) return &obj;
+        T* obj = LM::objof(tlink);
+        if likely (KM::equal(LM::keyof(obj), key)) return obj;
         tlink = tlink->next;
       }
 
@@ -2237,17 +2076,17 @@ namespace superstl {
     }
 
     struct Iterator {
-      SelfHashtable<K, T, LM, setcount, KM>* ht;
+      SelfHashtable<K, T, setcount, LM, KM>* ht;
       selflistlink* link;
       int slot;
 
       Iterator() { }
 
-      Iterator(SelfHashtable<K, T, LM, setcount, KM>* ht) {
+      Iterator(SelfHashtable<K, T, setcount, LM, KM>* ht) {
         reset(ht);
       }
 
-      void reset(SelfHashtable<K, T, LM, setcount, KM>* ht) {
+      void reset(SelfHashtable<K, T, setcount, LM, KM>* ht) {
         this->ht = ht;
         slot = 0;
         link = ht->sets[slot];
@@ -2265,10 +2104,10 @@ namespace superstl {
             continue;
           }
 
-          T& obj = LM::objof(link);
+          T* obj = LM::objof(link);
           link = link->next;
           prefetch(link);
-          return &obj;
+          return obj;
         }
       }
     };
@@ -2307,32 +2146,33 @@ namespace superstl {
       return get(key);
     }
 
-    T* add(T& obj) {
+    T* add(T* obj) {
       T* oldobj = get(LM::keyof(obj));
       if unlikely (oldobj) {
         remove(oldobj);
       }
 
-      if (LM::linkof(obj).linked()) return &obj;
+      if (LM::linkof(obj)->linked()) return obj;
 
-      LM::linkof(obj).addto(sets[lowbits(KM::hash(LM::keyof(obj)), log2(setcount))]);
+      LM::linkof(obj)->addto(sets[lowbits(KM::hash(LM::keyof(obj)), log2(setcount))]);
       count++;
-      return &obj;
+      return obj;
     }
 
-    T* add(T* obj) {
-      return add(*obj);
-    }
-
-    T* remove(T& obj) {
-      if (!LM::linkof(obj).linked()) return &obj;
-      LM::linkof(obj).unlink();
-      count--;
-      return &obj;
+    T& add(T& obj) {
+      return *add(&obj);
     }
 
     T* remove(T* obj) {
-      return remove(*obj);
+      selflistlink* link = LM::linkof(obj);
+      if (!link->linked()) return obj;
+      link->unlink();
+      count--;
+      return obj;
+    }
+
+    T& remove(T& obj) {
+      return *remove(&obj);
     }
 
     ostream& print(ostream& os) const {
@@ -2344,8 +2184,8 @@ namespace superstl {
         os << "  Set ", i, ":", endl;
         int n = 0;
         while likely (tlink) {
-          T& obj = LM::objof(tlink);
-          os << "    ", LM::keyof(obj), " -> ", obj, endl;
+          T* obj = LM::objof(tlink);
+          os << "    ", LM::keyof(obj), " -> ", *obj, endl;
           tlink = tlink->next;
           n++;
         }
@@ -2355,8 +2195,129 @@ namespace superstl {
   };
 
   template <typename K, typename T, typename LM, int setcount, typename KM>
-  static inline ostream& operator <<(ostream& os, const SelfHashtable<K, T, LM, setcount, KM>& ht) {
+  static inline ostream& operator <<(ostream& os, const SelfHashtable<K, T, setcount, LM, KM>& ht) {
     return ht.print(os);
+  }
+
+  template <typename K, typename T, typename KM>
+  struct ObjectHashtableEntry: public KeyValuePair<K, T> {
+    typedef KeyValuePair<K, T> base_t;
+    selflistlink hashlink;
+
+    ObjectHashtableEntry() { }
+
+    ObjectHashtableEntry(const K& key, const T& value) {
+      this->value = value;
+      this->key = KM::dup(key);
+    }
+
+    ~ObjectHashtableEntry() {
+      hashlink.unlink();
+      KM::free(this->key);
+    }
+  };
+
+  template <typename K, typename T, typename KM>
+  struct ObjectHashtableLinkManager {
+    typedef ObjectHashtableEntry<K, T, KM> entry_t;
+
+    static inline entry_t* objof(selflistlink* link) {
+      return baseof(entry_t, hashlink, link);
+    }
+
+    static inline K& keyof(entry_t* obj) {
+      return obj->key;
+    }
+
+    static inline selflistlink* linkof(entry_t* obj) {
+      return &obj->hashlink;
+    }
+  };
+
+  template <typename K, typename T, int setcount = 64, typename KM = HashtableKeyManager<K, setcount> >
+  struct Hashtable: public SelfHashtable<K, ObjectHashtableEntry<K, T, KM>, setcount, ObjectHashtableLinkManager<K, T, KM> > {
+    typedef ObjectHashtableEntry<K, T, KM> entry_t;
+    typedef SelfHashtable<K, entry_t, setcount, ObjectHashtableLinkManager<K, T, KM> > base_t;
+
+    struct Iterator: public base_t::Iterator {
+      Iterator() { }
+
+      Iterator(Hashtable<K, T, setcount, KM>* ht) {
+        reset(ht);
+      }
+
+      void reset(Hashtable<K, T, setcount, KM>* ht) {
+        base_t::Iterator::reset(ht);
+      }
+
+      KeyValuePair<K, T>* next() {
+        return base_t::Iterator::next();
+      }
+    };
+
+    dynarray< KeyValuePair<K, T> >& getentries(dynarray< KeyValuePair<K, T> >& a) {
+      a.resize(base_t::count);
+      int n = 0;
+      Iterator iter(this);
+      KeyValuePair<K, T>* kvp;
+      while (kvp = iter.next()) {
+        assert(n < base_t::count);
+        a[n++] = *kvp;
+      }
+      return a;
+    }
+
+    T* get(const K& key) {
+      entry_t* entry = base_t::get(key);
+      return &entry->value;
+    }
+
+    T* operator ()(const K key) {
+      return get(key);
+    }
+
+    T* add(const K& key, const T& value) { 
+      entry_t* entry = base_t::get(key);
+      if unlikely (entry) {
+        entry->value = value;
+        return &entry->value;
+      }
+
+      entry = new entry_t(key, value);
+      base_t::add(entry);
+      return &entry->value;
+    }
+
+    bool remove(const K& key, T& value) {
+      entry_t* entry = base_t::get(key);
+      if unlikely (!entry) return false;
+
+      value = entry->value;
+      base_t::remove(entry);
+      delete entry;
+      return true;
+    }
+
+    bool remove(const K key) {
+      T dummy;
+      return remove(key, dummy);
+    }
+
+    ostream& print(ostream& os) {
+      os << "Hashtable of ", setcount, " sets containing ", base_t::count, " entries:", endl;
+      Iterator iter;
+      iter.reset(this);
+      KeyValuePair<K, T>* kvp;
+      while (kvp = iter.next()) {
+        os << "  ", kvp->key, " -> ", kvp->value, endl;
+      }
+      return os;
+    }
+  };
+
+  template <typename K, typename T, int setcount, typename KM>
+  static inline ostream& operator <<(ostream& os, const Hashtable<K, T, setcount, KM>& ht) {
+    return ((Hashtable<K, T, setcount, KM>&)ht).print(os);
   }
 
   template <typename T, int N>
@@ -2554,157 +2515,6 @@ namespace superstl {
       return n;
     }
   };
-
-  //
-  // ChunkHashtable
-  //
-  template <typename T, int entries_per_chunk>
-  struct ChunkHashtableBlock {
-    listlink< ChunkHashtableBlock<T, entries_per_chunk> > link;
-    W64 freemap;
-    T data[entries_per_chunk];
-    static const W64 ALL_FREE = (1LL << entries_per_chunk)-1LL;
-
-    ChunkHashtableBlock() {
-      link(this);
-      setzero(data);
-      freemap = ALL_FREE;
-    }
-
-    bool full() const {
-      return (freemap == 0);
-    }
-
-    bool add(const T& entry) {
-      int idx = lsbindex64(freemap);
-      if unlikely ((!freemap) || (idx >= entries_per_chunk)) return false;
-      freemap &= ~(1LL << idx);
-      data[idx] = entry;
-      return true;
-    }
-
-    T* operator ()(const T& entry) {
-      W64 match = 0;
-      foreach (i, entries_per_chunk) {
-        match |= (W64)(data[i] == entry) << (W64)i;
-      }
-      match &= ~freemap;
-      int idx = lsbindex64(match);
-      return (match) ? &data[idx] : null;
-    }
-
-    bool remove(const T& entry) {
-      T* slot = (*this)(entry);
-      if unlikely (!slot) return (freemap == ALL_FREE);
-      int idx = (slot - data); 
-      freemap |= (1LL << idx);
-      return (freemap == ALL_FREE);
-    }
-
-    void print(ostream& os) const {
-      os << "    ChunkHashtableBlock<", entries_per_chunk, ">: prev ", link.prevnp, ", next ", link.next, ", freemap ", bitstring(freemap, entries_per_chunk, true), ":", endl;
-      foreach (i, entries_per_chunk) {
-        if (!bit(freemap, i)) os << "      ", intstring(i, 2), ": ", data[i], endl;
-      }
-    }
-  };
-
-  template <typename T, int entries_per_chunk>
-  static inline ostream& operator <<(ostream& os, ChunkHashtableBlock<T, entries_per_chunk>& chunk) {
-    chunk.print(os);
-    return os;
-  }
-
-#define ChunkHashtableBlock_fit_in_bytes(T, bytes) ((bytes - (sizeof(ChunkHashtableBlock<W64, 1>) - sizeof(W64))) / sizeof(T))
-
-  template <typename T, int setcount, int entries_per_chunk>
-  struct ChunkHashtable {
-    typedef ChunkHashtableBlock<T, entries_per_chunk> chunk_t;
-    int count;
-    listlink<chunk_t>* sets[setcount];
-
-    int setof(const T& entry); // (implement in subclasses)
-
-    void add(const T& entry) {
-      chunk_t* base = (chunk_t*)sets[setof(entry)];
-      if unlikely ((!base) || base->full()) {
-        base = new chunk_t();
-        base->link.addto(sets[setof(entry)]);
-      }
-
-      assert(base->add(entry));
-    }
-
-    void remove(const T& entry) {
-      chunk_t* chunk = (chunk_t*)sets[setof(entry)];
-      while (chunk) {
-        chunk_t* nextchunk = (chunk_t*)chunk->link.next;
-        bool empty = chunk->remove(entry);
-        if likely (empty) {
-          chunk->link.unlink();
-          delete chunk;
-        }
-        chunk = nextchunk;
-      }
-    }
-
-    T* operator ()(const T& entry) {
-      chunk_t* chunk = (chunk_t*)sets[setof(entry)];
-      T* found = null;
-      while (chunk) {
-        found = (*chunk)(entry);
-        if unlikely (found) break;
-        chunk = (chunk_t*)chunk->link.next;
-      }
-      return found;
-    }
-
-    ChunkHashtable() {
-      init();
-    }
-
-    void init() {
-      // Free all traces:
-      foreach (i, setcount) {
-        sets[i] = null;
-      }
-      count = 0;
-    }
-
-    void clear() {
-      foreach (i, setcount) {
-        chunk_t* chunk = (chunk_t*)sets[i];
-        while (chunk) {
-          chunk_t* nextchunk = (chunk_t*)chunk->link.next;
-          chunk->link.unlink();
-          delete chunk;
-          chunk = nextchunk;
-        }
-        sets[i] = null;
-      }
-      count = 0;
-    }
-
-    void print(ostream& os) {
-      os << "ChunkHashtable<", setcount, " sets, ", entries_per_chunk, " entries per chunk>: ", count, " entries:", endl;
-      foreach (i, setcount) {
-        if unlikely (!sets[i]) continue;
-        os << "  Set ", i, endl;
-        chunk_t* chunk = (chunk_t*)sets[i];
-        T* found = null;
-        while (chunk) {
-          os << (*chunk);
-          chunk = (chunk_t*)chunk->link.next;
-        }
-      }
-    }
-  };
-
-  template <typename T, int setcount, int entries_per_chunk>
-  static inline ostream& operator <<(ostream& os, ChunkHashtable<T, setcount, entries_per_chunk>& cht) {
-    cht.print(os);
-    return os;
-  }
 
   static inline W64s expandword(const byte*& p, int type) {
     W64s v;
