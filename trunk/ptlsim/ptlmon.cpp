@@ -33,61 +33,6 @@ asmlinkage {
 
 #undef DEBUG
 
-template <typename T, typename LM = superstl::ObjectLinkManager<T> >
-class queue: selflistlink {
-public:
-  void reset() { next = this; prev = this; }
-  queue() { reset(); }
-
-  void add_to_head(selflistlink* link) { addlink(this, link, next); }
-  void add_to_head(T& obj) { add_to_head(LM::linkof(&obj)); }
-  void add_to_head(T* obj) { add_to_head(LM::linkof(obj)); }
-
-  void add_to_tail(selflistlink* link) { addlink(prev, link, this); }
-  void add_to_tail(T& obj) { add_to_tail(LM::linkof(&obj)); }
-  void add_to_tail(T* obj) { add_to_tail(LM::linkof(obj)); }
-
-  T* remove_head() {
-    if unlikely (empty()) return null;
-    selflistlink* link = next;
-    link->unlink();
-    return LM::objof(link);
-  }
-
-  T* remove_tail() {
-    if unlikely (empty()) return null;
-    selflistlink* link = prev;
-    link->unlink();
-    return LM::objof(link);
-  }
-
-  void enqueue(T* obj) { add_to_tail(obj); }
-  T* dequeue() { return remove_head(); }
-
-  void push(T* obj) { add_to_tail(obj); }
-  void pop(T* obj) { remove_tail(); }
-
-  T* head() const {
-    return (unlikely (empty())) ? null : next;
-  }
-
-  T* tail() const {
-    return (unlikely (empty())) ? null : tail;
-  }
-
-  bool empty() const { return (next == this); }
-
-  operator bool() const { return (!empty()); }
-
-protected:
-  void addlink(selflistlink* prev, selflistlink* link, selflistlink* next) {
-    next->prev = link;
-    link->next = next;
-    link->prev = prev;
-    prev->next = link;
-  }
-};
-
 int domain = -1;
 bool log_ptlsim_boot = 0;
 
