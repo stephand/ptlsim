@@ -12,23 +12,72 @@
 #include <globals.h>
 #include <superstl.h>
 
+#define __XEN_TOOLS__
 asmlinkage {  
 #include <xen-types.h>
 #include <xen/xen.h>
-#include <xen/dom0_ops.h>
+#include <xen/domctl.h>
 #include <xen/sched.h>
 #include <xen/event_channel.h>
 #include <xen/grant_table.h>
 #include <xen/vcpu.h>
 #include <xen/memory.h>
 #include <xen/version.h>
-#include <xen/sched_ctl.h>
 #include <xen/xenoprof.h>
 #include <xen/callback.h>
 #include <xen/physdev.h>
 #include <xen/features.h>
-#include "xc_ptlsim.h"
 }
+
+typedef unsigned long pfn_t;
+typedef unsigned long mfn_t;
+typedef unsigned long pte_t;
+
+#define PML4_SHIFT (12+9+9+9)
+#define PTLSIM_VIRT_BASE 0xffffff0000000000ULL // PML4 entry 510
+#define PHYS_VIRT_BASE   0xfffffe0000000000ULL // PML4 entry 508 (enough for 2^39 bytes physical RAM)
+#define PTLSIM_RESERVED_VIRT_BASE 0xfffffe0000000000ULL // Start of guest-inaccessible PTLsim region
+#define PTLSIM_RESERVED_VIRT_END  0xffffff7fffffffffULL // End of guest-inaccessible PTLsim region
+// PML4 entry 511 is usually occupied by Linux itself
+
+#define virt_is_inside_ptlsim(x) ((((W64)(x)) >> PML4_SHIFT) == (PTLSIM_VIRT_BASE >> PML4_SHIFT))
+#define virt_is_inside_physmap(x) ((((W64)(x)) >> PML4_SHIFT) == (PHYS_VIRT_BASE >> PML4_SHIFT))
+
+#define PTLSIM_BOOT_PAGE_PFN 0
+#define PTLSIM_BOOT_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_BOOT_PAGE_PFN * 4096))
+#define PTLSIM_BOOT_PAGE_PADDING 2048 // bytes of pre-padding (where ELF header goes)
+
+#define PTLSIM_HYPERCALL_PAGE_PFN 1
+#define PTLSIM_HYPERCALL_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_HYPERCALL_PAGE_PFN * 4096))
+
+#define PTLSIM_SHINFO_PAGE_PFN 2
+#define PTLSIM_SHINFO_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_SHINFO_PAGE_PFN * 4096))
+
+#define PTLSIM_SHADOW_SHINFO_PAGE_PFN 3
+#define PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_SHADOW_SHINFO_PAGE_PFN * 4096))
+
+//
+// The transfer page is used to copy data *into* the domain, since all
+// other pages are mapped as read only. Thunked system calls and other
+// utility functions use this facility. PTLsim may need to copy data
+// from this buffer to its final destination inside the domain.
+//
+#define PTLSIM_XFER_PAGE_PFN 4
+#define PTLSIM_XFER_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_XFER_PAGE_PFN * 4096))
+
+#define PTLSIM_CTX_PAGE_PFN 5
+#define PTLSIM_CTX_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_CTX_PAGE_PFN * 4096))
+#define PTLSIM_CTX_PAGE_COUNT 32 // up to 32 VCPUs per domain
+
+#define PTLSIM_FIRST_READ_ONLY_PAGE (PTLSIM_CTX_PAGE_PFN + PTLSIM_CTX_PAGE_COUNT)
+
+#define INVALID_MFN 0xffffffffffffffffULL
+
+#define PTES_PER_PAGE (PAGE_SIZE / sizeof(pte_t))
+
+#define PTLSIM_STUB_MAGIC 0x4b4f6d69734c5450ULL // "PTLsimOK"
+#define PTLSIM_BOOT_PAGE_MAGIC 0x50426d69734c5450ULL // "PTLsimBP"
+#define MAX_RESERVED_PAGES 131072 // on 64-bit platforms, this is 512 MB
 
 #include <ptlhwdef.h>
 #include <config.h>
@@ -101,7 +150,7 @@ int HYPERVISOR_stack_switch(unsigned long ss, unsigned long esp);
 int HYPERVISOR_set_callbacks(unsigned long event_address, unsigned long failsafe_address, unsigned long syscall_address);
 int HYPERVISOR_fpu_taskswitch(int set);
 int HYPERVISOR_sched_op_compat(int cmd, unsigned long arg);
-int HYPERVISOR_dom0_op(dom0_op_t *dom0_op);
+int HYPERVISOR_domctl_op(xen_domctl_t *domctl_op);
 int HYPERVISOR_set_debugreg(int reg, unsigned long value);
 unsigned long HYPERVISOR_get_debugreg(int reg);
 int HYPERVISOR_update_descriptor(unsigned long ma, unsigned long word);
@@ -255,7 +304,34 @@ enum {
   PTLSIM_STATE_NATIVE,
 };
 
-struct PTLsimMonitorInfo: public PTLsimBootPageInfo {
+struct PTLsimMonitorInfo {
+  byte padding[PTLSIM_BOOT_PAGE_PADDING];
+
+  W64 magic; // PTLSIM_BOOT_PAGE_MAGIC
+  W64 mfn_count;
+  W64 avail_mfn_count;
+  W64 total_machine_pages;
+
+  Level1PTE* ptl_pagedir;
+  Level2PTE* ptl_pagedir_map;
+  Level3PTE* ptl_level3_map;
+  Level4PTE* toplevel_page_table;
+  PTLsimMonitorInfo* boot_page;
+  shared_info_t* shared_info;
+
+  W64 ptl_pagedir_mfn_count;
+
+  mfn_t ptl_pagedir_map_mfn;
+  mfn_t ptl_level3_mfn;
+  mfn_t toplevel_page_table_mfn;
+  mfn_t boot_page_mfn;
+  mfn_t shared_info_mfn;
+  mfn_t start_info_mfn;
+  mfn_t store_mfn;
+  mfn_t console_mfn;
+  int store_evtchn;
+  int console_evtchn;
+
   PTLsimHostCall hostreq;
   int queued_upcall_count;
   int hostcall_port;
@@ -268,9 +344,6 @@ struct PTLsimMonitorInfo: public PTLsimBootPageInfo {
   byte* heap_end;
   int vcpu_count;
   int max_pages;
-  int total_machine_pages;
-  //Context* ctx;
-  //shared_info_t* shadow_shinfo;
   struct Level1PTE* phys_pagedir;
   struct Level2PTE* phys_level2_pagedir;
   struct Level3PTE* phys_level3_pagedir;

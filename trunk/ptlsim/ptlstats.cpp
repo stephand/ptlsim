@@ -47,7 +47,7 @@ struct PTLstatsConfig {
   double histogram_thresh;
   W64 cumulative_histogram;
   
-  W64 percent_of_toplevel;
+  bool percent_of_toplevel;
   
   W64 invert_gains;
 

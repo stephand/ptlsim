@@ -61,9 +61,9 @@ int HYPERVISOR_sched_op_compat(int cmd, unsigned long arg) {
   return _hypercall2(int, sched_op_compat, cmd, arg);
 }
 
-int HYPERVISOR_dom0_op(dom0_op_t *dom0_op) {
-  dom0_op->interface_version = DOM0_INTERFACE_VERSION;
-  return _hypercall1(int, dom0_op, dom0_op);
+int HYPERVISOR_domctl_op(xen_domctl_t *domctl_op) {
+  domctl_op->interface_version = XEN_DOMCTL_INTERFACE_VERSION;
+  return _hypercall1(int, domctl, domctl_op);
 }
 
 int HYPERVISOR_set_debugreg(int reg, unsigned long value) {
@@ -607,10 +607,6 @@ void* sys_mmap(void* start, size_t length, int prot, int flags, int fd, W64 offs
 void assist_ptlcall(Context& ctx) {
   //++MTY TODO
 }
-
-//void initiate_prefetch(W64 addr, int cachelevel) {
-  // (dummy for now)
-//}
 
 asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
@@ -1685,6 +1681,12 @@ RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
   return *this;
 }
 
+static inline mfn_t get_cr3_mfn() {
+  Waddr cr3;
+  asm volatile("mov %%cr3,%[out]" : [out] "=r" (cr3));
+  return (cr3 >> 12);
+}
+
 //
 // Unmap an entire tree of physical pages rooted
 // at the specified L4 mfn. This must be done
@@ -1749,6 +1751,39 @@ void smc_setdirty_internal(Level1PTE& pte, bool dirty) {
 
 Level4PTE ptlsim_pml4_entry;
 Level4PTE physmap_pml4_entry;
+
+//
+// Inject the PTLsim toplevel page table entries (PML 510 and PML 508)
+// into the specified user mfn. The page must already be pinned; this
+// function is called right before loading.
+//
+void inject_ptlsim_into_toplevel(mfn_t mfn, bool force = false) {
+  int rc;
+
+  Level4PTE* top = (Level4PTE*)phys_to_mapped_virt(mfn << 12);
+  int ptlsim_slot = VirtAddr(PTLSIM_VIRT_BASE).lm.level4;
+  int physmap_slot = VirtAddr(PHYS_VIRT_BASE).lm.level4;
+  if (!force) {
+#if 0
+    cerr << "Inject PTLsim PML4 entries into top mfn ", mfn, " (at virt ", top, "):", endl;
+    cerr << "  top[", ptlsim_slot, "] = ", ptlsim_pml4_entry, endl;
+    cerr << "  top[", physmap_slot, "] = ", physmap_pml4_entry, endl, flush;
+#endif
+  }
+  bool needs_ptlsim_slot_update = true;
+  bool needs_physmap_slot_update = true;
+
+  if (!force) {
+    needs_ptlsim_slot_update = (top[ptlsim_slot] != ptlsim_pml4_entry);
+    needs_physmap_slot_update = (top[physmap_slot] != physmap_pml4_entry);
+  }
+
+  if (needs_ptlsim_slot_update)
+    assert(update_phys_pte((mfn << 12) + (ptlsim_slot * 8), ptlsim_pml4_entry) == 0);
+
+  if (needs_physmap_slot_update)
+    assert(update_phys_pte((mfn << 12) + (physmap_slot * 8), physmap_pml4_entry) == 0);
+}
 
 //
 // Build page tables for the 1:1 mapping of physical memory.
@@ -1827,7 +1862,6 @@ void build_physmap_page_tables() {
     pte.mfn = ptl_virt_to_mfn(ptvirt);
     // cerr << "    Slot ", intstring(i, 6), " = ", pte, endl, flush;
     assert(make_ptl_page_writable(ptvirt, false) == 0);
-    // assert(pin_page_table_page(ptvirt, 2) == 0);
   }
 
   // Clear out leftover slots: we may not care, but Xen will complain:
@@ -1845,11 +1879,31 @@ void build_physmap_page_tables() {
   if (DEBUG) cerr << "  Final L3 page table page at virt ", bootinfo.phys_level3_pagedir,
     " (mfn ", ptl_virt_to_mfn(bootinfo.phys_level3_pagedir), ")", endl, flush;
   assert(make_ptl_page_writable(ptvirt, false) == 0);
-  // assert(pin_page_table_page(ptvirt, 3) == 0);
+
+  //
+  // Create template overlay L4 page table page
+  //
+  Level4PTE* template_level4_page = (Level4PTE*)ptl_alloc_private_page();
+  assert(template_level4_page);
+  ptl_zero_private_page(template_level4_page);
+
+  //
+  // Build PTLsim PML4 entry 510:
+  //
+  //int ptlsim_slot = VirtAddr(PTLSIM_VIRT_BASE).lm.level4;
+  //Level4PTE& ptlsim_pml4_entry = template_level4_page[ptlsim_slot];
+  ptlsim_pml4_entry = 0;
+  ptlsim_pml4_entry.p = 1;
+  ptlsim_pml4_entry.rw = 1;
+  ptlsim_pml4_entry.us = 1;
+  ptlsim_pml4_entry.a = 1;
+  ptlsim_pml4_entry.mfn = ptl_virt_to_mfn(bootinfo.ptl_level3_map);
 
   //
   // Build physmap PML4 entry 508:
   //
+  //int physmap_slot = VirtAddr(PHYS_VIRT_BASE).lm.level4;
+  //Level4PTE& physmap_pml4_entry = template_level4_page[physmap_slot];
   physmap_pml4_entry = 0;
   physmap_pml4_entry.p = 1;
   physmap_pml4_entry.rw = 1;
@@ -1858,45 +1912,19 @@ void build_physmap_page_tables() {
   physmap_pml4_entry.mfn = ptl_virt_to_mfn(bootinfo.phys_level3_pagedir);
 
   //
-  // Build PTLsim PML4 entry 510:
+  // Update the template page inside Xen:
   //
-  ptlsim_pml4_entry = 0;
-  ptlsim_pml4_entry.p = 1;
-  ptlsim_pml4_entry.rw = 1;
-  ptlsim_pml4_entry.us = 1;
-  ptlsim_pml4_entry.a = 1;
-  ptlsim_pml4_entry.mfn = ptl_virt_to_mfn(bootinfo.ptl_level3_map);
-}
+  /*
+  mmuext_op_t mmuextop;
+  mmuextop.cmd = MMUEXT_SET_PT_OVERLAY;
+  mmuextop.arg1.linear_addr = (W64)template_level4_page;
+  int success_count = 0;
+  int rc = HYPERVISOR_mmuext_op(&mmuextop, 1, &success_count, DOMID_SELF);
+  cerr << "Set overlay page table: rc = ", rc, ", success_count = ", success_count, endl, flush;
+  assert(rc == 0);
+  */
 
-//
-// Inject the PTLsim toplevel page table entries (PML 510 and PML 508)
-// into the specified user mfn. The page must already be pinned; this
-// function is called right before loading.
-//
-void inject_ptlsim_into_toplevel(mfn_t mfn, bool force = false) {
-  int rc;
-
-  Level4PTE* top = (Level4PTE*)phys_to_mapped_virt(mfn << 12);
-  int ptlsim_slot = VirtAddr(PTLSIM_VIRT_BASE).lm.level4;
-  int physmap_slot = VirtAddr(PHYS_VIRT_BASE).lm.level4;
-#if 0
-  cerr << "Inject PTLsim PML4 entries into top mfn ", mfn, " (at virt ", top, "):", endl;
-  cerr << "  top[", ptlsim_slot, "] = ", ptlsim_pml4_entry, endl;
-  cerr << "  top[", physmap_slot, "] = ", physmap_pml4_entry, endl, flush;
-#endif
-  bool needs_ptlsim_slot_update = true;
-  bool needs_physmap_slot_update = true;
-
-  if (!force) {
-    needs_ptlsim_slot_update = (top[ptlsim_slot] != ptlsim_pml4_entry);
-    needs_physmap_slot_update = (top[physmap_slot] != physmap_pml4_entry);
-  }
-
-  if (needs_ptlsim_slot_update)
-    assert(update_phys_pte((mfn << 12) + (ptlsim_slot * 8), ptlsim_pml4_entry) == 0);
-
-  if (needs_physmap_slot_update)
-    assert(update_phys_pte((mfn << 12) + (physmap_slot * 8), physmap_pml4_entry) == 0);
+  inject_ptlsim_into_toplevel(get_cr3_mfn(), true);
 }
 
 //
@@ -1908,6 +1936,7 @@ void inject_ptlsim_into_toplevel(mfn_t mfn, bool force = false) {
 //
 void switch_page_table(mfn_t mfn) {
   inject_ptlsim_into_toplevel(mfn);
+  unmap_phys_page(mfn);
 
   mmuext_op op;
   op.cmd = MMUEXT_NEW_BASEPTR;
@@ -1943,12 +1972,6 @@ static inline void* get_rsp() {
   W64 rsp;
   asm volatile("mov %%rsp,%[out]" : [out] "=rm" (rsp));
   return (void*)rsp;
-}
-
-static inline mfn_t get_cr3_mfn() {
-  Waddr cr3;
-  asm volatile("mov %%cr3,%[out]" : [out] "=r" (cr3));
-  return (cr3 >> 12);
 }
 
 //
@@ -2005,7 +2028,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
     if (logable(2) | force_page_fault_logging) {
       logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ",
         (void*)faultaddr, ": added L2 PTE slot ", level2_slot_index, " (L1 mfn ",
-        l2pte.mfn, ") to PTLsim physmap", endl;
+        l2pte.mfn, ") to PTLsim physmap; toplevel cr3 mfn ", get_cr3_mfn(), endl;
     }
   }
    
@@ -2072,7 +2095,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
     if unlikely (logable(2) | force_page_fault_logging) {
       logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip,
         "] ", (void*)faultaddr, ": added L1 PTE for guest mfn ", mfn, 
-        " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
+        ", toplevel cr3 mfn ", get_cr3_mfn(), " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
     }
     return 1;
   }
@@ -2160,6 +2183,111 @@ ostream& print(ostream& os, const xen_memory_reservation_t& req, Context& ctx) {
   }
   os << "}";
   return os;
+}
+
+W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debug = 0) {
+#define getreq(type) type req; if (ctx.copy_from_user(&req, (Waddr)arg, sizeof(type)) != sizeof(type)) { return -EFAULT; }
+#define putreq(type) ctx.copy_to_user((Waddr)arg, &req, sizeof(type))
+
+  int rc = 0;
+
+  switch (op) {
+  case EVTCHNOP_alloc_unbound: {
+    getreq(evtchn_alloc_unbound);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+    if (debug) logfile << "hypercall: evtchn_alloc_unbound {dom = ", req.dom, ", remote_dom = ", req.remote_dom, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+    putreq(evtchn_alloc_unbound);
+    break;
+  }
+  case EVTCHNOP_bind_interdomain: {
+    getreq(evtchn_bind_interdomain);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+    if (debug) logfile << "hypercall: evtchn_bind_interdomain {remote_dom = ", req.remote_dom, ", remote_port = ", req.remote_port, "} => {local_port = ", req.local_port, "}", ", rc ", rc, endl;
+    putreq(evtchn_bind_interdomain);
+    break;
+  }
+  case EVTCHNOP_bind_virq: {
+    //
+    // PTLsim needs to monitor attempts to bind the VIRQ_TIMER interrupt so we can
+    // correctly deliver internal timer events at the appropriate rate.
+    //
+    getreq(evtchn_bind_virq);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+
+    if (debug) logfile << "hypercall: evtchn_bind_virq {virq = ", req.virq, ", vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+
+    if (rc == 0) {
+      assert(req.vcpu < bootinfo.vcpu_count);
+      assert(req.virq < lengthof(contextof(req.vcpu).virq_to_port));
+      contextof(req.vcpu).virq_to_port[req.virq] = req.port;
+      assert(req.port < NR_EVENT_CHANNELS);
+      port_to_vcpu[req.port] = req.vcpu;
+      // PTLsim generates its own timer interrupts
+      if (req.virq == VIRQ_TIMER) {
+        if (debug) logfile << "Assigned timer VIRQ ", req.virq, " on VCPU ", req.vcpu, " to port ", req.port, endl;
+        mask_evtchn(req.port);
+        always_mask_port[req.port] = 1;
+      }
+    }
+    putreq(evtchn_bind_virq);
+    break;
+  }
+  case EVTCHNOP_bind_ipi: {
+    getreq(evtchn_bind_ipi);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+    if (debug) logfile << "hypercall: evtchn_bind_ipi {vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+    if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
+    putreq(evtchn_bind_ipi);
+    break;
+  }
+  case EVTCHNOP_close: {
+    getreq(evtchn_close);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+    if (debug) logfile << "hypercall: evtchn_close {port = ", req.port, "}", ", rc ", rc, endl;
+    putreq(evtchn_close);
+    break;
+  }
+  case EVTCHNOP_send: {
+    getreq(evtchn_send);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+    if (debug) logfile << "hypercall: evtchn_send {port = ", req.port, "}", ", rc ", rc, endl;
+    putreq(evtchn_send);
+    break;
+  }
+  case EVTCHNOP_status: {
+    getreq(evtchn_status);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+    if (debug) logfile << "hypercall: evtchn_status {...}", ", rc ", rc, endl;
+    putreq(evtchn_status);
+    break;
+  }
+  case EVTCHNOP_bind_vcpu: {
+    getreq(evtchn_bind_vcpu);
+    rc = HYPERVISOR_event_channel_op(op, &req);
+    if (debug) logfile << "hypercall: evtchn_bind_vcpu {port = ", req.port, ", vcpu = ", req.vcpu, "}", ", rc ", rc, endl;
+    if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
+    putreq(evtchn_bind_vcpu);
+    break;
+  }
+  case EVTCHNOP_unmask: {
+    //
+    // Unmask is special since we need to redirect it to our
+    // virtual shinfo page, and potentially simulate an upcall.
+    //
+    getreq(evtchn_unmask);
+    if (debug) logfile << "hypercall: evtchn_unmask {port = ", req.port, "}, rc ", rc, endl;
+    shadow_evtchn_unmask(req.port);
+    rc = 0;
+    putreq(evtchn_unmask);
+    break;
+  }
+  default:
+    abort();
+  }
+
+  return rc;
+#undef getreq
+#undef putreq
 }
 
 int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5, W64 arg6) {
@@ -2318,7 +2446,6 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
     break;
   }
-    // __HYPERVISOR_set_gdt only needed during boot
 
   case __HYPERVISOR_stack_switch: {
     arg1 = fixup_guest_stack_selector(arg1);
@@ -2328,7 +2455,16 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   }
 
-    // __HYPERVISOR_set_callbacks only needed during boot
+  case __HYPERVISOR_set_callbacks: {
+    ctx.event_callback_rip = arg1;
+    ctx.failsafe_callback_rip = arg2;
+    ctx.syscall_rip = arg3;
+
+    ctx.syscall_disables_events = 0;
+    ctx.failsafe_disables_events = 1;
+    rc = 0;
+    break;
+  };
 
   case __HYPERVISOR_fpu_taskswitch: {
     ctx.cr0.ts = arg1;
@@ -2553,7 +2689,14 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     break;
   }
 
-    // __HYPERVISOR_event_channel_op_compat deprecated
+  case __HYPERVISOR_event_channel_op_compat: {
+    uint32_t op;
+    rc = -EFAULT;
+    if (ctx.copy_from_user(&op, (Waddr)arg1, sizeof(op)) == sizeof(op)) {
+      rc = handle_event_channel_op_hypercall(ctx, op, (void*)(arg1 + sizeof(op)));
+    }
+    break;
+  }
 
   case __HYPERVISOR_xen_version: {
     // NOTE: xen_version is sometimes used as a no-op call just to get pending events processed
@@ -2601,9 +2744,14 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       abort();
     }
     break;
-  };
+  }
 
-    // __HYPERVISOR_physdev_op_compat deprecated
+  case __HYPERVISOR_physdev_op_compat: {
+    getreq(physdev_op_t);
+    if (debug) logfile << "hypercall: physdev_op (operation ", req.cmd, "): ignored", endl;
+    rc = 0;
+    break;
+  }
 
   case __HYPERVISOR_grant_table_op: {
     foreach (i, arg3) {
@@ -2702,6 +2850,11 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       //
       // Therefore, we don't set it until we switch to native mode.
       //
+      break;
+    }
+    case VCPUOP_is_up: {
+      //++MTY SMP FIXME
+      rc = 1;
       break;
     }
     default:
@@ -2915,7 +3068,10 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
     // __HYPERVISOR_acm_op not needed for now
 
-    // __HYPERVISOR_nmi_op not needed in domU
+  case __HYPERVISOR_nmi_op: {
+    // not supported outside dom0
+    rc = -EINVAL;
+  }
 
   case __HYPERVISOR_sched_op: {
     switch (arg1) {
@@ -3000,103 +3156,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     // __HYPERVISOR_xenoprof_op not needed for now
 
   case __HYPERVISOR_event_channel_op: {
-#undef doreq
-#define doreq(type) case EVTCHNOP_##type: { getreq(evtchn_##type); rc = HYPERVISOR_event_channel_op(arg1, &req); putreq(evtchn_##type); break; }
-
-    switch (arg1) {
-    case EVTCHNOP_alloc_unbound: {
-      getreq(evtchn_alloc_unbound);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-      if (debug) logfile << "hypercall: evtchn_alloc_unbound {dom = ", req.dom, ", remote_dom = ", req.remote_dom, "} => {port = ", req.port, "}", ", rc ", rc, endl;
-      putreq(evtchn_alloc_unbound);
-      break;
-    }
-    case EVTCHNOP_bind_interdomain: {
-      getreq(evtchn_bind_interdomain);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-      if (debug) logfile << "hypercall: evtchn_bind_interdomain {remote_dom = ", req.remote_dom, ", remote_port = ", req.remote_port, "} => {local_port = ", req.local_port, "}", ", rc ", rc, endl;
-      putreq(evtchn_bind_interdomain);
-      break;
-    }
-    case EVTCHNOP_bind_virq: {
-      //
-      // PTLsim needs to monitor attempts to bind the VIRQ_TIMER interrupt so we can
-      // correctly deliver internal timer events at the appropriate rate.
-      //
-      getreq(evtchn_bind_virq);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-
-      if (debug) logfile << "hypercall: evtchn_bind_virq {virq = ", req.virq, ", vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
-
-      if (rc == 0) {
-        assert(req.vcpu < bootinfo.vcpu_count);
-        assert(req.virq < lengthof(contextof(req.vcpu).virq_to_port));
-        contextof(req.vcpu).virq_to_port[req.virq] = req.port;
-        assert(req.port < NR_EVENT_CHANNELS);
-        port_to_vcpu[req.port] = req.vcpu;
-        // PTLsim generates its own timer interrupts
-        if (req.virq == VIRQ_TIMER) {
-          if (debug) logfile << "Assigned timer VIRQ ", req.virq, " on VCPU ", req.vcpu, " to port ", req.port, endl;
-          mask_evtchn(req.port);
-          always_mask_port[req.port] = 1;
-        }
-      }
-      putreq(evtchn_bind_virq);
-      break;
-    }
-    case EVTCHNOP_bind_ipi: {
-      getreq(evtchn_bind_ipi);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-      if (debug) logfile << "hypercall: evtchn_bind_ipi {vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
-      if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
-      putreq(evtchn_bind_ipi);
-      break;
-    }
-    case EVTCHNOP_close: {
-      getreq(evtchn_close);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-      if (debug) logfile << "hypercall: evtchn_close {port = ", req.port, "}", ", rc ", rc, endl;
-      putreq(evtchn_close);
-      break;
-    }
-    case EVTCHNOP_send: {
-      getreq(evtchn_send);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-      if (debug) logfile << "hypercall: evtchn_send {port = ", req.port, "}", ", rc ", rc, endl;
-      putreq(evtchn_send);
-      break;
-    }
-    case EVTCHNOP_status: {
-      getreq(evtchn_status);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-      if (debug) logfile << "hypercall: evtchn_status {...}", ", rc ", rc, endl;
-      putreq(evtchn_status);
-      break;
-    }
-    case EVTCHNOP_bind_vcpu: {
-      getreq(evtchn_bind_vcpu);
-      rc = HYPERVISOR_event_channel_op(arg1, &req);
-      if (debug) logfile << "hypercall: evtchn_bind_vcpu {port = ", req.port, ", vcpu = ", req.vcpu, "}", ", rc ", rc, endl;
-      if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
-      putreq(evtchn_bind_vcpu);
-      break;
-    }
-    case EVTCHNOP_unmask: {
-      //
-      // Unmask is special since we need to redirect it to our
-      // virtual shinfo page, and potentially simulate an upcall.
-      //
-      getreq(evtchn_unmask);
-      if (debug) logfile << "hypercall: evtchn_unmask {port = ", req.port, "}, rc ", rc, endl;
-      shadow_evtchn_unmask(req.port);
-      rc = 0;
-      putreq(evtchn_unmask);
-      break;
-    }
-    default:
-      abort();
-    }
-
+    rc = handle_event_channel_op_hypercall(ctx, arg1, (void*)arg2);
     break;
   }
 
@@ -3551,12 +3611,13 @@ void init_virqs() {
     }
 
     ctx.sys_time_cycles_to_nsec_coeff = 1. / ((double)ctx.core_freq_hz / 1000000000.);
-    ctx.base_tsc = timeinfo.tsc_timestamp;
+    ctx.base_tsc = rdtsc(); // timeinfo.tsc_timestamp;
 
     ctx.timer_cycle = infinity;
     ctx.poll_timer_cycle = infinity;
 
-    logfile << "  VCPU ", i, " has recorded core frequency ", (ctx.core_freq_hz / 1000000), " MHz", endl;
+    logfile << "  VCPU ", i, " has recorded core frequency ", (ctx.core_freq_hz / 1000000), " MHz and base tsc ", ctx.base_tsc, endl, flush;
+    logfile << "rdtsc now ", rdtsc(), endl, flush;
 
     RunstateInfo& runstate = ctx.runstate;
     runstate.state = RUNSTATE_running;
@@ -3598,7 +3659,7 @@ void init_virqs() {
 // This should be called before virq 
 //
 void update_time() {
-  if (logable(5)) {
+  if (logable(4)) {
     logfile << "Update virtual real time at cycle ", sim_cycle, " (", total_user_insns_committed, " commits):", endl;
     logfile << "  Global simulation TSC:              ", intstring(sim_cycle, 20), endl;
   }
@@ -3609,7 +3670,7 @@ void update_time() {
     timeinfo.tsc_timestamp = ctx.base_tsc + sim_cycle;
     timeinfo.system_time = (config.realtime) ? shinfo.vcpu_info[0].time.system_time : (W64)(timeinfo.tsc_timestamp * ctx.sys_time_cycles_to_nsec_coeff);
     timeinfo.version &= ~1ULL; // bit 0 == 0 means update all done
-    if (logable(5)) logfile << "  VCPU ", i, " base TSC:                    ", intstring(ctx.base_tsc, 20), endl;
+    if (logable(4)) logfile << "  VCPU ", i, " base TSC:                    ", intstring(ctx.base_tsc, 20), endl;
   }
 
   W64 initial_nsecs_since_epoch;
@@ -3630,7 +3691,7 @@ void update_time() {
     sshinfo.wc_nsec = nsecs_since_epoch % 1000000000ULL;
   }
 
-  if (logable(5)) {
+  if (logable(4)) {
     logfile << "Wallclock time:", endl;
     logfile << "  Nanoseconds since boot:             ", intstring(nsecs_since_boot, 20), endl;
     logfile << "  Nanoseconds since epoch:            ", intstring(nsecs_since_epoch, 20), endl;
@@ -3941,11 +4002,10 @@ void ptlsim_init() {
   // PTLsim into the virtual address space of the guest
   // domain, then switch to this page table base.
   //
-  build_physmap_page_tables();
-  inject_ptlsim_into_toplevel(bootinfo.toplevel_page_table_mfn, true);
-  switch_page_table(contextof(0).cr3 >> 12);
   zeropage = ptl_alloc_private_page();
-  memset(zeropage, 0, 4096);
+  ptl_zero_private_page(zeropage);
+  build_physmap_page_tables();
+  switch_page_table(contextof(0).cr3 >> 12);
 
   //
   // Initialize the non-trivial parts of the VCPU contexts.
@@ -3995,9 +4055,11 @@ void print_sysinfo(ostream& os) {
   os << "Interfaces:", endl;
   os << "  Shared info mfn:    ", intstring(bootinfo.shared_info_mfn, 10), endl;
   os << "  Shadow shinfo mfn:  ", intstring(ptl_virt_to_mfn(&sshinfo), 10), endl;
+  /*
   os << "  Start info mfn:     ", intstring(bootinfo.start_info_mfn, 10), endl;
   os << "  Store mfn;          ", intstring(bootinfo.store_mfn, 10), ", event channel ", intstring(bootinfo.store_evtchn, 4), endl;
   os << "  Console mfn:        ", intstring(bootinfo.console_mfn, 10), ", event channel ", intstring(bootinfo.console_evtchn, 4), endl;
+  */
   os << "  PTLsim hostcall:    ", padstring("", 10), "  event channel ", intstring(bootinfo.hostcall_port, 4), endl;
   os << "  PTLsim upcall:      ", padstring("", 10), "  event channel ", intstring(bootinfo.upcall_port, 4), endl;
   os << endl;
@@ -4072,7 +4134,7 @@ bool check_for_async_sim_break() {
 int main(int argc, char** argv) {
   ptlsim_init();
 
-  bool first_time = true;
+  print_banner(cerr, stats);
 
   for (;;) {
     W64 requuid = handle_upcall(config);
@@ -4096,6 +4158,15 @@ int main(int argc, char** argv) {
       logfile << "Switching to native (pause? ", config.pause, ")...", endl, flush;
       logfile << "Final context:", endl, contextof(0), flush;
       logfile << "Final shared info page:", endl, sshinfo, endl, flush;
+      W64 base_tsc = contextof(0).base_tsc;
+      W64 real_tsc = rdtsc();
+      W64 virtual_tsc = base_tsc + sim_cycle;
+
+      logfile << "Base TSC:    ", intstring(base_tsc, 32), " = 0x", hexstring(base_tsc, 64), endl;
+      logfile << "Elapsed:     ", intstring(sim_cycle, 32), " = 0x", hexstring(sim_cycle, 64), endl;
+      logfile << "Virtual TSC: ", intstring(virtual_tsc, 32), " = 0x", hexstring(virtual_tsc, 64), endl;
+      logfile << "Real TSC:    ", intstring(real_tsc, 32), " = 0x", hexstring(real_tsc, 64), endl;
+      logfile << "Real-Virt:   ", intstring(real_tsc - virtual_tsc, 32), " = 0x", hexstring(real_tsc - virtual_tsc, 64), endl;
 
       foreach (i, bootinfo.vcpu_count) {
         Context& ctx = contextof(i);

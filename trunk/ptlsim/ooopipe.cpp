@@ -415,6 +415,7 @@ bool OutOfOrderCore::fetch() {
     if unlikely (isclass(transop.opcode, OPCLASS_BARRIER)) {
       // We've hit an assist: stall the frontend until we resume or redirect
       if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_ASSIST, transop);
+      stats.ooocore.fetch.stop.microcode_assist++;
       stall_frontend = 1;      
     }
 

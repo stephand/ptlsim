@@ -253,12 +253,6 @@ struct SequentialCore {
 
     if unlikely ((status = handle_common_exceptions<1>(uop, state, origaddr, addr, exception, pfec)) != ISSUE_COMPLETED) return status;
 
-#ifdef PTLSIM_HYPERVISOR
-    if unlikely (pteupdate.ptwrite) {
-      if (logable(6)) logfile << "Store to virt ", (void*)(Waddr)origaddr, " (mfn ", (mapped_virt_to_phys(mapped) >> 12), ") was to write-protected page table page", endl;
-    }
-#endif
-
     //
     // At this point all operands are valid, so merge the data and mark the store as valid.
     //

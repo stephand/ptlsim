@@ -7,7 +7,6 @@
 
 #include <globals.h>
 #include <superstl.h>
-//#include <config.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/epoll.h>
@@ -225,8 +224,6 @@ void ptl_zero_private_pages(void* addr, Waddr bytecount) {
   sys_madvise((void*)floor((Waddr)addr, PAGE_SIZE), bytecount, MADV_DONTNEED);
 }
 
-#define PSL_T 0x00000100 // single step bit in eflags
-
 // This is from ptlxen.bin.o:
 extern byte _binary_ptlxen_bin_start;
 extern byte _binary_ptlxen_bin_end;
@@ -257,33 +254,34 @@ static inline bool thunk_ptr_valid(Waddr w) {
   return (inrange(w, (Waddr)PTLSIM_XFER_PAGE_VIRT_BASE, PTLSIM_XFER_PAGE_VIRT_BASE+4095));
 }
 
+static ostream& operator <<(ostream& os, const page_type_t& pagetype) {
+  static const char* page_type_names[] = {"none", "L1", "L2", "L3", "L4", "GDT", "LDT", "write"};
+  const char* page_type_name = 
+    (pagetype.out.type == PAGE_TYPE_INVALID_MFN) ? "inv" :
+    (pagetype.out.type == PAGE_TYPE_INACCESSIBLE) ? "inacc" :
+    (pagetype.out.type < lengthof(page_type_names)) ? page_type_names[pagetype.out.type] :
+    "???";
+  
+  os << padstring(page_type_name, -5), " ", (pagetype.out.pinned ? "pin" : "   "), " ",
+    intstring(pagetype.out.total_count, 5), " total, ", intstring(pagetype.out.type_count, 5), " by type";
+  return os;
+}
+
 struct XenController {
   int xc;
   int domain;
-  mfn_t* pagelist;
-  W64 pagecount;
-  W64 maxpages;
-  cpumap_t cpus;
   xc_domaininfo_t info;
 
   shared_info_t* shinfo;
 
   Level4PTE* toplevel_page_table;
 
-  //Level1PTE* ptes;
-  //int ptes_page_count;
-
-  //Level1PTE* phys_ptes;
-  //int phys_ptes_page_count;
-
   byte* image;
   int ptl_page_count;
   int ptl_pagedir_mfn_count;
-  int ptl_remaining_pages;
   int shared_map_page_count;
 
-  mfn_t* pagedir_mfns;
-  mfn_t* pagedir_map_mfns;
+  mfn_t* ptl_mfns;
 
   shared_info_t* shadow_shinfo;
 
@@ -304,7 +302,7 @@ struct XenController {
   XenController() { reset(); }
 
   void reset() {
-    xc = -1; domain = -1; pagelist = 0; pagecount = 0; ptlsim_hostcall_port = -1;
+    xc = -1; domain = -1; ptlsim_hostcall_port = -1;
     shinfo = null;
     bootinfo = null;
     ctx = null;
@@ -352,93 +350,342 @@ struct XenController {
 
   pfn_t ptl_virt_to_pfn(void* virt) {
     Waddr offset = (Waddr)virt - (Waddr)image;
-    assert(inrange(offset, (Waddr)0, (Waddr)((ptl_page_count*PAGE_SIZE)-1)));
+    if (!inrange(offset, (Waddr)0, (Waddr)((ptl_page_count*PAGE_SIZE)-1))) {
+      cerr << "ptl_virt_to_pfn(", virt, "): in page ", (offset / 4096), ": not in range 0 to ", ptl_page_count, " pages", endl, flush;
+      assert(false);
+    }
     return offset >> 12;
   }
 
   mfn_t ptl_virt_to_mfn(void* virt) {
-    return pagedir_mfns[ptl_virt_to_pfn(virt)];
+    return ptl_mfns[ptl_virt_to_pfn(virt)];
   }
 
-  bool map_ptlsim_pages(shared_info_t* shinfo) {    
-    static const bool DEBUG = 0;
+  pfn_t ptl_level4_pfn, ptl_level3_pfn, ptl_level2_pfn, ptl_level1_pfn;
+  mfn_t ptl_level4_mfn, ptl_level3_mfn, ptl_level2_mfn;
 
-    PTLsimStub* stub = (PTLsimStub*)(((byte*)shinfo) + PAGE_SIZE - sizeof(PTLsimStub));
-    if (stub->magic != PTLSIM_STUB_MAGIC) {
+  bool alloc_ptlsim_pages(mfn_t* mfns, int ptl_page_count) {
+    static const int MAX_ATTEMPTS = 4;
+
+    int pages_so_far = 0;
+    W64 sleep_time_nsec = 50 * (1000000);
+
+    if (log_ptlsim_boot) cerr << "Allocate ", ptl_page_count, " pages (", ((ptl_page_count * 4096) / 1024), " KB) for PTLsim", endl, flush;
+
+    foreach (i, MAX_ATTEMPTS) {
+      xen_memory_reservation_t res;
+      res.extent_start.p = mfns + pages_so_far;
+      res.nr_extents = ptl_page_count - pages_so_far;
+      res.extent_order = 0;
+      res.address_bits = 0;
+      res.domid = domain;
+
+      assert(pages_so_far <= ptl_page_count);
+
+      int rc = xc_memory_op(xc, XENMEM_increase_reservation, &res);
+      // foreach (i, rc) { cerr << "  page ", intstring(i, 8), " -> mfn ", intstring(mfns[i], 8), endl; }
+
+      if (rc < 0) {
+        cerr << "PTLsim error: cannot increase domain reservation on attempt ", i, ": rc ", rc, endl, flush;
+        return false;
+      }
+
+      pages_so_far += rc;
+
+      if (pages_so_far == ptl_page_count) {
+        return true;
+      }
+
+      if (log_ptlsim_boot) cerr << "  alloc_ptlsim_pages (attempt ", i, "): allocated ", rc, " pages; total so far: ", pages_so_far, " out of ", ptl_page_count, " pages", endl, flush;
+
+      W64 current_target = 0;
+
+      {
+        istream is("/proc/xen/balloon");
+        if (!is) {
+          cerr << "PTLsim error: alloc_ptlsim_pages: cannot open /proc/xen/balloon", endl, flush;
+          return false;
+        }
+
+        stringbuf line;
+        dynarray<char*> tok;
+        for (;;) {
+          line.reset();
+          is >> line;
+          if (!is) break;
+
+          tok.tokenize(line, " :");
+          if ((tok.length >= 4) && strequal(tok[0], "Current") && strequal(tok[1], "allocation") && strequal(tok[3], "kB")) {
+            current_target = atoll(tok[2]) * 1024;
+            break;
+          }
+        }
+      }
+
+      if (log_ptlsim_boot) cerr << "  Current requested target: ", current_target, " bytes", endl, flush;
+
+      if (!current_target) {
+        cerr << "PTLsim error: cannot read current target reservation from /proc/xen/balloon! Is this the wrong Xen version?", endl, flush;
+        return false;
+      }
+
+      W64 pages_still_needed = ptl_page_count - pages_so_far;
+      W64 bytes_still_needed = pages_still_needed * 4096;
+
+      if (log_ptlsim_boot) cerr << "  Still need ", pages_still_needed, " pages (", bytes_still_needed, " bytes)", endl, flush;
+
+      W64 new_target = current_target - (bytes_still_needed + 1048576);
+
+      if (log_ptlsim_boot) cerr << "  New target: ", new_target, endl;
+
+      stringbuf sb;
+      sb << new_target, endl;
+
+      {
+        ostream os("/proc/xen/balloon");
+        os << sb;
+        os.flush();
+        if (!os.ok()) {
+          cerr << "PTLsim error: cannot write new target reservation (", new_target, ") to /proc/xen/balloon! Is there a permissions problem?", endl, flush;
+          return false;
+        }
+      }
+
+      if (log_ptlsim_boot) cerr << "Sleeping for ", (sleep_time_nsec / 1000000), " milliseconds while pages are freed...", endl, flush;
+      sys_nanosleep(sleep_time_nsec);
+      sleep_time_nsec *= 2; // exponential backoff
+    }
+
+    cerr << "PTLsim error: cannot allocate ", ptl_page_count, " pages (", ((ptl_page_count * 4096) / 1024), " KB) for PTLsim", endl;
+    cerr << "  Tried ", MAX_ATTEMPTS, " attempts but only got ", pages_so_far, " pages (", ((pages_so_far * 4096) / 1024), " KB)", endl;
+    cerr << endl;
+    cerr << flush;
+    return false;
+  }
+
+  bool inject_ptlsim(int reserved_mbytes) {
+    bool DEBUG = log_ptlsim_boot;
+
+    static const int stacksize = 1048576;
+    ptl_page_count = (reserved_mbytes * 1024*1024) / 4096;
+
+    xen_domctl_t op;
+
+    op.cmd = XEN_DOMCTL_getdomaininfo;
+    op.domain = domain;
+    int rc = xc_domctl(xc, &op);
+
+    xen_domctl_getdomaininfo_t info;
+    memcpy(&info, &op.u.getdomaininfo, sizeof(info));
+
+    if (rc) {
       cerr << endl;
-      cerr << "PTLsim error: domain ", domain, " does not have any physical memory reserved for PTLsim.", endl,
-        endl,
-        "Please use the reservedmem=xxx option in the domain config file, or use", endl,
-        "the 'xm restore <filename> --reserve xxx' option to reserve the specified", endl,
-        "number of megabytes and hide it from the guest OS. At least 32 MB is required.", endl,
-        endl;
-
+      cerr << "PTLsim error: cannot access domain ", domain, " (error ", rc, ")", endl,
+        "Please make sure the specified domain is running.", endl, endl;
       return false;
     }
 
-    bootinfo = (PTLsimMonitorInfo*)map_page(stub->boot_page_mfn);
-    assert(bootinfo);
-
-    assert(bootinfo->magic == PTLSIM_BOOT_PAGE_MAGIC);
-
-    ptl_page_count = bootinfo->mfn_count;
-    ptl_remaining_pages = bootinfo->avail_mfn_count;
-
-    if (DEBUG) cerr << "Map pagedir map mfn ", bootinfo->ptl_pagedir_map_mfn, endl, flush;
-    Level2PTE* pagedir_map_ptes = (Level2PTE*)map_page(bootinfo->ptl_pagedir_map_mfn);
-    assert(pagedir_map_ptes);
-
-    if (DEBUG) cerr << "pagedir_map_ptes = ", pagedir_map_ptes, endl, flush;
-
-    if (DEBUG) cerr << "ptl_pagedir_mfn_count = ", bootinfo->ptl_pagedir_mfn_count, endl, flush;
-
-    pagedir_map_mfns = new mfn_t[bootinfo->ptl_pagedir_mfn_count];
-    foreach (i, bootinfo->ptl_pagedir_mfn_count) { pagedir_map_mfns[i] = pagedir_map_ptes[i].mfn; }
-
-    if (DEBUG) cerr << "OK copied", endl, flush;
-
-    unmap_page(pagedir_map_ptes);
-
-    if (DEBUG) cerr << "OK unmapped", endl, flush;
+    W64 new_max_pages = info.tot_pages + ptl_page_count;
 
     if (DEBUG) {
-      foreach (i, bootinfo->ptl_pagedir_mfn_count) {
-        cerr << "  pagedir page ", intstring(i, 8), " -> mfn ", intstring(pagedir_map_mfns[i], 8), endl;
-      }
+      cerr << "Inject PTLsim into domain ", domain, ":", endl;
+      cerr << "  Current allocation: ", intstring(info.tot_pages, 8), " pages", endl;
+      cerr << "  Max allocation:     ", intstring(info.max_pages, 8), " pages", endl;
+      cerr << "  PTLsim reserved:    ", intstring(ptl_page_count, 8), " pages", endl;
+      cerr << "  Increase to:        ", intstring(new_max_pages, 8), " pages", endl;
     }
 
-    Level1PTE* ptes = (Level1PTE*)map_pages(pagedir_map_mfns, bootinfo->ptl_pagedir_mfn_count, PROT_READ);
+    op.cmd = XEN_DOMCTL_max_mem;
+    op.domain = domain;
+    op.u.max_mem.max_memkb = (new_max_pages * 4096) / 1024;
+    rc = xc_domctl(xc, &op);
 
-    if (DEBUG) cerr << "ptes = ", ptes, endl, flush;
-    assert(ptes);
+    if (rc) {
+      cerr << "PTLsim error: cannot increase domain limit to ", new_max_pages, " pages (rc ", rc, ")", endl, flush;
+      return false;
+    }
 
-    //delete[] pagedir_map_mfns;
+    ptl_mfns = new mfn_t[ptl_page_count];
+    memset(ptl_mfns, 0, ptl_page_count * sizeof(mfn_t));
 
-    pagedir_mfns = new mfn_t[ptl_page_count];
-    if (DEBUG) cerr << "pagedir_mfns = ", pagedir_mfns, endl, flush;
+    rc = alloc_ptlsim_pages(ptl_mfns, ptl_page_count);
 
-    foreach (i, ptl_page_count) pagedir_mfns[i] = ptes[i].mfn;
+    if (!rc) {
+      cerr << "PTLsim error: cannot increase domain reservation to ", new_max_pages, " pages (rc ", rc, ")", endl, flush;
+      return false;
+    }
 
-    PTLsimBootPageInfo* newbootinfo = ptlcore_ptr_to_ptlmon_ptr(bootinfo->boot_page);
+    image = (byte*)map_pages(ptl_mfns, ptl_page_count, PROT_READ|PROT_WRITE|PROT_EXEC, (void*)PTLSIM_PSEUDO_VIRT_BASE, MAP_FIXED);
+    assert(image == (byte*)PTLSIM_PSEUDO_VIRT_BASE);
 
-    unmap_pages(ptes, bootinfo->ptl_pagedir_mfn_count);
+    if (!image) {
+      cerr << "PTLsim error: cannot map ", ptl_page_count, " allocated pages!", endl, flush;
+      return false;
+    }
 
-    image = (byte*)PTLSIM_PSEUDO_VIRT_BASE;
-    if (DEBUG) cerr << "Map ", bootinfo->mfn_count, " pages as read/write at ", image, " (page ", 0, ")", endl, flush;
-    assert((Waddr)map_pages(pagedir_mfns, bootinfo->mfn_count, PROT_READ|PROT_WRITE, (void*)PTLSIM_PSEUDO_VIRT_BASE, MAP_FIXED) == PTLSIM_PSEUDO_VIRT_BASE);
-    unmap_page(bootinfo);
-    bootinfo = (PTLsimMonitorInfo*)newbootinfo;
+    memset(image, 0, ptl_page_count * PAGE_SIZE);
 
-    ptl_page_count = bootinfo->mfn_count;
-    ptl_pagedir_mfn_count = bootinfo->ptl_pagedir_mfn_count;
-    ptl_remaining_pages = bootinfo->avail_mfn_count;
+    int next_free_page_pfn = ptl_page_count;
+
+#define alloc_page(T, virt, pfn, mfn) next_free_page_pfn--; mfn = ptl_mfns[next_free_page_pfn]; pfn = next_free_page_pfn; T* virt = (T*)(image + (next_free_page_pfn * PAGE_SIZE))
+#define alloc_pages(T, virt, pfn, n) next_free_page_pfn -= (n); pfn = next_free_page_pfn; T* virt = (T*)(image + (next_free_page_pfn * PAGE_SIZE))
+#define virt_to_pfn(virt) ((((byte*)(virt)) - image) / PAGE_SIZE)
+
+    int ptl_pagedir_mfn_count = (ptl_page_count + PTES_PER_PAGE-1) / PTES_PER_PAGE;
+
+    bootinfo = (PTLsimMonitorInfo*)(image + (PTLSIM_BOOT_PAGE_PFN * PAGE_SIZE));
+    mfn_t bootpage_mfn = ptl_mfns[PTLSIM_BOOT_PAGE_PFN];
+
+    bootinfo->magic = PTLSIM_BOOT_PAGE_MAGIC;
+    bootinfo->mfn_count = ptl_page_count;
+    bootinfo->ptl_pagedir_mfn_count = ptl_pagedir_mfn_count;
+    bootinfo->boot_page_mfn = bootpage_mfn;
+    bootinfo->boot_page = (PTLsimMonitorInfo*)(PTLSIM_VIRT_BASE + ((byte*)bootinfo - image));
+    bootinfo->shared_info_mfn = info.shared_info_frame;
+    bootinfo->total_machine_pages = total_machine_pages;
+
+    alloc_pages(Level1PTE, ptl_level1, ptl_level1_pfn, ptl_pagedir_mfn_count);
+
+    memset(ptl_level1, 0, ptl_pagedir_mfn_count * PAGE_SIZE);
+
+    ptl_level1_pfn = virt_to_pfn(ptl_level1);
+
+    bootinfo->ptl_pagedir = (Level1PTE*)(PTLSIM_VIRT_BASE + ((byte*)ptl_level1 - image));
+
+    foreach (i, ptl_page_count) {
+      Level1PTE& pte = ptl_level1[i];
+      pte.p = 1;
+      pte.rw = 1; // writable (unless reset below for pinned page tables)
+      pte.us = 1; // supervisor only
+      pte.a = 1;
+      pte.mfn = ptl_mfns[i];
+    }
+
+    //
+    // Map shared info page in appropriate place
+    //
+    ptl_level1[PTLSIM_SHINFO_PAGE_PFN].mfn = bootinfo->shared_info_mfn;
+    bootinfo->shared_info = (shared_info_t*)PTLSIM_SHINFO_PAGE_VIRT_BASE;
+
+    //
+    // Allocate L2 PTE page
+    //
+    alloc_page(Level2PTE, ptl_level2, ptl_level2_pfn, ptl_level2_mfn);
+    memset(ptl_level2, 0, PAGE_SIZE);
+
+    foreach (i, ptl_pagedir_mfn_count) {
+      Level2PTE& pte = ptl_level2[i];
+      pte.p = 1;
+      pte.rw = 1; // sub-pages are writable unless overridden
+      pte.us = 1; // both user and supervisor
+      pte.a = 1;
+      pte.mfn = ptl_mfns[ptl_level1_pfn + i];
+    }
+
+    bootinfo->ptl_pagedir_map = (Level2PTE*)(PTLSIM_VIRT_BASE + ((byte*)ptl_level2 - image));
+    bootinfo->ptl_pagedir_map_mfn = ptl_level2_mfn;
+
+    alloc_page(Level3PTE, ptl_level3, ptl_level3_pfn, ptl_level3_mfn);
+    memset(ptl_level3, 0, PAGE_SIZE);
+
+    ptl_level3->p = 1;
+    ptl_level3->rw = 1; // sub-pages are writable unless overridden
+    ptl_level3->us = 1;
+    ptl_level3->a = 1;
+    ptl_level3->mfn = ptl_level2_mfn;
+
+    bootinfo->ptl_level3_map = (Level3PTE*)(PTLSIM_VIRT_BASE + ((byte*)ptl_level3 - image));
+    bootinfo->ptl_level3_mfn = ptl_level3_mfn;
+
+    //
+    // Finish toplevel
+    //
+    alloc_page(Level4PTE, ptl_level4, ptl_level4_pfn, ptl_level4_mfn);
+    memset(ptl_level4, 0, PAGE_SIZE);
+
+    {
+      Level4PTE& pte = ptl_level4[bits(PTLSIM_VIRT_BASE, (12+9+9+9), 9)];
+      pte.p = 1;
+      pte.rw = 1; // sub-pages are writable unless overridden
+      pte.us = 1; // both user and supervisor
+      pte.a = 1;
+      pte.mfn = ptl_level3_mfn;
+    }
+
+    //
+    // Finish up bootpage
+    //
+    bootinfo->toplevel_page_table = (Level4PTE*)(PTLSIM_VIRT_BASE + ((byte*)ptl_level4 - image));
+    bootinfo->toplevel_page_table_mfn = ptl_level4_mfn;
+
+    /*
+    bootpage->start_info_mfn = start_info_mfn;
+    bootpage->store_mfn = start_info->store_mfn;
+    bootpage->store_evtchn = start_info->store_evtchn;
+    bootpage->console_mfn = start_info->console_mfn;
+    bootpage->console_evtchn = start_info->console_evtchn;
+    */
 
     toplevel_page_table = ptlcore_ptr_to_ptlmon_ptr(bootinfo->toplevel_page_table);
-    if (DEBUG) cerr << "toplevel_page_table = ", toplevel_page_table, " (mfn ", ptl_virt_to_mfn(toplevel_page_table), ")", endl;
+    if (DEBUG) cerr << "toplevel_page_table = ", toplevel_page_table, " (mfn ", ptl_virt_to_mfn(toplevel_page_table), ")", endl, flush;
     if (DEBUG) cerr << "toplevel_page_table_mfn = ", bootinfo->toplevel_page_table_mfn, endl, flush;
     if (DEBUG) cerr << "ptl_pagedir_map_mfn = ", bootinfo->ptl_pagedir_map_mfn, endl, flush;
     assert(bootinfo->toplevel_page_table_mfn == ptl_virt_to_mfn(toplevel_page_table));
-    assert(bootinfo->magic == PTLSIM_BOOT_PAGE_MAGIC);
+
+    size_t bytes = &_binary_ptlxen_bin_end - &_binary_ptlxen_bin_start;
+    const byte* data = &_binary_ptlxen_bin_start;
+    const Elf64_Ehdr& ehdr = *(const Elf64_Ehdr*)data;
+    const Elf64_Phdr* phdr = (const Elf64_Phdr*)(((const byte*)&ehdr) + ehdr.e_phoff);
+
+    if (DEBUG) cerr << "Injecting PTLsim into domain ", domain, ":", endl;
+    if (DEBUG) cerr << "  PTLcore is ", bytes, " bytes @ virt addr ", image, endl, flush;
+
+    Waddr real_code_start_offset = (ehdr.e_entry - PTLSIM_VIRT_BASE);
+    shared_map_page_count = real_code_start_offset / PAGE_SIZE;
+
+    int bytes_remaining = bytes - real_code_start_offset; //PTLSIM_ELF_SKIP_END;
+    if (DEBUG) cerr << "  Real code starts at offset ", real_code_start_offset, endl;
+    if (DEBUG) cerr << "  Bytes to copy: ", bytes_remaining, endl, flush;
+    memcpy(image + real_code_start_offset, data + real_code_start_offset, bytes_remaining);
+
+    //
+    // Prepare the heap
+    //
+    byte* end_of_image = image + ceil(phdr[0].p_memsz, PAGE_SIZE);
+    Waddr bss_size = phdr[0].p_memsz - phdr[0].p_filesz;
+    if (DEBUG) cerr << "  PTLsim has ", next_free_page_pfn, " pages left out of ", ptl_page_count, " pages allocated", endl;
+    if (DEBUG) cerr << "  PTLxen file size ", phdr[0].p_filesz, ", virtual size ", phdr[0].p_memsz, ", end_of_image ", end_of_image, endl;
+    if (DEBUG) cerr << "  Zero ", bss_size, " bss bytes starting at ", (image + phdr[0].p_filesz), endl, flush;
+    memset(image + phdr[0].p_filesz, 0, bss_size);
+
+    //
+    // Set up stack
+    //
+    byte* sp = image + (next_free_page_pfn * PAGE_SIZE);
+    bootinfo->stack_top = ptlmon_ptr_to_ptlcore_ptr(sp);
+    bootinfo->stack_size = stacksize;
+    next_free_page_pfn -= (stacksize / PAGE_SIZE);
+    if (DEBUG) cerr << "  Setting up ", stacksize, "-byte stack starting at ", ptlmon_ptr_to_ptlcore_ptr(sp), endl, flush;
+
+    //
+    // Alocate virtual shinfo redirect page (for event recording and replay)
+    //
+    shadow_shinfo = ptlcore_ptr_to_ptlmon_ptr((shared_info_t*)PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE);
+    memcpy(shadow_shinfo, shinfo, PAGE_SIZE);
+    if (DEBUG) cerr << "  Shadow shared info page at ", shadow_shinfo, endl, flush;
+
+    //
+    // Allocate VCPU contexts
+    //
+    ctx = ptlcore_ptr_to_ptlmon_ptr((Context*)PTLSIM_CTX_PAGE_VIRT_BASE);
+    if (DEBUG) cerr << "  Context array starts at ", ptlmon_ptr_to_ptlcore_ptr(ctx), " (", sizeof(Context), " bytes each)", endl, flush;
+
+    // Align sp to 16-byte boundary according to what gcc expects:
+    sp = floorptr(sp, 16);
+
+    bootinfo->heap_start = ptlmon_ptr_to_ptlcore_ptr(end_of_image);
+    bootinfo->heap_end = bootinfo->stack_top - stacksize;
+    bootinfo->avail_mfn_count = next_free_page_pfn;
 
     if (DEBUG) {
       cerr << "PTLsim mapped at ", image, ":", endl;
@@ -449,6 +696,110 @@ struct XenController {
       cerr << "  Base:             ", (void*)image, endl;
       cerr << flush;
     }
+
+    if (DEBUG) cerr << "  Heap start ", bootinfo->heap_start, " to heap end ", bootinfo->heap_end, " (", ((bootinfo->heap_end - bootinfo->heap_start) / 1024), " kbytes)", endl;
+
+    bootinfo->vcpu_count = vcpu_count;
+    bootinfo->max_pages = info.max_pages;
+    bootinfo->total_machine_pages = total_machine_pages;
+    bootinfo->monitor_hostcall_port = ptlsim_hostcall_port;
+    bootinfo->hostcall_port = -1; // will be filled in by PTLsim on connect
+    bootinfo->monitor_upcall_port = ptlsim_upcall_port;
+    bootinfo->upcall_port = -1; // will be filled in by PTLsim on connect
+    bootinfo->hostreq.ready = 0;
+    bootinfo->hostreq.op = PTLSIM_HOST_NOP;
+    bootinfo->ptlsim_state = PTLSIM_STATE_INITIALIZING;
+    bootinfo->queued_upcall_count = 0;
+    bootinfo->hostreq.op = PTLSIM_HOST_NOP;
+    // These will be filled in by PTLsim once it starts up:
+    bootinfo->startup_log_buffer = null;
+    bootinfo->startup_log_buffer_tail = 0;
+    bootinfo->startup_log_buffer_size = 0;
+
+    //
+    // Set up hypercall page
+    //
+    {
+      xen_domctl_t dom0op;
+      dom0op.domain = domain;
+      dom0op.u.hypercall_init.gmfn = ptl_mfns[PTLSIM_HYPERCALL_PAGE_PFN];
+      dom0op.cmd = XEN_DOMCTL_hypercall_init;
+      assert(xc_domctl(xc, &dom0op) == 0);
+    }
+
+    //
+    // Set page protections correctly (can't have writable mappings to page table pages)
+    //
+    Level1PTE* l1ptes = ptlcore_ptr_to_ptlmon_ptr(bootinfo->ptl_pagedir);
+    if (DEBUG) cerr << "  ", bootinfo->ptl_pagedir_mfn_count, " L1 ptes start at ", l1ptes, endl, flush;
+    int first_l1_page = ptl_virt_to_pfn(l1ptes);
+
+    foreach (i, bootinfo->ptl_pagedir_mfn_count) {
+      // if (DEBUG) cerr << "  Make L1 pfn ", (first_l1_page + i), " read only", endl, flush;
+      l1ptes[first_l1_page + i].rw = 0;
+    }
+
+    int l2_page = ptl_virt_to_pfn(ptlcore_ptr_to_ptlmon_ptr(bootinfo->ptl_pagedir_map));
+    if (DEBUG) cerr << "  Make L2 pfn ", l2_page, " read only", endl, flush;
+    l1ptes[l2_page].rw = 0;
+
+    int l3_page = ptl_virt_to_pfn(ptlcore_ptr_to_ptlmon_ptr(bootinfo->ptl_level3_map));
+    if (DEBUG) cerr << "  Make L3 pfn ", l3_page, " read only", endl, flush;
+    l1ptes[l3_page].rw = 0;
+
+    int l4_page = ptl_virt_to_pfn(ptlcore_ptr_to_ptlmon_ptr(bootinfo->toplevel_page_table));
+    if (DEBUG) cerr << "  Make L4 pfn ", l4_page, " read only", endl, flush;
+    l1ptes[l4_page].rw = 0;
+
+    if (DEBUG) cerr << "  Make L4 mfn ", ptl_level4_mfn, " the L4 page table overlay page", endl, flush;
+
+    mmuext_op_t mmuextop;
+    mmuextop.cmd = MMUEXT_SET_PT_OVERLAY;
+    mmuextop.arg1.linear_addr = (W64)ptl_level4;
+    rc = xc_mmuext_op(xc, &mmuextop, 1, domain);
+    if (DEBUG) cerr << "  mmuext_op set_pt_overlay rc = ", rc, endl, flush;
+
+    //
+    // Unmap the read/write middle region and remap as read only (except for stack, which gets mapped read/write)
+    //
+    if (DEBUG) cerr << "Unmap ", bootinfo->mfn_count, " pages at ", image, endl, flush;
+    unmap_pages(image, bootinfo->mfn_count);
+
+    //
+    // NOTE! bootpage is no longer accessible at this point!
+    //
+
+    rc = pin_page_table_mfns(ptl_mfns + ptl_level1_pfn, ptl_pagedir_mfn_count, 1);
+    assert(rc == 0);
+
+    rc = pin_page_table_mfn(ptl_level2_mfn, 2);
+    assert(rc == 0);
+
+    rc = pin_page_table_mfn(ptl_level3_mfn, 3);
+    assert(rc == 0);
+
+    rc = pin_page_table_mfn(ptl_level4_mfn, 4);
+    assert(rc == 0);
+
+    //
+    // Make DMA area re-accessible:
+    //
+    if (DEBUG) cerr << "  Remap ", shared_map_page_count, " pages as read/write at ", image, " (page ", 0, ")", endl, flush;
+    assert((Waddr)map_pages(ptl_mfns, shared_map_page_count, PROT_READ|PROT_WRITE, (void*)PTLSIM_PSEUDO_VIRT_BASE, MAP_FIXED) == PTLSIM_PSEUDO_VIRT_BASE);
+
+    prep_initial_context(ctx, vcpu_count);
+    ctx[0].commitarf[REG_rip] = ehdr.e_entry;
+    ctx[0].commitarf[REG_rsp] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(sp);
+    ctx[0].commitarf[REG_rdi] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(bootinfo); // start info in %rdi (arg[0])
+
+    if (DEBUG) cerr << "  PTLsim initial toplevel overlay cr3 = ", (void*)ctx[0].cr3, " (mfn ", (ctx[0].cr3 >> log2(PAGE_SIZE)), ")", endl;
+    if (DEBUG) cerr << "  PTLsim entrypoint at ", (void*)ehdr.e_entry, endl;
+
+    if (DEBUG) cerr << "  Ready, set, go!", endl, flush;
+
+    switch_to_ptlsim(true);
+
+    if (DEBUG) cerr << "  PTLsim is now in control inside domain ", domain, endl, flush;
 
     return true;
   }
@@ -474,6 +825,45 @@ struct XenController {
     rc = xc_mmuext_op(xc, &op, 1, domain);
     return rc;
   }
+
+  page_type_t query_page_type(const mfn_t mfn) {
+    page_type_t pt;
+    pt.in.mfn = mfn;
+    
+    mmuext_op_t op;
+    op.cmd = MMUEXT_QUERY_PAGES;
+    op.arg1.linear_addr = (Waddr)&pt;
+    op.arg2.nr_ents = 1;
+    int rc = xc_mmuext_op(xc, &op, 1, domain);
+    return pt;
+  }
+
+  /*
+  int pin_page_table_mfns(const mfn_t* mfns, int count, int level) {
+    assert(inrange(level, 0, 4));
+    
+    int level_to_function[5] = {MMUEXT_UNPIN_TABLE, MMUEXT_PIN_L1_TABLE, MMUEXT_PIN_L2_TABLE, MMUEXT_PIN_L3_TABLE, MMUEXT_PIN_L4_TABLE};
+    int func = level_to_function[level];
+    int rc = 0;
+
+    foreach (i, count) {
+      mmuext_op_t op;
+      cerr << "Pin mfn ", mfns[i], " (index ", i, ") as level ", level, endl, flush;
+
+      page_type_t pt = query_page_type(mfns[i]);
+      cerr << "  Page type info (rc ", rc, "): ", pt, endl;
+
+      op.cmd = func;
+      op.arg1.mfn = mfns[i];
+      rc = xc_mmuext_op(xc, &op, 1, domain);
+      
+      cerr << "  Pin rc ", rc, endl;
+      if (rc) return rc;
+    }
+
+    return rc;
+  }
+  */
 
   int pin_page_table_mfns(const mfn_t* mfns, int count, int level) {
     assert(inrange(level, 0, 4));
@@ -560,11 +950,11 @@ struct XenController {
     //
     // Attach to target domain
     //
-    dom0_op_t op;
+    xen_domctl_t op;
 
-    op.cmd = DOM0_GETDOMAININFO;
-    op.u.getdomaininfo.domain = domain;
-    rc = xc_dom0_op(xc, &op);
+    op.cmd = XEN_DOMCTL_getdomaininfo;
+    op.domain = domain;
+    rc = xc_domctl(xc, &op);
 
     memcpy(&info, &op.u.getdomaininfo, sizeof(info));
     vcpu_count = info.max_vcpu_id + 1;
@@ -586,7 +976,8 @@ struct XenController {
       return false;
     }
 
-    maxpages = info.tot_pages;
+    W64 current_page_count = info.tot_pages;
+    W64 max_page_count = info.max_pages;
 
     shinfo = (shared_info_t*)map_page(info.shared_info_frame, PROT_READ|PROT_WRITE);
 
@@ -599,11 +990,12 @@ struct XenController {
 
     if (DEBUG) {
       cerr << "  ", vcpu_online_count, " out of ", vcpu_count, " VCPUs online", endl;
-      cerr << "  ", info.tot_pages, " total pages (", ((info.tot_pages * 4096) / (1024 * 1024)), " MB), limit ", ((info.tot_pages * 4096) / (1024 * 1024)), " MB", endl;
+      cerr << "  ", info.tot_pages, " current pages (", ((info.tot_pages * 4096) / (1024 * 1024)), " MB), limit ", ((info.tot_pages * 4096) / (1024 * 1024)), " MB", endl;
+      cerr << "  ", info.max_pages, " max pages (", ((info.max_pages * 4096) / (1024 * 1024)), " MB), limit ", ((info.max_pages * 4096) / (1024 * 1024)), " MB", endl;
       cerr << "  ", "Shared info mfn ", info.shared_info_frame, endl;
     }
 
-    return map_ptlsim_pages(shinfo);
+    return true;
   }
 
   //
@@ -654,170 +1046,6 @@ struct XenController {
     }
   }
 
-  bool inject_ptlsim_image(int argc, char** argv, int stacksize) {
-    static const bool DEBUG = log_ptlsim_boot;
-
-    int rc;
-
-    size_t bytes = &_binary_ptlxen_bin_end - &_binary_ptlxen_bin_start;
-    const byte* data = &_binary_ptlxen_bin_start;
-    const Elf64_Ehdr& ehdr = *(const Elf64_Ehdr*)data;
-    const Elf64_Phdr* phdr = (const Elf64_Phdr*)(((const byte*)&ehdr) + ehdr.e_phoff);
-
-    if (DEBUG) cerr << "Injecting PTLsim into domain ", domain, ":", endl;
-    if (DEBUG) cerr << "  PTLcore is ", bytes, " bytes @ virt addr ", image, endl, flush;
-
-    Waddr real_code_start_offset = (ehdr.e_entry - PTLSIM_VIRT_BASE);
-    shared_map_page_count = real_code_start_offset / PAGE_SIZE;
-
-    int bytes_remaining = bytes - real_code_start_offset; //PTLSIM_ELF_SKIP_END;
-    if (DEBUG) cerr << "  Real code starts at offset ", real_code_start_offset, endl;
-    if (DEBUG) cerr << "  Bytes to copy: ", bytes_remaining, endl, flush;
-    memcpy(image + real_code_start_offset, data + real_code_start_offset, bytes_remaining);
-
-    //
-    // Prepare the heap
-    //
-    byte* end_of_image = image + ceil(phdr[0].p_memsz, PAGE_SIZE);
-    Waddr bss_size = phdr[0].p_memsz - phdr[0].p_filesz;
-    if (DEBUG) cerr << "  PTLsim has ", ptl_remaining_pages, " pages left out of ", ptl_page_count, " pages allocated", endl;
-    if (DEBUG) cerr << "  PTLxen file size ", phdr[0].p_filesz, ", virtual size ", phdr[0].p_memsz, ", end_of_image ", end_of_image, endl;
-    if (DEBUG) cerr << "  Zero ", bss_size, " bss bytes starting at ", (image + phdr[0].p_filesz), endl, flush;
-    memset(image + phdr[0].p_filesz, 0, bss_size);
-
-    //
-    // Set up stack
-    //
-    byte* sp = image + (ptl_remaining_pages * PAGE_SIZE);
-    bootinfo->stack_top = ptlmon_ptr_to_ptlcore_ptr(sp);
-    bootinfo->stack_size = stacksize;
-    if (DEBUG) cerr << "  Setting up ", stacksize, "-byte stack starting at ", ptlmon_ptr_to_ptlcore_ptr(sp), endl, flush;
-
-    //
-    // Alocate virtual shinfo redirect page (for event recording and replay)
-    //
-    shadow_shinfo = ptlcore_ptr_to_ptlmon_ptr((shared_info_t*)PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE);
-    memcpy(shadow_shinfo, shinfo, PAGE_SIZE);
-    if (DEBUG) cerr << "  Shadow shared info page at ", shadow_shinfo, endl, flush;
-
-    //
-    // Allocate VCPU contexts
-    //
-    ctx = ptlcore_ptr_to_ptlmon_ptr((Context*)PTLSIM_CTX_PAGE_VIRT_BASE);
-    if (DEBUG) cerr << "  Context array starts at ", ptlmon_ptr_to_ptlcore_ptr(ctx), " (", sizeof(Context), " bytes each)", endl, flush;
-
-    // Align sp to 16-byte boundary according to what gcc expects:
-    sp = floorptr(sp, 16);
-
-    bootinfo->heap_start = ptlmon_ptr_to_ptlcore_ptr(end_of_image);
-    bootinfo->heap_end = bootinfo->stack_top - stacksize;
-    if (DEBUG) cerr << "  Heap start ", bootinfo->heap_start, " to heap end ", bootinfo->heap_end, " (", ((bootinfo->heap_end - bootinfo->heap_start) / 1024), " kbytes)", endl;
-
-    bootinfo->vcpu_count = vcpu_count;
-    bootinfo->max_pages = info.max_pages;
-    bootinfo->total_machine_pages = total_machine_pages;
-    bootinfo->monitor_hostcall_port = ptlsim_hostcall_port;
-    bootinfo->hostcall_port = -1; // will be filled in by PTLsim on connect
-    bootinfo->monitor_upcall_port = ptlsim_upcall_port;
-    bootinfo->upcall_port = -1; // will be filled in by PTLsim on connect
-    bootinfo->hostreq.ready = 0;
-    bootinfo->hostreq.op = PTLSIM_HOST_NOP;
-    bootinfo->ptlsim_state = PTLSIM_STATE_INITIALIZING;
-    bootinfo->queued_upcall_count = 0;
-    bootinfo->hostreq.op = PTLSIM_HOST_NOP;
-    // These will be filled in by PTLsim once it starts up:
-    bootinfo->startup_log_buffer = null;
-    bootinfo->startup_log_buffer_tail = 0;
-    bootinfo->startup_log_buffer_size = 0;
-
-    //
-    // Set up hypercall page
-    //
-    {
-      dom0_op_t dom0op;
-      dom0op.u.hypercall_init.domain = domain;
-      dom0op.u.hypercall_init.gmfn = pagedir_mfns[PTLSIM_HYPERCALL_PAGE_PFN];
-      dom0op.cmd = DOM0_HYPERCALL_INIT;
-      assert(xc_dom0_op(xc, &dom0op) == 0);
-    }
-
-    //
-    // Set page protections correctly (can't have writable mappings to page table pages)
-    //
-    Level1PTE* l1ptes = ptlcore_ptr_to_ptlmon_ptr(bootinfo->ptl_pagedir);
-    if (DEBUG) cerr << "  ", bootinfo->ptl_pagedir_mfn_count, " L1 ptes start at ", l1ptes, endl, flush;
-    int first_l1_page = ptl_virt_to_pfn(l1ptes);
-
-    foreach (i, bootinfo->ptl_pagedir_mfn_count) {
-      // if (DEBUG) cerr << "  Make L1 pfn ", (first_l1_page + i), " read only", endl, flush;
-      l1ptes[first_l1_page + i].rw = 0;
-    }
-
-    int l2_page = ptl_virt_to_pfn(ptlcore_ptr_to_ptlmon_ptr(bootinfo->ptl_pagedir_map));
-    if (DEBUG) cerr << "  Make L2 pfn ", l2_page, " read only", endl, flush;
-    l1ptes[l2_page].rw = 0;
-
-    int l3_page = ptl_virt_to_pfn(ptlcore_ptr_to_ptlmon_ptr(bootinfo->ptl_level3_map));
-    if (DEBUG) cerr << "  Make L3 pfn ", l3_page, " read only", endl, flush;
-    l1ptes[l3_page].rw = 0;
-
-    int l4_page = ptl_virt_to_pfn(ptlcore_ptr_to_ptlmon_ptr(bootinfo->toplevel_page_table));
-    if (DEBUG) cerr << "  Make L4 pfn ", l4_page, " read only", endl, flush;
-    l1ptes[l4_page].rw = 0;
-    
-    //
-    // Unmap the read/write middle region and remap as read only (except for stack, which gets mapped read/write)
-    //
-    mfn_t ptl_level2_mfn = bootinfo->ptl_pagedir_map_mfn;
-    mfn_t ptl_level3_mfn = bootinfo->ptl_level3_mfn;
-    mfn_t toplevel_page_table_mfn = bootinfo->toplevel_page_table_mfn;
-
-    if (DEBUG) cerr << "Unmap ", bootinfo->mfn_count, " pages at ", image, endl, flush;
-    unmap_pages(image, bootinfo->mfn_count);
-
-    //
-    // NOTE! bootpage is no longer accessible at this point!
-    //
-
-    rc = pin_page_table_mfns(pagedir_map_mfns, ptl_pagedir_mfn_count, 1);
-    //cerr << "L1 pin rc = ", rc, endl, flush;
-    assert(rc == 0);
-
-    rc = pin_page_table_mfn(ptl_level2_mfn, 2);
-    //cerr << "L2 pin rc = ", rc, endl, flush;
-    assert(rc == 0);
-
-    rc = pin_page_table_mfn(ptl_level3_mfn, 3);
-    //cerr << "L3 pin rc = ", rc, endl, flush;
-    assert(rc == 0);
-
-    rc = pin_page_table_mfn(toplevel_page_table_mfn, 4);
-    //cerr << "L4 pin rc = ", rc, endl, flush;
-    assert(rc == 0);
-
-    //
-    // Make everything re-accessible:
-    //
-    if (DEBUG) cerr << "  Remap ", shared_map_page_count, " pages as read/write at ", image, " (page ", 0, ")", endl, flush;
-    assert((Waddr)map_pages(pagedir_mfns, shared_map_page_count, PROT_READ|PROT_WRITE, (void*)PTLSIM_PSEUDO_VIRT_BASE, MAP_FIXED) == PTLSIM_PSEUDO_VIRT_BASE);
-
-    prep_initial_context(ctx, vcpu_count);
-    ctx[0].commitarf[REG_rip] = ehdr.e_entry;
-    ctx[0].commitarf[REG_rsp] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(sp);
-    ctx[0].commitarf[REG_rdi] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(bootinfo); // start info in %rdi (arg[0])
-
-    if (DEBUG) cerr << "  PTLsim initial toplevel cr3 = ", (void*)ctx[0].cr3, " (mfn ", (ctx[0].cr3 >> log2(PAGE_SIZE)), ")", endl;
-    if (DEBUG) cerr << "  PTLsim entrypoint at ", (void*)ehdr.e_entry, endl;
-
-    if (DEBUG) cerr << "  Ready, set, go!", endl, flush;
-
-    switch_to_ptlsim(true);
-
-    if (DEBUG) cerr << "  PTLsim is now in control inside domain ", domain, endl, flush;
-
-    return true;
-  }
-
   ostream& print_evtchn_mask(ostream& os, const char* title, const unsigned long* data) {
     os << title, ":", endl;
     foreach (i, 8) { // foreach (i, 64) {  // really 4096 possible events
@@ -857,6 +1085,8 @@ struct XenController {
     }
   }
 
+  bool first_time;
+
   //
   // Switch back to a frozen instance of PTLsim
   //
@@ -877,7 +1107,6 @@ struct XenController {
     }
 
     bootinfo->ptlsim_state = PTLSIM_STATE_RUNNING;
-
     unpause();
   }
 
@@ -1158,21 +1387,27 @@ struct XenController {
 
     int rc = xc_vcpu_setcontext(xc, domain, vcpu, &xenctx);
 
+    /*
     mmuext_op_t op;
 
     if (ctx.user_ptbase_mfn) {
       op.cmd = MMUEXT_SET_USER_BASEPTR;
       op.arg1.mfn = ctx.user_ptbase_mfn;
       op.arg2.vcpuid = vcpu;
+      //cerr << "setctx p4 before: user mfn ", op.arg1.mfn, endl, flush; syncpause();
       rc = xc_mmuext_op(xc, &op, 1, domain);
+      //cerr << "setctx p4 after", endl, flush; syncpause();
     }
 
     if (ctx.kernel_ptbase_mfn) {
       op.cmd = MMUEXT_SET_KERNEL_BASEPTR;
       op.arg1.mfn = ctx.kernel_ptbase_mfn;
       op.arg2.vcpuid = vcpu;
+      //cerr << "setctx p5 before: mfn ", op.arg1.mfn, endl, flush; syncpause();
       rc = xc_mmuext_op(xc, &op, 1, domain);
+      //cerr << "setctx p5 after", endl, flush; syncpause();
     }
+    */
 
     return rc;
   }
@@ -1258,7 +1493,6 @@ queue<PendingRequest> scriptq;
 W64 script_list_uuid_currently_pending = 0;
 
 void fill_requestq_from_scriptq(XenController& xc) {
-  //if (req->uuid == script_list_uuid_currently_pending) {
   script_list_uuid_currently_pending = 0;
   PendingRequest* scriptreq;
   if ((scriptreq = scriptq.dequeue())) {
@@ -1269,7 +1503,7 @@ void fill_requestq_from_scriptq(XenController& xc) {
     newreq->fd = -1;
     newreq->data = scriptreq->data; // don't strdup here: we already have a copy
     delete scriptreq;
-    cerr << "Queued request [", newreq->data, "]", endl;
+    // cerr << "Queued request [", newreq->data, "]", endl, flush;
     script_list_uuid_currently_pending = newreq->uuid;
     requestq.enqueue(newreq);
     xadd(xc.bootinfo->queued_upcall_count, +1);
@@ -1321,7 +1555,7 @@ void handle_upcall(XenController& xc, int fd) {
   bool run = 0;
 
   foreach (i, argv.count()) {
-    run |= (strequal(argv[i], "-run"));
+    run |= (strequal(argv[i], "-switch"));
   }
 
   delete[] temp;
@@ -1330,7 +1564,10 @@ void handle_upcall(XenController& xc, int fd) {
     // If it's in the native state, switch to PTLsim first, then send the command
     if (xc.bootinfo->ptlsim_state == PTLSIM_STATE_NATIVE) {
       cerr << "Switching domain from native mode back to PTLsim mode...", endl, flush;
+      sleep(1);
       xc.switch_to_ptlsim();
+      cerr << "OK", endl; cerr.flush(); sleep(1);
+      //++MTY hard lockup crash after printing "OK"
       reply << "Domain ", domain, " switched back to PTLsim mode.", endl;
       cerr << reply, flush;
     } else {
@@ -1386,9 +1623,14 @@ int main(int argc, char** argv) {
 
   char* listfile = null;
 
+  // 32 MB default:
+  W64 ptlsim_reserved_mb = 32;
+
   foreach (i, argc) {
     if (strequal(argv[i], "-domain")) {
       if (argc > i) { domain = atoi(argv[i+1]); }
+    } else if (strequal(argv[i], "-reservemem")) {
+      if (argc > i) { ptlsim_reserved_mb = atoi(argv[i+1]); }
     } else if (strequal(argv[i], "-bootlog")) {
       log_ptlsim_boot = 1;
     } else if (argv[i][0] == '@') {
@@ -1419,7 +1661,7 @@ int main(int argc, char** argv) {
     XenController xc;
     if (!xc.attach(domain)) return -1;
     xc.alloc_control_port();
-    xc.inject_ptlsim_image(argc, argv, 1048576);
+    if (!xc.inject_ptlsim(ptlsim_reserved_mb)) return -1;
 
     int rc = 0;
     int sd = socket(PF_LOCAL, SOCK_STREAM, 0);

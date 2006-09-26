@@ -79,7 +79,8 @@ void PTLsimConfig::reset() {
   event_trace_replay_filename.reset();
 
   core_freq_hz = 0;
-  timer_interrupt_freq_hz = 1000;
+  // default timer frequency is 100 hz in time-xen.c:
+  timer_interrupt_freq_hz = 100;
   pseudo_real_time_clock = 0;
   realtime = 0;
   mask_interrupts = 0;
@@ -210,7 +211,7 @@ void print_banner(ostream& os, const PTLsimStats& stats, int argc, char** argv) 
   os << "//  Revision ", stringify(SVNREV), " (", stringify(SVNDATE), ")", endl;
   os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
     stringify(__GNUC__), ".", stringify(__GNUC_MINOR__), endl;
-  os << "//  Running on ", stats.simulator.run.hostname, endl;
+  os << "//  Running on ", hostinfo.nodename, ".", hostinfo.domainname, endl;
   os << "//  ", endl;
 #ifndef PTLSIM_HYPERVISOR
   os << "//  Arguments: ";
@@ -347,7 +348,9 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
 
   if (first_time) {
     if (!config.quiet) {
+#ifndef PTLSIM_HYPERVISOR
       print_banner(cerr, stats, argc, argv);
+#endif
       print_sysinfo(cerr);
 #ifdef PTLSIM_HYPERVISOR
       if (!(config.run | config.native | config.kill))

@@ -133,6 +133,7 @@ struct PTLsimStats { // rootnode:
         W64 icache_miss;
         W64 fetchq_full;
         W64 bogus_rip;
+        W64 microcode_assist;
         W64 branch_taken;
         W64 full_width;
       } stop;

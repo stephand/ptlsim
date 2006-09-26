@@ -220,6 +220,13 @@ int main(int argc, char* argv[]) {
     cout << "  LDT: ", hexstring(ldt, 16), endl;
   }
 
+  {
+    W64 tsc = rdtsc();
+    cout << "Timestamp counter:", endl;
+    cout << "  Timestamp counter: ", intstring(tsc, 32), " = 0x", hexstring(tsc, 64), endl;
+    cout << "  Core frequency:    ", intstring(get_core_freq_hz(), 32), endl;
+  }
+
   cout << endl;
 }
 

@@ -69,7 +69,7 @@ endif
 OOOOBJS = ooocore.o ooopipe.o oooexec.o branchpred.o dcache.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h xc_ptlsim.h
+COMMONINCLUDES = logic.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h
 OOOINCLUDES = branchpred.h ooocore.h cpthwdef.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
