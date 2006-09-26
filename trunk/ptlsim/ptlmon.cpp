@@ -1564,10 +1564,7 @@ void handle_upcall(XenController& xc, int fd) {
     // If it's in the native state, switch to PTLsim first, then send the command
     if (xc.bootinfo->ptlsim_state == PTLSIM_STATE_NATIVE) {
       cerr << "Switching domain from native mode back to PTLsim mode...", endl, flush;
-      sleep(1);
       xc.switch_to_ptlsim();
-      cerr << "OK", endl; cerr.flush(); sleep(1);
-      //++MTY hard lockup crash after printing "OK"
       reply << "Domain ", domain, " switched back to PTLsim mode.", endl;
       cerr << reply, flush;
     } else {
