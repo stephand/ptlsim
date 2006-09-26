@@ -810,6 +810,7 @@ struct SequentialCore {
       total_user_insns_committed += uop.eom;
       user_insns += uop.eom;
       stats.summary.insns += uop.eom;
+      stats.summary.uops++;
 
       current_uuid++;
       // Don't advance on cracked loads/stores:
@@ -817,6 +818,7 @@ struct SequentialCore {
       current_uop_in_macro_op++;
       iterations++;
       sim_cycle++;
+      stats.summary.cycles++;
       seq_total_cycles++;
     }
 
@@ -947,9 +949,6 @@ struct SequentialMachine: public PTLsimMachine {
 
       exiting |= check_for_async_sim_break();
 
-      stats.summary.cycles++;
-      stats.summary.uops++;
-      sim_cycle++;
       iterations++;
 
       if unlikely (exiting) break;
