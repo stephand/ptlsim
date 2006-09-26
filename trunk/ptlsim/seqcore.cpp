@@ -809,6 +809,7 @@ struct SequentialCore {
       seq_total_user_insns_committed += uop.eom;
       total_user_insns_committed += uop.eom;
       user_insns += uop.eom;
+      stats.summary.insns += uop.eom;
 
       current_uuid++;
       // Don't advance on cracked loads/stores:
@@ -946,6 +947,8 @@ struct SequentialMachine: public PTLsimMachine {
 
       exiting |= check_for_async_sim_break();
 
+      stats.summary.cycles++;
+      stats.summary.uops++;
       sim_cycle++;
       iterations++;
 
