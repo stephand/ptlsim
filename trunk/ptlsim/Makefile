@@ -133,9 +133,9 @@ endif
 
 ptlsim.dst: dstbuild stats.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
 	$(CC) $(CFLAGS) $(INCFLAGS) -E -C stats.h > stats.i
-	cat stats.i | dstbuild PTLsimStats > dstbuild.temp.cpp
+	cat stats.i | ./dstbuild PTLsimStats > dstbuild.temp.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -DDSTBUILD -include stats.h dstbuild.temp.cpp $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o -o dstbuild.temp
-	dstbuild.temp > ptlsim.dst
+	./dstbuild.temp > ptlsim.dst
 	rm -f dstbuild.temp destbuild.temp.cpp stats.i
 
 makeusage: makeusage.o $(BASEOBJS) $(STDOBJS)
