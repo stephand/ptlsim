@@ -150,7 +150,7 @@ void assist_x87_fprem1(Context& ctx) {
   SSEType st0u(st0); SSEType st1u(st1);
 
   X87StatusWord fpsw;
-  asm("fldl %[st1]; fldl %[st0]; fprem1; fstsw %%ax; fstpl %[st0]; ffree %%st(0); fincstp;" : [st0] "+m" (st0u.d), "=a" (fpsw) : [st1] "m" (st1u.d));
+  asm("fldl %[st1]; fldl %[st0]; fprem1; fstsw %%ax; fstpl %[st0]; ffree %%st(0); fincstp;" : [st0] "+m" (st0u.d), "=a" (*(W16*)&fpsw) : [st1] "m" (st1u.d));
   st0 = st0u.w64;
 
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
@@ -166,7 +166,7 @@ void assist_x87_fxam(Context& ctx) {
   SSEType ra(r);
 
   X87StatusWord fpsw;
-  asm("fxam; fstsw %%ax" : "=a" (fpsw) : "t" (ra.d));
+  asm("fxam; fstsw %%ax" : "=a" (*(W16*)&fpsw) : "t" (ra.d));
 
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
   sw->c0 = fpsw.c0;
