@@ -1,0 +1,109 @@
+diff -r c4f3f719d997 tools/python/xen/xend/XendCheckpoint.py
+--- a/tools/python/xen/xend/XendCheckpoint.py	Sat Sep 23 13:54:58 2006
++++ b/tools/python/xen/xend/XendCheckpoint.py	Sun Oct  8 01:20:36 2006
+@@ -111,7 +111,9 @@
+         raise Exception, exn
+ 
+ 
+-def restore(xd, fd):
++def restore(xd, fd, paused):
++    log.info("XendCheckpoint.restore(fd %d, %d)", fd, paused);
++    
+     signature = read_exact(fd, len(SIGNATURE),
+         "not a valid guest state file: signature read")
+     if signature != SIGNATURE:
+@@ -163,7 +165,9 @@
+ 
+         #Block until src closes connection
+         os.read(fd, 1)
+-        dominfo.unpause()
++
++        if paused == 0:
++            dominfo.unpause()
+         
+         dominfo.completeRestore(handler.store_mfn, handler.console_mfn)
+         
+diff -r c4f3f719d997 tools/python/xen/xend/XendDomain.py
+--- a/tools/python/xen/xend/XendDomain.py	Sat Sep 23 13:54:58 2006
++++ b/tools/python/xen/xend/XendDomain.py	Sun Oct  8 01:20:36 2006
+@@ -240,7 +240,7 @@
+         # !!!
+         raise XendError("Unsupported")
+ 
+-    def domain_restore(self, src):
++    def domain_restore(self, src, paused):
+         """Restore a domain from file.
+ 
+         @param src:      source file
+@@ -249,18 +249,18 @@
+         try:
+             fd = os.open(src, os.O_RDONLY)
+             try:
+-                return self.domain_restore_fd(fd)
++                return self.domain_restore_fd(fd, paused)
+             finally:
+                 os.close(fd)
+         except OSError, ex:
+             raise XendError("can't read guest state file %s: %s" %
+                             (src, ex[1]))
+ 
+-    def domain_restore_fd(self, fd):
++    def domain_restore_fd(self, fd, paused):
+         """Restore a domain from the given file descriptor."""
+ 
+         try:
+-            return XendCheckpoint.restore(self, fd)
++            return XendCheckpoint.restore(self, fd, paused)
+         except:
+             # I don't really want to log this exception here, but the error
+             # handling in the relocation-socket handling code (relocate.py) is
+diff -r c4f3f719d997 tools/python/xen/xend/server/XMLRPCServer.py
+--- a/tools/python/xen/xend/server/XMLRPCServer.py	Sat Sep 23 13:54:58 2006
++++ b/tools/python/xen/xend/server/XMLRPCServer.py	Sun Oct  8 01:20:36 2006
+@@ -64,8 +64,8 @@
+     info = XendDomain.instance().domain_create(config)
+     return fixup_sxpr(info.sxpr())
+ 
+-def domain_restore(src):
+-    info = XendDomain.instance().domain_restore(src)
++def domain_restore(src, paused):
++    info = XendDomain.instance().domain_restore(src, paused)
+     return fixup_sxpr(info.sxpr())
+ 
+ def get_log():
+diff -r c4f3f719d997 tools/python/xen/xm/main.py
+--- a/tools/python/xen/xm/main.py	Sat Sep 23 13:54:58 2006
++++ b/tools/python/xen/xm/main.py	Sun Oct  8 01:20:36 2006
+@@ -83,7 +83,7 @@
+                      'Migrate a domain to another machine.'),
+     'pause'       : ('<Domain>', 'Pause execution of a domain.'),
+     'reboot'      : ('<Domain> [-wa]', 'Reboot a domain.'),
+-    'restore'     : ('<CheckpointFile>',
++    'restore'     : ('<CheckpointFile> [--paused]',
+                      'Restore a domain from a saved state.'),
+     'save'        : ('<Domain> <CheckpointFile>',
+                      'Save a domain state to restore later.'),
+@@ -451,15 +451,21 @@
+     server.xend.domain.save(domid, savefile)
+     
+ def xm_restore(args):
+-    arg_check(args, "restore", 1)
++    arg_check(args, "restore", 1, 2)
+ 
+     savefile = os.path.abspath(args[0])
++
++    paused = 0
++
++    for f in args:
++        if f in ['--paused']:
++            paused = 1
+ 
+     if not os.access(savefile, os.R_OK):
+         err("xm restore: Unable to read file %s" % savefile)
+         sys.exit(1)
+ 
+-    server.xend.domain.restore(savefile)
++    server.xend.domain.restore(savefile, paused)
+ 
+ 
+ def getDomains(domain_names, full = 0):

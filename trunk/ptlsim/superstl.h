@@ -78,12 +78,23 @@ namespace superstl {
       return *this;
     }
 
+    stringbuf& operator =(const stringbuf& str) {
+      const char* s = (const char*)str;
+      if unlikely (!s) {
+        reset();
+        return *this;
+      }
+      reset(strlen(s)+1);
+      *this << s;
+      return *this;
+    }
+
     bool operator ==(const stringbuf& s) {
-      return (strcmp(*this, s) == 0);
+      return strequal((char*)(*this), (char*)s);
     }
 
     bool operator !=(const stringbuf& s) {
-      return (strcmp(*this, s) != 0);
+      return !strequal((char*)(*this), (char*)s);
     }
 
   public:

@@ -1,6 +1,6 @@
-diff -r 840f33e54054 xen/arch/x86/time.c
---- a/xen/arch/x86/time.c	Sat Jun 17 01:45:45 2006
-+++ b/xen/arch/x86/time.c	Wed Jul 26 02:59:00 2006
+diff -r c4f3f719d997 xen/arch/x86/time.c
+--- a/xen/arch/x86/time.c	Sat Sep 23 13:54:58 2006
++++ b/xen/arch/x86/time.c	Sun Oct  8 01:20:36 2006
 @@ -4,7 +4,9 @@
   * Per-CPU time calibration and management.
   * 
@@ -28,10 +28,12 @@ diff -r 840f33e54054 xen/arch/x86/time.c
      ASSERT(dividend < divisor);
      __asm__ ( 
          "divl %4"
-@@ -914,6 +925,141 @@
-     setup_irq(0, &irq0);
- }
+@@ -912,6 +929,140 @@
+            cpu_khz / 1000, cpu_khz % 1000);
  
+     setup_irq(0, &irq0);
++}
++
 +/*
 + * Frequency Scaling Support
 + *
@@ -110,7 +112,6 @@ diff -r 840f33e54054 xen/arch/x86/time.c
 +    u32 oldlo, oldhi;
 +    int oldfid, newfid;
 +    int mhz;
-+    unsigned int cpu = smp_processor_id();
 +    s_time_t now;
 +
 +    DPRINTK("fidvid_ctl: requested msr write 0x%08x:0x%08x\n", hi, lo);
@@ -148,15 +149,15 @@ diff -r 840f33e54054 xen/arch/x86/time.c
 +    DPRINTK("%d MHz\n", mhz);
 +
 +    cpu_khz = mhz * 1000;
-+    set_time_scale(&cpu_time[smp_processor_id()].tsc_scale, (u64)mhz * 1000000ULL);
++    set_time_scale(&this_cpu(cpu_time).tsc_scale, (u64)mhz * 1000000ULL);
 +
 +    DPRINTK("fidvid_ctl: resetting timestamps...");
 +
-+    rdtscll(cpu_time[cpu].local_tsc_stamp);
++    rdtscll(this_cpu(cpu_time).local_tsc_stamp);
 +    now = read_platform_stime();
 +
-+    cpu_time[cpu].stime_master_stamp = now;
-+    cpu_time[cpu].stime_local_stamp  = now;
++    this_cpu(cpu_time).stime_master_stamp = now;
++    this_cpu(cpu_time).stime_local_stamp  = now;
 +
 +    DPRINTK("fidvid_ctl: recalibrating timers...");
 +
@@ -165,15 +166,13 @@ diff -r 840f33e54054 xen/arch/x86/time.c
 +    DPRINTK("OK\n");
 +
 +    return 0;
-+}
-+
+ }
+ 
  void send_timer_event(struct vcpu *v)
- {
-     send_guest_vcpu_virq(v, VIRQ_TIMER);
-diff -r 840f33e54054 xen/arch/x86/traps.c
---- a/xen/arch/x86/traps.c	Sat Jun 17 01:45:45 2006
-+++ b/xen/arch/x86/traps.c	Wed Jul 26 02:59:00 2006
-@@ -1221,6 +1238,16 @@
+diff -r c4f3f719d997 xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Sat Sep 23 13:54:58 2006
++++ b/xen/arch/x86/traps.c	Sun Oct  8 01:20:36 2006
+@@ -1375,6 +1445,16 @@
                  ((u64)regs->edx << 32) | regs->eax;
              break;
  #endif
@@ -188,9 +187,9 @@ diff -r 840f33e54054 xen/arch/x86/traps.c
 +        }
 +
          default:
-             if ( (rdmsr_safe(regs->ecx, l, h) != 0) ||
-                  (regs->eax != l) || (regs->edx != h) )
-@@ -1252,6 +1279,14 @@
+             if ( wrmsr_hypervisor_regs(regs->ecx, regs->eax, regs->edx) )
+                 break;
+@@ -1409,6 +1489,14 @@
              if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
                  goto fail;
              break;
@@ -203,12 +202,12 @@ diff -r 840f33e54054 xen/arch/x86/traps.c
 +        }
 +
          default:
-             /* Everyone can read the MSR space. */
-             /*DPRINTK("Domain attempted RDMSR %p.\n", _p(regs->ecx));*/
-diff -r 840f33e54054 xen/include/asm-x86/msr.h
---- a/xen/include/asm-x86/msr.h	Sat Jun 17 01:45:45 2006
-+++ b/xen/include/asm-x86/msr.h	Wed Jul 26 02:59:00 2006
-@@ -137,6 +137,37 @@
+             if ( rdmsr_hypervisor_regs(regs->ecx, &l, &h) )
+             {
+diff -r c4f3f719d997 xen/include/asm-x86/msr.h
+--- a/xen/include/asm-x86/msr.h	Sat Sep 23 13:54:58 2006
++++ b/xen/include/asm-x86/msr.h	Sun Oct  8 01:20:36 2006
+@@ -141,6 +141,37 @@
  #define EFER_LMA (1<<_EFER_LMA)
  #define EFER_NX (1<<_EFER_NX)
  #define EFER_SVME (1<<_EFER_SVME)

@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Trigger functions 
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef __PTLCALLS_H__
@@ -11,10 +11,12 @@
 #ifndef __INSIDE_PTLSIM__
 #include <unistd.h>
 #include <sys/mman.h>
+#include <signal.h>
+#include <string.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <errno.h>
 #define sys_munlock munlock
-#endif
 
 typedef unsigned char byte;
 typedef unsigned short W16;
@@ -26,6 +28,32 @@ typedef W64 Waddr;
 #else
 typedef W32 Waddr;
 #endif
+#endif // !__INSIDE_PTLSIM
+
+#ifdef PTLSIM_HYPERVISOR
+// PTLsim/X
+enum {
+  PTLCALL_NOP,
+  PTLCALL_VERSION,
+  PTLCALL_ENQUEUE,
+  PTLCALL_FLUSH_QUEUE,
+};
+
+struct PTLsimCommandDescriptor {
+  W64 command; // pointer to command string
+  W64 length;       // length of command string
+};
+
+#else
+// Userspace PTLsim
+enum {
+  PTLCALL_NOP,
+  PTLCALL_MARKER,
+  PTLCALL_SWITCH_TO_SIM,
+  PTLCALL_SWITCH_TO_NATIVE,
+  PTLCALL_CAPTURE_STATS,
+  PTLCALL_COUNT,
+};
 
 // Put at start of address space where nothing normally goes
 #define PTLSIM_THUNK_PAGE 0x1000
@@ -42,6 +70,165 @@ struct PTLsimThunkPage {
   W64 call_code_addr; // thunk function to call
 };
 
+#endif
+
+#ifndef __INSIDE_PTLSIM__
+#ifdef PTLSIM_HYPERVISOR
+//
+// PTLsim/X implements ptlcalls using an actual x86
+// instruction (0x0f37) that's trapped by the hypervisor.
+//
+
+static int running_under_ptlsim_checked = 0;
+static int running_under_ptlsim = 0;
+
+static inline void handle_invalid_opcode(int sig, siginfo_t* si, void* contextp) {
+  ucontext_t* context = (ucontext_t*)contextp;
+#ifdef __x86_64__
+  context->uc_mcontext.gregs[REG_RIP] += 2;
+#else
+  context->uc_mcontext.gregs[REG_EIP] += 2;
+#endif
+  running_under_ptlsim = 0;
+}
+
+#ifdef __x86_64__
+static inline W64 ptlcall_op(W64 op, W64 arg1, W64 arg2, W64 arg3, W64 arg4) {
+  asm volatile(".byte 0x0f,0x37"
+               : "+a" (op)
+               : "c" (arg1), "d" (arg2), "S" (arg3), "D" (arg4)
+               : "memory");
+  return op;
+}
+#else
+static inline W64 ptlcall_op(W32 op, W32 arg1, W32 arg2, W32 arg3, W32 arg4) {
+  asm volatile(".byte 0x0f,0x37"
+               : "+a" (op)
+               : "c" (arg1), "d" (arg2), "S" (arg3), "D" (arg4)
+               : "memory");
+  return op;
+}
+#endif
+
+static inline W64 ptlcall(W64 op, W64 arg1 = 0, W64 arg2 = 0, W64 arg3 = 0, W64 arg4 = 0) {
+  struct sigaction oldsa;
+  struct sigaction sa;
+  W64 rc;
+
+  if (running_under_ptlsim_checked) {
+    if (running_under_ptlsim) {
+      return -ENOSYS;
+    } else {
+      return ptlcall_op(op, arg1, arg2, arg3, arg4);
+    }
+  }
+
+  running_under_ptlsim_checked = 1;
+
+  memset(&sa, 0, sizeof sa);
+  sa.sa_sigaction = handle_invalid_opcode;
+  sa.sa_flags = SA_SIGINFO;
+
+  sigaction(SIGILL, &sa, &oldsa);
+
+  running_under_ptlsim = 1;
+  rc = ptlcall_op(op, arg1, arg2, arg3, arg4);
+
+  if (!running_under_ptlsim) return -ENOSYS;
+
+  sigaction(SIGILL, &oldsa, NULL);
+
+  return rc;
+}
+
+//
+// Enqueue a list of commands, to be executed in sequence.
+//
+// Queueing is required to implement a fixed-length simulation run
+// followed by a switch back to native mode (or another core).
+// Otherwise, PTLsim would halt after completing the first command,
+// but it would never know about the next command since it needs
+// to actually execute another ptlcall instruction to get that
+// command. Hence, we allow multiple commands to be atomically
+// queued and processed in sequence.
+//
+static inline W64 ptlcall_multi(char* const list[], size_t length, int flush) {
+  PTLsimCommandDescriptor* desc = (PTLsimCommandDescriptor*)malloc(length * sizeof(PTLsimCommandDescriptor));
+  W64 rc;
+  int i;
+
+  for (i = 0; i < length; i++) {
+    desc[i].command = (W64)list[i];
+    desc[i].length = strlen(list[i]);
+  }
+
+  rc = ptlcall(PTLCALL_ENQUEUE, (W64)desc, length, flush);
+  free(desc);
+  return rc;
+}
+
+static inline W64 ptlcall_multi_enqueue(char* const list[], size_t length) {
+  return ptlcall_multi(list, length, 0);
+}
+
+static inline W64 ptlcall_multi_flush(char* const list[], size_t length) {
+  return ptlcall_multi(list, length, 1);
+}
+
+static inline W64 ptlcall_single(const char* command, int flush) {
+  PTLsimCommandDescriptor desc;
+  desc.command = (W64)command;
+  desc.length = strlen(command);
+
+  return ptlcall(PTLCALL_ENQUEUE, (W64)&desc, 1, flush);
+}
+
+static inline W64 ptlcall_single_enqueue(const char* command) {
+  return ptlcall_single(command, 0);
+}
+
+static inline W64 ptlcall_single_flush(const char* command) {
+  return ptlcall_single(command, 1);
+}
+
+//
+// Convenience functions
+//
+static inline W64 ptlcall_nop() {
+  return ptlcall_single_flush("-run");
+}
+
+static inline W64 ptlcall_switch_to_sim() {
+  return ptlcall_single_flush("-run -stopinsns inf");
+}
+
+static inline W64 ptlcall_switch_to_native() {
+  return ptlcall_single_flush("-native");
+}
+
+static inline W64 ptlcall_marker(const char* name) {
+  char buf[128];
+  if (!name) name = "forced";
+  snprintf(buf, sizeof(buf), "-marker %s", name);
+
+  char* commands[2] = {buf, "-run"};
+  return ptlcall_multi_flush(commands, 2);
+}
+
+static inline W64 ptlcall_capture_stats(const char* snapshot) {
+  char buf[128];
+  if (!snapshot) snapshot = "forced";
+  snprintf(buf, sizeof(buf), "-snapshot-now %s", snapshot);
+
+  char* commands[2] = {buf, "-run"};
+  return ptlcall_multi_flush(commands, 2);
+}
+
+#else
+//
+// Userspace PTLsim uses the following to implement ptlcalls:
+//
+
 static inline W64 ptlcall(W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5) {
   struct PTLsimThunkPage* thunk = (struct PTLsimThunkPage*)PTLSIM_THUNK_PAGE;
   ptlcall_func_t func;
@@ -49,7 +236,7 @@ static inline W64 ptlcall(W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W6
   if (running_under_ptlsim < 0) {
     /*
      * Quick and dirty trick to find out if a given page is mapped:
-     * If the page is valid, munmap() is basically a nop, but if
+     * If the page is valid, munlock() is basically a nop, but if
      * it isn't, it returns -ENOMEM.
      */
 
@@ -70,15 +257,6 @@ static inline W64 ptlcall(W64 callid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W6
   return func(callid, arg1, arg2, arg3, arg4, arg5);
 }
 
-enum {
-  PTLCALL_NOP,
-  PTLCALL_MARKER,
-  PTLCALL_SWITCH_TO_SIM,
-  PTLCALL_SWITCH_TO_NATIVE,
-  PTLCALL_CAPTURE_STATS,
-  PTLCALL_COUNT,
-};
-
 // Valid in any mode
 static inline W64 ptlcall_nop() { return ptlcall(PTLCALL_MARKER, 0, 0, 0, 0, 0); }
 static inline W64 ptlcall_marker(W64 marker) { return ptlcall(PTLCALL_MARKER, marker, 0, 0, 0, 0); }
@@ -89,5 +267,9 @@ static inline W64 ptlcall_switch_to_sim() { return ptlcall(PTLCALL_SWITCH_TO_SIM
 
 // Valid in simulator mode only:
 static inline W64 ptlcall_switch_to_native() { return ptlcall(PTLCALL_SWITCH_TO_NATIVE, 0, 0, 0, 0, 0); }
+
+#endif // !PTLSIM_HYPERVISOR
+
+#endif // __INSIDE_PTLSIM__
 
 #endif // __PTLCALLS_H__

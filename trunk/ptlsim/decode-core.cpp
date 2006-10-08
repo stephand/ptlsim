@@ -1269,7 +1269,7 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
 
   if (!count) return 0;
 
-  if (DEBUG) logfile << "Reclaiming cached basic blocks at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits:", endl, flush;
+  if (DEBUG) logfile << "Reclaiming cached basic blocks at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits:", endl;
 
   stats.decoder.reclaim_rounds++;
 
@@ -1367,11 +1367,49 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
       }
     }
 
-    if (DEBUG) logfile << "Freed ", pages_freed, " empty pages", endl, flush;
+    if (DEBUG) logfile << "Freed ", pages_freed, " empty pages", endl;
   }
 
   return n;
 }
+
+//
+// Flush the entire basic block cache immediately.
+// All basic blocks are flushed: no remaining
+// references are allowed.
+//
+void BasicBlockCache::flush() {
+  bool DEBUG = 1;
+
+  if (DEBUG) logfile << "Flushing basic block cache at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits:", endl;
+
+  stats.decoder.reclaim_rounds++;
+
+  {
+    Iterator iter(this);
+    BasicBlock* bb;
+    while (bb = iter.next()) {
+      invalidate(bb, INVALIDATE_REASON_RECLAIM);
+    }
+  }
+
+  //
+  // Reclaim per-page chunklist heads
+  //
+
+  {
+    BasicBlockPageCache::Iterator iter(&bbpages);
+    BasicBlockChunkList* page;
+    int pages_freed = 0;
+
+    while (page = iter.next()) {
+      assert(page->empty());
+      bbpages.remove(page);
+      delete page;
+    }
+  }
+}
+
 
 void assist_exec_page_fault(Context& ctx) {
   //
@@ -1643,9 +1681,14 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   TraceDecoder trans(rvp);
   trans.fillbuf(ctx);
 
+  if (rvp.rip == 0xffffffff80108ca0) {
+    logfile << "Translation of ", trans.valid_byte_count, " bytes at rvp ", rvp, ":", endl;
+    logfile << bytemaskstring(trans.insnbytes, bitmask(min(trans.valid_byte_count, 32)), min(trans.valid_byte_count, 32)), endl;
+    logfile.flush();
+  }
+
   if (logable(5) | log_code_page_ops) {
     logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
-    logfile << "Warning: ", rvp, " may cross dirty pages", endl;
   }
 
   if (rvp.mfnlo == RIPVirtPhys::INVALID) {

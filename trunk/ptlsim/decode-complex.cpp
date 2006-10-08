@@ -1961,6 +1961,11 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
+  case 0x177: { // EMMS: clear all tag bits (set to "empty" state)
+    this << TransOp(OP_mov, REG_fptags, REG_zero, REG_zero, REG_zero, 3);
+    break;
+  }
+
   case 0x105: {
     // syscall or hypercall
     // Saves return address into %rcx and jumps to MSR_LSTAR

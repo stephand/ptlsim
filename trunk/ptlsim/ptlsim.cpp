@@ -37,12 +37,14 @@ void PTLsimConfig::reset() {
   stop = 0;
   native = 0;
   kill = 0;
+  flush_command_queue = 0;
+  simswitch = 0;
 #endif
 
   core_name = "ooo";
 
   quiet = 0;
-  log_filename = "logfile";
+  log_filename = "ptlsim.log";
   loglevel = 0;
   start_log_at_iteration = infinity;
   start_log_at_rip = INVALIDRIP;
@@ -112,6 +114,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(stop,                         "stop",                 "Stop current simulation run and wait for command");
   add(native,                       "native",               "Switch to native mode");
   add(kill,                         "kill",                 "Kill PTLsim inside domain (and ptlmon), then shutdown domain");
+  add(flush_command_queue,          "flush",                "Flush all queued commands, stop the current simulation run and wait");
+  add(simswitch,                    "switch",               "Switch back to PTLsim while in native mode");
 #endif
 
   section("Simulation Control");
@@ -199,7 +203,7 @@ void print_banner(ostream& os, const PTLsimStats& stats, int argc, char** argv) 
   os << "//  ", endl;
 #ifdef __x86_64__
 #ifdef PTLSIM_HYPERVISOR
-  os << "//  PTLsim: Cycle Accurate x86-64 Full System SMP/SMT Simulator", endl;
+  os << "//  PTLsim: Cycle Accurate x86-64 Full System Simulator", endl;
 #else
   os << "//  PTLsim: Cycle Accurate x86-64 Simulator", endl;
 #endif
@@ -425,7 +429,6 @@ void update_progress() {
 #ifdef PTLSIM_HYPERVISOR
     cerr << "\r  ", sb, flush;
 #endif
-    
     last_printed_status_at_ticks = ticks;
     last_printed_status_at_cycle = sim_cycle;
     last_printed_status_at_user_insn = total_user_insns_committed;
@@ -437,6 +440,7 @@ bool simulate(const char* machinename) {
 
   if (!machine) {
     logfile << "Cannot find core named '", machinename, "'", endl;
+    cerr << "Cannot find core named '", machinename, "'", endl;
     return 0;
   }
 
@@ -451,10 +455,6 @@ bool simulate(const char* machinename) {
 
   logfile << "Switching to simulation core '", machinename, "'...", endl, flush;
   logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
-#ifdef PTLSIM_HYPERVISOR
-  cerr << "Switching to simulation core '", machinename, "'...", endl, flush;
-  cerr << "  Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
-#endif
 
   // Update stats every half second:
   ticks_per_update = seconds_to_ticks(0.5);
@@ -478,8 +478,9 @@ bool simulate(const char* machinename) {
   }
 
 #ifdef PTLSIM_HYPERVISOR
+  last_printed_status_at_ticks = 0;
+  update_progress();
   cerr << endl;
-  cerr << "Done", endl, flush;
 #endif
 
   return 0;

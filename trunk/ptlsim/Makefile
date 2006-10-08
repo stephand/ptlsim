@@ -20,7 +20,7 @@ endif
 # but can still run 32-bit code and operating systems
 # under it. See the FAQ for details.
 #
-# PTLSIM_HYPERVISOR=1
+PTLSIM_HYPERVISOR=1
 
 CC = g++
 
@@ -57,7 +57,7 @@ STDOBJS = glibc.o
 
 ifdef __x86_64__
 ifdef PTLSIM_HYPERVISOR
-COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlsim.o ptlxen.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlsim.o ptlxen.o ptlxen-memory.o ptlxen-events.o ptlxen-common.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o linkend.o
 else
 COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o datastore.o injectcode-32bit.o injectcode-64bit.o seqcore.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
@@ -76,28 +76,19 @@ INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-core.cpp decode-fast.cpp decode-complex.cpp decode-x87.cpp decode-sse.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp makeusage.cpp
 
 ifdef PTLSIM_HYPERVISOR
-COMMONCPPFILES += lowlevel-64bit-xen.S ptlxen.cpp ptlxen-common.cpp ptlmon.cpp
+COMMONCPPFILES += lowlevel-64bit-xen.S ptlxen.cpp ptlxen-memory.cpp ptlxen-events.cpp ptlxen-common.cpp ptlmon.cpp ptlctl.cpp
 endif
 OOOCPPFILES = ooocore.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
-#
-# See the notes on "Performance Counter Support" in kernel.cpp
-# for how to use this. Uncomment this only if you have perfctr
-# kernel support and header files available.
-#
-# ENABLE_KERNEL_PERFCTRS = 1
-#
-
-ifdef ENABLE_KERNEL_PERFCTRS
-	LIBPERFCTR = -lperfctr
-else
-	LIBPERFCTR = 
-endif
-
 CFLAGS += -D__PTLSIM_OOO_ONLY__
 
-all: ptlsim ptlstats ptlcalls.o ptlcalls-32bit.o cpuid
+TOPLEVEL = ptlsim ptlstats ptlcalls.o ptlcalls-32bit.o cpuid
+ifdef PTLSIM_HYPERVISOR
+TOPLEVEL += ptlctl
+endif
+
+all: $(TOPLEVEL)
 	@echo "Compiled successfully..."
 
 cpuid: cpuid.o $(BASEOBJS) $(STDOBJS)
@@ -142,7 +133,7 @@ makeusage: makeusage.o $(BASEOBJS) $(STDOBJS)
 	$(CC) $(CFLAGS) $(INCFLAGS) $(BASEOBJS) $(STDOBJS) makeusage.o -o makeusage
 
 usage.o: makeusage Makefile
-	makeusage > usage.txt
+	./makeusage > usage.txt
 	objcopy -I binary -O elf32-i386 -B i386 --rename-section .data=.usage,alloc,load,readonly,data,contents usage.txt usage.o
 
 ptlsim.dst.o: ptlsim.dst
@@ -171,6 +162,9 @@ ptlsim: $(OBJFILES) Makefile ptlsim32.lds
 	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim32.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`
 endif
 
+ptlctl: ptlctl.o $(BASEOBJS) $(STDOBJS)
+	g++ -O2 ptlctl.o $(BASEOBJS) $(STDOBJS) -o ptlctl
+
 BASEADDR = 0
 
 test.dat-64bit.S: test.dat Makefile
@@ -191,7 +185,7 @@ test.dat-32bit.S: test.dat Makefile
 	$(CC) $(CFLAGS) $(INCFLAGS) -c $<
 
 clean:
-	rm -fv ptlsim ptlstats ptlxen.bin cpuid dstbuild.temp destbuild.temp.cpp stats.i makeusage *.o core core.[0-9]* .depend *.gch
+	rm -fv ptlsim ptlstats ptlctl ptlxen.bin cpuid dstbuild.temp destbuild.temp.cpp stats.i makeusage *.o core core.[0-9]* .depend *.gch
 
 OBJFILES = $(COMMONOBJS) $(PT2XOBJS) $(OOOOBJS)
 INCLUDEFILES = $(COMMONINCLUDES) $(PT2XINCLUDES) $(OOOINCLUDES)

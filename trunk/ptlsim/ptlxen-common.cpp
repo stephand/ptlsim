@@ -103,6 +103,16 @@ void Context::restorefrom(const vcpu_guest_context& ctx) {
   running = 1;
 }
 
+void Context::restorefrom(const vcpu_extended_context& ctx) {
+  kernel_ptbase_mfn = ctx.guest_table;
+  user_ptbase_mfn = ctx.guest_table_user;
+  user_runstate = (RunstateInfo*)ctx.runstate_guest;
+  foreach (i, NR_VIRQS) virq_to_port[i] = ctx.virq_to_evtchn[i];
+
+  base_tsc = ctx.phys_tsc_at_capture + ctx.tsc_timestamp_bias;
+  // base_system_time must be filled in from shinfo
+}
+
 void Context::saveto(vcpu_guest_context& ctx) {
   ctx.user_regs.rax = commitarf[REG_rax];
   ctx.user_regs.rcx = commitarf[REG_rcx];
@@ -125,7 +135,7 @@ void Context::saveto(vcpu_guest_context& ctx) {
   ctx.user_regs.eflags = 
     (commitarf[REG_flags] & (FLAG_ZAPS|FLAG_CF|FLAG_OF)) |
     (internal_eflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
-  ctx.user_regs.eflags = (ctx.user_regs.eflags & ~FLAG_IOPL) | ((kernel_mode ? 1 : 3) << 12);
+  ctx.user_regs.eflags = (ctx.user_regs.eflags & ~FLAG_IOPL) | ((kernel_mode ? 1 : 3) << 12) | FLAG_IF;
 
   ctx.user_regs.entry_vector = x86_exception;
   ctx.user_regs.error_code = error_code;
@@ -192,6 +202,13 @@ void Context::saveto(vcpu_guest_context& ctx) {
   ctx.user_regs.gs = seg[SEGID_GS].selector;
 
   fxsave(*(FXSAVEStruct*)&ctx.fpu_ctxt);
+
+  assert((ctx.flags & VGCF_HVM_GUEST) == 0);
+}
+
+void Context::saveto(vcpu_extended_context& ctx) {
+  ctx.guest_table = kernel_ptbase_mfn;
+  ctx.guest_table_user = user_ptbase_mfn;
 }
 
 ostream& operator <<(ostream& os, const Level1PTE& pte) {

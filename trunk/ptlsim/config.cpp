@@ -158,6 +158,13 @@ int ConfigurationParserBase::parse(void* baseptr, int argc, char* argv[]) {
 int ConfigurationParserBase::parse(void* baseptr, char* argstr) {
   dynarray<char*> argv;
   argv.tokenize(argstr, " ");
+  foreach (i, argv.length) {
+    // Skip comments
+    if (argv[i][0] == '#') {
+      argv.resize(i);
+      break;
+    }
+  }
   return parse(baseptr, argv.length, argv);
 }
 
@@ -210,4 +217,72 @@ ostream& ConfigurationParserBase::print(const void* baseptr, ostream& os) const 
   }
 
   return os;
+}
+
+void expand_command_list(dynarray<char*>& list, int argc, char** argv, int depth) {
+  dynarray<char*> includes;
+  stringbuf line;
+
+  if (depth >= 1024) {
+    cerr << "Warning: excessive depth (infinite recursion?) while expanding command list", endl;
+    return;
+  }
+
+  foreach (i, argc) {
+    char* arg = argv[i];
+    if (arg[0] == '@') {
+      includes.push(arg+1);
+    } else if (arg[0] == ':') {
+      list.push(strdup(line));
+      line.reset();
+    } else {
+      line << argv[i];
+      if (i != (argc-1)) line << " ";
+    }
+  }
+
+  if (strlen(line)) {
+    list.push(strdup(line));
+  }
+
+  foreach (i, includes.length) {
+    char* listfile = includes[i];
+    istream is(listfile);
+    if (!is) {
+      cerr << "Warning: cannot open command list file '", listfile, "'", endl;
+      continue;
+    }
+
+    for (;;) {
+      line.reset();
+      is >> line;
+      if (!is) break;
+
+      char* p = strchr(line, '#');
+      if (p) *p = 0;
+      int length = strlen(line);
+      bool empty = 1;
+      foreach (j, length) {
+        empty &= ((line[j] == ' ') | (line[j] == '\t'));
+      }
+      if (empty) continue;
+
+      expand_command_list(list, line, depth + 1);
+    }
+  }
+}
+
+void expand_command_list(dynarray<char*>& list, char* args, int depth) {
+  dynarray<char*> argv;
+  char* temp = argv.tokenize(strdup(args), " ");
+  expand_command_list(list, argv.length, argv, depth);
+  delete temp;
+}
+
+void free_command_list(dynarray<char*>& list) {
+  foreach (i, list.length) {
+    delete list[i];
+    list[i] = null;
+  }
+  list.resize(0);
 }

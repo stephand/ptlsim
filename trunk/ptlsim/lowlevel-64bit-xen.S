@@ -218,6 +218,7 @@ xen_event_callback_entry:
   save_regs 0
   call xen_event_callback
   restore_regs_and_iret 0
+# We're always in kernel mode:
 # or    byte ptr [%rsp + (2+1)*8],3
 # or    byte ptr [%rsp + (2+4)*8],3
 # pop   %rcx

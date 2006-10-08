@@ -816,10 +816,6 @@ struct SequentialCore {
       // Don't advance on cracked loads/stores:
       uopindex += unaligned_ldst_buf.empty();
       current_uop_in_macro_op++;
-      iterations++;
-      sim_cycle++;
-      stats.summary.cycles++;
-      seq_total_cycles++;
     }
 
     if (barrier) return SEQEXEC_BARRIER;
@@ -950,6 +946,8 @@ struct SequentialMachine: public PTLsimMachine {
       exiting |= check_for_async_sim_break();
 
       iterations++;
+      sim_cycle++;
+      stats.summary.cycles++;
 
       if unlikely (exiting) break;
     }

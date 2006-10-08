@@ -150,6 +150,8 @@ struct PTLsimConfig {
   bool stop;
   bool native;
   bool kill;
+  bool flush_command_queue;
+  bool simswitch;
 #endif
 
   stringbuf core_name;

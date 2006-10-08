@@ -1,0 +1,174 @@
+diff -r c4f3f719d997 xen/arch/x86/sysctl.c
+--- a/xen/arch/x86/sysctl.c	Sat Sep 23 13:54:58 2006
++++ b/xen/arch/x86/sysctl.c	Sun Oct  8 01:20:36 2006
+@@ -24,6 +24,91 @@
+ #include <asm/hvm/hvm.h>
+ #include <asm/hvm/support.h>
+ #include <asm/processor.h>
++
++/*
++ * Lockup debugging
++ */
++extern char *video;
++int enable_lockup_debug_dump = 0;
++static unsigned int print_counter;
++unsigned long last_page_fault_from_rip = 0;
++
++static int word_to_hex(char* dest, uint64_t v, int bytes) {
++    static const char* hexdigits = "0123456789abcdef";
++    int i;
++    int n = bytes * 2;
++ 
++    for (i = 0; i < n; i++) {
++      dest[(n-1) - i] = hexdigits[v & 0xf];
++      v >>= 4;
++    }
++
++    return n;
++}
++
++void print_direct_to_screen(const char* buf, int len, int line) {
++    int i;
++    char* dest;
++
++    if (!enable_lockup_debug_dump) return;
++
++    dest = video + (line * 80 * 2);
++
++    for (i = 0; i < len; i++) {
++        dest[i*2 + 0] = buf[i];
++        dest[i*2 + 1] = 7; // white on black
++    }
++}
++
++void print_lockup_debug_dump(struct cpu_user_regs *regs) {
++    char buf[128];
++    char* p;
++    unsigned long cr2;
++    unsigned long cr3;
++    unsigned int flags;
++
++    if (!enable_lockup_debug_dump)
++        return;
++
++    if (!video)
++       return;
++
++    if (!dom0)
++        return;
++
++    print_counter++;
++
++    if ((print_counter & enable_lockup_debug_dump) != 0)
++	return;
++
++    __asm__ __volatile__("mov %%cr2,%0" : "=r" (cr2) : );
++    cr3 = read_cr3();
++    __save_flags(flags);
++
++    memset(buf, ' ', sizeof(buf));
++
++    p = buf;
++    p += word_to_hex(p, regs->rip, 8) + 1;
++    p += word_to_hex(p, cr2, 8) + 1;
++    p += word_to_hex(p, last_page_fault_from_rip, 8) + 1;
++    p += word_to_hex(p, cr3 >> 12, 4) + 1;
++    p += word_to_hex(p, flags, 4) + 1;
++    if (dom0->shared_info) {
++        *p++ = (dom0->shared_info->vcpu_info[0].evtchn_upcall_mask) ? 'M' : '-';
++        *p++ = ' ';
++        *p++ = (dom0->shared_info->vcpu_info[0].evtchn_upcall_pending) ? 'P' : '-';
++        *p++ = ' ';
++        //p += word_to_hex(p, dom0->shared_info->evtchn_mask[0], 2) + 1;
++        //p += word_to_hex(p, dom0->shared_info->evtchn_pending[0], 2) + 1;
++    } else {
++        *p++ = 'X';
++        p++;
++    }
++
++    p += word_to_hex(p, print_counter, 2) + 1;
++
++    print_direct_to_screen(buf, 79, 0);
++}
+ 
+ long arch_do_sysctl(
+     struct xen_sysctl *sysctl, XEN_GUEST_HANDLE(xen_sysctl_t) u_sysctl)
+@@ -57,6 +142,19 @@
+     }
+     break;
+     
++    case XEN_SYSCTL_set_lockup_debug:
++    {
++        unsigned int enable = sysctl->u.set_lockup_debug.enable;
++        if (enable) {
++            printk("Enable lockup debugging printout at level %d (video %p)\n", enable, video);
++            enable_lockup_debug_dump = enable;
++        } else {
++            printk("Disable lockup debugging printout\n");
++            enable_lockup_debug_dump = 0;
++        }
++        ret = 0;
++    }
++    break;
+ 
+     default:
+         ret = -ENOSYS;
+diff -r c4f3f719d997 xen/arch/x86/time.c
+--- a/xen/arch/x86/time.c	Sat Sep 23 13:54:58 2006
++++ b/xen/arch/x86/time.c	Sun Oct  8 01:20:36 2006
+@@ -143,12 +154,18 @@
+     return product;
+ }
+ 
++extern int enable_lockup_debug_dump;
++extern void print_lockup_debug_dump(struct cpu_user_regs *regs);
++
+ void timer_interrupt(int irq, void *dev_id, struct cpu_user_regs *regs)
+ {
+     ASSERT(local_irq_is_enabled());
+ 
+     /* Update jiffies counter. */
+     (*(unsigned long *)&jiffies)++;
++
++    if (unlikely (enable_lockup_debug_dump))
++        print_lockup_debug_dump(regs);
+ 
+     /* Rough hack to allow accurate timers to sort-of-work with no APIC. */
+     if ( !cpu_has_apic )
+diff -r c4f3f719d997 xen/include/public/sysctl.h
+--- a/xen/include/public/sysctl.h	Sat Sep 23 13:54:58 2006
++++ b/xen/include/public/sysctl.h	Sun Oct  8 01:20:36 2006
+@@ -122,6 +122,13 @@
+ typedef struct xen_sysctl_getdomaininfolist xen_sysctl_getdomaininfolist_t;
+ DEFINE_XEN_GUEST_HANDLE(xen_sysctl_getdomaininfolist_t);
+ 
++#define XEN_SYSCTL_set_lockup_debug 7
++struct xen_sysctl_set_lockup_debug {
++    unsigned int enable;
++};
++typedef struct xen_sysctl_set_lockup_debug xen_sysctl_set_lockup_debug_t;
++DEFINE_XEN_GUEST_HANDLE(xen_sysctl_set_lockup_debug_t);
++
+ struct xen_sysctl {
+     uint32_t cmd;
+     uint32_t interface_version; /* XEN_SYSCTL_INTERFACE_VERSION */
+@@ -132,6 +139,7 @@
+         struct xen_sysctl_sched_id          sched_id;
+         struct xen_sysctl_perfc_op          perfc_op;
+         struct xen_sysctl_getdomaininfolist getdomaininfolist;
++        struct xen_sysctl_set_lockup_debug  set_lockup_debug;
+         uint8_t                             pad[128];
+     } u;
+ };
+diff -r c4f3f719d997 xen/drivers/video/vga.c
+--- a/xen/drivers/video/vga.c	Sat Sep 23 13:54:58 2006
++++ b/xen/drivers/video/vga.c	Sun Oct  8 01:20:36 2006
+@@ -561,7 +561,7 @@
+ static const struct font_desc *font;
+ 
+ static int xpos, ypos;
+-static unsigned char *video;
++unsigned char *video;
+ 
+ /* vga: comma-separated options. */
+ static char opt_vga[30] = "";

@@ -568,7 +568,7 @@ union VirtAddr {
 #define DefinePTESetField(T, func, field) inline T func(W64 val) const { T pte(*this); pte.field = val; return pte; }
 
 typedef struct Level4PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, mfn:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, mfn:40, avlhi:11, nx:1;
   RawDataAccessors(Level4PTE, W64);
 
   DefinePTESetField(Level4PTE, P, p);
@@ -583,7 +583,7 @@ typedef struct Level4PTE {
 };
 
 struct Level3PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, mfn:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, ign:1, mbz:2, avl:3, mfn:40, avlhi:11, nx:1;
   RawDataAccessors(Level3PTE, W64);
 
   DefinePTESetField(Level3PTE, P, p);
@@ -598,7 +598,7 @@ struct Level3PTE {
 };
 
 struct Level2PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, psz:1, mbz:1, avl:3, mfn:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, psz:1, mbz:1, avl:3, mfn:40, avlhi:11, nx:1;
   RawDataAccessors(Level2PTE, W64);
 
   DefinePTESetField(Level2PTE, P, p);
@@ -615,7 +615,7 @@ struct Level2PTE {
 };
 
 struct Level1PTE {
-  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, mfn:51, nx:1;
+  W64 p:1, rw:1, us:1, pwt:1, pcd:1, a:1, d:1, pat:1, g:1, avl:3, mfn:40, avlhi:11, nx:1;
   RawDataAccessors(Level1PTE, W64);
 
   void accum(const Level1PTE& l) { p &= l.p; rw &= l.rw; us &= l.us; nx |= l.nx; }
@@ -710,6 +710,7 @@ struct EFER {
 };
 
 struct vcpu_guest_context;
+struct vcpu_extended_context;
 
 Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);
@@ -800,6 +801,7 @@ struct ContextBase {
   Waddr vm_assist;
 
   W64 base_tsc;
+  W64 base_system_time;
   W64 core_freq_hz;
   double sys_time_cycles_to_nsec_coeff;
 
@@ -854,7 +856,9 @@ struct Context: public ContextBase {
 
 #ifdef PTLSIM_HYPERVISOR
   void restorefrom(const vcpu_guest_context& ctx);
+  void restorefrom(const vcpu_extended_context& ctx);
   void saveto(vcpu_guest_context& ctx);
+  void saveto(vcpu_extended_context& ctx);
 
   bool gdt_entry_valid(W16 idx);
   SegmentDescriptor get_gdt_entry(W16 idx);

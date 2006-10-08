@@ -83,6 +83,19 @@ static inline void sldt(W16& selector) {
   asm volatile("sldt %[selector]" : [selector] "=m" (selector) : : "memory");
 }
 
+#define XEN_EMULATE_PREFIX ".byte 0x0f,0x0b,0x78,0x65,0x6e ; "
+
+static inline void cpuidxen(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {
+	asm(XEN_EMULATE_PREFIX "cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "0" (op + 0x40000000));
+}
+
+static inline W64 rdpmc(W32 op) {
+  W32 eax;
+  W32 edx;
+	asm volatile("rdpmc" : "=a" (eax), "=d" (edx) : "c" (op));
+  return (((W64)edx) << 32) + ((W64)eax);
+}
+
 int main(int argc, char* argv[]) {
   W32 eax, ebx, ecx, edx;
   W32 maxfuncs;
@@ -211,9 +224,9 @@ int main(int argc, char* argv[]) {
     DescriptorTablePointer gdt, idt;
     W16 ldt;
 
-    sgdt(gdt);
-    sidt(idt);
-    sldt(ldt);
+    // sgdt(gdt);
+    // sidt(idt);
+    // sldt(ldt);
     cout << "Descriptor Tables", endl, flush;
     cout << "  GDT: ", gdt, endl;
     cout << "  IDT: ", idt, endl;

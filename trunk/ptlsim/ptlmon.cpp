@@ -21,7 +21,7 @@ typedef W16 domid_t;
 #include <xen/linux/privcmd.h>
 #include <xen/linux/evtchn.h>
 
-#define EXCLUDE_BOOTINFO_SHINFO
+#define PTLSIM_IN_PTLMON
 #include <ptlxen.h>
 
 asmlinkage {
@@ -91,7 +91,6 @@ static int xc_alloc_unbound(int xc, int domfrom, int domto) {
   req.dom = domto;
   req.remote_dom = domfrom;
   int rc = do_evtchn_op(xc, EVTCHNOP_alloc_unbound, &req, sizeof(req));
-  cout << "Result: ", rc, " vs port ", req.port, endl;
   return (rc < 0) ? rc : req.port;
 }
 
@@ -224,6 +223,21 @@ void ptl_zero_private_pages(void* addr, Waddr bytecount) {
   sys_madvise((void*)floor((Waddr)addr, PAGE_SIZE), bytecount, MADV_DONTNEED);
 }
 
+// In dom0, PTLmon runs in userspace so it can't mmap at the real address.
+#define PTLSIM_PSEUDO_VIRT_BASE 0x10000000
+
+template <typename T>
+static inline T ptlcore_ptr_to_ptlmon_ptr(T p) {
+  if (!p) return p;
+  return (T)((((Waddr)p) - PTLSIM_VIRT_BASE) + PTLSIM_PSEUDO_VIRT_BASE);
+}
+
+template <typename T>
+static inline T ptlmon_ptr_to_ptlcore_ptr(T p) {
+  if (!p) return p;
+  return (T)((((Waddr)p) - PTLSIM_PSEUDO_VIRT_BASE) + PTLSIM_VIRT_BASE);
+}
+
 // This is from ptlxen.bin.o:
 extern byte _binary_ptlxen_bin_start;
 extern byte _binary_ptlxen_bin_end;
@@ -242,15 +256,12 @@ struct PendingRequestLinkManager: public ObjectLinkManager<PendingRequest> {
 
 queue<PendingRequest, PendingRequestLinkManager> requestq;
 
-SelfHashtable<W64, PendingRequest, 16, PendingRequestLinkManager> pendingreqs;
+typedef SelfHashtable<W64, PendingRequest, 16, PendingRequestLinkManager> PendingRequestTable;
+PendingRequestTable pendingreqs;
 
 struct XenController;
 
-void complete_upcall(XenController& xc, W64 uuid);
-void fill_requestq_from_scriptq(XenController& xc);
-
 static inline bool thunk_ptr_valid(Waddr w) {
-  //Waddr w = (Waddr)p;
   return (inrange(w, (Waddr)PTLSIM_XFER_PAGE_VIRT_BASE, PTLSIM_XFER_PAGE_VIRT_BASE+4095));
 }
 
@@ -293,6 +304,7 @@ struct XenController {
   int evtchnfd;
   int ptlsim_hostcall_port;
   int ptlsim_upcall_port;
+  int ptlsim_breakout_port;
 
   W64 total_machine_pages;
   W64 xen_hypervisor_start_va;
@@ -306,6 +318,7 @@ struct XenController {
     shinfo = null;
     bootinfo = null;
     ctx = null;
+    next_upcall_uuid = 1;
   }
 
   void* map_pages(mfn_t* mfns, size_t count, int prot = PROT_READ, void* base = null, int flags = 0) {
@@ -361,8 +374,8 @@ struct XenController {
     return ptl_mfns[ptl_virt_to_pfn(virt)];
   }
 
-  pfn_t ptl_level4_pfn, ptl_level3_pfn, ptl_level2_pfn, ptl_level1_pfn;
-  mfn_t ptl_level4_mfn, ptl_level3_mfn, ptl_level2_mfn;
+  pfn_t ptl_level4_pfn, ptl_level3_pfn, phys_level3_pfn, ptl_level2_pfn, ptl_level1_pfn;
+  mfn_t ptl_level4_mfn, ptl_level3_mfn, phys_level3_mfn, ptl_level2_mfn;
 
   bool alloc_ptlsim_pages(mfn_t* mfns, int ptl_page_count) {
     static const int MAX_ATTEMPTS = 4;
@@ -585,6 +598,9 @@ struct XenController {
     bootinfo->ptl_pagedir_map = (Level2PTE*)(PTLSIM_VIRT_BASE + ((byte*)ptl_level2 - image));
     bootinfo->ptl_pagedir_map_mfn = ptl_level2_mfn;
 
+    //
+    // Allocate PTLsim L3 page
+    //
     alloc_page(Level3PTE, ptl_level3, ptl_level3_pfn, ptl_level3_mfn);
     memset(ptl_level3, 0, PAGE_SIZE);
 
@@ -598,7 +614,7 @@ struct XenController {
     bootinfo->ptl_level3_mfn = ptl_level3_mfn;
 
     //
-    // Finish toplevel
+    // Finish toplevel template
     //
     alloc_page(Level4PTE, ptl_level4, ptl_level4_pfn, ptl_level4_mfn);
     memset(ptl_level4, 0, PAGE_SIZE);
@@ -671,7 +687,7 @@ struct XenController {
     // Alocate virtual shinfo redirect page (for event recording and replay)
     //
     shadow_shinfo = ptlcore_ptr_to_ptlmon_ptr((shared_info_t*)PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE);
-    memcpy(shadow_shinfo, shinfo, PAGE_SIZE);
+    // shadow_shinfo will be filled in by Xen during the context swap
     if (DEBUG) cerr << "  Shadow shared info page at ", shadow_shinfo, endl, flush;
 
     //
@@ -706,6 +722,8 @@ struct XenController {
     bootinfo->hostcall_port = -1; // will be filled in by PTLsim on connect
     bootinfo->monitor_upcall_port = ptlsim_upcall_port;
     bootinfo->upcall_port = -1; // will be filled in by PTLsim on connect
+    bootinfo->monitor_breakout_port = ptlsim_breakout_port;
+    bootinfo->breakout_port = -1; // will be filled in by PTLsim on connect
     bootinfo->hostreq.ready = 0;
     bootinfo->hostreq.op = PTLSIM_HOST_NOP;
     bootinfo->ptlsim_state = PTLSIM_STATE_INITIALIZING;
@@ -753,12 +771,6 @@ struct XenController {
 
     if (DEBUG) cerr << "  Make L4 mfn ", ptl_level4_mfn, " the L4 page table overlay page", endl, flush;
 
-    mmuext_op_t mmuextop;
-    mmuextop.cmd = MMUEXT_SET_PT_OVERLAY;
-    mmuextop.arg1.linear_addr = (W64)ptl_level4;
-    rc = xc_mmuext_op(xc, &mmuextop, 1, domain);
-    if (DEBUG) cerr << "  mmuext_op set_pt_overlay rc = ", rc, endl, flush;
-
     //
     // Unmap the read/write middle region and remap as read only (except for stack, which gets mapped read/write)
     //
@@ -788,6 +800,7 @@ struct XenController {
     assert((Waddr)map_pages(ptl_mfns, shared_map_page_count, PROT_READ|PROT_WRITE, (void*)PTLSIM_PSEUDO_VIRT_BASE, MAP_FIXED) == PTLSIM_PSEUDO_VIRT_BASE);
 
     prep_initial_context(ctx, vcpu_count);
+
     ctx[0].commitarf[REG_rip] = ehdr.e_entry;
     ctx[0].commitarf[REG_rsp] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(sp);
     ctx[0].commitarf[REG_rdi] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(bootinfo); // start info in %rdi (arg[0])
@@ -1018,6 +1031,7 @@ struct XenController {
       getcontext(i, ptlctx);
 
       ptlctx.cr3 = (ptl_virt_to_mfn(toplevel_page_table) << log2(PAGE_SIZE));
+
       ptlctx.kernel_ptbase_mfn = ptlctx.cr3 >> 12;
       ptlctx.user_ptbase_mfn = ptlctx.cr3 >> 12;
 
@@ -1033,16 +1047,9 @@ struct XenController {
 
       memset(ptlctx.idt, 0, sizeof(ptlctx.idt));
 
-#if defined(__i386__)
-      ptlctx.event_callback_cs     = FLAT_KERNEL_CS;
-      ptlctx.event_callback_rip    = 0;
-      ptlctx.failsafe_callback_cs  = FLAT_KERNEL_CS;
-      ptlctx.failsafe_callback_rip = 0;
-#elif defined(__x86_64__)
       ptlctx.event_callback_rip    = 0;
       ptlctx.failsafe_callback_rip = 0;
       ptlctx.syscall_rip = 0;
-#endif
     }
   }
 
@@ -1066,23 +1073,74 @@ struct XenController {
 
     alloc.remote_domain = domain;
     ptlsim_upcall_port = ioctl(evtchnfd, IOCTL_EVTCHN_BIND_UNBOUND_PORT, &alloc);
+
+    alloc.remote_domain = domain;
+    ptlsim_breakout_port = ioctl(evtchnfd, IOCTL_EVTCHN_BIND_UNBOUND_PORT, &alloc);
   }
 
   //
   // Copy the saved context in ctx (in PTLsim space) into the real
   // context, and save the old context back into ctx.
   //
-  void swap_context() {
+  void swap_context(bool target_is_ptlsim) {
     int rc;
-    pause();
+    sync();
+    sync();
 
-    Context temp;
+    vcpu_guest_context_t* newctx = new vcpu_guest_context_t[vcpu_count];
+    mlock(newctx, sizeof(vcpu_guest_context_t) * vcpu_count);
+
+    vcpu_guest_context_t* oldctx = new vcpu_guest_context_t[vcpu_count];
+    mlock(oldctx, sizeof(vcpu_guest_context_t) * vcpu_count);
+
+    vcpu_extended_context_t* oldext = new vcpu_extended_context_t[vcpu_count];
+    mlock(oldext, sizeof(vcpu_extended_context_t) * vcpu_count);
+
+    vcpu_extended_context_t* newext = new vcpu_extended_context_t[vcpu_count];
+    mlock(newext, sizeof(vcpu_extended_context_t) * vcpu_count);
 
     foreach (i, vcpu_count) {
-      getcontext(i, temp);
-      setcontext(i, ctx[i]);
-      ctx[i] = temp;
+      ctx[i].saveto(newctx[i]);
+      ctx[i].saveto(newext[i]);
     }
+
+    xen_domctl_t dom0op;
+    dom0op.domain = domain;
+    dom0op.u.contextswap.vcpumap = bitmask(vcpu_count);
+    if (target_is_ptlsim) {
+      // native -> PTLsim
+      dom0op.u.contextswap.old_shared_info = shadow_shinfo;
+      dom0op.u.contextswap.new_shared_info = null; // leave as is: PTLsim will set this up
+    } else {
+      // PTLsim -> native
+      dom0op.u.contextswap.old_shared_info = null; // no need to save
+      dom0op.u.contextswap.new_shared_info = shadow_shinfo;
+    }
+      
+    dom0op.u.contextswap.oldctx = oldctx;
+    dom0op.u.contextswap.newctx = newctx;
+    dom0op.u.contextswap.oldext = oldext;
+    dom0op.u.contextswap.newext = newext;
+    dom0op.cmd = XEN_DOMCTL_contextswap;
+
+    rc = xc_domctl(xc, &dom0op);
+
+    foreach (i, vcpu_count) {
+      ctx[i].restorefrom(oldctx[i]);
+      ctx[i].restorefrom(oldext[i]);
+    }
+
+    munlock(newext, sizeof(vcpu_extended_context_t) * vcpu_count);
+    delete newext;
+
+    munlock(oldext, sizeof(vcpu_extended_context_t) * vcpu_count);
+    delete oldext;
+
+    munlock(oldctx, sizeof(vcpu_guest_context_t) * vcpu_count);
+    delete oldctx;
+
+    munlock(newctx, sizeof(vcpu_guest_context_t) * vcpu_count);
+    delete newctx;
   }
 
   bool first_time;
@@ -1091,13 +1149,12 @@ struct XenController {
   // Switch back to a frozen instance of PTLsim
   //
   void switch_to_ptlsim(bool first_time = false) {
+    swap_context(true);
     shinfo->vcpu_info[0].evtchn_upcall_mask = 1;
-    swap_context();
 
     //
     // Send event to kick-start it
     //
-
     if (!first_time) {
       bootinfo->hostreq.ready = 1;
       bootinfo->hostreq.rc = 0;
@@ -1110,20 +1167,122 @@ struct XenController {
     unpause();
   }
 
+  W64 next_upcall_uuid;
+
+  W64 enqueue_upcall(const char* buf, size_t length) {
+    PendingRequest* req = new PendingRequest();
+    req->uuid = next_upcall_uuid++;
+    req->fd = -1;
+    req->data = new char[length+1];
+    memcpy(req->data, buf, length);
+    req->data[length] = 0;
+    
+    requestq.enqueue(req);
+    xadd(bootinfo->queued_upcall_count, +1);
+    return req->uuid;
+  }
+
+  W64 flush_upcall_queue(W64 uuidlimit = 0) {
+    int n = 0;
+    PendingRequest* req;
+    while ((req = requestq.dequeue())) {
+      xadd(bootinfo->queued_upcall_count, -1);
+      n++;
+      delete req->data;
+      req->data = null;
+      delete req;
+    }
+
+    PendingRequestTable::Iterator iter(&pendingreqs);
+    while (req = iter.next()) {
+      pendingreqs.remove(req);
+
+      if (req->fd >= 0) {
+        stringbuf reply;
+        reply << "OK", endl;
+        sys_write(req->fd, (char*)reply, strlen(reply));
+        sys_close(req->fd);
+      }
+
+      delete req->data;
+      req->data = null;
+      delete req;
+
+      n++;
+    }
+
+    return n;
+  }
+
+  void complete_upcall(W64 uuid) {
+    PendingRequest* req = pendingreqs.get(uuid);
+
+    if (!req) {
+      cout << endl;
+      // cout << "Warning: PTLxen notified us of an unknown completed request (uuid ", uuid, ")", endl, flush;
+      return;
+    }
+
+    pendingreqs.remove(req);
+
+    if (req->fd >= 0) {
+      stringbuf reply;
+      reply << "OK", endl;
+      sys_write(req->fd, (char*)reply, strlen(reply));
+      sys_close(req->fd);
+    }
+
+    delete req->data;
+    req->data = null;
+    delete req;
+  }
+
+  void enqueue_upcall_from_socket(int fd) {
+    int rc = -EINVAL;
+    int n;
+    size_t request_bytes = 0;
+
+    stringbuf sb;
+    istream is(fd);
+    is >> sb;
+
+    // cerr << "Received request ", next_upcall_uuid, " [", (char*)sb, "]", endl, flush;
+
+    dynarray<char*> list;
+    expand_command_list(list, sb);
+
+    //
+    // Tell the core to stop the current run at the next cycle, then wait:
+    //
+    flush_upcall_queue();
+    bootinfo->abort_request = 1;
+
+    foreach (i, list.length) {
+      enqueue_upcall(list[i], strlen(list[i]));
+    }
+
+    free_command_list(list);
+
+    if (xchg(bootinfo->ptlsim_state, (int)PTLSIM_STATE_RUNNING) == PTLSIM_STATE_NATIVE) {
+      cerr << "External mode switch request received", endl, flush;
+      switch_to_ptlsim();
+      cerr << "  Switched to simulation mode", endl, flush;
+    }
+
+    complete_hostcall();
+
+    return;
+  }
+
   int process_event() {
     int rc;
-
-    W32 readyport = 0;
-    rc = read(evtchnfd, &readyport, sizeof(readyport));
-    // Re-enable it:
-    rc = write(evtchnfd, &readyport, sizeof(readyport));
 
     int op = bootinfo->hostreq.op;
 
     bootinfo->hostreq.ready = 0;
 
-    // cerr << "procss_event: hostreq op ", bootinfo->hostreq.op, ", syscall_id ", bootinfo->hostreq.syscall.syscallid, ", pending_upcall_count ", bootinfo->queued_upcall_count, endl, flush;
-
+    // cerr << "process_event: hostreq op ", bootinfo->hostreq.op, ", syscall_id ", bootinfo->hostreq.syscall.syscallid, ", pending_upcall_count ", bootinfo->queued_upcall_count, endl, flush;
+    
     switch (bootinfo->hostreq.op) {
     case PTLSIM_HOST_SYSCALL: {
       W64 syscall = bootinfo->hostreq.syscall.syscallid;
@@ -1180,13 +1339,13 @@ struct XenController {
                                               arg4,
                                               arg5,
                                               arg6);
-#if 0
+ #if 0
       cerr << "  syscall result = ", bootinfo->hostreq.rc, endl, flush;
 #endif
       break;
     };
     case PTLSIM_HOST_SWITCH_TO_NATIVE: {
-      pause();
+      // pause();
       //
       // We have to be careful when copying the shadow shinfo page
       // back over the real shinfo page since Xen updates the timers
@@ -1198,25 +1357,11 @@ struct XenController {
       // It may have missed some periodic events (timer, console) but those can be
       // discarded without ill effects (other than unavoidable jumpyness).
       //
-      memcpy(shinfo->evtchn_mask, shadow_shinfo->evtchn_mask, sizeof(shinfo->evtchn_mask));
-      memcpy(shinfo->evtchn_pending, shadow_shinfo->evtchn_pending, sizeof(shinfo->evtchn_pending));
-      foreach (i, vcpu_count) {
-        const vcpu_info& src = shadow_shinfo->vcpu_info[i];
-        vcpu_info& dest = shinfo->vcpu_info[i];
-        dest.arch = src.arch;
-        dest.evtchn_upcall_mask = src.evtchn_upcall_mask;
-        dest.evtchn_upcall_pending = src.evtchn_upcall_pending;
-        dest.evtchn_pending_sel = src.evtchn_pending_sel;
-      }
 
-      swap_context();
+      swap_context(false);
 
-      // Context newctx;
-      // getcontext(0, newctx);
-      // cout << "ptlmon: Updated context:", endl, newctx, endl, flush;
-
-      bootinfo->ptlsim_state = ((bootinfo->hostreq.op == PTLSIM_HOST_SWITCH_TO_NATIVE) ? PTLSIM_STATE_NATIVE : PTLSIM_STATE_NONE);
-      cout << "ptlmon: Domain ", domain, " is now running in native mode", endl, flush;
+      bootinfo->ptlsim_state = PTLSIM_STATE_NATIVE;
+      cerr << "  Switched to native mode", endl, flush;
       bootinfo->hostreq.rc = 0;
       if (!bootinfo->hostreq.switch_to_native.pause) unpause();
 
@@ -1224,21 +1369,24 @@ struct XenController {
     };
     case PTLSIM_HOST_SHUTDOWN: {
       pause();
-      cout << "ptlmon: Domain ", domain, " has shut down", endl, flush;
+      cerr << "ptlmon: Domain ", domain, " has shut down", endl, flush;
       return 1;
     };
     case PTLSIM_HOST_ACCEPT_UPCALL: {
-      if (requestq.empty()) {
-        fill_requestq_from_scriptq(*this);
-      }
-
       if ((!requestq.empty()) | (!bootinfo->hostreq.accept_upcall.blocking)) complete_hostcall();
-      //cout << "get_request: queue empty!", endl, flush;
       // Otherwise wait for user to add a request
       return 0;
     }
     case PTLSIM_HOST_COMPLETE_UPCALL: {
-      complete_upcall(*this, bootinfo->hostreq.complete_upcall.uuid);
+      complete_upcall(bootinfo->hostreq.complete_upcall.uuid);
+      break;
+    }
+    case PTLSIM_HOST_INJECT_UPCALL: {
+      bootinfo->hostreq.rc = enqueue_upcall(ptlcore_ptr_to_ptlmon_ptr(bootinfo->hostreq.inject_upcall.buf), bootinfo->hostreq.inject_upcall.length);
+      break;
+    }
+    case PTLSIM_HOST_FLUSH_UPCALL_QUEUE: {
+      bootinfo->hostreq.rc = flush_upcall_queue(bootinfo->hostreq.flush_upcall_queue.uuid_limit);
       break;
     }
     default:
@@ -1265,9 +1413,8 @@ struct XenController {
 
       if (req) {
         xadd(bootinfo->queued_upcall_count, -1);
-        int n = min(strlen(req->data), bootinfo->hostreq.accept_upcall.count-1);
+        int n = min(strlen(req->data), bootinfo->hostreq.accept_upcall.length-1);
 
-        // cout << "Returning accept_upcall for uuid ", req->uuid, ": data [", req->data, "]", endl, flush; 
         strncpy(ptlcore_ptr_to_ptlmon_ptr(bootinfo->hostreq.accept_upcall.buf), req->data, n);
         *(ptlcore_ptr_to_ptlmon_ptr(bootinfo->hostreq.accept_upcall.buf + n)) = 0;
         bootinfo->hostreq.rc = req->uuid;
@@ -1275,7 +1422,6 @@ struct XenController {
         pendingreqs.add(req);
       } else {
         if (bootinfo->hostreq.accept_upcall.blocking) {
-          //cout << "Cannot complete get_request: queue empty!", endl, flush;
           return 0;
         }
 
@@ -1286,7 +1432,6 @@ struct XenController {
       break;
     }
     default: {
-      //cout << "ptlmon: host request type ", op, " was not a continuation", endl;
       break;
     }
     }
@@ -1298,19 +1443,6 @@ struct XenController {
     rc = ioctl(evtchnfd, IOCTL_EVTCHN_NOTIFY, &notify);
     return 0;
   }
-
-  //
-  // Send an asynchronous upcall to PTLsim inside the domain
-  //
-  /*
-  int send_upcall(const PTLsimUpcall& upcall) {
-    memcpy(&bootinfo->upcall, &upcall, sizeof(upcall));
-    ioctl_evtchn_notify notify;
-    notify.port = ptlsim_upcall_port;
-    int rc = ioctl(evtchnfd, IOCTL_EVTCHN_NOTIFY, &notify);
-    return rc;
-  }
-  */
 
   XenController(int domain) {
     attach(domain);
@@ -1371,47 +1503,6 @@ struct XenController {
     return rc;
   }
 
-  int setcontext(int vcpu, Context& ctx) {
-    vcpu_guest_context_t xenctx;
-    ctx.saveto(xenctx);
-    assert(domain != 0);
-
-    pause();
-
-    //
-    // Force it to kernel_ptbase: on reschedule path,
-    // hypervisor needs to set up iret frame on kernel
-    // stack; it will switch to user stack before context
-    // switching.
-    //
-
-    int rc = xc_vcpu_setcontext(xc, domain, vcpu, &xenctx);
-
-    /*
-    mmuext_op_t op;
-
-    if (ctx.user_ptbase_mfn) {
-      op.cmd = MMUEXT_SET_USER_BASEPTR;
-      op.arg1.mfn = ctx.user_ptbase_mfn;
-      op.arg2.vcpuid = vcpu;
-      //cerr << "setctx p4 before: user mfn ", op.arg1.mfn, endl, flush; syncpause();
-      rc = xc_mmuext_op(xc, &op, 1, domain);
-      //cerr << "setctx p4 after", endl, flush; syncpause();
-    }
-
-    if (ctx.kernel_ptbase_mfn) {
-      op.cmd = MMUEXT_SET_KERNEL_BASEPTR;
-      op.arg1.mfn = ctx.kernel_ptbase_mfn;
-      op.arg2.vcpuid = vcpu;
-      //cerr << "setctx p5 before: mfn ", op.arg1.mfn, endl, flush; syncpause();
-      rc = xc_mmuext_op(xc, &op, 1, domain);
-      //cerr << "setctx p5 after", endl, flush; syncpause();
-    }
-    */
-
-    return rc;
-  }
-
   int pause() {
     int rc;
     if ((rc = xc_domain_pause(xc, domain))) {
@@ -1460,16 +1551,14 @@ int send_request_to_ptlmon(int domain, const char* request) {
     return -1;
   }
 
-  cerr << "Sending request to PTLmon: [", request, "]", endl, flush;
+  cerr << "ptlsim: Sending request '", request, "' to domain ", domain, "...", flush;
 
   rc = sys_write(sd, request, strlen(request));
   sys_write(sd, "\n", 1);
 
-  cout << "Sent message (rc = ", rc, " vs size ", strlen(request), "); wait for reply...", endl, flush;
-
   char reply[64];
   rc = sys_read(sd, reply, sizeof(reply)); 
-  cout << "Received upcall reply: bytes = ", rc, ", text: '", reply, "'", endl, flush;
+  cout << reply, endl, flush;
 
   sys_close(sd);
 
@@ -1485,105 +1574,6 @@ stringbuf& merge_string_list(stringbuf& sb, const char* sep, int n, char** list)
     if (i != (n-1)) sb << sep;
   }
   return sb;
-}
-
-W64 next_upcall_uuid = 1;
-
-queue<PendingRequest> scriptq;
-W64 script_list_uuid_currently_pending = 0;
-
-void fill_requestq_from_scriptq(XenController& xc) {
-  script_list_uuid_currently_pending = 0;
-  PendingRequest* scriptreq;
-  if ((scriptreq = scriptq.dequeue())) {
-    assert(scriptreq); assert(scriptreq != (PendingRequest*)&scriptq);
-    
-    PendingRequest* newreq = new PendingRequest();
-    newreq->uuid = next_upcall_uuid++;
-    newreq->fd = -1;
-    newreq->data = scriptreq->data; // don't strdup here: we already have a copy
-    delete scriptreq;
-    // cerr << "Queued request [", newreq->data, "]", endl, flush;
-    script_list_uuid_currently_pending = newreq->uuid;
-    requestq.enqueue(newreq);
-    xadd(xc.bootinfo->queued_upcall_count, +1);
-  }
-}
-
-void complete_upcall(XenController& xc, W64 uuid) {
-  //cout << "Completing upcall for uuid ", uuid, " -> ", endl;
-
-  PendingRequest* req = pendingreqs.get(uuid);
-
-  if (!req) {
-    cout << endl;
-    cout << "Warning: PTLxen notified us of an unknown completed request (uuid ", uuid, ")", endl, flush;
-    return;
-  }
-
-  pendingreqs.remove(req);
-
-  //cout << "uuid ", req.uuid, ", fd ", req.fd, ", data [", req.data, "]", endl, flush;
-
-  if (req->fd >= 0) {
-    stringbuf reply;
-    reply << "OK", endl;
-    sys_write(req->fd, (char*)reply, strlen(reply));
-    sys_close(req->fd);
-  }
-
-  delete req->data;
-  req->data = null;
-  delete req;
-
-  fill_requestq_from_scriptq(xc);
-}
-
-void handle_upcall(XenController& xc, int fd) {
-  int rc = -EINVAL;
-  int n;
-  size_t request_bytes = 0;
-  dynarray<char*> argv;
-  stringbuf reply;
-
-  stringbuf sb;
-  istream is(fd);
-  is.readline(sb);
-
-  char* temp = argv.tokenize(strdup(sb), " ");
-
-  bool run = 0;
-
-  foreach (i, argv.count()) {
-    run |= (strequal(argv[i], "-switch"));
-  }
-
-  delete[] temp;
-
-  if (run) {
-    // If it's in the native state, switch to PTLsim first, then send the command
-    if (xc.bootinfo->ptlsim_state == PTLSIM_STATE_NATIVE) {
-      cerr << "Switching domain from native mode back to PTLsim mode...", endl, flush;
-      xc.switch_to_ptlsim();
-      reply << "Domain ", domain, " switched back to PTLsim mode.", endl;
-      cerr << reply, flush;
-    } else {
-      // PTLsim may be in the idle state: send it anyway
-      //reply << "ptlmon: Warning: cannot switch to simulation mode: domain ", domain, " was already in state ", xc.bootinfo->ptlsim_state, endl;
-      //cerr << reply, flush;
-    }
-  }
-
-  PendingRequest* req = new PendingRequest();
-  req->uuid = next_upcall_uuid++;
-  req->fd = fd;
-  req->data = strdup(sb);
-  cerr << "Received request ", req->uuid, " [", req->data, "]", endl, flush;
-  requestq.enqueue(req);
-  xadd(xc.bootinfo->queued_upcall_count, +1);
-  xc.complete_hostcall();
-
-  return;
 }
 
 void print_banner(ostream& os) {
@@ -1612,13 +1602,10 @@ void print_saved_usage(ostream& os) {
 
 int main(int argc, char** argv) {
   int rc;
+  argc--; argv++;
 
   // We need each VCPU context to be exactly one page; it was padded this way in ptlhwdef.h:
   assert(sizeof(Context) == PAGE_SIZE);
-
-  argc--; argv++;
-
-  char* listfile = null;
 
   // 32 MB default:
   W64 ptlsim_reserved_mb = 32;
@@ -1630,8 +1617,6 @@ int main(int argc, char** argv) {
       if (argc > i) { ptlsim_reserved_mb = atoi(argv[i+1]); }
     } else if (strequal(argv[i], "-bootlog")) {
       log_ptlsim_boot = 1;
-    } else if (argv[i][0] == '@') {
-      listfile = argv[i] + 1;
     }
   }
 
@@ -1652,8 +1637,6 @@ int main(int argc, char** argv) {
   rc = send_request_to_ptlmon(domain, cmdsb);
 
   if (rc < 0) {
-    cerr << "PTLsim does not appear to be running in this domain. Starting ptlmon...", endl, flush;
-
     // Inject into guest for first time, or reboot PTLsim within guest
     XenController xc;
     if (!xc.attach(domain)) return -1;
@@ -1709,37 +1692,14 @@ int main(int argc, char** argv) {
     eventctl.data.fd = xc.evtchnfd;
     assert(epoll_ctl(waitfd, EPOLL_CTL_ADD, xc.evtchnfd, &eventctl) == 0);
 
-    // Add the initial command line to the request queue.
-    PendingRequest* initreq = new PendingRequest();
-    stringbuf cmdsb;
-    initreq->uuid = next_upcall_uuid++;
-    initreq->fd = -1;
-    initreq->data = strdup(merge_string_list(cmdsb, " ", argc, argv));
-    requestq.enqueue(initreq);
-    xadd(xc.bootinfo->queued_upcall_count, +1);
-    xc.complete_hostcall();
-
-    if (listfile) {
-      istream is(listfile);
-      if (is) {
-        stringbuf line;
-        for (;;) {
-          line.reset();
-          is >> line;
-          if (!is) break;
-
-          char* p = strrchr(line, '#');
-          if (p) *p = 0;
-          if (!strlen(line)) continue;
-
-          PendingRequest* req = new PendingRequest();
-          req->data = strdup(line);
-          scriptq.enqueue(req);
-        }
-      } else {
-        cerr << "Warning: cannot open command list file '", listfile, "'", endl;
-      }
+    dynarray<char*> list;
+    expand_command_list(list, argc, argv);
+    foreach (i, list.length) {
+      xc.enqueue_upcall(list[i], strlen(list[i]));
     }
+    free_command_list(list);
+
+    xc.complete_hostcall();
 
     for (;;) {
       epoll_event event;
@@ -1754,15 +1714,32 @@ int main(int argc, char** argv) {
         socklen_t acceptlen = sizeof(acceptaddr);
         int acceptsd = accept(sd, (sockaddr*)&acceptaddr, &acceptlen);
         // NOTE: potential denial of service here, if data hasn't arrived yet (can hold up servicing hostcalls from ptlcore): use a timeout
-        handle_upcall(xc, acceptsd);
+        xc.enqueue_upcall_from_socket(acceptsd);
         epoll_ctl(waitfd, EPOLL_CTL_DEL, acceptsd, null);
       } else if (event.data.fd == xc.evtchnfd) {
-        int done = xc.process_event();
+        W32 readyport = 0;
+        rc = read(xc.evtchnfd, &readyport, sizeof(readyport));
+        // Re-enable it:
+        rc = write(xc.evtchnfd, &readyport, sizeof(readyport));
 
-        if (done) {
-          cerr << "PTLsim exited", endl, flush;
-          cerr << flush;
-          break;
+        if (readyport == xc.ptlsim_hostcall_port) {
+          int done = xc.process_event();
+          
+          if (done) {
+            cerr << "PTLsim exited", endl, flush;
+            cerr << flush;
+            break;
+          }
+        } else if (readyport == xc.ptlsim_breakout_port) {
+          // If it's in the native state, switch to PTLsim first, then send the command
+          if (xc.bootinfo->ptlsim_state == PTLSIM_STATE_NATIVE) {
+            cerr << "Breakout request received from native mode", endl, flush;
+            xc.switch_to_ptlsim();
+            cerr << "  Switched to simulation mode", endl, flush;
+          } else {
+            // PTLsim may be in the idle state: send it anyway
+            cerr << "ptlmon: Warning: cannot switch to simulation mode: domain ", domain, " was already in state ", xc.bootinfo->ptlsim_state, endl, flush;
+          }
         }
       }
     }

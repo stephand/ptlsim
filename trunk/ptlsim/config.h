@@ -111,4 +111,8 @@ struct ConfigurationParser: public T {
   void setup();
 };
 
+void expand_command_list(dynarray<char*>& list, int argc, char** argv, int depth = 0);
+void expand_command_list(dynarray<char*>& list, char* args, int depth = 0);
+void free_command_list(dynarray<char*>& list);
+
 #endif // _CONFIG_H_

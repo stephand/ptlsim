@@ -1,0 +1,95 @@
+diff -r c4f3f719d997 xen/arch/x86/x86_64/entry.S
+--- a/xen/arch/x86/x86_64/entry.S	Sat Sep 23 13:54:58 2006
++++ b/xen/arch/x86/x86_64/entry.S	Sun Oct  8 01:20:36 2006
+@@ -339,6 +339,21 @@
+         jnz   test_all_events
+         jmp   restore_all_xen
+ 
++.data
++ENTRY(last_exception_type)
++  .int 0
++
++ENTRY(last_exception_error_code)
++  .int 0
++
++ENTRY(last_exception_fixup_rip)
++  .quad 0
++
++ENTRY(last_exception_fixup_cr2)
++  .quad 0
++
++.previous
++
+         ALIGN
+ /* No special register assumptions. */
+ handle_exception:
+@@ -347,7 +362,12 @@
+         jz    exception_with_ints_disabled
+         sti
+         movq  %rsp,%rdi
++        movl  UREGS_error_code(%rsp),%eax
++        leaq  last_exception_error_code(%rip),%rdx
++        movl  %eax,(%rdx)
+         movl  UREGS_entry_vector(%rsp),%eax
++        leaq  last_exception_type(%rip),%rdx
++        movl  %eax,(%rdx)
+         leaq  exception_table(%rip),%rdx
+         GET_CURRENT(%rbx)
+         PERFC_INCR(PERFC_exceptions, %rax)
+diff -r c4f3f719d997 xen/arch/x86/x86_64/traps.c
+--- a/xen/arch/x86/x86_64/traps.c	Sat Sep 23 13:54:58 2006
++++ b/xen/arch/x86/x86_64/traps.c	Sun Oct  8 01:20:36 2006
+@@ -36,6 +36,20 @@
+            debug, print_tainted(taint_str));
+ }
+ 
++#define TRAP_COUNT 20
++static char *trap_name[TRAP_COUNT] = { 
++    "divide error", "debug", "nmi", "bkpt",
++    "overflow", "bounds", "invalid opcode", "device not available",
++    "double fault",  "coprocessor segment", "invalid tss", "segment not found", 
++    "stack error", "general protection fault", "page fault", "spurious interrupt",
++    "coprocessor error", "alignment check", "machine check", "simd error"
++};
++
++extern unsigned int last_exception_type;
++extern unsigned int last_exception_error_code;
++extern unsigned long last_exception_fixup_rip;
++extern unsigned long last_exception_fixup_cr2;
++
+ void show_registers(struct cpu_user_regs *regs)
+ {
+     struct cpu_user_regs fault_regs = *regs;
+@@ -70,6 +84,10 @@
+     }
+ 
+     print_xen_info();
++    printk("Trap: %s (%d)\n", (last_exception_type < TRAP_COUNT) ? trap_name[last_exception_type] : "Unknown", last_exception_type);
++    printk("Error code %08x\n", last_exception_error_code);
++    printk("Last fixup: rip %p, cr2 %p\n", (void*)last_exception_fixup_rip, (void*)last_exception_fixup_cr2);
++    printk("Guest VCPU flags: %lu\n", current->arch.flags);
+     printk("CPU:    %d\nRIP:    %04x:[<%016lx>]",
+            smp_processor_id(), fault_regs.cs, fault_regs.rip);
+     if ( !guest_mode(regs) )
+diff -r c4f3f719d997 xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Sat Sep 23 13:54:58 2006
++++ b/xen/arch/x86/traps.c	Sun Oct  8 01:20:36 2006
+@@ -903,6 +958,9 @@
+  *  Bit 3: Reserved bit violation
+  *  Bit 4: Instruction fetch
+  */
++extern unsigned long last_exception_fixup_rip;
++extern unsigned long last_exception_fixup_cr2;
++
+ asmlinkage int do_page_fault(struct cpu_user_regs *regs)
+ {
+     unsigned long addr, fixup;
+@@ -926,6 +984,8 @@
+ 
+         if ( likely((fixup = search_exception_table(regs->eip)) != 0) )
+         {
++            last_exception_fixup_rip = regs->eip;
++            last_exception_fixup_cr2 = addr;
+             perfc_incrc(copy_user_faults);
+             regs->eip = fixup;
+             return 0;
