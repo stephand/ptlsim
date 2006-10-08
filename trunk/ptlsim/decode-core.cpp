@@ -1681,12 +1681,6 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   TraceDecoder trans(rvp);
   trans.fillbuf(ctx);
 
-  if (rvp.rip == 0xffffffff80108ca0) {
-    logfile << "Translation of ", trans.valid_byte_count, " bytes at rvp ", rvp, ":", endl;
-    logfile << bytemaskstring(trans.insnbytes, bitmask(min(trans.valid_byte_count, 32)), min(trans.valid_byte_count, 32)), endl;
-    logfile.flush();
-  }
-
   if (logable(5) | log_code_page_ops) {
     logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
   }
