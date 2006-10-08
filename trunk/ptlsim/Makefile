@@ -20,7 +20,7 @@ endif
 # but can still run 32-bit code and operating systems
 # under it. See the FAQ for details.
 #
-PTLSIM_HYPERVISOR=1
+# PTLSIM_HYPERVISOR=1
 
 CC = g++
 
