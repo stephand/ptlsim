@@ -101,7 +101,7 @@ Matt T.
 \begin_layout Standard
 \noindent
 \align center
-Revision 20060925
+Revision 20061008
 \newline
 
 \series bold
@@ -193,12 +193,12 @@ PTLsim
 \series default
  is a state of the art cycle accurate microprocessor simulator and virtual
  machine for the x86 and x86-64 instruction sets.
- PTLsim models a modern speculative out of order x86-64 compatible processor
+ PTLsim models a modern superscalar out of order x86-64 compatible processor
  core at a configurable level of detail ranging from full-speed native execution
  on the host CPU all the way down to RTL level models of all key pipeline
  structures.
  In addition, the complete cache hierarchy, memory subsystem and supporting
- hardware devices are modeled with cycle accuracy.
+ hardware devices are modeled with true cycle accuracy.
  PTLsim supports the full x86-64 instruction set of the Pentium 4+, Athlon
  64 and similar machines with all extensions (x86-64, SSE/SSE2/SSE3, MMX,
  x87).
@@ -256,7 +256,7 @@ History
 PTLsim was designed and developed by Matt T.
  Yourst 
 \family typewriter
-\size small
+\size footnotesize
 <yourst@yourst.com>
 \family default
 \size default
@@ -264,12 +264,12 @@ PTLsim was designed and developed by Matt T.
  The main PTLsim code base, including the out of order processor model,
  has been in active development since 2003 and has been used extensively
  by our processor design research group at the State University of New York
- at Binghamton in addition to hundreds of other major academic and industry
- organizations.
+ at Binghamton in addition to hundreds of major universities, industry research
+ labs and several well known microprocessor vendors.
 \end_layout
 
 \begin_layout Standard
-PTLsim is not related to other widely used simulators.
+PTLsim is not related to other legacy simulators.
  It is our hope that PTLsim will help microprocessor researchers move to
  a contemporary and widely used instruction set (x86 and x86-64) with readily
  available hardware implementations.
@@ -343,7 +343,7 @@ If you simply want to
 \emph on
 use
 \emph default
- PTLsim, this part starts with an easy to follow 
+ full system PTLsim/X, this part starts with an easy to follow 
 \series bold
 tutorial
 \end_layout
@@ -848,12 +848,54 @@ ptlxen.cpp
 \family default
 \series default
 \size default
- brings up PTLsim on the bare hardware, provides all interrupt handling,
- manages the page tables, dispatches traps and interrupts, virtualizes Xen
- hypercalls, communicates via DMA with the PTLsim monitor process running
- in the host domain 0 and otherwise serves as the kernel of PTLsim's own
- mini operating system.
- 
+ brings up PTLsim on the bare hardware, dispatches traps and interrupts,
+ virtualizes Xen hypercalls, communicates via DMA with the PTLsim monitor
+ process running in the host domain 0 and otherwise serves as the kernel
+ of PTLsim's own mini operating system.
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\series bold
+\size small
+ptlxen-memory.cpp
+\family default
+\series default
+\size default
+ is responsible for all page based memory operations within PTLsim.
+ It manages PTLsim's own internal page tables and its physical memory map,
+ and services page table walks, parts of the x86 microcode and memory-related
+ Xen hypercalls.
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\series bold
+\size small
+ptlxen-events.cpp
+\family default
+\series default
+\size default
+ provides all interrupt (VIRQ) and event handling, manages PTLsim's time
+ dilation technology, and provides all time and event related hypercalls.
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\series bold
+\size small
+ptlxen-common.cpp
+\family default
+\series default
+\size default
+ provides common functions used by both PTLsim itself and PTLmon.
+\end_layout
+
+\begin_layout Itemize
+
 \family typewriter
 \series bold
 \size small
@@ -861,7 +903,7 @@ ptlxen.h
 \family default
 \series default
 \size default
- provides inline functions and defines to assist in this task.
+ provides inline functions and defines related to full system PTLsim/X.
 \end_layout
 
 \begin_layout Itemize
@@ -878,18 +920,6 @@ ptlmon.cpp
  communicate with the outside world.
  It uses a client/server architecture to forward control commands to PTLsim
  using DMA and Xen hypercalls.
-\end_layout
-
-\begin_layout Itemize
-
-\family typewriter
-\series bold
-\size small
-ptlxen-common.cpp
-\family default
-\series default
-\size default
- provides common functions used by both PTLsim itself and PTLmon.
 \end_layout
 
 \begin_layout Itemize
@@ -955,7 +985,32 @@ lowlevel-64bit-xen.S
 \family default
 \series default
 \size default
- contains the PTLsim/X boot code, interrupt handling and exception handling.
+ contains the PTLsim/X boot code, interrupt handling and exception handling
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\series bold
+\size footnotesize
+ptlctl.cpp
+\family default
+\series default
+\size default
+ is a utility used within a domain under simulation to control PTLsim
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\series bold
+\size footnotesize
+ptlcalls.h
+\family default
+\series default
+\size default
+ provides a library of functions used by code within the target domain to
+ control PTLsim.
 \end_layout
 
 \end_deeper
@@ -8608,8 +8663,8 @@ highly recommend
 \end_layout
 
 \begin_layout Itemize
-We have successfully built PTLsim/X with gcc 3.3, 3.4.x and 4.1.x+ (gcc 4.0.x has
- documented bugs affecting some of our code).
+We have successfully built PTLsim/X with gcc 3.4.x and 4.1.x+ (gcc 4.0.x has documente
+d bugs affecting some of our code).
 \end_layout
 
 \begin_layout Standard
@@ -8643,7 +8698,7 @@ Download
 our modified Xen source tree (
 \family typewriter
 \size footnotesize
-xen-source-ptlsim.tar.gz
+xen-source-ptlsim.tar.bz2
 \family default
 \size default
 ) from 
@@ -8671,18 +8726,8 @@ ptlsim-xen-hypervisor.diff
 ptlsim-xen-tools.diff
 \family default
 \size default
-, plus the 
-\family typewriter
-\size footnotesize
-patch-xen.sh
-\family default
-\size default
- script, in case you want to manually apply the patches to a development
- version of Xen, but this is 
-\emph on
-not
-\emph default
- recommended.
+ in case you want to manually apply the patches to a development version
+ of Xen; the patches are fairly simple and can be adapted as needed.
 \end_layout
 
 \end_deeper
@@ -8699,7 +8744,7 @@ Build and install
 In 
 \family typewriter
 \size footnotesize
-xen-unstable.hg/xen
+xen-ptlsim.hg/xen
 \family default
 \size default
 , run 
@@ -8718,7 +8763,13 @@ xen
 \end_layout
 
 \begin_layout Itemize
-In xen-unstable.hg/tools, run 
+In 
+\family typewriter
+\size footnotesize
+xen-ptlsim.hg/tools
+\family default
+\size default
+, run 
 \family typewriter
 \size footnotesize
 make
@@ -8739,43 +8790,37 @@ make install
 \series bold
 Download
 \series default
- our sample kernel (
+ our sample kernel and modules (
 \family typewriter
 \size footnotesize
-linuxkernel-2.6.18-mtyrel-k8-64bit-xen
+linux-2.6.18-mtyrel-k8-64bit-xen.tar.bz2
 \family default
 \size default
-) and put it in 
+) and extract in the root directory to create 
 \family typewriter
 \size footnotesize
-/tmp/linuxkernel-2.6.18-mtyrel-k8-64bit-xen
+/lib/modules/2.6.18-mtyrel-k8-64bit-xen/....
 \end_layout
 
 \begin_deeper
 \begin_layout Itemize
-This is a uniprocessor kernel based on the 
-\family typewriter
-\size footnotesize
-linux-2.6.hg
-\family default
-\size default
- tree but extended to support kernel 2.6.18.
+This is a uniprocessor kernel based on 2.6.18 with the Xen patches maintained
+ by SuSE Linux.
  The complete source is in 
 \family typewriter
 \size footnotesize
-linux-2.6.16-mtyrel-k8-64bit-xen.tar.gz
+linux-2.6.18-mtyrel-k8-64bit-xen-source.tar.gz
 \family default
 \size default
-, if you want to recompile it (this is generally not necessary).
+, if you want to recompile it (such as to enable SMP support).
 \end_layout
 
 \begin_layout Itemize
-We recommend you run this same kernel in domain 0 as well, but PTLsim/X
- should work even if you use the Xen-compatible kernel shipped with your
- Linux distribution (we haven't tried this combination).
- You can recompile this kernel with SMP support if desired, but you must
- run the uniprocessor version inside PTLsim for now (at least until we release
- SMP/SMT support in the near future).
+This is just a sample kernel we use - PTLsim/X should work even if you use
+ the Xen-compatible kernel shipped with your Linux distribution of choice.
+ However, we recommend you run this same kernel in domain 0 as well as in
+ the target domain under simulation, simply because we know it works correctly
+ and has all the latest Xen patches.
 \end_layout
 
 \end_deeper
@@ -8828,40 +8873,37 @@ Set up sample virtual machine and disk images:
 \series bold
 Download
 \series default
- our pre-configured 512 MB disk image (
+ our pre-configured 256 MB disk image (
 \family typewriter
 \size footnotesize
-ptlsim-vm-disk.gz
+ptlsim.img.bz2
 \family default
 \size default
-), uncompress with gunzip, and put it on a local disk (for instance, as
- 
+) and uncompress with bunzip2.
+ The sample scripts below expect this file to be in 
 \family typewriter
 \size footnotesize
-/tmp/ptlsim-vm-disk
+/project/ptlsim/ptlsim.img
 \family default
 \size default
-)
+.
 \end_layout
 
+\begin_deeper
 \begin_layout Itemize
+We recommend placing this disk image on a local hard disk rather than NFS.
+ It will not mount correctly over NFS unless the 
+\family typewriter
+\size footnotesize
+no_root_squash
+\family default
+\size default
+ NFS option is used.
+\end_layout
 
-\series bold
-Download
-\series default
- our sample kernel (
-\family typewriter
-\size footnotesize
-linuxkernel-2.6.16-mtyrel-k8-64bit-xen
-\family default
-\size default
-) and put it in 
-\family typewriter
-\size footnotesize
-/tmp/linuxkernel-2.6.16-mtyrel-k8-64bit-xen 
-\family default
-\size default
-as described above.
+\end_deeper
+\begin_layout Itemize
+You have already downloaded our Xen-compatible kernel above.
 \end_layout
 
 \begin_layout Itemize
@@ -8978,13 +9020,13 @@ If the build process complains about missing header files, make sure
  is a symlink to 
 \family typewriter
 \size footnotesize
-/project/xen-unstable.hg/tools/libxc/xen
+/project/xen-ptlsim.hg/tools/libxc/xen
 \family default
 \size default
  (or wherever you put the 
 \family typewriter
 \size footnotesize
-xen-unstable.hg
+xen-ptlsim.hg
 \family default
 \size default
  tree you downloaded).
@@ -9111,26 +9153,39 @@ ptlvm
 \begin_layout LyX-Code
 
 \size footnotesize
-yourst [typhoon /project/ptlsim] sudo xm restore ptlvm.img --reserve 32 --paused;
- sudo xm list;
+yourst [typhoon /project/ptlsim] sudo xm create ptlvm --paused; sudo xm
+ list; sudo xm console ptlvm;
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Name                              ID Mem(MiB) VCPUs State  Time(s)
+Using config file "ptlvm".
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Domain-0                           0     1711     2 r-----  1235.2
+Started domain ptlvm
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-ptlvm                             21      256     1 --p---     0.0
+Name                                      ID Mem(MiB) VCPUs State   Time(s)
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Domain-0                                   0     1877     2 r-----    137.9
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+ptlvm                                     21      128     1 --p---     
+ 0.0
 \end_layout
 
 \begin_layout Standard
@@ -9149,18 +9204,11 @@ Open another console and start PTLsim on this domain (using the domain ID
 \begin_layout LyX-Code
 
 \size footnotesize
-sudo ./ptlsim -logfile /tmp/logfile -loglevel 1 -core seq -run -domain 21
+sudo ./ptlsim -domain 21 -logfile ptlsim.log -native
 \end_layout
 
 \begin_layout Standard
 The resulting output:
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-PTLsim does not appear to be running in this domain.
- Starting ptlmon...
 \end_layout
 
 \begin_layout LyX-Code
@@ -9172,7 +9220,7 @@ PTLsim does not appear to be running in this domain.
 \begin_layout LyX-Code
 
 \size footnotesize
-//  PTLsim: Cycle Accurate x86-64 Full System SMP/SMT Simulator
+//  PTLsim: Cycle Accurate x86-64 Full System Simulator
 \end_layout
 
 \begin_layout LyX-Code
@@ -9191,19 +9239,19 @@ PTLsim does not appear to be running in this domain.
 \begin_layout LyX-Code
 
 \size footnotesize
-//  Revision 171 (2006-09-18)
+//  Revision 165 (2006-09-15)
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-//  Built Sep 21 2006 22:59:48 on tidalwave.cs.binghamton.edu using gcc-4.1
+//  Built Oct  8 2006 02:49:42 on tidalwave.lab.ptlsim.org using gcc-4.1
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-//  Running on typhoon.cs.binghamton.edu
+//  Running on typhoon.lab.ptlsim.org
 \end_layout
 
 \begin_layout LyX-Code
@@ -9214,6 +9262,12 @@ PTLsim does not appear to be running in this domain.
 
 \begin_layout LyX-Code
 
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Processing -domain 21 -logfile ptlsim.log -native
 \end_layout
 
 \begin_layout LyX-Code
@@ -9273,19 +9327,19 @@ Memory Layout:
 \begin_layout LyX-Code
 
 \size footnotesize
-  Page Tables:                19 pages,         76 KB
+  Page Tables:               275 pages,       1100 KB
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-  PTLsim image:              400 pages,       1600 KB
+  PTLsim image:              407 pages,       1628 KB
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-  Heap:                     7517 pages,      30068 KB
+  Heap:                     7510 pages,      30040 KB
 \end_layout
 
 \begin_layout LyX-Code
@@ -9303,13 +9357,19 @@ Interfaces:
 \begin_layout LyX-Code
 
 \size footnotesize
-  Shared info mfn:           471
+  PTLsim page table:      282898
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-  Shadow shinfo mfn:      369182
+  Shared info mfn:          4056
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+  Shadow shinfo mfn:      295164
 \end_layout
 
 \begin_layout LyX-Code
@@ -9331,20 +9391,7 @@ Interfaces:
 \begin_layout LyX-Code
 
 \size footnotesize
-Switching to simulation core 'seq'...
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-  Stopping after 9223372036854775807 commits
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-  Completed     510834243 cycles,     200846738 commits:   8493036 cycles/sec,
-   6202967, insns/sec
+  Switched to native mode
 \end_layout
 
 \begin_layout Standard
@@ -9355,44 +9402,15 @@ Back in the Xen console for the domain, you'll see the familiar Linux boot
 \begin_layout LyX-Code
 
 \size footnotesize
-Using config file "ptlvm".
+Bootdata ok (command line is  nousb noide root=/dev/hda1 xencons=ttyS console=tt
+yS0)
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Started domain ptlvm
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-Name                              ID Mem(MiB) VCPUs State  Time(s)
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-Domain-0                           0     1711     2 r-----  1235.2
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-ptlvm                             21      128     1 --p---     0.0
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-Bootdata ok (command line is  nousb noide root=/dev/hda1)
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-Linux version 2.6.16-mtyrel-k8-64bit-xen (yourst@tidalwave) (gcc version 4.1.0
- (SUSE Linux)) #1 Sun Jun 18 19:37:46 EDT 2006
+Linux version 2.6.18-mtyrel-k8-64bit-xen (yourst@tidalwave) (gcc version 4.1.0
+ (SUSE Linux)) #2 Sun Oct 8 02:29:10 EDT 2006
 \end_layout
 
 \begin_layout LyX-Code
@@ -9404,7 +9422,7 @@ BIOS-provided physical RAM map:
 \begin_layout LyX-Code
 
 \size footnotesize
- Xen: 0000000000000000 - 0000000006800000 (usable)
+ Xen: 0000000000000000 - 0000000008800000 (usable)
 \end_layout
 
 \begin_layout LyX-Code
@@ -9416,13 +9434,14 @@ No mptable found.
 \begin_layout LyX-Code
 
 \size footnotesize
-Built 1 zonelists
+Built 1 zonelists.
+  Total pages: 34816
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Kernel command line:  nousb noide root=/dev/hda1
+Kernel command line:  nousb noide root=/dev/hda1 xencons=ttyS console=ttyS0
 \end_layout
 
 \begin_layout LyX-Code
@@ -9434,19 +9453,63 @@ Initializing CPU#0
 \begin_layout LyX-Code
 
 \size footnotesize
-PID hash table entries: 512 (order: 9, 16384 bytes)
+PID hash table entries: 1024 (order: 10, 8192 bytes)
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Xen reported: 2202.806 MHz processor.
+Xen reported: 2202.808 MHz processor.
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Console: colour dummy device 80x25
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Dentry cache hash table entries: 32768 (order: 6, 262144 bytes)
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Inode-cache hash table entries: 16384 (order: 5, 131072 bytes)
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Software IO TLB disabled
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Memory: 123180k/139264k available (2783k kernel code, 7728k reserved, 959k
+ data, 184k init)
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Calibrating delay using timer specific routine..
+ 4407.14 BogoMIPS (lpj=2203570)
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
 ...
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+NET: Registered protocol family 1
 \end_layout
 
 \begin_layout LyX-Code
@@ -9478,116 +9541,159 @@ Welcome to the PTLsim demo machine!
 \begin_layout LyX-Code
 
 \size footnotesize
-[ptlsim /] cat /proc/cpuinfo
+root [ptlsim /] cat /proc/cpuinfo
+\end_layout
+
+\begin_layout Standard
+You'll notice how we specified the 
+\begin_inset Quotes eld
+\end_inset
+
+
+\family typewriter
+\size footnotesize
+-native
+\family default
+\size default
+
+\begin_inset Quotes erd
+\end_inset
+
+ option to speed up the boot process by running all code on the real CPU
+ rather than PTLsim's synthetic CPU model.
+ Booting Linux within PTLsim is slow since the kernel often executes several
+ billion instructions before finally presenting a command line.
+\end_layout
+
+\begin_layout Section
+Running Simulations: PTLctl
+\end_layout
+
+\begin_layout Standard
+At this point, we would like to start an actual simulation run.
+ For purposes of illustration, this run is composed of three actions:
+\end_layout
+
+\begin_layout Itemize
+Simulate 100 million x86 instructions using PTLsim's out of order superscalar
+ model
+\end_layout
+
+\begin_layout Itemize
+Simulate another 100 million using PTLsim's sequential model.
+ The sequential model is much faster than the out of order superscalar model,
+ so it's useful for testing and debugging functional issues, as well as
+ simply interacting with the domain.
+ However, it does not collect any cycle accurate timing data.
+ Section 
+\begin_inset LatexCommand \ref{sec:SequentialMode}
+
+\end_inset
+
+ gives more information on the sequential model.
+\end_layout
+
+\begin_layout Itemize
+Return to native mode
+\end_layout
+
+\begin_layout Standard
+In the first example, we will start this run from within the running domain
+ using 
+\family typewriter
+\size footnotesize
+ptlctl
+\family default
+\size default
+ (PTLsim controller), a program supplied with PTLsim.
+ PTLctl is actually an example program showing the use of PTLsim hypercalls
+ (
+\begin_inset Quotes eld
+\end_inset
+
+PTL calls
+\begin_inset Quotes erd
+\end_inset
+
+), special x86 instructions that can be used to control a domain's own simulatio
+n.
+ More information on the PTLcall API is in Section 
+\begin_inset LatexCommand \ref{sec:PTLcallsFullSystem}
+
+\end_inset
+
+.
+\end_layout
+
+\begin_layout Standard
+To conduct this simulation, the 
+\family typewriter
+\size footnotesize
+ptlctl 
+\family default
+\size default
+command is used 
+\emph on
+within
+\emph default
+ the running virtual machine (by typing it at the domain's console); it
+ is not run on the host system at all:
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-processor       : 0
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-vendor_id       : 
+root [ptlsim /] 
 \series bold
-PTLsimCPUx64
+tar zc usr lib | tar ztv > /tmp/allfiles.txt &
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-cpu family      : 15
+[1] 775
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-model           : 0
+root [ptlsim /] 
+\series bold
+ptlctl
+\series default
+ 
+\series bold
+-core ooo -stopinsns 100m -run : -core seq -stopinsns 200m -run : -native
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-model name      : PTLsim/X x86-64 2006-09-18 r171 ooo core        
+Sending flush and command list to PTLsim hypervisor:
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-stepping        : 0
+  -core ooo -stopinsns 100m -run
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-cpu MHz         : 2202.808
+  -core seq -stopinsns 200m -run
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-fpu             : yes
+  -native
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-fpu_exception   : yes
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-cpuid level     : 1
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-wp              : yes
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-flags           : fpu pse tsc msr pae mce cx8 apic mca cmov pat pse36 pn
- clflush acpi mmx fxsr sse sse2 ss ht pni cx16
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-bogomips        : 4405.80
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-clflush size    : 64
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-cache_alignment : 64
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-address sizes   : 0 bits physical, 0 bits virtual
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-power management:
-\end_layout
-
-\begin_layout LyX-Code
-
+PTLsim returned rc 0
 \end_layout
 
 \begin_layout LyX-Code
@@ -9597,158 +9703,161 @@ root [ptlsim /]
 \end_layout
 
 \begin_layout Standard
-If you get the CPUID information above, you have successfully booted Linux
- on PTLsim's virtual CPU core.
+The first command simply runs several CPU-intensive multi-threaded processes
+ in the background for simulation purposes (in this case, compressing and
+ uncompressing files in the virtual machine's filesystem).
 \end_layout
 
 \begin_layout Standard
-You'll notice we specified the 
-\begin_inset Quotes eld
-\end_inset
-
-
+The second 
 \family typewriter
 \size footnotesize
--core seq
+ptlctl
 \family default
 \size default
-
-\begin_inset Quotes erd
-\end_inset
-
- option to speed up the boot process using PTLsim's sequential core model.
- For cycle accurate results using the full out of order core, leave this
- part out (or explicitly specify 
+ command submits the three simulation actions to PTLsim, separated by colons
+ (
 \begin_inset Quotes eld
 \end_inset
 
 
 \family typewriter
+\series bold
 \size footnotesize
--core ooo
+:
 \family default
+\series default
 \size default
 
 \begin_inset Quotes erd
 \end_inset
 
 ).
- Note that the out of order core is around 10
-\begin_inset Formula $\times$
-\end_inset
-
- slower than the sequential core (on high end hardware, it reaches around
- 1-2 million cycles per second, compared to 10-20 MHz for the sequential
- core).
-\end_layout
-
-\begin_layout Section
-Working with Checkpoints
 \end_layout
 
 \begin_layout Standard
-Xen provides the ability to capture the state of a domain into a 
+At the PTLsim console, the following output is produced (the cycle counters
+ will update regularly):
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+...
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Breakout request received from native mode
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+  Switched to simulation mode
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Returned from switch to native: now back in sim
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Processing -core ooo -stopinsns 100m -run
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+  Completed       75258330 cycles,      100000000 commits:    461819 cycles/sec,
+    795201, insns/sec
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Processing -core seq -stopinsns 200m -run
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+  Completed      200000000 cycles,      200000000 commits:   6941302 cycles/sec,
+   6941302, insns/sec
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+Processing -native
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+  Switched to native mode
+\end_layout
+
+\begin_layout Standard
+Notice how the command list is always terminated by a final simulation action
+ (in this case, 
+\family typewriter
+\size footnotesize
+-native
+\family default
+\size default
+).
+ If the command list only had one simulation run with a fixed duration,
+ once that simulation ended, the domain would freeze, since PTLsim would
+ pause until another command arrived.
+ However, since the domain is frozen, the next command would 
 \emph on
-checkpoint file
+never
 \emph default
- stored on disk.
- PTLsim can leverage this capability to start simulation from a checkpoint,
- avoiding the need to go through the entire boot process, and allowing precisely
- reproducable results across multiple simulation runs.
-\end_layout
-
-\begin_layout Standard
-To create a checkpoint, boot the domain in native mode without PTLsim running,
- and bring the domain to the point where you would like to begin simulation.
- Then, in another console, run:
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-sudo xm save ptlvm /tmp/ptlvm.img
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-Started domain ptlvm
-\end_layout
-
-\begin_layout Standard
-To restore the domain to that checkpoint, run:
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-sudo xm restore /tmp/ptlvm.img --paused
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-sudo xm list
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-sudo xm console ptlvm
-\end_layout
-
-\begin_layout Standard
-PTLsim can then be started in the normal manner, by specifying 
+ arrive: there is no way to execute the 
 \family typewriter
 \size footnotesize
--domain X
+ptlctl
 \family default
 \size default
- (according to the output of 
+ program a second time if the domain is stopped.
+ To avoid this sort of deadlock, 
 \family typewriter
 \size footnotesize
-xm list
+ptlctl 
 \family default
 \size default
-).
- If the checkpoint was made while the domain waited for input (e.g.
- at a shell command line), you may have to press a few keys to get any response
- from its console.
+lets the user atomically submit batches of multiple commands as shown ahove.
 \end_layout
 
 \begin_layout Standard
-To exit PTLsim, use 
+This powerful capability allows 
 \begin_inset Quotes eld
 \end_inset
 
-
-\family typewriter
-\size footnotesize
-sudo ptlsim -kill -domain X
-\family default
-\size default
-
+self-directed
 \begin_inset Quotes erd
 \end_inset
 
- from another console.
- To abort PTLsim immediately, use Ctrl+C on the ptlsim process, then type
- 
-\begin_inset Quotes eld
-\end_inset
-
-
+ simulation scripts (i.e.
+ standard shell scripts), in which 
 \family typewriter
 \size footnotesize
-xm kill ptlvm
+ptlctl 
 \family default
 \size default
-
-\begin_inset Quotes erd
-\end_inset
-
- to destroy the domain.
- 
+is run immediately before starting a benchmark program, then 
+\family typewriter
+\size footnotesize
+ptlctl 
+\family default
+\size default
+is run again after the program exits to end the simulation and switch back
+ to native mode.
 \end_layout
 
 \begin_layout Section
@@ -9869,38 +9978,57 @@ Live Updates of Configuration Options
 \end_layout
 
 \begin_layout Standard
-PTLsim/X provides the ability to modify configuration options and send commands
- to the running simulation from another console.
- For instance, 
-\end_layout
-
-\begin_layout LyX-Code
-
+PTLsim/X provides the ability to send commands and modify configuration
+ options in the running simulation from another console on the host system.
+ This is different from how the 
+\family typewriter
 \size footnotesize
-sudo ./ptlsim -native -domain 21
+ptlctl
+\family default
+\size default
+ program is used inside the target domain to script simulations: in this
+ case, the commands are submitted asynchronously from the host system.
 \end_layout
 
 \begin_layout Standard
-will immediately switch the domain back to native mode.
- In the PTLsim console window, PTLsim will output:
+For instance, 
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Received request 2 [-native -domain 21]
+sudo ptlsim -native -domain 21
+\end_layout
+
+\begin_layout Standard
+will immediately switch the target domain back to native mode.
+\end_layout
+
+\begin_layout Standard
+To reset the log level in the middle of a simulation run, use the following:
+\end_layout
+
+\begin_layout LyX-Code
+
+\series bold
+\size footnotesize
+sudo ptlsim -domain 21 -loglevel 99 : -run
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Done
+ptlsim: Sending request '-domain 12 -loglevel 99 : -run' to domain 12...OK
 \end_layout
 
-\begin_layout LyX-Code
-
+\begin_layout Standard
+(This is an example only! Using 
+\family typewriter
 \size footnotesize
-ptlmon: Domain 21 is now running in native mode
+-loglevel 99
+\family default
+\size default
+ will create huge log files).
 \end_layout
 
 \begin_layout Standard
@@ -9917,6 +10045,20 @@ Most options (such as
 \family default
 \size default
 , etc.) can be updated at any time in this manner.
+\end_layout
+
+\begin_layout Standard
+To end a simulation currently in progress, use this:
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+sudo ptlsim -domain 21 -kill
+\end_layout
+
+\begin_layout Standard
+This will force PTLsim to cleanly exit.
 \end_layout
 
 \begin_layout Section
@@ -9967,7 +10109,7 @@ ptlvm.cmd
 \begin_inset Quotes erd
 \end_inset
 
- operator) contains the lines:
+ operator) contains the example lines:
 \end_layout
 
 \begin_layout LyX-Code
@@ -10035,69 +10177,146 @@ These commands are executed by PTLsim one at a time, waiting until the previous
 \end_layout
 
 \begin_layout Standard
-Executing the script above produces output similar to the following:
+Command scripts can be nested (i.e.
+ a script can itself include other scripts using 
+\family typewriter
+\size footnotesize
+@scriptname
+\family default
+\size default
+).
+ When multiple commands are given on the command line separated by colons
+ (
+\begin_inset Quotes eld
+\end_inset
+
+
+\family typewriter
+\series bold
+\size footnotesize
+:
+\family default
+\series default
+\size default
+
+\begin_inset Quotes erd
+\end_inset
+
+), any 
+\family typewriter
+\size footnotesize
+@scriptname
+\family default
+\size default
+ clauses are processed after all other commands on the command line.
+\end_layout
+
+\begin_layout Section
+Working with Checkpoints
+\end_layout
+
+\begin_layout Standard
+Xen provides the ability to capture the state of a domain into a 
+\emph on
+checkpoint file
+\emph default
+ stored on disk.
+ PTLsim can leverage this capability to start simulation from a checkpoint,
+ avoiding the need to go through the entire boot process, and allowing precisely
+ reproducable results across multiple simulation runs.
+\end_layout
+
+\begin_layout Standard
+To create a checkpoint, boot the domain in native mode without PTLsim running,
+ and bring the domain to the point where you would like to begin simulation.
+ Then, in another console, run:
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-PTLsim is now waiting for a command.
+sudo xm save ptlvm /tmp/ptlvm.img
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Switching to simulation core 'seq'...
+Started domain ptlvm
+\end_layout
+
+\begin_layout Standard
+To restore the domain to that checkpoint, run:
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-  Stopping after 20000000 commits
+sudo xm restore /tmp/ptlvm.img --paused
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-  Completed      33191896 cycles,      18586834 commits:   7791496 cycles/sec,
-   3895917, insns/sec
+sudo xm list
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-Done
+sudo xm console ptlvm
 \end_layout
 
-\begin_layout LyX-Code
-
+\begin_layout Standard
+PTLsim can then be started in the normal manner, by specifying 
+\family typewriter
 \size footnotesize
-Switching to simulation core 'ooo'...
+-domain X
+\family default
+\size default
+ (according to the output of 
+\family typewriter
+\size footnotesize
+xm list
+\family default
+\size default
+).
+ If the checkpoint was made while the domain waited for input (e.g.
+ at a shell command line), you may have to press a few keys to get any response
+ from its console.
 \end_layout
 
-\begin_layout LyX-Code
+\begin_layout Standard
+To exit PTLsim, use 
+\begin_inset Quotes eld
+\end_inset
 
+
+\family typewriter
 \size footnotesize
-  Stopping after 24000000 commits
-\end_layout
+sudo ptlsim -kill -domain X
+\family default
+\size default
 
-\begin_layout LyX-Code
+\begin_inset Quotes erd
+\end_inset
 
+ from another console.
+ To abort PTLsim immediately, use Ctrl+C on the ptlsim process, then type
+ 
+\begin_inset Quotes eld
+\end_inset
+
+
+\family typewriter
 \size footnotesize
-  Completed      40413451 cycles,      23964537 commits:    232497 cycles/sec,
-    227646, insns/sec
-\end_layout
+xm kill ptlvm
+\family default
+\size default
 
-\begin_layout LyX-Code
+\begin_inset Quotes erd
+\end_inset
 
-\size footnotesize
-Done
-\end_layout
-
-\begin_layout LyX-Code
-
-\size footnotesize
-ptlmon: Domain 21 is now running in native mode
+ to destroy the domain.
 \end_layout
 
 \begin_layout Section
@@ -10238,9 +10457,28 @@ Hz
 \begin_deeper
 \begin_layout Standard
 Specify the timer interrupt frequency in interrupts per second.
- By default, 1000 interrupts per second are used.
- Higher numbers may provide better interactive response at the expense of
- more overhead.
+ By default, 100 interrupts per second are used, since this is the standard
+ for Linux kernels.
+\end_layout
+
+\begin_layout Standard
+
+\series bold
+\emph on
+Hint:
+\series default
+\emph default
+ if keyboard interaction with the domain seems slow or sluggish, this is
+ because Linux only flushes console buffers to the screen at every clock
+ tick.
+ Specifying 
+\family typewriter
+\size footnotesize
+-timerfreq 1000
+\family default
+\size default
+ will greatly improve interactive response at the expense of more interrupt
+ overhead.
 \end_layout
 
 \end_deeper
@@ -10345,7 +10583,7 @@ Reserves
 M
 \emph default
  megabytes of physical memory for PTLsim and its translation cache.
- The default is 32 MB; the valid range is from 16 MB to 256 MB.
+ The default is 32 MB; the valid range is from 16 MB to 512 MB.
  See Chapter 
 \begin_inset LatexCommand \ref{sec:PTLsimXArchitectureDetails}
 
@@ -10415,7 +10653,7 @@ collapsed
 
 \begin_layout Standard
 PTLsim/X consists of three primary components: the modified Xen hypervisor,
- the PTLsim monitor process, and the PTLsim simulator core.
+ the PTLsim monitor process, and the PTLsim core.
 \end_layout
 
 \begin_layout Subsection
@@ -10424,7 +10662,25 @@ Xen Modifications
 
 \begin_layout Standard
 The Xen hypervisor requires some modifications to work with PTLsim.
- Specifically, several new hypercalls were added:
+ Specifically, several new major hypercalls were added:
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+XEN_DOMCTL_contextswap 
+\family default
+\size default
+atomically swaps all context information in all VCPUs of the target domain,
+ saving the old context and writing in a new context.
+ In addition to per-VCPU data (including all registers and page tables),
+ the shared info page is also swapped.
+ This is done as a hypercall so as to eliminate race conditions between
+ the hypervisor, PTLsim monitor process in domain 0 and the target domain.
+ The domain is first de-scheduled from all physical CPUs in the host system,
+ the old context is saved, the new context is validated and written, and
+ finally the paused domain wakes up to the new context.
 \end_layout
 
 \begin_layout Itemize
@@ -10449,41 +10705,6 @@ FIRST_RESERVED_GDT_PAGE gdt_frames[]
 
 \family typewriter
 \size footnotesize
-MMUEXT_GET_KERNEL_BASEPTR
-\family default
-\size default
- and 
-\family typewriter
-\size footnotesize
-MMUEXT_GET_USER_BASEPTR
-\family default
-\size default
- return the target domain's current page table base pointers for kernel
- and user mode, respectively.
-\end_layout
-
-\begin_layout Itemize
-
-\family typewriter
-\size footnotesize
-MMUEXT_SET_PT_OVERLAY
-\family default
-\size default
- sets up a page table overlay.
- This is a page that Xen consults whenever a page fault is taken in the
- target domain.
- If the L4 PTE corresponding to the faulting virtual address is marked as
- present in the overlay table, Xen will copy that PTE into the corresponding
- slot in the domain's active L4 page table page.
- In this way, one or more top-level slots can automatically appear in every
- address space in the target.
- PTLsim uses this feature to inject itself into the target domain.
-\end_layout
-
-\begin_layout Itemize
-
-\family typewriter
-\size footnotesize
 MMUEXT_QUERY_PAGES
 \family default
 \size default
@@ -10494,31 +10715,68 @@ MMUEXT_QUERY_PAGES
 
 \family typewriter
 \size footnotesize
-VCPUOP_GET_REGISTERED_RUNSTATE_MEMORY_AREA
+VCPUOP_set_breakout_insn_action
 \family default
 \size default
- reads the location of the guest's memory-mapped runstate timer information
- so PTLsim can emulate updates to this structure
+ tells the hypervisor about a special 
+\emph on
+breakout instruction
+\emph default
+.
+ This is a normally undefined x86 instruction that the 
+\family typewriter
+\size footnotesize
+ptlctl
+\family default
+\size default
+ program (and PTL calls from user code) can use to request services from
+ PTLsim.
+ The hypervisor uses the x86 invalid opcode trap to intercept this instruction,
+ and in response it may perform several actions, including pausing the domain
+ and sending an interrupt to domain 0 for the PTLsim monitor process to
+ receive.
+ This is the mechanism by which a domain operating in native mode can request
+ a switch back into simulation mode.
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+VCPUOP_set_timestamp_bias 
+\family default
+\size default
+is used to virtualize the processor timestamp counter (TSC) read by the
+ x86 
+\family typewriter
+\size footnotesize
+rdtsc
+\family default
+\size default
+ instruction.
+ This support is needed to ensure a seamless transition between simulation
+ mode and native mode without the target domain noticing any cycles are
+ missing.
+ Since PTLsim runs much slower than the native CPU, a negative bias must
+ be applied to the TSC to provide timing continuity when returning to native
+ mode.
+ The hypervisor will trap 
+\family typewriter
+\size footnotesize
+rdtsc
+\family default
+\size default
+ instructions and emulate them when a bias is in effect.
 \end_layout
 
 \begin_layout Standard
 These changes are provided by 
-\emph on
-ptlsim-xen-hypervisor.diff
-\emph default
-.
- This diff can be applied to the 
-\emph on
-xen-unstable
-\emph default
- tree, but the PTLsim web site (http://www.ptlsim.org) always has a copy of
- our full Xen source tree pre-patched to work with PTLsim in 
 \family typewriter
 \size footnotesize
-xen-source-ptlsim.tar.gz
+ptlsim-xen-hypervisor.diff
 \family default
 \size default
-; we strongly recommend you start with this version to avoid patch mismatches.
+ as described in the installation instructions.
 \end_layout
 
 \begin_layout Subsection
@@ -10546,14 +10804,6 @@ ptlsim
 \emph default
  executable.
  PTLmon then builds page tables to map PTLsim space into the target domain.
- These page tables are injected into the target's current top level page
- table using the 
-\family typewriter
-\size footnotesize
-MMUEXT_SET_PT_OVERLAY
-\family default
-\size default
- hypercall described above.
  Finally, PTLmon fills in various other fields in the boot info page (including
  a pointer to the 
 \emph on
@@ -10575,16 +10825,16 @@ vcpu_context_t
  This is required since the monitor process cannot have writable references
  to any of PTLsim's pages or PTLsim may not be able to pin those pages as
  page table pages.
- At this point, PTLmon restarts the domain using the Xen 
+ At this point, PTLmon atomically restarts the domain inside PTLsim using
+ the new 
 \family typewriter
 \size footnotesize
-SETVCPUCONTEXT
+contextswap
 \family default
 \size default
-\emph on
- 
-\emph default
-hypercall.
+ hypercall.
+ The old context of the domain is thus available for PTLsim to use and update
+ via simulation.
 \end_layout
 
 \begin_layout Standard
@@ -10624,7 +10874,13 @@ hostcall
  channel's port.
  The domain 0 kernel will then forward this notification to PTLmon, which
  will do the system call on PTLsim's behalf (while PTLsim remains blocked
- in the synchronous_host_call() function).
+ in the 
+\family typewriter
+\size footnotesize
+synchronous_host_call()
+\family default
+\size default
+ function).
  PTLmon will then notify the hostcall port in the opposite direction (waking
  up PTLsim) when the system call is complete.
  This is very similar to a remote procedure call, but using shared memory.
@@ -10642,28 +10898,39 @@ upcall
  simulation mode, trigger a snapshot, or request that PTLsim update its
  internal parameters.
  The PTLmon process sets up a socket in 
-\emph on
+\family typewriter
+\size footnotesize
 /tmp/ptlsim-domain-XXX
-\emph default
+\family default
+\size default
  and waits for requests on this socket.
  The user can then run the 
-\emph on
+\family typewriter
+\size footnotesize
 ptlsim
-\emph default
+\family default
+\size default
  command again, which will connect to this socket and tell the main monitor
  process for the domain to enqueue a text string (usually the command line
  parameters to 
-\emph on
+\family typewriter
+\size footnotesize
 ptlsim
-\emph default
+\family default
+\size default
 ) and send an interrupt to PTLsim on the 
 \emph on
 upcall
 \emph default
  channel.
  In response, PTLsim uses the 
+\family typewriter
+\size footnotesize
+ACCEPT_UPCALL
+\family default
+\size default
 \emph on
-ACCEPT_UPCALL 
+ 
 \emph default
 hostcall to read the enqueued command line, then parses it and acts on any
  listed actions or parameter updates.
@@ -11376,79 +11643,6 @@ ons: it just follows the currently active page table based on physical addresses
  only.
 \end_layout
 
-\begin_layout Standard
-\begin_inset Note Note
-status open
-
-\begin_layout Standard
-The cache subsystem includes separate translation lookaside buffers (TLBs)
- for data (DTLB) and instructions (ITLB) to map virtual to physical addresses.
- Note that virtual addresses are always used within the simulated virtual
- address space; hence the TLBs are solely for accurately measuring performance.
- To achieve fast simulation, the TLBs are not actually associatively scanned
- on each access; instead, the 
-\family typewriter
-\size small
-TranslationLookasideBuffer::check()
-\family default
-\size default
- method simply checks one of the simulator's Shadow Page Access Tables (SPATs)
- as described in Section 
-\begin_inset LatexCommand \ref{sec:AddressSpaceSimulation}
-
-\end_inset
-
-.
- For DTLB accesses, the 
-\family typewriter
-\size small
-dtlbmap
-\family default
-\size default
- SPAT is used, while ITLB accesses use the 
-\family typewriter
-\size small
-itlbmap
-\family default
-\size default
- SPAT.
- If a bit in the appropriate SPAT is set, that page is considered mapped
- within the TLB.
- When entries are added to or evicted from the TLBs, the SPAT bit for the
- old entry's virtual page address must be cleared and the bit for the new
- entry's virtual page address must be set; this keeps the SPATs up to date.
-\end_layout
-
-\begin_layout Standard
-TLB miss penalties can be modeled in various ways.
- In most x86 processors, a hardware state machine is used to walk the 3-level
- or 4-level page table tree by issuing a chain of loads until the lowest
- level page table containing the physical address and attributes is reached.
- This can take from ~10 cycles up to hundreds of cycles if the page tables
- themselves are not already in the cache hierarchy.
- To model this, the 
-\family typewriter
-\size small
-probe_cache_and_sfr()
-\family default
-\size default
- function queries the DTLB for every access, and if a miss is detected,
- it simulates an L2 cache miss to add some latency to the load causing the
- TLB miss.
- The TLB is then updated with the 
-\family typewriter
-\size small
-TranslationLookasideBuffer::replace()
-\family default
-\size default
- method.
-\end_layout
-
-\end_inset
-
-
-\end_layout
-
 \begin_layout Subsection
 Exceptions
 \end_layout
@@ -11692,21 +11886,219 @@ Xen lets the guest kernel execute various privileged instructions, which
 \end_layout
 
 \begin_layout Section
+\begin_inset LatexCommand \label{sec:PTLcallsFullSystem}
+
+\end_inset
+
+PTLcalls
+\end_layout
+
+\begin_layout Standard
+PTLsim defines the special x86 opcode 
+\family typewriter
+\size footnotesize
+0x0f37
+\family default
+\size default
+ as a breakout opcode.
+ It is undefined in the normal x86 instruction set, but when executed by
+ any code running under PTLsim, it can be used to enqueue commands for PTLsim
+ to execute.
+\end_layout
+
+\begin_layout Standard
+The 
+\family typewriter
+\size footnotesize
+ptlctl
+\family default
+\size default
+ program uses this facility to switch from native mode to simulation mode
+ as follows.
+ Whenever PTLsim is about to switch back to native mode, it uses the 
+\family typewriter
+\size footnotesize
+VCPUOP_set_breakout_insn_action
+\family default
+\size default
+ to specify the opcode bytes to intercept.
+ When the hypervisor sees an invalid instruction matching 
+\family typewriter
+\size footnotesize
+0x0f37
+\family default
+\size default
+, it freezes the domain and sends an event channel notification to domain
+ 0.
+ This event channel is read by PTLmon, which then uses the 
+\family typewriter
+\size footnotesize
+contextswap
+\family default
+\size default
+ hypercall to switch back into PTLsim inside the domain.
+ PTLsim then processes whatever command caused the switch back into simulation
+ mode.
+\end_layout
+
+\begin_layout Standard
+While executing 
+\emph on
+within 
+\emph default
+simulation mode, this is not necessary: since PTLsim is in complete control
+ of the execution of each x86 instruction, it simply defines microcode to
+ handle 
+\family typewriter
+\size footnotesize
+0x0f37
+\family default
+\size default
+ instead of triggering an invalid opcode exception.
+ This microcode branches into PTLsim, which uses the 
+\family typewriter
+\size footnotesize
+PTLSIM_HOST_INJECT_UPCALL
+\family default
+\size default
+ hostcall to add the command(s) to the command queue.
+ The queue is maintained inside PTLmon so as to ensure synchronization between
+ commands coming from the host and commands from within the domain arriving
+ via PTLcalls.
+ The queue is typically flushed before adding new commands in this manner:
+ otherwise, it would be impossible to get immediate results using 
+\family typewriter
+\size footnotesize
+ptlctl
+\family default
+\size default
+.
+\end_layout
+
+\begin_layout Standard
+All PTL calls are defined in 
+\family typewriter
+\size footnotesize
+ptlcalls.h
+\family default
+\size default
+, which simply collects the call's arguments and executes opcode 
+\family typewriter
+\size footnotesize
+0x0f37
+\family default
+\size default
+ as if it were a normal x86 
+\family typewriter
+\size footnotesize
+syscall
+\family default
+\size default
+ instruction:
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+ptlcall_multi_enqueue(const char* list[], size_t length)
+\family default
+\size default
+ enqueues a list of commands to process in sequence
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+ptlcall_multi_flush(const char* list[], size_t length)
+\family default
+\size default
+ flushes the queue before adding the commands
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+ptlcall_single_enqueue(const char* command)
+\family default
+\size default
+ adds one command to the end of the queue
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+ptlcall_single_flush(const char* command)
+\family default
+\size default
+ immediately flushes the queue and processes the specified command
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+ptlcall_nop()
+\family default
+\size default
+ is a simple no-operation command used to get PTLsim's attention
+\end_layout
+
+\begin_layout Itemize
+
+\family typewriter
+\size footnotesize
+ptlcall_version()
+\family default
+\size default
+ returns version information about the running PTLsim hypervisor.
+\end_layout
+
+\begin_layout Standard
+The 
+\family typewriter
+\size footnotesize
+ptlcall
+\family default
+\size default
+ opcode 
+\family typewriter
+\size footnotesize
+0x0f37
+\family default
+\size default
+ can be executed from both user mode and kernel mode, since it may be desirable
+ to switch simulation options from a userspace program.
+ This would be impossible if 
+\family typewriter
+\size footnotesize
+wrmsr 
+\family default
+\size default
+(the traditional method) were used to effect PTLsim operations.
+\end_layout
+
+\begin_layout Section
 Event Trace Mode
 \end_layout
 
 \begin_layout Standard
-PTLsim normally operates in real-time mode, in which the simulation is interacti
-ve (like the current userspace PTLsim).
- However, it's very difficult to accurately and reproducibly model interrupt
- latency and DMA traffic in this mode: if the simulation is 1000x slower
- than the native CPU, interrupts from outside devices will appear to arrive
- at 1000x the rate: clearly this can generate misleading results.
- Therefore, PTLsim/X offers 
+In Section 
+\begin_inset LatexCommand \ref{sec:TimeDilation}
+
+\end_inset
+
+, we discussed the philosophical question of how to accurately model the
+ timing of external events when cycle accurate simulation runs thousands
+ of times slower than the outside world expects.
+ To solve this problem, PTLsim/X offers 
 \emph on
 event trace
 \emph default
- mode to solve this problem.
+ mode.
 \end_layout
 
 \begin_layout Standard
@@ -11834,8 +12226,6 @@ upcall_pending
 \family default
 \size default
  bit set).
- Because of this added complexity, using trace replay mode may be the only
- practical option on multi-processor versions of PTLsim.
 \end_layout
 
 \begin_layout Standard
