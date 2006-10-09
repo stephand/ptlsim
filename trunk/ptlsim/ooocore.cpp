@@ -1267,6 +1267,9 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
     }
   }
 
+  // Flush everything to remove any remaining refs to basic blocks
+  flush_all_pipelines();
+
   return exiting;
 }
 

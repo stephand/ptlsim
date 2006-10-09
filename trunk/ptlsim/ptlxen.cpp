@@ -2194,17 +2194,6 @@ int main(int argc, char** argv) {
       logfile << "Final context:", endl, contextof(0), flush;
       logfile << "Final shared info page:", endl, sshinfo, endl, flush;
 
-      {
-        Context& ctx = contextof(0);
-        W64 processed_system_time = 0;
-        // For reference only, sample from a live Linux kernel at the specified address (look up with objdump):
-        W64 old_cr3 = ctx.cr3;
-        ctx.cr3 = ctx.kernel_ptbase_mfn << 12;
-        ctx.copy_from_user(&processed_system_time, 0xffffffff804f1338, sizeof(processed_system_time));
-        ctx.cr3 = old_cr3;
-        logfile << "processed_system_time = ", processed_system_time, endl, flush;
-      }
-
       logfile << "Done!", endl;
       logfile << flush;
 
