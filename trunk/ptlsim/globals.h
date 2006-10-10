@@ -13,12 +13,7 @@ extern "C" {
 #include <sys/ptrace.h>
 }
 
-//
-// We include these first just to make sure abs/fabs/min/max
-// get defined before we try to redefine them to our own
-// inline functions, which gcc can optimize much better:
-//
-
+typedef __SIZE_TYPE__ size_t;
 typedef unsigned long long W64;
 typedef signed long long W64s;
 typedef unsigned int W32;
@@ -125,8 +120,8 @@ template <typename T> static inline T* nullptr() { return (T*)(Waddr)0; }
 #define noalias __restrict__
 
 // Default placement versions of operator new.
-inline void* operator new(unsigned long, void* p) { return p; }
-inline void* operator new[](unsigned long, void* p) { return p; }
+inline void* operator new(size_t, void* p) { return p; }
+inline void* operator new[](size_t, void* p) { return p; }
 inline void operator delete(void*, void*) { }
 inline void operator delete[](void*, void*) { }
 
