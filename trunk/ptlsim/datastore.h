@@ -73,8 +73,15 @@ struct ScaleOperator {
 
 #undef DeclareOperator
 
+struct DataStoreNodeLinkManager {
+  static DataStoreNode* objof(selflistlink* link);
+  static const char*& keyof(DataStoreNode* obj);
+  static selflistlink* linkof(DataStoreNode* obj);
+};
+
 struct DataStoreNode {
-  typedef Hashtable<const char*, DataStoreNode*> hash_t;
+  typedef Hashtable<const char*, DataStoreNode*, 16> hash_t;
+  selflistlink hashlink;
   hash_t* subnodes;
   const char* name;
   DataStoreNode* sum_of_subtrees_cache;

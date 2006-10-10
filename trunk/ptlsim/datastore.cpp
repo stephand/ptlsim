@@ -9,6 +9,18 @@
 
 using namespace superstl;
 
+DataStoreNode* DataStoreNodeLinkManager::objof(selflistlink* link) {
+  return baseof(DataStoreNode, hashlink, link);
+}
+
+const char*& DataStoreNodeLinkManager::keyof(DataStoreNode* obj) {
+  return obj->name;
+}
+
+selflistlink* DataStoreNodeLinkManager::linkof(DataStoreNode* obj) {
+  return &obj->hashlink;
+}
+
 DataStoreNode::DataStoreNode() {
   init(null, DS_NODE_TYPE_NULL, 0);
 }
@@ -48,7 +60,7 @@ void DataStoreNode::rename(const char* newname) {
   if (oldparent)
     assert(oldparent->remove(name));
 
-  delete name;
+  delete[] name;
   name = strdup(newname);
 
   if (oldparent) oldparent->add(this);
@@ -93,7 +105,7 @@ DataStoreNode::~DataStoreNode() {
   removeall();
   if (subnodes)
     delete subnodes;
-  delete name;
+  delete[] name;
   subnodes = null;
   parent = null;
   name = null;
@@ -164,7 +176,8 @@ DataStoreNode* DataStoreNode::searchpath(const char* path) const {
 
   if (path[0] == '/') path++;
 
-  char* pbase = tokens.tokenize(strdup(path), "/");
+  char* pbase = strdup(path);
+  tokens.tokenize(pbase, "/");
 
   const DataStoreNode* ds = this;
 
@@ -179,7 +192,7 @@ DataStoreNode* DataStoreNode::searchpath(const char* path) const {
     ds = dsn;
   }
 
-  delete pbase;
+  free(pbase);
 
   return (DataStoreNode*)ds;
 }
@@ -846,12 +859,15 @@ DataStoreNodeTemplate::DataStoreNodeTemplate(const char* name, int type, int cou
 
 DataStoreNodeTemplate::~DataStoreNodeTemplate() {
   foreach (i, subnodes.length) {
-    // delete subnodes[i];
+    delete subnodes[i];
   }
   subnodes.clear();
   subcount = 0;
-  // if (labels) delete labels;
-  if (name) delete name;
+  if (labels) {
+    foreach (i, count) { delete[] labels[i]; }
+    delete[] labels;
+  }
+  if (name) delete[] name;
 }
 
 //
@@ -1184,10 +1200,10 @@ bool StatsFileReader::open(const char* filename) {
     is >> namelen;
     assert(is.ok());
     if (namelen) {
-      char* name = new char(namelen);
+      char* name = new char[namelen];
       is.read(name, namelen);
       name_to_uuid.add(name, uuid);
-      delete name;
+      delete[] name;
     }
 
     assert(is.ok());
@@ -1231,8 +1247,8 @@ DataStoreNode* StatsFileReader::get(const char* name) {
 }
 
 void StatsFileReader::close() {
-  if (dst) delete dst;
-  if (buf) delete buf;
+  if (dst) { delete dst; dst = null; }
+  if (buf) { delete[] buf; buf = null; }
 
   name_to_uuid.clear();
 

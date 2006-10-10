@@ -78,7 +78,7 @@ namespace superstl {
     if (fd < 0) return;
     if (ringbuf_mode) set_ringbuf_mode(0);
     flush();
-    if (buf) delete buf;
+    if (buf) delete[] buf;
     buf = null;
     tail = 0;
     if (close_on_destroy) sys_close(fd);

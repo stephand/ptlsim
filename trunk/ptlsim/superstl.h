@@ -563,22 +563,49 @@ namespace superstl {
   extern ostream cout;
   extern ostream cerr;
 
+
+  //
+  // Turn a raw-memory into an array of <T> filled with <value>
+  //
+  template <typename T, bool> struct ArrayConstructor {
+    inline static void init(T* noalias p, size_t length) {
+      foreach (i, length) { new(p + i) T(); }
+    }
+  };
+
+  // Specialization for primitive initialization
+  template <typename T> struct ArrayConstructor<T, true> {
+    inline static void init(T* noalias p, size_t length) { }
+  };
+
+  template <typename T, bool> struct ArrayInitializer {
+    inline static void init(T* noalias p, size_t length, const T value) {
+      foreach (i, length) { new(p + i) T(value); }
+    }
+  };
+
+  // Specialization for primitive initialization
+  template <typename T> struct ArrayInitializer<T, true> {
+    inline static void init(T* noalias p, size_t length, const T value) {
+      foreach (i, length) { p[i] = value; }
+    }
+  };
+
   template <typename T>
   static inline T* renew(T* p, size_t oldcount, size_t newcount) {
     if unlikely (newcount <= oldcount) return p;
-
-    T* pp = new T[newcount];
-
+    T* pp = (T*)malloc(sizeof(T) * newcount);
     if unlikely (!p) assert(oldcount == 0);
 
     if likely (p) {
-      memcpy(pp, p, oldcount * sizeof(T));
-      delete[] p;
+      arraycopy(pp, p, oldcount);
+      free(p);
     }
+
+    ArrayConstructor<T, isprimitive(T) | ispointer(T)>::init(pp + oldcount, newcount - oldcount);
 
     return pp;
   }
-
 
   /*
    * Simple array class with optional bounds checking
@@ -688,10 +715,10 @@ namespace superstl {
   protected:
   public:
     T* data;
-    int length;
-    int reserved;
-    int granularity;
-    
+    size_t length;
+    size_t reserved;
+    size_t granularity;
+
   public:
     inline T& operator [](int i) { return data[i]; }
     inline T operator [](int i) const { return data[i]; }
@@ -712,9 +739,13 @@ namespace superstl {
       data = null;
       reserve(initcap);
     }
-    
+
     ~dynarray() {
-      delete data;
+      if (!(isprimitive(T) | ispointer(T))) {
+        foreach (i, reserved) data[i].~T();
+      }
+
+      free(data);
       data = null;
       length = 0;
       reserved = 0;
@@ -757,26 +788,23 @@ namespace superstl {
     void reserve(int newsize) {
       if unlikely (newsize <= reserved) return;
       newsize = (newsize + (granularity-1)) & ~(granularity-1);
+      int oldsize = length;
       data = renew(data, length, newsize);
       reserved = newsize;
     }
 
-    void fill(const T& value) {
+    void fill(const T value) {
       foreach (i, length) {
         data[i] = value;
       }
     }
 
-    void trim() {
-      //++MTY FIXME realloc is not always available!
-      //reserved = count;
-      //data = (T*)realloc(data, count * sizeof(T));
-      //data = renew(data, count, newsize);
-    }
-
     // Only works with specialization for character arrays:
     char* tokenize(char* string, const char* seplist) { abort(); }
   };
+
+  template <class T> static inline const T& operator <<(dynarray<T>& buf, const T& v) { return buf.push(v); }
+  template <class T> static inline const T& operator >>(dynarray<T>& buf, T& v) { return (v = buf.pop()); }
 
   template <>
   char* dynarray<char*>::tokenize(char* string, const char* seplist);
@@ -789,118 +817,6 @@ namespace superstl {
     }
     return os;
   }
-
-  /*
-   * Simple type-safe temporary buffer with overflow protection.
-   */
-  template <class T>
-  class tempbuf {
-  protected:
-  public:
-    T* data;
-    T* endp;
-    T* base;
-
-  public:
-    inline T& operator [](int i) { return base[i]; }
-    inline T operator [](int i) const { return base[i]; }
-    inline operator T*() { return data; }
-    T& operator ->() { return *data; }
-
-    inline operator const T&() { return *data; }
-
-    inline const T& operator =(const T& v) { *data = v; return *this; }
-    //inline const T& operator +=(const T& v) { *data++ = v; return v; }
-    inline T* operator +=(int n) { return (data += n); }
-    inline T* operator -=(int n) { return (data -= n); }
-
-    inline T* operator ++() { return ++data; }
-    inline T* operator ++(int postfix) { return data++; }
-
-    inline T* operator --() { return --data; }
-    inline T* operator --(int postfix) { return data--; }
-
-    tempbuf() {
-      data = endp = base = NULL;
-    }
-
-    void free() {
-      if unlikely (!base)
-        return;
-      assert(data <= endp);
-      munmap(base, ((char*)endp - (char*)base) + PAGE_SIZE);
-      base = endp = data = NULL;
-    }
-
-    ~tempbuf() {
-      free();
-    }
-
-    void resize(int size) {
-      free();
-
-      int realsize = ceil(size * sizeof(T), PAGE_SIZE);
-      
-      base = (T*)sys_mmap(NULL, realsize + 2*PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, 0, 0);
-      assert(base != MAP_FAILED);
-
-      base = (T*)((char*)base + PAGE_SIZE);
-      endp = (T*)((char*)base + realsize);
-
-      assert(sys_mprotect(((char*)base) - PAGE_SIZE, PAGE_SIZE, PROT_NONE) == 0);
-      assert(sys_mprotect((char*)endp, PAGE_SIZE, PROT_NONE) == 0);
-      data = base;
-    }
-
-    tempbuf(int size) {
-      resize(size);
-    }
-
-    inline bool empty() const { return (data == base); }
-    inline void clear() { data = base; }
-    inline int capacity() const { return (endp - base); }
-    inline int setcount(int newcount) {
-      data = base + newcount; 
-      return newcount;
-    }
-    inline int size() const { return (data - base); }
-    inline int count() const { return (data - base); }
-    inline operator bool() const { return empty(); }
-
-    inline T* start() const { return base; }
-    inline T* end() const { return data; }
-    inline T* dup() const {
-      T* t = new T[count()];
-      memcpy(t, base, sizeof(T) * count());
-      return t;
-    }
-
-    T* reserve(int n = 1) {
-      T* p = data;
-      data = data + n;
-      if likely (data <= end)
-        return p;
-
-      data = p;
-      return NULL;
-    }
-
-    const T& push(const T& obj) {
-      *data++ = obj;
-      return obj;
-    }
-
-    T& push() {
-      return *data++;
-    }
-
-    T& pop() {
-      return *data--;
-    }
-  };
-
-  template <class T> static inline const T& operator <<(tempbuf<T>& buf, const T& v) { return buf.push(v); }
-  template <class T> static inline const T& operator >>(tempbuf<T>& buf, T& v) { return (v = buf.pop()); }
 
   /*
    * CRC32

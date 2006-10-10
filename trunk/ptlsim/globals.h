@@ -96,12 +96,40 @@ MakeLimits(unsigned long, 0, 0xffffffff);
 #endif
 #undef MakeLimits
 
+template <typename T> struct isprimitive_t { static const bool primitive = 0; };
+#define MakePrimitive(T) template <> struct isprimitive_t<T> { static const bool primitive = 1; }
+MakePrimitive(signed char);
+MakePrimitive(unsigned char);
+MakePrimitive(signed short);
+MakePrimitive(unsigned short);
+MakePrimitive(signed int);
+MakePrimitive(unsigned int);
+MakePrimitive(signed long);
+MakePrimitive(unsigned long);
+MakePrimitive(signed long long);
+MakePrimitive(unsigned long long);
+MakePrimitive(float);
+MakePrimitive(double);
+MakePrimitive(bool);
+
+template<typename T> struct ispointer_t { static const bool pointer = 0; };
+template <typename T> struct ispointer_t<T*> { static const bool pointer = 1; };
+#define ispointer(T) (ispointer_t<T>::pointer)
+#define isprimitive(T) (isprimitive_t<T>::primitive)
+
 // Null pointer to the specified object type, for computing field offsets
 template <typename T> static inline T* nullptr() { return (T*)(Waddr)0; }
 #define offsetof(T, field) ((Waddr)(&(nullptr<T>()->field)) - ((Waddr)nullptr<T>()))
 #define baseof(T, field, ptr) ((T*)(((byte*)(ptr)) - offsetof(T, field)))
+// Restricted (non-aliased) pointers:
+#define noalias __restrict__
 
-//#error FIXME: This does not work right when the struct is a temporary (compiler bug?) (test_refs() in cpuid.cpp)
+// Default placement versions of operator new.
+inline void* operator new(unsigned long, void* p) { return p; }
+inline void* operator new[](unsigned long, void* p) { return p; }
+inline void operator delete(void*, void*) { }
+inline void operator delete[](void*, void*) { }
+
 // Add raw data auto-casts to a structured or bitfield type 
 #define RawDataAccessors(structtype, rawtype) \
   structtype() { } \
