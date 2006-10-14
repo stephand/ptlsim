@@ -531,7 +531,7 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
 
               if (printinfo.show_stars_in_histogram) {
                 os << " ";
-                int stars = (int)round((percent / 100.0) * 50);
+                int stars = (int)((percent / 100.0) * 50);
                 foreach (i, stars) { os << '*'; }
               }
               os << endl;
