@@ -18,7 +18,7 @@ typedef dynarray< KeyValuePair<const char*, DataStoreNode*> > DataStoreNodeDirec
 struct DataStoreNode;
 
 struct DataStoreNodePrintSettings {
-  int force_sum_of_subtrees_only:1, percent_of_toplevel:1, cumulative_histogram:1;
+  int force_sum_of_subtrees_only:1, percent_of_toplevel:1, cumulative_histogram:1, show_stars_in_histogram:1;
   int maxdepth;
   int percent_digits;
   float histogram_thresh;
@@ -30,6 +30,7 @@ struct DataStoreNodePrintSettings {
     percent_of_toplevel = 0;
     histogram_thresh = 0.0001;
     cumulative_histogram = 0;
+    show_stars_in_histogram = 1;
   }
 };
 
@@ -75,7 +76,7 @@ struct ScaleOperator {
 
 struct DataStoreNodeLinkManager {
   static DataStoreNode* objof(selflistlink* link);
-  static const char*& keyof(DataStoreNode* obj);
+  static char*& keyof(DataStoreNode* obj);
   static selflistlink* linkof(DataStoreNode* obj);
 };
 
@@ -83,7 +84,7 @@ struct DataStoreNode {
   typedef Hashtable<const char*, DataStoreNode*, 16> hash_t;
   selflistlink hashlink;
   hash_t* subnodes;
-  const char* name;
+  char* name;
   DataStoreNode* sum_of_subtrees_cache;
   DataStoreNode* average_of_subtrees_cache;
   double total_sum_cache;
@@ -503,7 +504,7 @@ struct DataStoreNodeTemplate: public DataStoreNodeTemplateBase {
 
   enum NodeType { DS_NODE_TYPE_NULL, DS_NODE_TYPE_INT, DS_NODE_TYPE_FLOAT, DS_NODE_TYPE_NODE, DS_NODE_TYPE_STRING, DS_NODE_TYPE_LABELED_HISTOGRAM };
 
-  DataStoreNodeTemplate() { }
+  DataStoreNodeTemplate() { name = null; labels = null; parent = null; }
 
   DataStoreNodeTemplate(const char* name, int type = DS_NODE_TYPE_NULL, int count = 1, const char** labels = null);
 

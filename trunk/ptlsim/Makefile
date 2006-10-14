@@ -36,7 +36,7 @@ endif
 
 ifdef __x86_64__
 CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
-#CFLAGS = -O1 -g3 -march=k8 -falign-functions=16 $
+#CFLAGS = -O1 -g3 -march=k8 -falign-functions=16
 CFLAGS32BIT = $(CFLAGS) -m32
 else
 # 32-bit PTLsim32 only, on a Pentium 4:
@@ -78,7 +78,7 @@ COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-c
 ifdef PTLSIM_HYPERVISOR
 COMMONCPPFILES += lowlevel-64bit-xen.S ptlxen.cpp ptlxen-memory.cpp ptlxen-events.cpp ptlxen-common.cpp ptlmon.cpp ptlctl.cpp
 endif
-OOOCPPFILES = ooocore.cpp seqcore.cpp branchpred.cpp
+OOOCPPFILES = ooocore.cpp ooopipe.cpp oooexec.cpp seqcore.cpp branchpred.cpp
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
 CFLAGS += -D__PTLSIM_OOO_ONLY__
@@ -122,7 +122,7 @@ else
 	$(CC) -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer ptlcalls.c -o ptlcalls-32bit.o
 endif
 
-ptlsim.dst: dstbuild stats.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
+ptlsim.dst: dstbuild stats.h ooocore.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
 	$(CC) $(CFLAGS) $(INCFLAGS) -E -C stats.h > stats.i
 	cat stats.i | ./dstbuild PTLsimStats > dstbuild.temp.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -DDSTBUILD -include stats.h dstbuild.temp.cpp $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o -o dstbuild.temp

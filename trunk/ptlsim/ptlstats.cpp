@@ -46,6 +46,7 @@ struct PTLstatsConfig {
   
   double histogram_thresh;
   W64 cumulative_histogram;
+  bool show_stars_in_histogram;
   
   bool percent_of_toplevel;
   
@@ -93,6 +94,7 @@ void PTLstatsConfig::reset() {
   
   histogram_thresh = 0.0001;
   cumulative_histogram = 0;
+  show_stars_in_histogram = 1;
   
   percent_of_toplevel = 0;
   
@@ -147,6 +149,7 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(graph_logk,                       "logk",                      "Log scale constant");
   add(cumulative_histogram,             "cumulative-histogram",      "Cumulative histogram");
   add(histogram_thresh,                 "histogram-thresh",          "Histogram threshold (1.0 = print nothing, 0.0 = everything)");
+  add(show_stars_in_histogram,          "nostars",                   "Don't show stars (***) in histogram");
 
   section("Miscellaneous");
   add(print_datastore_info,             "info",                      "Print information about the data store file");
@@ -1151,6 +1154,7 @@ int main(int argc, char* argv[]) {
   printinfo.percent_of_toplevel = config.percent_of_toplevel;
   printinfo.histogram_thresh = config.histogram_thresh;
   printinfo.cumulative_histogram = config.cumulative_histogram;
+  printinfo.show_stars_in_histogram = config.show_stars_in_histogram;
 
   char* subtract_branch = (config.subtract_branch.set()) ? (char*)config.subtract_branch : null;
   char* snapshot = (config.snapshot.set()) ? (char*)config.snapshot : null;

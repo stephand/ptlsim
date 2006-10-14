@@ -13,7 +13,7 @@ DataStoreNode* DataStoreNodeLinkManager::objof(selflistlink* link) {
   return baseof(DataStoreNode, hashlink, link);
 }
 
-const char*& DataStoreNodeLinkManager::keyof(DataStoreNode* obj) {
+char*& DataStoreNodeLinkManager::keyof(DataStoreNode* obj) {
   return obj->name;
 }
 
@@ -60,7 +60,7 @@ void DataStoreNode::rename(const char* newname) {
   if (oldparent)
     assert(oldparent->remove(name));
 
-  delete[] name;
+  free(name);
   name = strdup(newname);
 
   if (oldparent) oldparent->add(this);
@@ -105,7 +105,7 @@ DataStoreNode::~DataStoreNode() {
   removeall();
   if (subnodes)
     delete subnodes;
-  delete[] name;
+  free(name);
   subnodes = null;
   parent = null;
   name = null;
@@ -527,7 +527,14 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
               
               os << intstring(base, w), " ", 
                 intstring(base + (histostride-1), w), " ",
-                intstring(value, w), endl;
+                intstring(value, w);
+
+              if (printinfo.show_stars_in_histogram) {
+                os << " ";
+                int stars = (int)round((percent / 100.0) * 50);
+                foreach (i, stars) { os << '*'; }
+              }
+              os << endl;
             }
           }
 
@@ -972,6 +979,7 @@ DataStoreNodeTemplate::DataStoreNodeTemplate(idstream& is) {
   W16 n;
   is >> n; name = new char[n+1]; is.read(name, n); name[n] = 0;
 
+  labels = null;
   if (labeled_histogram) {
     labels = new char*[count];
     foreach (i, count) {
