@@ -549,7 +549,7 @@ struct PTEUpdate: public PTEUpdateBase {
 
 struct TrapTarget {
 #ifdef __x86_64__
-  W64 rip:48, cpl:2, maskevents:1, cs:3;
+  W64 rip:48, cpl:2, maskevents:1, cs:13;
 #else
   W32 rip;
   W16 pad;

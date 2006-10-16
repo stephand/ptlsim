@@ -26,28 +26,26 @@ hypercall_page:
 .previous
 
 .extern main
+.extern secondary_vcpu_startup
+
 .global ptlsim_preinit_entry
 ptlsim_preinit_entry:
-  # %rdi already points to PTLsimMonitorInfo struct
+  # %rsp is at the top of the per-vcpu stack
+  # %rdi points to PTLsimMonitorInfo struct
+  # %rsi is the vcpuid (0 = primary, >0 = secondary)
+  test %rsi,%rsi
+  jnz  1f
+  # Primary VCPU
   xor  %edi,%edi # no argc
   xor  %esi,%esi # no argv[]
   call main
-1:  
-  jmp 1b
+  int3
 
-.global get_fs
-get_fs:
-  xor   %eax,%eax
-  mov   %ax,%fs
-  ret
-
-.global get_gs
-get_gs:
-  xor   %eax,%eax
-  mov   %ax,%gs
-  ret
-
-.extern got_upcall
+1:
+  # Secondary VCPUs
+  mov  %rdi,%rsi # vcpuid is first arg
+  call secondary_vcpu_startup
+  int3
 
 #define __ASSEMBLY__
 #include <xen/xen.h>
@@ -124,6 +122,8 @@ get_gs:
  * 1:  r11
  * 0:  rcx
  */
+
+.extern per_vcpu_stack_base
 
 .macro save_regs HAS_ERROR_CODE
   mov   %rcx,[%rsp + 0*8]

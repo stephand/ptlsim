@@ -292,6 +292,7 @@ W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false, bool i
   // state. Hence the target VCPU will remain blocked forever. To avoid
   // this, we specify spin = true for these calls.
   //
+
   while (!bootinfo.hostreq.ready) {
     if unlikely (!spin) { hostreq_spins++; xen_sched_block(); }
     barrier();
@@ -349,7 +350,7 @@ int switch_to_native(bool pause = false) {
   // the current cr3 mfn as a data page, and hence it will be
   // invalid if we try to use it as our root later on.
   //
-  switch_page_table(bootinfo.toplevel_page_table_mfn);
+  // switch_page_table(bootinfo.toplevel_page_table_mfn);
   enable_breakout_insn();
 
   // Linux kernels expect this to be re-enabled:
@@ -742,14 +743,15 @@ bool Context::gdt_entry_valid(W16 idx) {
   return (idx < gdtsize);
 }
 
-SegmentDescriptor Context::get_gdt_entry(W16 idx) {
-  // idx >>= 3; // remove GDT/LDT select bit and 2-bit DPL
+void* gdt_page;
+mfn_t gdt_mfn;
 
+SegmentDescriptor Context::get_gdt_entry(W16 idx) {
   if (!idx)
     return SegmentDescriptor(0);
 
   if ((idx >> 9) == FIRST_RESERVED_GDT_PAGE)
-    return *(const SegmentDescriptor*)((byte*)bootinfo.gdt_page + (lowbits(idx, 9) * 8));
+    return *(const SegmentDescriptor*)((byte*)gdt_page + (lowbits(idx, 9) * 8));
 
   if (idx >= gdtsize)
     return SegmentDescriptor(0);
@@ -945,14 +947,13 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   bool debug = logable(1) | force_hypercall_logging;
 
   if (debug) {
-    logfile << "hypercall: ", hypercallid, " (", ((hypercallid < lengthof(hypercall_names)) ? hypercall_names[hypercallid] : "???"), 
-      ") on vcpu ", ctx.vcpuid, " from ", (void*)ctx.commitarf[REG_rip], " ", flush;
+    logfile << "[vcpu ", ctx.vcpuid, "] hypercall (", hypercallid, ") from ";
     // Get real return address from stack, above push of %rcx and %r11
     void* real_retaddr;
     int stackn = ctx.copy_from_user(&real_retaddr, (ctx.commitarf[REG_rsp] + 8*2), 8);
-    logfile << "real ret addr "; if (stackn) logfile << real_retaddr; else logfile << "<unknown>";
-    logfile << " args (", (void*)arg1, ", ", (void*)arg2, ", ", (void*)arg3, ", ", (void*)arg4, ", ",
-      (void*)arg5, ", ", (void*)arg6, ") at cycle ", iterations, " (", total_user_insns_committed, " commits)", endl, flush;
+    if (stackn) logfile << real_retaddr; else logfile << "<unknown>";
+    logfile << " at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits: ";
+    // Target hypercall will print rest of line 
   }
 
   W64s rc;
@@ -973,8 +974,8 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
     setzero(ctx.idt);
 
-    if (logable(1) | force_hypercall_logging) {
-      logfile << "hypercall: set_trap_table(", (void*)arg1, "):", endl;
+    if (debug) {
+      logfile << "set_trap_table(", (void*)arg1, "):", endl;
     }
 
     foreach (i, 256) {
@@ -1020,7 +1021,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     rc = HYPERVISOR_set_gdt(mfns, entries);
 
     if (debug) {
-      logfile << "hypercall: set_gdt: ", entries, " entries in ", pages, " pages:";
+      logfile << "set_gdt: ", entries, " entries in ", pages, " pages:";
       foreach (i, pages) { logfile << " ", mfns[i]; }
       logfile << "; rc ", rc, endl;
     }
@@ -1036,6 +1037,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     arg1 = fixup_guest_stack_selector(arg1);
     ctx.kernel_ss = arg1;
     ctx.kernel_sp = arg2;
+    logfile << "stack_switch: ", (void*)ctx.kernel_ss, ":", (void*)ctx.kernel_sp, endl;
     rc = 0;
     break;
   }
@@ -1044,15 +1046,17 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     ctx.event_callback_rip = arg1;
     ctx.failsafe_callback_rip = arg2;
     ctx.syscall_rip = arg3;
-
     ctx.syscall_disables_events = 0;
     ctx.failsafe_disables_events = 1;
+    logfile << "set_callbacks: (event ", (void*)ctx.event_callback_rip, ", failsafe ",
+      (void*)ctx.failsafe_callback_rip, ", syscall ", (void*)ctx.syscall_rip, ")", endl;
     rc = 0;
     break;
   };
 
   case __HYPERVISOR_fpu_taskswitch: {
     ctx.cr0.ts = arg1;
+    logfile << "fpu_taskswitch: TS = ", ctx.cr0.ts, endl;
     rc = 0;
     break;
   };
@@ -1062,6 +1066,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     // __HYPERVISOR_dom0_op not needed in domU
 
   case __HYPERVISOR_set_debugreg: {
+    logfile << "set_debugreg: dr", arg1, " = 0x", hexstring(arg2, 64), endl;
     if (inrange((int)arg1, 0, 7)) {
       switch (arg1) {
       case 0: ctx.dr0 = arg2; break;
@@ -1095,6 +1100,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     } else {
       rc = -EINVAL;
     }
+    logfile << "get_debugreg: dr", arg1, " = 0x", hexstring(rc, 64), endl;
     break;
   }
 
@@ -1107,6 +1113,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     Waddr physaddr = arg1;
     W64 desc = arg2;
 
+    logfile << "update_descriptor: physaddr ", (void*)arg1, " (mfn ", (arg1 >> 12), ", entry ", (lowbits(arg1, 12) / 8), ") = 0x", hexstring(desc, 64), endl;
     rc = HYPERVISOR_update_descriptor(physaddr, desc);
     break;
   };
@@ -1139,6 +1146,9 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
   case __HYPERVISOR_xen_version: {
     // NOTE: xen_version is sometimes used as a no-op call just to get pending events processed
+
+    logfile << "xen_version: tyoe ", arg1, " => buf ", (void*)arg2, endl;
+
     static const int struct_sizes[] = {
       0, // XENVER_version
       sizeof(xen_extraversion_t),
@@ -1167,7 +1177,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   case __HYPERVISOR_console_io: {
     switch (arg1) {
     case CONSOLEIO_write: {
-      if (debug) logfile << "hypercall: console_io (write): write ", arg2, " bytes at ", (void*)(Waddr)arg3, endl, flush;
+      if (debug) logfile << "console_io (write): write ", arg2, " bytes at ", (void*)(Waddr)arg3, endl, flush;
       logfile << "Console output (", arg2, " bytes):", endl, flush;
       logfile.write((void*)arg3, arg2);
       logfile << flush;
@@ -1175,7 +1185,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       break;
     }
     case CONSOLEIO_read: {
-      if (debug) logfile << "hypercall: console_io (read): read ", arg2, " bytes into ", (void*)(Waddr)arg3, endl, flush;
+      if (debug) logfile << "console_io (read): read ", arg2, " bytes into ", (void*)(Waddr)arg3, endl, flush;
       rc = 0;
       break;
     }
@@ -1187,7 +1197,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
   case __HYPERVISOR_physdev_op_compat: {
     getreq(physdev_op_t);
-    if (debug) logfile << "hypercall: physdev_op (operation ", req.cmd, "): ignored", endl;
+    if (debug) logfile << "physdev_op (operation ", req.cmd, "): ignored", endl;
     rc = 0;
     break;
   }
@@ -1198,7 +1208,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   }
 
   case __HYPERVISOR_vm_assist: {
-    if (debug) logfile << "hypercall: vm_assist (subcall ", arg1, ") = value ", arg2, endl;
+    if (debug) logfile << "vm_assist (subcall ", arg1, ") = value ", arg2, endl;
     // Writable pagetables are always supported by PTLsim (this is the only relevant assist type)
     break;
   }
@@ -1216,10 +1226,12 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     rc = 0;
     switch (arg1) {
     case SEGBASE_FS:
+      logfile << "set_segment_base: kernel_fs = ", (void*)arg2, endl;
       ctx.fs_base = arg2;
       ctx.seg[SEGID_FS].base = arg2;
       break;
     case SEGBASE_GS_USER:
+      logfile << "set_segment_base: user_gs = ", (void*)arg2, endl;
       ctx.gs_base_user = arg2;
       //
       // Update the MSR so the new user base gets restored
@@ -1229,6 +1241,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       ctx.swapgs_base = arg2;
       break;
     case SEGBASE_GS_KERNEL:
+      logfile << "set_segment_base: kernel_gs = ", (void*)arg2, endl;
       ctx.gs_base_kernel = arg2;
       ctx.seg[SEGID_GS].base = arg2;
       break;
@@ -1240,13 +1253,14 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       // swapgs; mov %k0,%gs; swapgs; hack they have to use.
       //
       ctx.swapgs();
+      logfile << "set_segment_base: user_gs_sel = ", (void*)arg2, endl;
       int exception = ctx.write_segreg(SEGID_GS, arg2);
       ctx.swapgs(); // put it back in the base to restore for user mode
       rc = (exception) ? -EINVAL : 0;
       break;
     }
     default:
-      if (debug) logfile << "hypercall: set_segment_base: unknown segment id ", arg1, endl;
+      if (debug) logfile << "set_segment_base: unknown segment id ", arg1, endl;
       abort();
     }
 
@@ -1262,6 +1276,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
   case __HYPERVISOR_nmi_op: {
     // not supported outside dom0
+    logfile << "nmi_op: not supported", endl;
     rc = -EINVAL;
   }
 
@@ -1277,28 +1292,28 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       bool disable_events = ((req.flags & CALLBACKF_mask_events) != 0);
       switch (req.type) {
       case CALLBACKTYPE_event:
-        if (debug) logfile << "hypercall: callback_op: set event callback to ", (void*)(Waddr)req.address, endl;
+        if (debug) logfile << "callback_op: set event callback to ", (void*)(Waddr)req.address, endl;
         ctx.event_callback_rip = req.address;
         break;
       case CALLBACKTYPE_syscall:
-        if (debug) logfile << "hypercall: callback_op: set syscall callback to ", 
+        if (debug) logfile << "callback_op: set syscall callback to ", 
                      (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
         ctx.syscall_rip = req.address;
         ctx.syscall_disables_events = disable_events;
         break;
       case CALLBACKTYPE_failsafe:
-        if (debug) logfile << "hypercall: callback_op: set failsafe callback to ", 
+        if (debug) logfile << "callback_op: set failsafe callback to ", 
                      (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
         ctx.failsafe_callback_rip = req.address;
         ctx.failsafe_disables_events = disable_events;
         break;
       case CALLBACKTYPE_nmi:
-        if (debug) logfile << "hypercall: callback_op: set nmi callback to ", 
+        if (debug) logfile << "callback_op: set nmi callback to ", 
                      (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
         // We don't have NMIs in PTLsim - dom0 handles that
         break;
       default:
-        logfile << "hypercall: callback_op: set unknown callback ", req.type, " to ", 
+        logfile << "callback_op: set unknown callback ", req.type, " to ", 
           (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
         abort();
         break;
@@ -1323,7 +1338,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   case __HYPERVISOR_physdev_op: {
     switch (arg1) {
     case PHYSDEVOP_set_iopl: {
-      if (debug) logfile << "hypercall: physdev_op (set_iopl): ignored", endl;
+      if (debug) logfile << "physdev_op (set_iopl): ignored", endl;
       // Even domU's try to get iopl 1; just ignore it: they don't have any physical devices anyway
       rc = 0;
       break;
@@ -1340,7 +1355,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     abort();
   }
 
-  if (debug) logfile << "  Returning rc ", rc, endl, flush;
+  // if (debug) logfile << "  Returning rc ", rc, endl, flush;
 
   return rc;
 }
@@ -1407,7 +1422,7 @@ void handle_xen_hypercall_assist(Context& ctx) {
       ctx.kernel_mode = 0;
       ctx.cr3 = ctx.user_ptbase_mfn << 12;
       ctx.flush_tlb();
-      switch_page_table(ctx.cr3 >> 12);
+      // switch_page_table(ctx.cr3 >> 12);
       if (logable(4)) logfile << "  Switch back to user mode @ cr3 mfn ", (ctx.cr3 >> 12), endl;
       ctx.swapgs();
     }
@@ -1523,7 +1538,7 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
     cr3 = kernel_ptbase_mfn << 12;
     if (logable(4)) logfile << "  Load kernel page table @ cr3 mfn ", (cr3 >> 12), endl;
     flush_tlb();
-    switch_page_table(cr3 >> 12);
+    // switch_page_table(cr3 >> 12);
     if (logable(4)) logfile << "  Switching to kernel mode (new kernel ptbase mfn ", (cr3 >> 12), ")", endl;
   }
 
@@ -1657,7 +1672,7 @@ void handle_syscall_assist(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_rcx]; // microcode stub puts return address in rcx
 
   if (logable(1)) {
-    logfile << "  System call ", ctx.commitarf[REG_rax], " args (",
+    logfile << "[vcpu ", ctx.vcpuid, "] syscall from ", (void*)ctx.commitarf[REG_rip], ": ", ctx.commitarf[REG_rax], " args (",
       (void*)ctx.commitarf[REG_rdi], ", ",
       (void*)ctx.commitarf[REG_rsi], ", ",
       (void*)ctx.commitarf[REG_rdx], ", ",
@@ -1736,6 +1751,8 @@ void collect_sysinfo(PTLsimStats& stats) {
 #define strput(x, y) (strncpy((x), (y), sizeof(x)))
   strput(stats.simulator.run.hypervisor_version, xen_caps);
 }
+
+void wait_for_secondary_vcpus();
 
 //
 // Bring up PTLsim subsystems on the bare hardware,
@@ -1851,12 +1868,12 @@ void ptlsim_init() {
   //
   // Copy GDT template page from hypervisor
   //
-  bootinfo.gdt_page = ptl_alloc_private_page();
-  bootinfo.gdt_mfn = ptl_virt_to_mfn(bootinfo.gdt_page);
+  gdt_page = ptl_alloc_private_page();
+  gdt_mfn = ptl_virt_to_mfn(gdt_page);
 
   mmuext_op_t mmuextop;  
   mmuextop.cmd = MMUEXT_GET_GDT_TEMPLATE;
-  mmuextop.arg1.linear_addr = (unsigned long)bootinfo.gdt_page;
+  mmuextop.arg1.linear_addr = (unsigned long)gdt_page;
   mmuextop.arg2.nr_ents = PAGE_SIZE;
   int opcount = 1;
   assert(HYPERVISOR_mmuext_op(&mmuextop, opcount, &opcount, DOMID_SELF) == 0);
@@ -1872,13 +1889,18 @@ void ptlsim_init() {
   init_decode();
 
   //
+  // Wait for ptlmon to properly convert the context
+  //
+  while (!bootinfo.context_spinlock) { xen_sched_yield(); barrier(); }
+
+  //
   // Build the physical memory map page tables, inject
   // PTLsim into the virtual address space of the guest
   // domain, then switch to this page table base.
   //
   build_physmap_page_tables();
   inject_ptlsim_into_toplevel(get_cr3_mfn());
-  switch_page_table(contextof(0).cr3 >> 12);
+  // switch_page_table(contextof(0).cr3 >> 12);
 
   //
   // Initialize the non-trivial parts of the VCPU contexts.
@@ -1894,20 +1916,80 @@ void ptlsim_init() {
 
   collect_sysinfo(stats);
 
+  // Bring up secondary processors
+  wait_for_secondary_vcpus();
+
   // Tell PTLmon we're now up and running
   bootinfo.ptlsim_state = PTLSIM_STATE_RUNNING;
+}
+
+//
+// Secondary VCPUs spin on bits in this bitmap (waiting
+// for a '1' bit) until the primary VCPU initializes.
+//
+// This starts at bit 0 == '1' since vcpu0 immediately
+// starts on bootup.
+//
+W64 vcpu_startup_signal_bitmap = 1;
+
+//
+// Secondary VCPUs atomically set bits in this bitmap
+// as they come on line. VCPU0 only reads this bitmap;
+// it never writes it.
+//
+W64 vcpu_startup_complete_bitmap = 1;
+
+void wait_for_secondary_vcpus() {
+  //
+  // Figure out which VCPUs are running, then
+  // spin on vcpu_startup_complete_bitmap
+  //
+
+  W64 vcpu_up_map = 0;
+
+  foreach (i, contextcount) {
+    int up = HYPERVISOR_vcpu_op(VCPUOP_is_up, i, null);
+    if (up) setbit(vcpu_up_map, i);
+  }
+
+  barrier();
+  // Start up all secondary VCPUs
+  vcpu_startup_signal_bitmap = bitmask(contextcount);
+  barrier();
+
+  while (vcpu_startup_complete_bitmap != vcpu_up_map) {
+    xen_sched_yield();
+    barrier();
+  }
+}
+
+//
+// This is where all secondary VCPUs (i.e. other than vcpu0)
+// start up after boot. We wait in a spin loop until vcpu0
+// brings up all subsystems, then enter event slave mode.
+//
+asmlinkage void secondary_vcpu_startup(int vcpuid) {
+  while (!bit(vcpu_startup_signal_bitmap, vcpuid)) { barrier(); }
+
+  HYPERVISOR_fpu_taskswitch(0);
+
+  int rc = HYPERVISOR_set_callbacks((Waddr)xen_event_callback_entry, 0, 0);
+  if (rc < 0) ptlsim_init_fail(20);
+
+  x86_locked_bts(vcpu_startup_complete_bitmap, W64(vcpuid));
+  sti();
+
+  for (;;) {
+    xen_sched_block();
+    barrier();
+  }
 }
 
 //
 // Resume all subsystems after returning from native mode
 //
 void resume_from_native() {
-  byte old_upcall_mask = xchg(shinfo.vcpu_info[0].evtchn_upcall_mask, (byte)1);
   capture_initial_timestamps();
-
-  memcpy(&sshinfo, &shinfo, PAGE_SIZE);
-  sshinfo.vcpu_info[0].evtchn_upcall_mask = old_upcall_mask;
-  barrier();
 
 	HYPERVISOR_vm_assist(VMASST_CMD_disable, VMASST_TYPE_writable_pagetables);
   HYPERVISOR_fpu_taskswitch(0);
@@ -1929,7 +2011,7 @@ void resume_from_native() {
   sti();
 
   inject_ptlsim_into_toplevel(get_cr3_mfn());
-  switch_page_table(contextof(0).cr3 >> 12);
+  // switch_page_table(contextof(0).cr3 >> 12);
 
   //
   // Flush the basic block cache, since code pages could
@@ -1948,6 +2030,12 @@ void resume_from_native() {
     ctx.vcpuid = i;
     ctx.init();
   }
+
+  //
+  // We may have some new VCPUs that were brought online
+  // during native mode:
+  //
+  wait_for_secondary_vcpus();
 }
 
 void print_meminfo_line(ostream& os, const char* name, W64 pages) {
@@ -1964,10 +2052,8 @@ void print_sysinfo(ostream& os) {
   os << "  Xen is mapped at virtual address ", (void*)(Waddr)xen_hypervisor_start_va, endl;
   os << "  PTLsim is running across ", contextcount, " VCPUs:", endl;
 
-  foreach (i, contextcount) {
-    const vcpu_time_info_t& timeinfo = shinfo.vcpu_info[i].time;
-    os << "    VCPU ", i, ": ", (get_core_freq_hz(timeinfo) / 1000000), " MHz", endl;
-  }
+  const vcpu_time_info_t& timeinfo = shinfo.vcpu_info[0].time;
+  os << "  VCPU 0 core frequency: ", (get_core_freq_hz(timeinfo) / 1000000), " MHz", endl;
 
   os << "Memory Layout:", endl;
   print_meminfo_line(os, "System:",          bootinfo.total_machine_pages);
@@ -2191,7 +2277,11 @@ int main(int argc, char** argv) {
 
     if (native) {
       logfile << "Switching to native (pause? ", config.pause, ")...", endl, flush;
-      logfile << "Final context:", endl, contextof(0), flush;
+      logfile << "Final context:", endl;
+      foreach (i, contextcount) {
+        logfile << "VCPU ", i, ":", endl;
+        logfile << contextof(i);
+      }
       logfile << "Final shared info page:", endl, sshinfo, endl, flush;
 
       logfile << "Done!", endl;
@@ -2205,7 +2295,6 @@ int main(int argc, char** argv) {
       //
       // Go native
       //
-
       switch_to_native(pause);
 
       //
@@ -2218,8 +2307,11 @@ int main(int argc, char** argv) {
 
       logfile << "Returned from switch to native: now back in sim", endl, flush;
       cerr << "Returned from switch to native: now back in sim", endl, flush;
-      logfile << contextof(0), endl;
-      logfile << sshinfo, endl;
+      foreach (i, contextcount) {
+        logfile << "VCPU ", i, ":", endl;
+        logfile << contextof(0), endl;
+      }
+      logfile << sshinfo, endl, flush;
 
       process_native_upcall();
     } else if (kill) {

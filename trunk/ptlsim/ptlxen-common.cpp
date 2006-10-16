@@ -42,7 +42,7 @@ void Context::restorefrom(const vcpu_guest_context& ctx) {
 
   foreach (i, lengthof(ctx.trap_ctxt)) {
     const trap_info& ti = ctx.trap_ctxt[i];
-    TrapTarget& tt = idt[ti.vector];
+    TrapTarget& tt = idt[i];
     tt.cs = ti.cs >> 3;
     tt.rip = ti.address;
     tt.cpl = lowbits(ti.flags, 2);
@@ -111,6 +111,9 @@ void Context::restorefrom(const vcpu_extended_context& ctx) {
 
   base_tsc = ctx.phys_tsc_at_capture + ctx.tsc_timestamp_bias;
   // base_system_time must be filled in from shinfo
+
+  running = ((ctx.runstate.state == RUNSTATE_running) |
+             (ctx.runstate.state == RUNSTATE_runnable));
 }
 
 void Context::saveto(vcpu_guest_context& ctx) {
@@ -209,6 +212,8 @@ void Context::saveto(vcpu_guest_context& ctx) {
 void Context::saveto(vcpu_extended_context& ctx) {
   ctx.guest_table = kernel_ptbase_mfn;
   ctx.guest_table_user = user_ptbase_mfn;
+
+  ctx.runstate.state == (running) ? RUNSTATE_runnable : RUNSTATE_blocked;
 }
 
 ostream& operator <<(ostream& os, const Level1PTE& pte) {
@@ -301,8 +306,10 @@ const char* PageFrameType::names[] = {"normal", "L1", "L2", "L3", "L4", "(5)", "
 
 ostream& operator <<(ostream& os, const shared_info& si) {
   os << "Xen Shared Info:", endl;
-  foreach (i, 1) { // or MAX_VIRT_CPUS
+  foreach (i, MAX_VIRT_CPUS) {
     vcpu_info_t vcpu = si.vcpu_info[i];
+    // Is it initialized or valid yet?
+    if (!vcpu.time.tsc_timestamp) continue;
     os << "  VCPU ", i, ":", endl;
     os << "    pending ", vcpu.evtchn_upcall_pending, ", mask ", vcpu.evtchn_upcall_mask, endl;
     os << "    sel     ", bitstring(vcpu.evtchn_pending_sel, 64), endl;

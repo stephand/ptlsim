@@ -768,6 +768,7 @@ ostream& operator <<(ostream& os, const Context& ctx) {
 
 #ifdef PTLSIM_HYPERVISOR
   os << "  Flags:", endl;
+  os << "    Running?   ", ((ctx.running) ? "running" : "blocked"), endl;
   os << "    Mode:      ", ((ctx.kernel_mode) ? "kernel" : "user"), ((ctx.kernel_in_syscall) ? " (in syscall)" : ""), endl;
   os << "    32/64:     ", ((ctx.use64) ? "64-bit x86-64" : "32-bit x86"), endl;
   os << "    x87 state: ", ((ctx.i387_valid) ? "valid" : "invalid"), endl;

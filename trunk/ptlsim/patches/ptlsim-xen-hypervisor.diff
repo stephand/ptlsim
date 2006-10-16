@@ -1,6 +1,6 @@
 diff -r c4f3f719d997 xen/arch/x86/domain.c
 --- a/xen/arch/x86/domain.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/domain.c	Sun Oct  8 01:20:36 2006
++++ b/xen/arch/x86/domain.c	Mon Oct 16 01:16:25 2006
 @@ -394,6 +394,35 @@
          break;
      }
@@ -53,8 +53,8 @@ diff -r c4f3f719d997 xen/arch/x86/domain.c
      {
 diff -r c4f3f719d997 xen/arch/x86/domctl.c
 --- a/xen/arch/x86/domctl.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/domctl.c	Sun Oct  8 01:20:36 2006
-@@ -345,6 +345,34 @@
++++ b/xen/arch/x86/domctl.c	Mon Oct 16 01:16:25 2006
+@@ -345,6 +345,38 @@
      c->vm_assist = v->domain->vm_assist;
  }
  
@@ -78,8 +78,12 @@ diff -r c4f3f719d997 xen/arch/x86/domctl.c
 +        mfn_t user_mfn = gmfn_to_mfn(v->domain, ext->guest_table_user);
 +
 +        ok &= update_vcpu_pt_base(v, kernel_mfn, 0);
-+        ok &= update_user_pt_base(v, user_mfn);
-+        
++
++        /* Prevent installation of a null user page table */
++        /* if we're in user mode already */        
++        ok &= ((!(v->arch.flags & TF_kernel_mode)) & (!user_mfn)) ? 0 :
++            update_user_pt_base(v, user_mfn);
++
 +        update_cr3(v);
 +    }
 +
@@ -91,7 +95,7 @@ diff -r c4f3f719d997 xen/arch/x86/domctl.c
   * mode: C
 diff -r c4f3f719d997 xen/arch/x86/mm.c
 --- a/xen/arch/x86/mm.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/mm.c	Sun Oct  8 01:20:36 2006
++++ b/xen/arch/x86/mm.c	Mon Oct 16 01:16:25 2006
 @@ -1718,9 +1718,8 @@
  }
  
@@ -290,7 +294,7 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
              okay = 0;
 diff -r c4f3f719d997 xen/arch/x86/setup.c
 --- a/xen/arch/x86/setup.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/setup.c	Sun Oct  8 01:20:36 2006
++++ b/xen/arch/x86/setup.c	Mon Oct 16 01:16:25 2006
 @@ -656,7 +656,7 @@
  
  #elif defined(CONFIG_X86_64)
@@ -302,8 +306,8 @@ diff -r c4f3f719d997 xen/arch/x86/setup.c
          p += sprintf(p, "hvm-%d.%d-x86_32 ", major, minor);
 diff -r c4f3f719d997 xen/arch/x86/time.c
 --- a/xen/arch/x86/time.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/time.c	Sun Oct  8 01:20:36 2006
-@@ -680,8 +697,8 @@
++++ b/xen/arch/x86/time.c	Mon Oct 16 01:16:25 2006
+@@ -680,8 +680,8 @@
  
      version_update_begin(&u->version);
  
@@ -314,7 +318,7 @@ diff -r c4f3f719d997 xen/arch/x86/time.c
      u->tsc_to_system_mul = t->tsc_scale.mul_frac;
      u->tsc_shift         = (s8)t->tsc_scale.shift;
  
-@@ -690,7 +707,7 @@
+@@ -690,7 +690,7 @@
  
  void update_vcpu_system_time(struct vcpu *v)
  {
@@ -325,7 +329,7 @@ diff -r c4f3f719d997 xen/arch/x86/time.c
  }
 diff -r c4f3f719d997 xen/arch/x86/traps.c
 --- a/xen/arch/x86/traps.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/traps.c	Sun Oct  8 01:20:36 2006
++++ b/xen/arch/x86/traps.c	Mon Oct 16 01:16:25 2006
 @@ -605,6 +605,58 @@
      return EXCRET_fault_fixed;
  }
@@ -395,7 +399,7 @@ diff -r c4f3f719d997 xen/arch/x86/traps.c
          return rc;
  
      ti = &current->arch.guest_context.trap_ctxt[TRAP_invalid_op];
-@@ -1237,12 +1297,26 @@
+@@ -1237,12 +1292,26 @@
          goto fail;
      }
  
@@ -423,7 +427,7 @@ diff -r c4f3f719d997 xen/arch/x86/traps.c
      switch ( opcode )
      {
      case 0x06: /* CLTS */
-@@ -1331,11 +1405,7 @@
+@@ -1331,11 +1400,7 @@
              break;
  
          case 4:
@@ -438,7 +442,7 @@ diff -r c4f3f719d997 xen/arch/x86/traps.c
          default:
 diff -r c4f3f719d997 xen/common/domain.c
 --- a/xen/common/domain.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/common/domain.c	Sun Oct  8 01:20:36 2006
++++ b/xen/common/domain.c	Mon Oct 16 01:16:25 2006
 @@ -551,6 +551,33 @@
          break;
      }
@@ -475,8 +479,8 @@ diff -r c4f3f719d997 xen/common/domain.c
          break;
 diff -r c4f3f719d997 xen/common/domctl.c
 --- a/xen/common/domctl.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/common/domctl.c	Sun Oct  8 01:20:36 2006
-@@ -165,6 +165,100 @@
++++ b/xen/common/domctl.c	Mon Oct 16 01:16:25 2006
+@@ -165,6 +165,123 @@
      return cpu;
  }
  
@@ -539,6 +543,8 @@ diff -r c4f3f719d997 xen/common/domctl.c
 +            arch_getdomaininfo_ctxt(v, oldbuf);
 +            if (copy_to_user(&op->oldctx[i], oldbuf, sizeof(struct vcpu_guest_context))) continue;
 +
++            memcpy(&oldext.runstate, &v->runstate, sizeof(oldext.runstate));
++            oldext.runstate.state = (v->vcpu_flags & (VCPUF_blocked | VCPUF_blocked_in_xen | VCPUF_down)) ? RUNSTATE_blocked : RUNSTATE_runnable;
 +            oldext.phys_tsc_at_capture = phys_tsc_at_capture;
 +            oldext.tsc_timestamp_bias = v->tsc_timestamp_bias;
 +            oldext.system_time_bias = v->system_time_bias;
@@ -559,6 +565,27 @@ diff -r c4f3f719d997 xen/common/domctl.c
 +            if (arch_finish_context_swap(v, newbuf, (op->newext ? &newext : NULL))) continue;
 +        }
 +
++        if (op->newext) {
++            switch (newext.runstate.state) {
++            case RUNSTATE_running:
++            case RUNSTATE_runnable:
++                /* Unblock the VCPU when we resume */
++                vcpu_unblock(v);
++                break;
++            case RUNSTATE_blocked:
++                /* It's already paused, but make sure it doesn't get */
++                /* rescheduled when we unpause the entire domain: */
++                v->vcpu_info->evtchn_upcall_mask = 0;
++                set_bit(_VCPUF_blocked, &v->vcpu_flags);
++                if (v->vcpu_info->evtchn_upcall_pending)
++                    clear_bit(_VCPUF_blocked, &v->vcpu_flags);
++                break;
++            case RUNSTATE_offline:
++                /* No action: already blocked */
++                break;
++            }
++        }
++
 +        clear_bit(i, &op->vcpumap);
 +    }
 +
@@ -577,11 +604,10 @@ diff -r c4f3f719d997 xen/common/domctl.c
  long do_domctl(XEN_GUEST_HANDLE(xen_domctl_t) u_domctl)
  {
      long ret = 0;
-@@ -636,6 +730,21 @@
-             d->time_offset_seconds = op->u.settimeoffset.time_offset_seconds;
+@@ -637,6 +754,18 @@
              put_domain(d);
              ret = 0;
-+        }
+         }
 +    }
 +    break;
 +
@@ -593,15 +619,13 @@ diff -r c4f3f719d997 xen/common/domctl.c
 +            ret = do_contextswap(d, &op->u.contextswap);
 +            put_domain(d);
 +        }
-+        if ( copy_to_guest(u_domctl, op, 1) ) {
-+            printk("Cannot copy domctl back to guest!\n");
-+            ret = -EFAULT;
-         }
++        if ( copy_to_guest(u_domctl, op, 1) ) ret = -EFAULT;
      }
      break;
+ 
 diff -r c4f3f719d997 xen/common/grant_table.c
 --- a/xen/common/grant_table.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/common/grant_table.c	Sun Oct  8 01:20:36 2006
++++ b/xen/common/grant_table.c	Mon Oct 16 01:16:25 2006
 @@ -834,7 +834,7 @@
      struct gnttab_copy *op)
  {
@@ -613,7 +637,7 @@ diff -r c4f3f719d997 xen/common/grant_table.c
      int have_d_grant = 0, have_s_grant = 0, have_s_ref = 0;
 diff -r c4f3f719d997 xen/include/asm-x86/mm.h
 --- a/xen/include/asm-x86/mm.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/asm-x86/mm.h	Sun Oct  8 01:20:36 2006
++++ b/xen/include/asm-x86/mm.h	Mon Oct 16 01:16:25 2006
 @@ -7,6 +7,7 @@
  #include <xen/list.h>
  #include <asm/io.h>
@@ -647,8 +671,16 @@ diff -r c4f3f719d997 xen/include/asm-x86/mm.h
  void propagate_page_fault(unsigned long addr, u16 error_code);
 diff -r c4f3f719d997 xen/include/public/domctl.h
 --- a/xen/include/public/domctl.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/public/domctl.h	Sun Oct  8 01:20:36 2006
-@@ -347,6 +347,59 @@
++++ b/xen/include/public/domctl.h	Mon Oct 16 01:16:25 2006
+@@ -15,6 +15,7 @@
+ #endif
+ 
+ #include "xen.h"
++#include "vcpu.h"
+ 
+ #define XEN_DOMCTL_INTERFACE_VERSION 0x00000003
+ 
+@@ -347,6 +348,61 @@
  };
  typedef struct xen_domctl_settimeoffset xen_domctl_settimeoffset_t;
  DEFINE_XEN_GUEST_HANDLE(xen_domctl_settimeoffset_t);
@@ -659,6 +691,8 @@ diff -r c4f3f719d997 xen/include/public/domctl.h
 + * Extended VCPU context (PTLsim specific)
 + */
 +struct vcpu_extended_context {
++    struct vcpu_runstate_info runstate;
++
 +    uint64_t      phys_tsc_at_capture;
 +    uint64_t      tsc_timestamp_bias;
 +    uint64_t      system_time_bias;
@@ -708,7 +742,7 @@ diff -r c4f3f719d997 xen/include/public/domctl.h
  
  struct xen_domctl {
      uint32_t cmd;
-@@ -373,7 +426,9 @@
+@@ -373,7 +429,9 @@
          struct xen_domctl_hypercall_init    hypercall_init;
          struct xen_domctl_arch_setup        arch_setup;
          struct xen_domctl_settimeoffset     settimeoffset;
@@ -721,7 +755,7 @@ diff -r c4f3f719d997 xen/include/public/domctl.h
  typedef struct xen_domctl xen_domctl_t;
 diff -r c4f3f719d997 xen/include/public/vcpu.h
 --- a/xen/include/public/vcpu.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/public/vcpu.h	Sun Oct  8 01:20:36 2006
++++ b/xen/include/public/vcpu.h	Mon Oct 16 01:16:25 2006
 @@ -108,6 +108,35 @@
  };
  typedef struct vcpu_register_runstate_memory_area vcpu_register_runstate_memory_area_t;
@@ -760,7 +794,7 @@ diff -r c4f3f719d997 xen/include/public/vcpu.h
  /*
 diff -r c4f3f719d997 xen/include/public/xen.h
 --- a/xen/include/public/xen.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/public/xen.h	Sun Oct  8 01:20:36 2006
++++ b/xen/include/public/xen.h	Mon Oct 16 01:16:25 2006
 @@ -215,20 +215,55 @@
  #define MMUEXT_SET_LDT          13
  #define MMUEXT_NEW_USER_BASEPTR 15
@@ -821,7 +855,7 @@ diff -r c4f3f719d997 xen/include/public/xen.h
  typedef struct mmuext_op mmuext_op_t;
 diff -r c4f3f719d997 xen/include/xen/sched.h
 --- a/xen/include/xen/sched.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/xen/sched.h	Sun Oct  8 01:20:36 2006
++++ b/xen/include/xen/sched.h	Mon Oct 16 01:16:25 2006
 @@ -91,6 +91,12 @@
  
      /* Bitmask of CPUs which are holding onto this VCPU's state. */

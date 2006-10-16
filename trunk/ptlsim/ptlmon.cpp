@@ -377,6 +377,10 @@ struct XenController {
   pfn_t ptl_level4_pfn, ptl_level3_pfn, phys_level3_pfn, ptl_level2_pfn, ptl_level1_pfn;
   mfn_t ptl_level4_mfn, ptl_level3_mfn, phys_level3_mfn, ptl_level2_mfn;
 
+  byte* per_vcpu_stack_base;
+
+  shared_info_t* ptlsim_entry_shinfo;
+
   bool alloc_ptlsim_pages(mfn_t* mfns, int ptl_page_count) {
     static const int MAX_ATTEMPTS = 4;
 
@@ -476,6 +480,33 @@ struct XenController {
     return false;
   }
 
+  // RIP where PTLsim is entered (by default, 0xffffff0000025000
+  W64 ptlsim_entrypoint;
+
+  void prep_initial_ptlsim_context(int vcpuid, Context& ptlctx) {
+    setzero(ptlctx);
+    ptlctx.cr3 = (ptl_virt_to_mfn(toplevel_page_table) << log2(PAGE_SIZE));
+    ptlctx.kernel_ptbase_mfn = ptlctx.cr3 >> 12;
+    ptlctx.user_ptbase_mfn = ptlctx.cr3 >> 12;
+    ptlctx.kernel_mode = 1;
+    ptlctx.seg[SEGID_CS].selector = FLAT_KERNEL_CS;
+    ptlctx.seg[SEGID_DS].selector = FLAT_KERNEL_DS;
+    ptlctx.seg[SEGID_SS].selector = FLAT_KERNEL_SS;
+    ptlctx.seg[SEGID_ES].selector = FLAT_KERNEL_DS;
+    ptlctx.seg[SEGID_FS].selector = 0;
+    ptlctx.seg[SEGID_GS].selector = 0;
+    ptlctx.commitarf[REG_flags] = 0; // interrupts initially off
+    ptlctx.saved_upcall_mask = 1;
+    
+    Waddr per_vcpu_sp = ((Waddr)bootinfo->per_vcpu_stack_base) + (vcpuid * 4096) + 4096;
+    ptlctx.commitarf[REG_rsp] = (vcpuid > 0) ? per_vcpu_sp : (Waddr)bootinfo->stack_top;
+    ptlctx.commitarf[REG_rip] = ptlsim_entrypoint;
+    // start info in %rdi (arg[0]):
+    ptlctx.commitarf[REG_rdi] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(bootinfo);
+    // vcpuid is passed in rsi so we know whether or not we're the primary VCPU:
+    ptlctx.commitarf[REG_rsi] = vcpuid;
+  }
+
   bool inject_ptlsim(int reserved_mbytes) {
     bool DEBUG = log_ptlsim_boot;
 
@@ -549,11 +580,8 @@ struct XenController {
     bootinfo = (PTLsimMonitorInfo*)(image + (PTLSIM_BOOT_PAGE_PFN * PAGE_SIZE));
     mfn_t bootpage_mfn = ptl_mfns[PTLSIM_BOOT_PAGE_PFN];
 
-    bootinfo->magic = PTLSIM_BOOT_PAGE_MAGIC;
     bootinfo->mfn_count = ptl_page_count;
     bootinfo->ptl_pagedir_mfn_count = ptl_pagedir_mfn_count;
-    bootinfo->boot_page_mfn = bootpage_mfn;
-    bootinfo->boot_page = (PTLsimMonitorInfo*)(PTLSIM_VIRT_BASE + ((byte*)bootinfo - image));
     bootinfo->shared_info_mfn = info.shared_info_frame;
     bootinfo->total_machine_pages = total_machine_pages;
 
@@ -634,14 +662,6 @@ struct XenController {
     bootinfo->toplevel_page_table = (Level4PTE*)(PTLSIM_VIRT_BASE + ((byte*)ptl_level4 - image));
     bootinfo->toplevel_page_table_mfn = ptl_level4_mfn;
 
-    /*
-    bootpage->start_info_mfn = start_info_mfn;
-    bootpage->store_mfn = start_info->store_mfn;
-    bootpage->store_evtchn = start_info->store_evtchn;
-    bootpage->console_mfn = start_info->console_mfn;
-    bootpage->console_evtchn = start_info->console_evtchn;
-    */
-
     toplevel_page_table = ptlcore_ptr_to_ptlmon_ptr(bootinfo->toplevel_page_table);
     if (DEBUG) cerr << "toplevel_page_table = ", toplevel_page_table, " (mfn ", ptl_virt_to_mfn(toplevel_page_table), ")", endl, flush;
     if (DEBUG) cerr << "toplevel_page_table_mfn = ", bootinfo->toplevel_page_table_mfn, endl, flush;
@@ -659,7 +679,7 @@ struct XenController {
     Waddr real_code_start_offset = (ehdr.e_entry - PTLSIM_VIRT_BASE);
     shared_map_page_count = real_code_start_offset / PAGE_SIZE;
 
-    int bytes_remaining = bytes - real_code_start_offset; //PTLSIM_ELF_SKIP_END;
+    int bytes_remaining = bytes - real_code_start_offset;
     if (DEBUG) cerr << "  Real code starts at offset ", real_code_start_offset, endl;
     if (DEBUG) cerr << "  Bytes to copy: ", bytes_remaining, endl, flush;
     memcpy(image + real_code_start_offset, data + real_code_start_offset, bytes_remaining);
@@ -675,13 +695,21 @@ struct XenController {
     memset(image + phdr[0].p_filesz, 0, bss_size);
 
     //
-    // Set up stack
+    // Set up primary stack
     //
     byte* sp = image + (next_free_page_pfn * PAGE_SIZE);
     bootinfo->stack_top = ptlmon_ptr_to_ptlcore_ptr(sp);
     bootinfo->stack_size = stacksize;
     next_free_page_pfn -= (stacksize / PAGE_SIZE);
     if (DEBUG) cerr << "  Setting up ", stacksize, "-byte stack starting at ", ptlmon_ptr_to_ptlcore_ptr(sp), endl, flush;
+
+    //
+    // Allocate up per-VCPU stacks
+    //
+    pfn_t per_vcpu_stack_base_pfn;
+    alloc_pages(byte, per_vcpu_stack_base, per_vcpu_stack_base_pfn, MAX_CONTEXTS);
+    bootinfo->per_vcpu_stack_base = ptlmon_ptr_to_ptlcore_ptr(per_vcpu_stack_base);
+    if (DEBUG) cerr << "  Setting up ", vcpu_count, " stacks of ", 4096, " bytes each starting at ", bootinfo->per_vcpu_stack_base, endl, flush;
 
     //
     // Alocate virtual shinfo redirect page (for event recording and replay)
@@ -696,12 +724,9 @@ struct XenController {
     ctx = ptlcore_ptr_to_ptlmon_ptr((Context*)PTLSIM_CTX_PAGE_VIRT_BASE);
     if (DEBUG) cerr << "  Context array starts at ", ptlmon_ptr_to_ptlcore_ptr(ctx), " (", sizeof(Context), " bytes each)", endl, flush;
 
-    // Align sp to 16-byte boundary according to what gcc expects:
-    sp = floorptr(sp, 16);
-
     bootinfo->heap_start = ptlmon_ptr_to_ptlcore_ptr(end_of_image);
-    bootinfo->heap_end = bootinfo->stack_top - stacksize;
-    bootinfo->avail_mfn_count = next_free_page_pfn;
+    bootinfo->heap_end = ptlmon_ptr_to_ptlcore_ptr(image + ((next_free_page_pfn-1) * PAGE_SIZE));
+    bootinfo->avail_mfn_count = (next_free_page_pfn-1);
 
     if (DEBUG) {
       cerr << "PTLsim mapped at ", image, ":", endl;
@@ -714,6 +739,7 @@ struct XenController {
     }
 
     if (DEBUG) cerr << "  Heap start ", bootinfo->heap_start, " to heap end ", bootinfo->heap_end, " (", ((bootinfo->heap_end - bootinfo->heap_start) / 1024), " kbytes)", endl;
+    if (DEBUG) cerr << "  Per-VCPU stacks from ", bootinfo->heap_start, " to heap end ", bootinfo->heap_end, " (", ((bootinfo->heap_end - bootinfo->heap_start) / 1024), " kbytes)", endl;
 
     bootinfo->vcpu_count = vcpu_count;
     bootinfo->max_pages = info.max_pages;
@@ -729,10 +755,10 @@ struct XenController {
     bootinfo->ptlsim_state = PTLSIM_STATE_INITIALIZING;
     bootinfo->queued_upcall_count = 0;
     bootinfo->hostreq.op = PTLSIM_HOST_NOP;
-    // These will be filled in by PTLsim once it starts up:
-    bootinfo->startup_log_buffer = null;
-    bootinfo->startup_log_buffer_tail = 0;
-    bootinfo->startup_log_buffer_size = 0;
+
+    if (DEBUG) cerr << "  Hostcall port: ", bootinfo->monitor_hostcall_port, endl;
+    if (DEBUG) cerr << "  Upcall port:   ", bootinfo->monitor_upcall_port, endl;
+    if (DEBUG) cerr << "  Breakout port: ", bootinfo->monitor_breakout_port, endl;
 
     //
     // Set up hypercall page
@@ -799,20 +825,33 @@ struct XenController {
     if (DEBUG) cerr << "  Remap ", shared_map_page_count, " pages as read/write at ", image, " (page ", 0, ")", endl, flush;
     assert((Waddr)map_pages(ptl_mfns, shared_map_page_count, PROT_READ|PROT_WRITE, (void*)PTLSIM_PSEUDO_VIRT_BASE, MAP_FIXED) == PTLSIM_PSEUDO_VIRT_BASE);
 
-    prep_initial_context(ctx, vcpu_count);
+    ptlsim_entrypoint = ehdr.e_entry;
 
-    ctx[0].commitarf[REG_rip] = ehdr.e_entry;
-    ctx[0].commitarf[REG_rsp] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(sp);
-    ctx[0].commitarf[REG_rdi] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(bootinfo); // start info in %rdi (arg[0])
+    foreach (i, vcpu_count) {
+      Context& ptlctx = ctx[i];
+      prep_initial_ptlsim_context(i, ptlctx);
+    }
+
+    //
+    // Prepare initial shinfo page.
+    // Upcalls must be disabled on every vcpu;
+    // PTLsim will re-enable them on startup.
+    //
+    ptlsim_entry_shinfo = (shared_info_t*)ptl_alloc_private_page();
+    memset(ptlsim_entry_shinfo, 0, 4096);
+    foreach (i, vcpu_count) {
+      ptlsim_entry_shinfo->vcpu_info[i].evtchn_upcall_mask = 1;
+      //
+      // Put in the initial CPU frequency since this will not be filled in until
+      // PTLsim has been scheduled for the first timeslice.
+      //
+      ptlsim_entry_shinfo->vcpu_info[i].time.tsc_to_system_mul = shinfo->vcpu_info[i].time.tsc_to_system_mul;
+      ptlsim_entry_shinfo->vcpu_info[i].time.tsc_shift = shinfo->vcpu_info[i].time.tsc_shift;
+      memset(ptlsim_entry_shinfo->evtchn_mask, 0xff, sizeof(ptlsim_entry_shinfo->evtchn_mask));
+    }
 
     if (DEBUG) cerr << "  PTLsim initial toplevel overlay cr3 = ", (void*)ctx[0].cr3, " (mfn ", (ctx[0].cr3 >> log2(PAGE_SIZE)), ")", endl;
     if (DEBUG) cerr << "  PTLsim entrypoint at ", (void*)ehdr.e_entry, endl;
-
-    if (DEBUG) cerr << "  Ready, set, go!", endl, flush;
-
-    switch_to_ptlsim(true);
-
-    if (DEBUG) cerr << "  PTLsim is now in control inside domain ", domain, endl, flush;
 
     return true;
   }
@@ -850,33 +889,6 @@ struct XenController {
     int rc = xc_mmuext_op(xc, &op, 1, domain);
     return pt;
   }
-
-  /*
-  int pin_page_table_mfns(const mfn_t* mfns, int count, int level) {
-    assert(inrange(level, 0, 4));
-    
-    int level_to_function[5] = {MMUEXT_UNPIN_TABLE, MMUEXT_PIN_L1_TABLE, MMUEXT_PIN_L2_TABLE, MMUEXT_PIN_L3_TABLE, MMUEXT_PIN_L4_TABLE};
-    int func = level_to_function[level];
-    int rc = 0;
-
-    foreach (i, count) {
-      mmuext_op_t op;
-      cerr << "Pin mfn ", mfns[i], " (index ", i, ") as level ", level, endl, flush;
-
-      page_type_t pt = query_page_type(mfns[i]);
-      cerr << "  Page type info (rc ", rc, "): ", pt, endl;
-
-      op.cmd = func;
-      op.arg1.mfn = mfns[i];
-      rc = xc_mmuext_op(xc, &op, 1, domain);
-      
-      cerr << "  Pin rc ", rc, endl;
-      if (rc) return rc;
-    }
-
-    return rc;
-  }
-  */
 
   int pin_page_table_mfns(const mfn_t* mfns, int count, int level) {
     assert(inrange(level, 0, 4));
@@ -1011,48 +1023,6 @@ struct XenController {
     return true;
   }
 
-  //
-  // Prepare the initial PTLsim entry context
-  //
-  void prep_initial_context(Context* ctx, int vcpu_count) {
-    //
-    //++MTY TODO: Put all other VCPUs into spin state (i.e. blocked)
-    //
-
-    foreach (i, vcpu_count) {
-      Context& ptlctx = ctx[i];
-      // These are filled in later on a per-VCPU basis.
-      // ptlctx.user_regs.rip = ehdr.e_entry;
-      // ptlctx.user_regs.rsp = (Waddr)sp;
-      // ptlctx.user_regs.rdi = (Waddr)si; // start info in %rdi (arg[0])
-      //memset(ptlctx, 0, sizeof(ptlctx));
-
-      // Use as a template:
-      getcontext(i, ptlctx);
-
-      ptlctx.cr3 = (ptl_virt_to_mfn(toplevel_page_table) << log2(PAGE_SIZE));
-
-      ptlctx.kernel_ptbase_mfn = ptlctx.cr3 >> 12;
-      ptlctx.user_ptbase_mfn = ptlctx.cr3 >> 12;
-
-      ptlctx.kernel_mode = 1;
-      ptlctx.seg[SEGID_CS].selector = FLAT_KERNEL_CS;
-      ptlctx.seg[SEGID_DS].selector = FLAT_KERNEL_DS;
-      ptlctx.seg[SEGID_SS].selector = FLAT_KERNEL_SS;
-      ptlctx.seg[SEGID_ES].selector = FLAT_KERNEL_DS;
-      ptlctx.seg[SEGID_FS].selector = 0;
-      ptlctx.seg[SEGID_GS].selector = 0;
-      ptlctx.commitarf[REG_flags] = 0; // 1<<9 (set interrupt flag)
-      ptlctx.saved_upcall_mask = 1;
-
-      memset(ptlctx.idt, 0, sizeof(ptlctx.idt));
-
-      ptlctx.event_callback_rip    = 0;
-      ptlctx.failsafe_callback_rip = 0;
-      ptlctx.syscall_rip = 0;
-    }
-  }
-
   ostream& print_evtchn_mask(ostream& os, const char* title, const unsigned long* data) {
     os << title, ":", endl;
     foreach (i, 8) { // foreach (i, 64) {  // really 4096 possible events
@@ -1085,7 +1055,19 @@ struct XenController {
   void swap_context(bool target_is_ptlsim) {
     int rc;
     sync();
-    sync();
+
+    if (target_is_ptlsim) {
+      foreach (i, vcpu_count) {
+        if (!bit(bootinfo->vcpu_ctx_initialized, i)) {
+          prep_initial_ptlsim_context(i, ctx[i]);
+          setbit(bootinfo->vcpu_ctx_initialized, i);
+        }
+      }
+    }
+
+    // Make sure PTLsim doesn't read the context until we've converted it to PTLsim format
+    bootinfo->context_spinlock = 0;
+    barrier();
 
     vcpu_guest_context_t* newctx = new vcpu_guest_context_t[vcpu_count];
     mlock(newctx, sizeof(vcpu_guest_context_t) * vcpu_count);
@@ -1099,7 +1081,11 @@ struct XenController {
     vcpu_extended_context_t* newext = new vcpu_extended_context_t[vcpu_count];
     mlock(newext, sizeof(vcpu_extended_context_t) * vcpu_count);
 
+    mlock(ptlsim_entry_shinfo, PAGE_SIZE);
+
     foreach (i, vcpu_count) {
+      // PTLsim always starts off running on all VCPUs:
+      if (target_is_ptlsim) ctx[i].running = 1;
       ctx[i].saveto(newctx[i]);
       ctx[i].saveto(newext[i]);
     }
@@ -1110,25 +1096,39 @@ struct XenController {
     if (target_is_ptlsim) {
       // native -> PTLsim
       dom0op.u.contextswap.old_shared_info = shadow_shinfo;
-      dom0op.u.contextswap.new_shared_info = null; // leave as is: PTLsim will set this up
+      dom0op.u.contextswap.new_shared_info = ptlsim_entry_shinfo; // make sure events are masked on entry
     } else {
       // PTLsim -> native
       dom0op.u.contextswap.old_shared_info = null; // no need to save
       dom0op.u.contextswap.new_shared_info = shadow_shinfo;
     }
-      
+
     dom0op.u.contextswap.oldctx = oldctx;
-    dom0op.u.contextswap.newctx = newctx;
     dom0op.u.contextswap.oldext = oldext;
+
+    dom0op.u.contextswap.newctx = newctx;
     dom0op.u.contextswap.newext = newext;
     dom0op.cmd = XEN_DOMCTL_contextswap;
 
     rc = xc_domctl(xc, &dom0op);
 
     foreach (i, vcpu_count) {
+      if (bit(dom0op.u.contextswap.vcpumap, i)) {
+        // cerr << "ptlmon: Warning: cannot swap context for vcpu ", i, " (vcpu may not be up yet)", endl, flush;
+        clearbit(bootinfo->vcpu_ctx_initialized, i);
+      }
+    }
+
+    foreach (i, vcpu_count) {
       ctx[i].restorefrom(oldctx[i]);
       ctx[i].restorefrom(oldext[i]);
     }
+
+    // Release PTLsim if it's waiting on the context
+    bootinfo->context_spinlock = 1;
+    barrier();
+
+    munlock(ptlsim_entry_shinfo, PAGE_SIZE);
 
     munlock(newext, sizeof(vcpu_extended_context_t) * vcpu_count);
     delete newext;
@@ -1150,7 +1150,6 @@ struct XenController {
   //
   void switch_to_ptlsim(bool first_time = false) {
     swap_context(true);
-    shinfo->vcpu_info[0].evtchn_upcall_mask = 1;
 
     //
     // Send event to kick-start it
@@ -1246,8 +1245,6 @@ struct XenController {
     istream is(fd);
     is >> sb;
 
-    // cerr << "Received request ", next_upcall_uuid, " [", (char*)sb, "]", endl, flush;
-
     dynarray<char*> list;
     expand_command_list(list, sb);
 
@@ -1263,7 +1260,7 @@ struct XenController {
 
     free_command_list(list);
 
-    if (xchg(bootinfo->ptlsim_state, (int)PTLSIM_STATE_RUNNING) == PTLSIM_STATE_NATIVE) {
+    if (xchg(bootinfo->ptlsim_state, (byte)PTLSIM_STATE_RUNNING) == PTLSIM_STATE_NATIVE) {
       cerr << "External mode switch request received", endl, flush;
       switch_to_ptlsim();
       cerr << "  Switched to simulation mode", endl, flush;
@@ -1281,7 +1278,7 @@ struct XenController {
 
     bootinfo->hostreq.ready = 0;
 
-    // cerr << "process_event: hostreq op ", bootinfo->hostreq.op, ", syscall_id ", bootinfo->hostreq.syscall.syscallid, ", pending_upcall_count ", bootinfo->queued_upcall_count, endl, flush;
+    // cerr << "process_event: hostreq op ", bootinfo->hostreq.op, ", syscall_id ", bootinfo->hostreq.syscall.syscallid, endl, flush;
     
     switch (bootinfo->hostreq.op) {
     case PTLSIM_HOST_SYSCALL: {
@@ -1313,7 +1310,7 @@ struct XenController {
       case __NR_read:
       case __NR_write:
         assert(thunk_ptr_valid(arg2));
-	arg2 = ptlcore_ptr_to_ptlmon_ptr(arg2);
+        arg2 = ptlcore_ptr_to_ptlmon_ptr(arg2);
         break;
       case __NR_rename:
       case __NR_readlink:
@@ -1339,9 +1336,7 @@ struct XenController {
                                               arg4,
                                               arg5,
                                               arg6);
- #if 0
-      cerr << "  syscall result = ", bootinfo->hostreq.rc, endl, flush;
-#endif
+      // cerr << "  syscall result = ", bootinfo->hostreq.rc, endl, flush;
       break;
     };
     case PTLSIM_HOST_SWITCH_TO_NATIVE: {
@@ -1437,6 +1432,9 @@ struct XenController {
     }
 
     int rc;
+
+    // cerr << "complete_hostcall(", op, "): notify port ", ptlsim_hostcall_port, endl, flush;
+
     bootinfo->hostreq.ready = 1;
     ioctl_evtchn_notify notify;
     notify.port = ptlsim_hostcall_port;
@@ -1699,7 +1697,9 @@ int main(int argc, char** argv) {
     }
     free_command_list(list);
 
-    xc.complete_hostcall();
+    if (log_ptlsim_boot) cerr << "  Ready, set, go!", endl, flush;
+    xc.switch_to_ptlsim(true);
+    if (log_ptlsim_boot) cerr << "  PTLsim is now in control inside domain ", domain, endl, flush;
 
     for (;;) {
       epoll_event event;

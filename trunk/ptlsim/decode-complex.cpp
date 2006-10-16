@@ -546,6 +546,7 @@ void assist_write_cr3(Context& ctx) {
   }
 
   ctx.cr3 = ctx.commitarf[REG_ar1] & 0xfffffffffffff000ULL;
+  ctx.flush_tlb();
   switch_page_table(ctx.cr3 >> 12);
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }

@@ -137,6 +137,12 @@ void* zeropage;
 Level4PTE ptlsim_pml4_entry;
 Level4PTE physmap_pml4_entry;
 
+struct Level1PTE* phys_pagedir;
+struct Level2PTE* phys_level2_pagedir;
+struct Level3PTE* phys_level3_pagedir;
+mfn_t phys_level3_pagedir_mfn;
+W64 phys_pagedir_mfn_count;
+
 //
 // Build page tables for the 1:1 mapping of physical memory.
 //
@@ -146,7 +152,7 @@ Level4PTE physmap_pml4_entry;
 // allocate L1, we just don't fill it).
 //
 // On return, PML4 slot 508 (0xfffffe0000000000) should be set to
-// ptl_virt_to_mfn(bootinfo.phys_level3_pagedir).
+// ptl_virt_to_mfn(phys_level3_pagedir).
 //
 void build_physmap_page_tables() {
   static const bool DEBUG = 0;
@@ -159,29 +165,29 @@ void build_physmap_page_tables() {
 
   Waddr physmap_level1_page_count = ceil(bootinfo.total_machine_pages, PTES_PER_PAGE) / PTES_PER_PAGE;
 
-  bootinfo.phys_pagedir = (Level1PTE*)ptl_alloc_private_pages(physmap_level1_page_count * PAGE_SIZE);
-  memset(bootinfo.phys_pagedir, 0, physmap_level1_page_count * PAGE_SIZE);
+  phys_pagedir = (Level1PTE*)ptl_alloc_private_pages(physmap_level1_page_count * PAGE_SIZE);
+  memset(phys_pagedir, 0, physmap_level1_page_count * PAGE_SIZE);
 
-  if (DEBUG) cerr << "  L1 page table at virt ", (void*)bootinfo.phys_pagedir, " (", bootinfo.total_machine_pages, " entries, ",
+  if (DEBUG) cerr << "  L1 page table at virt ", (void*)phys_pagedir, " (", bootinfo.total_machine_pages, " entries, ",
     physmap_level1_page_count, " pages, ", (bootinfo.total_machine_pages * sizeof(Level1PTE)), " bytes)", endl, flush;
 
   //
   // Construct L2 page tables, pointing to fill-on-demand L1 tables:
   //
   Waddr physmap_level2_page_count = ceil(physmap_level1_page_count, PTES_PER_PAGE) / PTES_PER_PAGE;
-  bootinfo.phys_level2_pagedir = (Level2PTE*)ptl_alloc_private_pages(physmap_level2_page_count * PAGE_SIZE);
+  phys_level2_pagedir = (Level2PTE*)ptl_alloc_private_pages(physmap_level2_page_count * PAGE_SIZE);
 
-  if (DEBUG) cerr << "  L2 page table at virt ", (void*)bootinfo.phys_level2_pagedir, " (", physmap_level1_page_count, " entries, ",
+  if (DEBUG) cerr << "  L2 page table at virt ", (void*)phys_level2_pagedir, " (", physmap_level1_page_count, " entries, ",
     physmap_level2_page_count, " pages, ", (physmap_level1_page_count * sizeof(Level1PTE)), " bytes)", endl, flush;
 
   foreach (i, physmap_level1_page_count) {
-    Level2PTE& pte = bootinfo.phys_level2_pagedir[i];
+    Level2PTE& pte = phys_level2_pagedir[i];
     pte = 0;
     pte.p = 1;  // let PTLsim fill it in on demand
     pte.rw = 1; // sub-pages are writable unless overridden
     pte.us = 1; // both user and supervisor (PTLsim itself will check protections)
     pte.a = 1;  // accessed
-    pte.mfn = ptl_virt_to_mfn(bootinfo.phys_pagedir + (i * PTES_PER_PAGE));
+    pte.mfn = ptl_virt_to_mfn(phys_pagedir + (i * PTES_PER_PAGE));
 
     // cerr << "    Slot ", intstring(i, 6), " = ", pte, endl, flush;
     pte.p = 0;
@@ -191,7 +197,7 @@ void build_physmap_page_tables() {
   if ((physmap_level1_page_count & (PTES_PER_PAGE-1)) > 0) {
     foreach (i, PTES_PER_PAGE - (physmap_level1_page_count & (PTES_PER_PAGE-1))) {
       // cerr << "    Slot ", intstring(physmap_level1_page_count + i, 6), " is left over", endl, flush;
-      bootinfo.phys_level2_pagedir[physmap_level1_page_count + i] = 0;
+      phys_level2_pagedir[physmap_level1_page_count + i] = 0;
     }
   }
 
@@ -203,14 +209,14 @@ void build_physmap_page_tables() {
   // on the page.
   //
   assert(physmap_level2_page_count < PTES_PER_PAGE);
-  bootinfo.phys_level3_pagedir = (Level3PTE*)ptl_alloc_private_page();
-  ptl_zero_private_page(bootinfo.phys_level3_pagedir);
+  phys_level3_pagedir = (Level3PTE*)ptl_alloc_private_page();
+  ptl_zero_private_page(phys_level3_pagedir);
 
-  if (DEBUG) cerr << "  L3 page table at mfn ", bootinfo.phys_level3_pagedir_mfn, ", virt ", (void*)bootinfo.phys_level3_pagedir, " (", physmap_level2_page_count, " entries, ",
+  if (DEBUG) cerr << "  L3 page table at mfn ", phys_level3_pagedir_mfn, ", virt ", (void*)phys_level3_pagedir, " (", physmap_level2_page_count, " entries, ",
     1, " pages, ", (physmap_level2_page_count * sizeof(Level1PTE)), " bytes)", endl, flush;
 
   foreach (i, physmap_level2_page_count) {
-    Level3PTE& pte = bootinfo.phys_level3_pagedir[i];
+    Level3PTE& pte = phys_level3_pagedir[i];
     Level3PTE newpte = 0;
 
     newpte.p = 1;  // pre-filled
@@ -219,7 +225,7 @@ void build_physmap_page_tables() {
     newpte.a = 1;  // accessed
 
     // Link back to L2 tables:
-    Level2PTE* ptvirt = bootinfo.phys_level2_pagedir + (i * PTES_PER_PAGE);
+    Level2PTE* ptvirt = phys_level2_pagedir + (i * PTES_PER_PAGE);
     newpte.mfn = ptl_virt_to_mfn(ptvirt);
     // cerr << "    Slot ", intstring(i, 6), " = ", pte, endl, flush;
     assert(make_ptl_page_writable(ptvirt, false) == 0);
@@ -230,9 +236,9 @@ void build_physmap_page_tables() {
   //
   // Remap and pin L3 page
   //
-  if (DEBUG) cerr << "  Final L3 page table page at virt ", bootinfo.phys_level3_pagedir,
-    " (mfn ", ptl_virt_to_mfn(bootinfo.phys_level3_pagedir), ")", endl, flush;
-  assert(make_ptl_page_writable(bootinfo.phys_level3_pagedir, false) == 0);
+  if (DEBUG) cerr << "  Final L3 page table page at virt ", phys_level3_pagedir,
+    " (mfn ", ptl_virt_to_mfn(phys_level3_pagedir), ")", endl, flush;
+  assert(make_ptl_page_writable(phys_level3_pagedir, false) == 0);
 
   //
   // Build PTLsim PML4 entry 510:
@@ -252,7 +258,7 @@ void build_physmap_page_tables() {
   physmap_pml4_entry.rw = 1;
   physmap_pml4_entry.us = 1;
   physmap_pml4_entry.a = 1;
-  physmap_pml4_entry.mfn = ptl_virt_to_mfn(bootinfo.phys_level3_pagedir);
+  physmap_pml4_entry.mfn = ptl_virt_to_mfn(phys_level3_pagedir);
 
   //
   // Inject the physmap entry into the current page table,
@@ -295,8 +301,8 @@ Waddr last_guest_uuid_triggering_walk = 0;
 int map_phys_page(mfn_t mfn, Waddr rip) {
   int level2_slot_index = mfn / PTES_PER_PAGE;
   W64 faultaddr = mfn << 12;
-  Level2PTE& l2pte = bootinfo.phys_level2_pagedir[level2_slot_index];
-  Level1PTE& l1pte = bootinfo.phys_pagedir[mfn];
+  Level2PTE& l2pte = phys_level2_pagedir[level2_slot_index];
+  Level1PTE& l1pte = phys_pagedir[mfn];
 
   if unlikely (!l2pte.p) {
     //
@@ -391,7 +397,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
 }
 
 void unmap_phys_page(mfn_t mfn) {
-  Level1PTE& pte = bootinfo.phys_pagedir[mfn];
+  Level1PTE& pte = phys_pagedir[mfn];
   if unlikely (!pte.p) return;
   assert(update_ptl_pte(pte, Level1PTE(0)) == 0);
 }
@@ -418,7 +424,7 @@ static const bool debug_unmap_phys_page_tree = 1;
 
 inline void unmap_level1_page_tree(mfn_t mfn) {
   // No need to unmap actual leaf physical pages - those are just data pages
-  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  Level1PTE& physpte = phys_pagedir[mfn];
   if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "        L1: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
@@ -426,7 +432,7 @@ inline void unmap_level1_page_tree(mfn_t mfn) {
 inline void unmap_level2_page_tree(mfn_t mfn) {
   Level2PTE* ptes = (Level2PTE*)phys_to_mapped_virt(mfn << 12);
   foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level1_page_tree(ptes[i].mfn);
-  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  Level1PTE& physpte = phys_pagedir[mfn];
   if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "      L2: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
@@ -434,7 +440,7 @@ inline void unmap_level2_page_tree(mfn_t mfn) {
 void unmap_level3_page_tree(mfn_t mfn) {
   Level3PTE* ptes = (Level3PTE*)phys_to_mapped_virt(mfn << 12);
   foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level2_page_tree(ptes[i].mfn);
-  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  Level1PTE& physpte = phys_pagedir[mfn];
   if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "    L3: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
@@ -442,7 +448,7 @@ void unmap_level3_page_tree(mfn_t mfn) {
 void unmap_level4_page_tree(mfn_t mfn) {
   Level4PTE* ptes = (Level4PTE*)phys_to_mapped_virt(mfn << 12);
   foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level3_page_tree(ptes[i].mfn);
-  Level1PTE& physpte = bootinfo.phys_pagedir[mfn];
+  Level1PTE& physpte = phys_pagedir[mfn];
   if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "  L4: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
@@ -471,7 +477,7 @@ void unmap_address_space() {
   if (logable(1)) logfile << "unmap_address_space: check ", physmap_level1_pages, " PTEs:", endl, flush;
 
   foreach (i, physmap_level1_pages) {
-    Level2PTE& l2pte = bootinfo.phys_level2_pagedir[i];
+    Level2PTE& l2pte = phys_level2_pagedir[i];
     if unlikely (l2pte.p) {
       l2pte <= l2pte.P(0);
       if (logable(1)) logfile << "  update ", intstring(n, 6), ": pte ", intstring(i, 6), " <= not present", endl;
@@ -935,7 +941,7 @@ bool is_mfn_ptpage(mfn_t mfn) {
     return false;
   }
 
-  Level1PTE& pte = bootinfo.phys_pagedir[mfn];
+  Level1PTE& pte = phys_pagedir[mfn];
 
   if unlikely (!pte.p) {
     //
@@ -1240,7 +1246,7 @@ W64 handle_mmu_update_hypercall(Context& ctx, mmu_update_t* reqp, W64 count, int
     
     Level1PTE newpte(req.val);
     
-    if (debug) logfile << "hypercall: mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", newpte, endl, flush;
+    if (debug) logfile << "mmu_update: mfn ", mfn, " + ", (void*)(Waddr)lowbits(req.ptr, 12), " (entry ", (lowbits(req.ptr, 12) >> 3), ") <= ", newpte, endl, flush;
     
     if (newpte.p) {
       unmap_phys_page(newpte.mfn);
@@ -1268,11 +1274,11 @@ W64 handle_mmu_update_hypercall(Context& ctx, mmu_update_t* reqp, W64 count, int
 W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W64 flags, bool debug) {
   Waddr ptephys = virt_to_pte_phys_addr(va, ctx.cr3 >> 12);
   if (!ptephys) {
-    if (debug) logfile << "hypercall: update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12), ": cannot resolve PTE address", endl, flush;
+    if (debug) logfile << "update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12), ": cannot resolve PTE address", endl, flush;
     return W64(-EINVAL);
   }
     
-  if (debug) logfile << "hypercall: update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12),
+  if (debug) logfile << "update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12),
                " -> pte @ phys ", (void*)ptephys, ") <= ", newpte, ", flags ", (void*)(Waddr)flags,
                " (flushtype ", (flags & UVMF_FLUSHTYPE_MASK), ")", endl, flush;
   
@@ -1281,7 +1287,7 @@ W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W
     // pointer was specified: get it and thunk the address
     Waddr flush_bitmap;
     if (ctx.copy_from_user(&flush_bitmap, (Waddr)flush_bitmap_ptr, sizeof(flush_bitmap)) != sizeof(flush_bitmap)) {
-      if (debug) logfile << "hypercall: update_va_mapping: va ", (void*)va, "; flush bitmap ptr ", flush_bitmap_ptr, " not accessible", endl, flush;
+      if (debug) logfile << "update_va_mapping: va ", (void*)va, "; flush bitmap ptr ", flush_bitmap_ptr, " not accessible", endl, flush;
       return W64(-EFAULT);
     }
     flags = (((Waddr)&flush_bitmap) & ~UVMF_FLUSHTYPE_MASK) | (flags & UVMF_FLUSHTYPE_MASK);
@@ -1290,7 +1296,7 @@ W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W
   
   int targetmfn = newpte.mfn;
   
-  if (debug) logfile << "  Old PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), endl, flush;
+  // if (debug) logfile << "  Old PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), endl, flush;
   
   int rc = update_phys_pte(ptephys, newpte);
 
@@ -1320,7 +1326,7 @@ W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W
     }
   }
   
-  if (debug) logfile << "  New PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), " (rc ", rc, ")", endl, flush;
+  // if (debug) logfile << "  New PTE: ", *(Level1PTE*)phys_to_mapped_virt(ptephys), " (rc ", rc, ")", endl, flush;
   
   if (flags & UVMF_FLUSHTYPE_MASK) {
     foreach (i, contextcount) {
@@ -1351,7 +1357,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
     xen_machphys_mapping_t req;
     rc = HYPERVISOR_memory_op(XENMEM_machphys_mapping, &req);
     if (debug) {
-      logfile << "hypercall: memory_op (machphys_mapping): ",
+      logfile << "memory_op (machphys_mapping): ",
         (void*)(Waddr)arg, " <= {", (void*)(Waddr)req.v_start, ", ",
         (void*)(Waddr)req.v_end, ", ", (void*)(Waddr)req.max_mfn, "} rc ", rc , endl;
     }
@@ -1364,7 +1370,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
     rc = HYPERVISOR_memory_op(XENMEM_memory_map, &req);
     //++MTY CHECKME should we fixup the memory map to exclude the PTLsim reserved area?
     if (debug) {
-      logfile << "hypercall: memory_op (memory_map): {nr_entries = ", orig_nr_entries,
+      logfile << "memory_op (memory_map): {nr_entries = ", orig_nr_entries,
         ", buffer = ", req.buffer.p, "} => rc ", rc, ", ", req.nr_entries, " entries filled", endl;
     }
     putreq(xen_memory_map_t);
@@ -1372,7 +1378,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
   }
   case XENMEM_populate_physmap: {
     getreq(xen_memory_reservation_t);
-    if (debug) { logfile << "hypercall: memory_op (populate_physmap): in "; print(logfile, req, ctx); logfile << endl; }
+    if (debug) { logfile << "memory_op (populate_physmap): in "; print(logfile, req, ctx); logfile << endl; }
     rc = HYPERVISOR_memory_op(XENMEM_populate_physmap, &req);
     if (debug) { logfile << "  populate_physmap: rc ", rc, " out "; print(logfile, req, ctx); logfile << endl; }
     putreq(xen_memory_reservation_t);
@@ -1380,7 +1386,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
   }
   case XENMEM_increase_reservation: {
     getreq(xen_memory_reservation_t);
-    if (debug) { logfile << "hypercall: memory_op (increase_reservation): in "; print(logfile, req, ctx); logfile << endl; }
+    if (debug) { logfile << "memory_op (increase_reservation): in "; print(logfile, req, ctx); logfile << endl; }
     rc = HYPERVISOR_memory_op(XENMEM_increase_reservation, &req);
     if (debug) { logfile << "  increase_reservation: rc ", rc, " out "; print(logfile, req, ctx); logfile << endl; }
     putreq(xen_memory_reservation_t);
@@ -1389,7 +1395,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
   case XENMEM_decrease_reservation: {
     //++MTY CHECKME we first need to unmap the specified MFNs from PTLsim if they were mapped!
     getreq(xen_memory_reservation_t);
-    if (debug) { logfile << "hypercall: memory_op (decrease_reservation): in "; print(logfile, req, ctx); logfile << endl; }
+    if (debug) { logfile << "memory_op (decrease_reservation): in "; print(logfile, req, ctx); logfile << endl; }
 
     //
     // We must unmap 
@@ -1404,7 +1410,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
       foreach (j, pages_in_extent) {
         mfn_t mfn = basemfn + j;
         if unlikely (mfn >= bootinfo.total_machine_pages) break;
-        Level1PTE& pte = bootinfo.phys_pagedir[mfn];
+        Level1PTE& pte = phys_pagedir[mfn];
         if likely (pte.p) {
           pte <= pte.P(0);
           if unlikely (debug) logfile << "  Unmap mfn ", mfn, endl;
@@ -1421,7 +1427,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
   }
   default: {
     // All others are only used by dom0
-    logfile << "hypercall: memory_op (", op, ") not supported!", endl, flush;
+    logfile << "memory_op (", op, ") not supported!", endl, flush;
     abort();
   }
   }
@@ -1454,7 +1460,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       const Level1PTE* pinptes = (Level1PTE*)phys_to_mapped_virt(mfn << 12);
       Level1PTE pte0 = pinptes[0];
 
-      if (debug) logfile << "hypercall: mmuext_op: map/unmap mfn ", mfn, " (pin/unpin operation ", req.cmd, ")", endl, flush;
+      if (debug) logfile << "mmuext_op: map/unmap mfn ", mfn, " (pin/unpin operation ", req.cmd, ")", endl, flush;
 
       if (req.cmd != MMUEXT_UNPIN_TABLE) {
         // Unmapping only required when pinning, not unpinning
@@ -1472,13 +1478,13 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     case MMUEXT_NEW_BASEPTR: {
-      if (debug) logfile << "hypercall: mmuext_op: new kernel baseptr is mfn ",
+      if (debug) logfile << "mmuext_op: new kernel baseptr is mfn ",
                    req.arg1.mfn, " on vcpu ", ctx.vcpuid, ")", endl, flush;
       unmap_phys_page(req.arg1.mfn);
       ctx.kernel_ptbase_mfn = req.arg1.mfn;
       ctx.cr3 = ctx.kernel_ptbase_mfn << 12;
       ctx.flush_tlb();
-      switch_page_table(ctx.cr3 >> 12);
+      // switch_page_table(ctx.cr3 >> 12);
       total_updates++;
       rc = 0;
       break;
@@ -1486,7 +1492,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
     case MMUEXT_TLB_FLUSH_LOCAL:
     case MMUEXT_INVLPG_LOCAL: {
       bool single = (req.cmd == MMUEXT_INVLPG_LOCAL);
-      if (debug) logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " local (vcpu ", ctx.vcpuid, ") @ ",
+      if (debug) logfile << "mmuext_op: ", (single ? "invlpg" : "flush"), " local (vcpu ", ctx.vcpuid, ") @ ",
                    (void*)(Waddr)req.arg1.linear_addr, endl, flush;
       if (single)
         ctx.flush_tlb_virt(req.arg1.linear_addr);
@@ -1501,8 +1507,8 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       int n = ctx.copy_from_user(&vcpumask, (Waddr)req.arg2.vcpumask, sizeof(vcpumask));
       if (n != sizeof(vcpumask)) { rc = -EFAULT; break; }
       bool single = (req.cmd == MMUEXT_INVLPG_MULTI);
-      if (debug) logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " multi (mask ", 
-                   bitstring(vcpumask, contextcount), " @ ", (void*)(Waddr)req.arg1.linear_addr, endl, flush;
+      if (debug) logfile << "mmuext_op: ", (single ? "invlpg" : "flush"), " multi (mask ", 
+                   bitstring(vcpumask, contextcount), " @ ", (void*)(Waddr)req.arg1.linear_addr, ")", endl, flush;
       if (single) {
         foreach (i, contextcount) {
           if (bit(vcpumask, i)) contextof(i).flush_tlb_virt(req.arg1.linear_addr);
@@ -1519,7 +1525,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
     case MMUEXT_TLB_FLUSH_ALL:
     case MMUEXT_INVLPG_ALL: {
       bool single = (req.cmd == MMUEXT_INVLPG_ALL);
-      if (debug) logfile << "hypercall: mmuext_op: ", (single ? "invlpg" : "flush"), " all @ ",
+      if (debug) logfile << "mmuext_op: ", (single ? "invlpg" : "flush"), " all @ ",
                    (void*)(Waddr)req.arg1.linear_addr, endl, flush;
       if (single) {
         foreach (i, contextcount) contextof(i).flush_tlb_virt(req.arg1.linear_addr);
@@ -1531,7 +1537,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     case MMUEXT_FLUSH_CACHE: {
-      if (debug) logfile << "hypercall: mmuext_op: flush_cache on vcpu ", ctx.vcpuid, endl, flush;
+      if (debug) logfile << "mmuext_op: flush_cache on vcpu ", ctx.vcpuid, endl, flush;
       total_updates++;
       rc = 0;
       break;
@@ -1540,7 +1546,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       ctx.ldtvirt = req.arg1.linear_addr;
       ctx.ldtsize = req.arg2.nr_ents;
 
-      if (debug) logfile << "hypercall: mmuext_op: set_ldt to virt ", (void*)(Waddr)ctx.ldtvirt, " with ",
+      if (debug) logfile << "mmuext_op: set_ldt to virt ", (void*)(Waddr)ctx.ldtvirt, " with ",
                    ctx.ldtsize, " entries on vcpu ", ctx.vcpuid, endl, flush;
 
       total_updates++;
@@ -1548,7 +1554,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     case MMUEXT_NEW_USER_BASEPTR: { // (x86-64 only)
-      if (debug) logfile << "hypercall: mmuext_op: new user baseptr is mfn ",
+      if (debug) logfile << "mmuext_op: new user baseptr is mfn ",
                    req.arg1.mfn, " on vcpu ", ctx.vcpuid, ")", endl, flush;
       ctx.user_ptbase_mfn = req.arg1.mfn;
       //
@@ -1565,7 +1571,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     default:
-      if (debug) logfile << "hypercall: mmuext_op: unknown op ", req.cmd, endl, flush;
+      if (debug) logfile << "mmuext_op: unknown op ", req.cmd, endl, flush;
       rc = -EINVAL;
       abort();
       break;
@@ -1592,10 +1598,9 @@ W64 handle_grant_table_op_hypercall(Context& ctx, W64 cmd, byte* arg, W64 count,
       // has its own page table in effect, we need to do the virt->PTE-to-modify mapping
       // ourselves, replace the host_addr field and add in the GNTMAP_contains_pte flag.
       //
-      // This is no longer required since we cohabitate the same virtual address
-      // space as the real page table base at all times. However, we keep it in place
-      // for SMT or multi-core use since switching the page table base every time
-      // may be too expensive and time consuming.
+      // Since we may not cohabitate the same virtual address space as the real page
+      // table base at all times, we keep it in place for SMT or multi-core use since
+      // switching the page table base every time may be too expensive and time consuming.
       //
     case GNTTABOP_map_grant_ref: {
       getreq(gnttab_map_grant_ref);
@@ -1637,7 +1642,7 @@ W64 handle_grant_table_op_hypercall(Context& ctx, W64 cmd, byte* arg, W64 count,
       break;
     }
     default: {
-      if (debug) logfile << "hypercall: grant_table_op: unknown op ", cmd, endl, flush;
+      if (debug) logfile << "grant_table_op: unknown op ", cmd, endl, flush;
       rc = -EINVAL;
       abort();
       break;

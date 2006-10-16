@@ -62,13 +62,9 @@ void clear_evtchn(int port) {
   shinfo_evtchn_pending[port].atomicclear();
 }
 
-W64 events_just_handled = 0;
-
 bitvec<4096> always_mask_port;
 
-W64 sim_cycle_of_last_internal_interrupt = 0;
-
-void handle_event(int port) {
+void handle_event(int port, int vcpu) {
   // Can't use anything that makes host calls in here!
   if likely (port == bootinfo.hostcall_port) {
     // No action: will automatically unblock and return to hostcall caller
@@ -77,9 +73,7 @@ void handle_event(int port) {
   } else {
     // some user port: copy to virtualized shared info page and notify simulation loop
     if (!always_mask_port[port]) {
-      sim_cycle_of_last_internal_interrupt = sim_cycle;
-      events_just_handled |= (1<<port);
-       if likely (!config.mask_interrupts) shadow_evtchn_set_pending(port);
+      if likely (!config.mask_interrupts) shadow_evtchn_set_pending(port);
     }
   }
 
@@ -87,10 +81,10 @@ void handle_event(int port) {
 }
 
 asmlinkage void xen_event_callback(W64* regs) {
-  u32                l1, l2;
-  unsigned int   l1i, l2i, port;
-  int            cpu = 0;
-  vcpu_info_t& vcpu_info = shinfo.vcpu_info[cpu];
+  int vcpu = current_vcpuid();
+  vcpu_info_t& vcpu_info = shinfo.vcpu_info[vcpu];
+  W64  l1, l2;
+  unsigned int l1i, l2i, port;
 
   vcpu_info.evtchn_upcall_pending = 0;
   l1 = xchg(vcpu_info.evtchn_pending_sel, 0UL);
@@ -99,11 +93,11 @@ asmlinkage void xen_event_callback(W64* regs) {
     l1i = lsbindex(l1);
     l1 &= ~(1 << l1i);
 
-    while ((l2 = active_evtchns(cpu, shinfo, l1i))) {
+    while ((l2 = active_evtchns(vcpu, shinfo, l1i))) {
       l2i = lsbindex(l2);
       l2 &= ~(1 << l2i);
       port = (l1i * BITS_PER_LONG) + l2i;
-      handle_event(port);
+      handle_event(port, vcpu);
     }
     shinfo.evtchn_pending[l1i] = 0;
   }
@@ -112,15 +106,39 @@ asmlinkage void xen_event_callback(W64* regs) {
 //
 // Shadow Event Channels
 //
-int virq_and_vcpu_to_port[NR_VIRQS][MAX_VIRT_CPUS];
-W8s port_to_vcpu[NR_EVENT_CHANNELS];
+W8s port_to_vcpu_cache[NR_EVENT_CHANNELS];
+
+evtchn_status_t evtchn_get_status(int port) {
+  evtchn_status_t status;
+  status.dom = DOMID_SELF;
+  status.port = port;
+  HYPERVISOR_event_channel_op(EVTCHNOP_status, &status);
+  return status;
+}
+
+//
+// Convert a port to the VCPU it's bound to, if any.
+// We use the evtchn_status hypercall to determine this,
+// then cache the lookup results.
+//
+inline int port_to_vcpu(int port) {
+  W8s& vcpu = port_to_vcpu_cache[port];
+  if likely (vcpu >= 0) return vcpu;
+
+  evtchn_status_t status = evtchn_get_status(port);
+
+  vcpu = status.vcpu;
+  if (!inrange(vcpu, W8s(0), W8s(contextcount-1))) vcpu = 0;
+
+  return vcpu;
+}
 
 int shadow_evtchn_unmask(unsigned int port) {
   if (port >= NR_EVENT_CHANNELS) return 0;
 
-  int vcpu_to_notify = port_to_vcpu[port];
+  int vcpu_to_notify = port_to_vcpu(port);
 
-  if (port_to_vcpu[port] < 0) {
+  if (vcpu_to_notify < 0) {
     logfile << "unmask_evtchn: port ", port, " is not bound to any VCPU", endl;
     return 0;
   }
@@ -140,41 +158,36 @@ int shadow_evtchn_unmask(unsigned int port) {
 }
 
 bool shadow_evtchn_set_pending(unsigned int port) {
-  if (port >= 4096) return false;
-  static const bool DEBUG = 0; // cannot be set if called from event upcall interrupt handler
-  int vcpu_to_notify = port_to_vcpu[port];
-
-  if (DEBUG) logfile << "Set pending for port ", port, " mapped to vcpu ", vcpu_to_notify, ":", endl;
+  if unlikely (port >= 4096) return false;
+  int vcpu_to_notify = port_to_vcpu(port);
 
   if unlikely (vcpu_to_notify < 0) {
-    if (DEBUG) logfile << "  Not bound to any VCPU", endl;
+    // Not bound to any VCPU
     return false;
   }
 
   if unlikely (sshinfo_evtchn_pending[port].testset()) {
-    if (DEBUG) logfile << "  Already pending", endl;
+    // Already pending
     return false;
   }
 
   bool masked = sshinfo_evtchn_mask[port];
 
   if unlikely (masked) {
-    if (DEBUG) logfile << "  Event masked", endl;
+    // Event masked
     return false;
   }
 
   if unlikely (sshinfo_evtchn_pending_sel(vcpu_to_notify)[port / (sizeof(unsigned long) * 8)].testset()) {
-    if (DEBUG) logfile << "  Event already pending in evtchn_pending_sel", endl;
+    // Event already pending in evtchn_pending_sel
     return false;
   }
 
-  if (DEBUG) logfile << "  Mark vcpu ", vcpu_to_notify, " events pending", endl;
-
   if likely (!xchg(sshinfo.vcpu_info[vcpu_to_notify].evtchn_upcall_pending, (byte)1)) {
-    if (DEBUG) logfile << "  Kick vcpu", endl;
+    // Kick vcpu
     return true;
   } else {
-    if (DEBUG) logfile << "  VCPU already kicked", endl;
+    // VCPU already running
     return false;
   }
 }
@@ -361,22 +374,48 @@ void capture_initial_timestamps() {
 // by the hypervisor when we context swapped into PTLsim.
 //
 void reconstruct_virq_to_port_mappings() {
-  logfile << "Rebuilding virq-to-port mappings:", endl;
+  logfile << "Interrupt mappings:", endl;
   foreach (vcpu, contextcount) {
     Context& ctx = contextof(vcpu);
 
     foreach (virq, NR_VIRQS) {
       int port = ctx.virq_to_port[virq];
+      if (!port) continue;
       assert(inrange(port, 0, 4095));
-      port_to_vcpu[port] = vcpu;
-      logfile << "  Assigned VIRQ ", virq, " on VCPU ", vcpu, " to port ", port, endl;
+      port_to_vcpu_cache[port] = vcpu;
+      logfile << "  vcpu ", vcpu, ": virq ", virq, " -> port ", port, endl;
       if (virq == VIRQ_TIMER) {
-        logfile << "  (Timer VIRQ: generate internally)", endl;
+        logfile << "  - Timer virq: mask and generate internally", endl;
         mask_evtchn(port);
         always_mask_port[port] = 1;
       }
     }
   }
+}
+
+ostream& operator <<(ostream& os, const evtchn_status_t& status) {
+  static const char* evtchn_status_names[] = {"closed", "unbound", "inter", "pirq", "virq", "ipi"};
+
+  os << padstring(evtchn_status_names[status.status], -8), " -> vcpu ", status.vcpu;
+  switch (status.status) {
+  case EVTCHNSTAT_unbound:
+    os << ", remote domain ", status.u.unbound.dom;
+    break;
+  case EVTCHNSTAT_interdomain:
+    os << ", remote domain ", status.u.interdomain.dom,
+      ", remote port ", status.u.interdomain.port;
+    break;
+  case EVTCHNSTAT_pirq:
+    os << ", physical irq ", status.u.pirq;
+    break;
+  case EVTCHNSTAT_virq:
+    os << ", virq ", status.u.virq;
+    break;
+  default:
+    break;
+  }
+
+  return os;
 }
 
 //
@@ -440,23 +479,33 @@ void time_and_virq_resume() {
   timer_interrupt_period_in_cycles = contextof(0).core_freq_hz / config.timer_interrupt_freq_hz;
   timer_interrupt_last_sent_at_cycle = 0;
 
-  logfile << "  Timer VIRQ ", VIRQ_TIMER, " will be delivered to port ", contextof(0).virq_to_port[VIRQ_TIMER], " every 1/", config.timer_interrupt_freq_hz,
-    " sec = every ", timer_interrupt_period_in_cycles, " cycles", endl;
-
-  //++MTY SMP TODO use EVTCHNOP_status to query this whenever status is unknown (like when returning from native mode)
-  memset(port_to_vcpu, 0, sizeof(port_to_vcpu)); // by default, route to vcpu 0
-
+  //
+  // Initially all ports go to undefined VCPUs; we use the
+  // evtchn_status hypercall to lazily resolve this.
+  //
+  memset(port_to_vcpu_cache, 0xff, NR_EVENT_CHANNELS);
   always_mask_port.reset();
 
-  // Let PTLsim see all events even if the guest masks them...
-  setzero(shinfo.evtchn_mask);
-
   reconstruct_virq_to_port_mappings();
+
+  logfile << "Timer interrupts will be delivered every 1/", config.timer_interrupt_freq_hz,
+    " sec = every ", timer_interrupt_period_in_cycles, " cycles", endl;
+
+  // Summarize the low 256 events (this is advisory only - generally there are fewer than 256 events)
+  logfile << "Summary of event channels:", endl;
+  foreach (port, 256) {    
+    evtchn_status_t status = evtchn_get_status(port);
+    if (status.status == EVTCHNSTAT_closed) continue;
+    logfile << "  Port ", intstring(port, 4), ": ", status, endl;
+  }
 
   if (logable(1)) {
     logfile << "Current shared info:", endl, shinfo, endl;
     logfile << "Current shadow shared info:", endl, sshinfo, endl;
   }
+
+  // Let PTLsim see all events on all VCPUs even if the guest masks them...
+  setzero(shinfo.evtchn_mask);
 }
 
 //
@@ -522,10 +571,6 @@ void virtualize_time_for_native_mode() {
 // Update time info in shinfo page
 //
 void update_time() {
-  if (logable(1)) {
-    logfile << "Update virtual real time at cycle ", sim_cycle, " (", total_user_insns_committed, " commits):", endl;
-  }
-
   //
   // Important! We do *not* update tsc_timestamp and system_time
   // in the shinfo page: the values remain fixed at whatever
@@ -575,8 +620,10 @@ bool Context::change_runstate(int newstate) {
   W64 delta_nsec = current_time_nsec - runstate.state_entry_time;
   runstate.time[runstate.state] += delta_nsec;
 
-  if (logable(1)) logfile << "change_vcpu_runstate at cycle ", sim_cycle, " (vcpu ", vcpuid, "): change state ", runstate.state,
-    " -> ", newstate, " (delta nsec ", delta_nsec, ")", endl;
+  static const char* runstate_names[] = {"running", "runnable", "blocked", "offline"};
+
+  if (logable(1)) logfile << "[vcpu ", vcpuid, "] change_vcpu_runstate at cycle ", sim_cycle, ": ", runstate_names[runstate.state],
+    " -> ", runstate_names[newstate], " (delta nsec ", delta_nsec, ")", endl;
 
   runstate.state_entry_time = current_time_nsec;
   runstate.state = newstate;
@@ -601,9 +648,9 @@ static bool deliver_timer_interrupt_to_vcpu(int vcpuid, bool forced) {
 
   if unlikely (port < 0) return false;
   if (logable(1)) {
-    logfile << "Deliver ", ((forced) ? "forced" : "periodic"), " timer interrupt to VCPU ", vcpuid,
-    " on port ", port, " at abs cycle ", (sim_cycle + ctx.base_tsc), " (rel cycle ", sim_cycle, ")", endl;
-    logfile << "  Masked? ", sshinfo.vcpu_info[vcpuid].evtchn_upcall_mask, ", pending? ", 
+    logfile << "[vcpu ", vcpuid, "] Deliver ", ((forced) ? "forced" : "periodic"), " timer interrupt on port ",
+      port, " at abs cycle ", (sim_cycle + ctx.base_tsc), " (rel cycle ", sim_cycle, "); ",
+      " masked? ", sshinfo.vcpu_info[vcpuid].evtchn_upcall_mask, ", pending? ", 
       sshinfo.vcpu_info[vcpuid].evtchn_upcall_pending, ", state? ", ctx.runstate.state, " (running? ", ctx.running, ")", endl;
   }
 
@@ -658,10 +705,11 @@ int inject_events() {
 
     if unlikely ((!old_vcpu_has_pending_events[i]) & pending) {
       if (logable(1)) {
-        logfile << "VCPU ", i, " just got an event notification at cycle ", sim_cycle, " (vs sent to PTLsim irq ", sim_cycle_of_last_internal_interrupt, ")!", endl;
-        logfile << "  Pending? ", sshinfo.vcpu_info[i].evtchn_upcall_pending, endl;
-        logfile << "  Masked?  ", sshinfo.vcpu_info[i].evtchn_upcall_mask, endl;
-        logfile << "  Pending events: "; print_pending_events(logfile); logfile << endl;
+        logfile << "[vcpu ", ctx.vcpuid, "] Edge triggered events in cycle ", sim_cycle, " (abs cycle ", (sim_cycle + ctx.base_tsc), "); "
+          "masked? ", sshinfo.vcpu_info[ctx.vcpuid].evtchn_upcall_mask, ", pending? ", 
+          sshinfo.vcpu_info[ctx.vcpuid].evtchn_upcall_pending, ", state? ", ctx.runstate.state, " (running? ", ctx.running, ") => ";
+        print_pending_events(logfile);
+        logfile << "; upcall? ", ctx.check_events(), endl;
       }
     }
 
@@ -686,14 +734,14 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
   case EVTCHNOP_alloc_unbound: {
     getreq(evtchn_alloc_unbound);
     rc = HYPERVISOR_event_channel_op(op, &req);
-    if (debug) logfile << "hypercall: evtchn_alloc_unbound {dom = ", req.dom, ", remote_dom = ", req.remote_dom, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+    if (debug) logfile << "evtchn_alloc_unbound {dom = ", req.dom, ", remote_dom = ", req.remote_dom, "} => {port = ", req.port, "}", ", rc ", rc, endl;
     putreq(evtchn_alloc_unbound);
     break;
   }
   case EVTCHNOP_bind_interdomain: {
     getreq(evtchn_bind_interdomain);
     rc = HYPERVISOR_event_channel_op(op, &req);
-    if (debug) logfile << "hypercall: evtchn_bind_interdomain {remote_dom = ", req.remote_dom, ", remote_port = ", req.remote_port, "} => {local_port = ", req.local_port, "}", ", rc ", rc, endl;
+    if (debug) logfile << "evtchn_bind_interdomain {remote_dom = ", req.remote_dom, ", remote_port = ", req.remote_port, "} => {local_port = ", req.local_port, "}", ", rc ", rc, endl;
     putreq(evtchn_bind_interdomain);
     break;
   }
@@ -705,14 +753,14 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
     getreq(evtchn_bind_virq);
     rc = HYPERVISOR_event_channel_op(op, &req);
 
-    if (debug) logfile << "hypercall: evtchn_bind_virq {virq = ", req.virq, ", vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+    if (debug) logfile << "evtchn_bind_virq {virq = ", req.virq, ", vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
 
     if (rc == 0) {
       assert(req.vcpu < contextcount);
       assert(req.virq < lengthof(contextof(req.vcpu).virq_to_port));
       contextof(req.vcpu).virq_to_port[req.virq] = req.port;
       assert(req.port < NR_EVENT_CHANNELS);
-      port_to_vcpu[req.port] = req.vcpu;
+      port_to_vcpu_cache[req.port] = req.vcpu;
       // PTLsim generates its own timer interrupts
       if (req.virq == VIRQ_TIMER) {
         if (debug) logfile << "Assigned timer VIRQ ", req.virq, " on VCPU ", req.vcpu, " to port ", req.port, endl;
@@ -726,37 +774,43 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
   case EVTCHNOP_bind_ipi: {
     getreq(evtchn_bind_ipi);
     rc = HYPERVISOR_event_channel_op(op, &req);
-    if (debug) logfile << "hypercall: evtchn_bind_ipi {vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
-    if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
+    if (debug) logfile << "evtchn_bind_ipi {vcpu = ", req.vcpu, "} => {port = ", req.port, "}", ", rc ", rc, endl;
+    if (rc == 0) port_to_vcpu_cache[req.port] = req.vcpu;
     putreq(evtchn_bind_ipi);
     break;
   }
   case EVTCHNOP_close: {
     getreq(evtchn_close);
     rc = HYPERVISOR_event_channel_op(op, &req);
-    if (debug) logfile << "hypercall: evtchn_close {port = ", req.port, "}", ", rc ", rc, endl;
+    if (debug) logfile << "evtchn_close {port = ", req.port, "}", ", rc ", rc, endl;
     putreq(evtchn_close);
     break;
   }
   case EVTCHNOP_send: {
     getreq(evtchn_send);
-    rc = HYPERVISOR_event_channel_op(op, &req);
-    if (debug) logfile << "hypercall: evtchn_send {port = ", req.port, "}", ", rc ", rc, endl;
+    evtchn_status_t status = evtchn_get_status(req.port);
+    if (status.status == EVTCHNSTAT_ipi) {
+      shadow_evtchn_set_pending(req.port);
+      rc = 0;
+    } else {
+      rc = HYPERVISOR_event_channel_op(op, &req);
+    }
+    if (debug) logfile << "evtchn_send {port = ", req.port, "} => ", status, ", rc ", rc, endl;
     putreq(evtchn_send);
     break;
   }
   case EVTCHNOP_status: {
     getreq(evtchn_status);
     rc = HYPERVISOR_event_channel_op(op, &req);
-    if (debug) logfile << "hypercall: evtchn_status {...}", ", rc ", rc, endl;
+    if (debug) logfile << "evtchn_status {port ", req.port, "} => ", req, ", rc ", rc, endl;
     putreq(evtchn_status);
     break;
   }
   case EVTCHNOP_bind_vcpu: {
     getreq(evtchn_bind_vcpu);
     rc = HYPERVISOR_event_channel_op(op, &req);
-    if (debug) logfile << "hypercall: evtchn_bind_vcpu {port = ", req.port, ", vcpu = ", req.vcpu, "}", ", rc ", rc, endl;
-    if (rc == 0) port_to_vcpu[req.port] = req.vcpu;
+    if (debug) logfile << "evtchn_bind_vcpu {port = ", req.port, ", vcpu = ", req.vcpu, "}", ", rc ", rc, endl;
+    if (rc == 0) port_to_vcpu_cache[req.port] = req.vcpu;
     putreq(evtchn_bind_vcpu);
     break;
   }
@@ -766,14 +820,15 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
     // virtual shinfo page, and potentially simulate an upcall.
     //
     getreq(evtchn_unmask);
-    if (debug) logfile << "hypercall: evtchn_unmask {port = ", req.port, "}, rc ", rc, endl;
+    if (debug) logfile << "evtchn_unmask {port = ", req.port, "}, rc ", rc, endl;
     shadow_evtchn_unmask(req.port);
     rc = 0;
     putreq(evtchn_unmask);
     break;
   }
   default:
-    abort();
+    rc = -ENOSYS;
+    break;
   }
 
   return rc;
@@ -782,10 +837,15 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
 W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
   if (timeout) {
     update_time();
+
+    vcpu_time_info_t& time = sshinfo.vcpu_info[ctx.vcpuid].time;
     W64 trigger_nsecs_since_boot = timeout;
-    W64 trigger_cycles_since_boot = (W64)((double)trigger_nsecs_since_boot / ctx.sys_time_cycles_to_nsec_coeff);
-    W64 trigger_cycles_in_future = trigger_cycles_since_boot - (ctx.base_tsc + sim_cycle);
-    
+    W64 current_cycle = (ctx.base_tsc + sim_cycle);
+    W64 current_nsecs_since_boot = time.system_time + W64s((current_cycle - time.tsc_timestamp) * ctx.sys_time_cycles_to_nsec_coeff);
+    W64s delta_nsecs = trigger_nsecs_since_boot - current_nsecs_since_boot;
+    W64s delta_cycles = W64s(delta_nsecs / ctx.sys_time_cycles_to_nsec_coeff);
+    W64 trigger_cycles_since_boot = current_cycle + delta_cycles;
+
     ctx.timer_cycle = trigger_cycles_since_boot;
     
     //
@@ -794,12 +854,14 @@ W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
     //
     // ctx.timer_cycle = ctx.base_tsc + sim_cycle + timer_interrupt_period_in_cycles;
     
-    if (debug) logfile << "hypercall: set_timer_op: timeout ", trigger_nsecs_since_boot, " nsec since boot = ", 
-                 ctx.timer_cycle, " cycles since boot (", trigger_cycles_in_future, " cycles in future = ",
-                 (trigger_nsecs_since_boot - sshinfo.vcpu_info[0].time.system_time), " nsec in future)", endl;
+    if (debug) {
+      logfile << "set_timer_op: trigger ", trigger_nsecs_since_boot, " nsecs vs current nsecs ",
+        current_nsecs_since_boot, " (delta ", delta_nsecs, " nsecs in future) => delta ", delta_cycles,
+        " cycles in future => final trigger cycle ", trigger_cycles_since_boot, endl;
+    }
   } else {
     ctx.timer_cycle = infinity;
-    if (debug) logfile << "hypercall: set_timer_op: cancel timer", endl;
+    if (debug) logfile << "set_timer_op: cancel timer", endl;
   }
   return 0;
 }
@@ -818,7 +880,7 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     vcpu_register_runstate_memory_area req;
     if (ctx.copy_from_user(&req, (Waddr)arg3, sizeof(req)) != sizeof(req)) { return W64(-EFAULT); }
     if (arg2 >= contextcount) { return W64(-EINVAL); }
-    if (debug) logfile << "hypercall: vcpu_op: register_runstate_memory_area: registered virt ", req.addr.v, " for runstate info on vcpu ", arg2, endl, flush;
+    if (debug) logfile << "vcpu_op: register_runstate_memory_area: registered virt ", req.addr.v, " for runstate info on vcpu ", arg2, endl, flush;
     // Since this is virtual, we need to check it every time we "reschedule" the VCPU:
     contextof(arg2).user_runstate = (RunstateInfo*)req.addr.v;
     
@@ -830,7 +892,7 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     break;
   }
   default:
-    if (debug) logfile << "hypercall: vcpu_op ", arg1, " not implemented!", endl, flush;
+    if (debug) logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;
     abort();
   }
 
@@ -841,7 +903,7 @@ W64 handle_sched_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
   switch (op) {
   case SCHEDOP_yield: {
     // Take no action: under PTLsim, the guest VCPU appears to run continuously
-    if (debug) logfile << "hypercall: sched_op: yield VCPU ", ctx.vcpuid, endl, flush;
+    if (debug) logfile << "sched_op: yield VCPU ", ctx.vcpuid, endl, flush;
     return 0;
   }
   case SCHEDOP_block: {
@@ -853,14 +915,14 @@ W64 handle_sched_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
     //
     // Xen implicitly unmasks events when we do this. 
     // 
-    if (debug) logfile << "hypercall: sched_op: blocking VCPU ", ctx.vcpuid, endl, flush;
+    if (debug) logfile << "sched_op: blocking VCPU ", ctx.vcpuid, endl, flush;
     ctx.change_runstate(RUNSTATE_blocked);
     sshinfo.vcpu_info[ctx.vcpuid].evtchn_upcall_mask = 0;
     return 0;
   }
   case SCHEDOP_shutdown: {
     getreq(sched_shutdown_t);
-    if (debug) logfile << "hypercall: sched_op: shutdown (reason ", req.reason, ")", endl, flush;
+    if (debug) logfile << "sched_op: shutdown (reason ", req.reason, ")", endl, flush;
     inject_upcall("-kill", 5, true);
     return 0;
   }

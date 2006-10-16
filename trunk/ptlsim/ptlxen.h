@@ -65,9 +65,12 @@ typedef unsigned long pte_t;
 #define PTLSIM_XFER_PAGE_PFN 4
 #define PTLSIM_XFER_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_XFER_PAGE_PFN * 4096))
 
+// Maximum VCPUs per domain allowed by Xen:
+#define MAX_CONTEXTS 32 // up to 32 VCPUs per domain
+
 #define PTLSIM_CTX_PAGE_PFN 5
 #define PTLSIM_CTX_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_CTX_PAGE_PFN * 4096))
-#define PTLSIM_CTX_PAGE_COUNT 32 // up to 32 VCPUs per domain
+#define PTLSIM_CTX_PAGE_COUNT MAX_CONTEXTS
 
 #define PTLSIM_FIRST_READ_ONLY_PAGE (PTLSIM_CTX_PAGE_PFN + PTLSIM_CTX_PAGE_COUNT)
 
@@ -232,57 +235,38 @@ enum {
 struct PTLsimMonitorInfo {
   byte padding[PTLSIM_BOOT_PAGE_PADDING];
 
-  W64 magic; // PTLSIM_BOOT_PAGE_MAGIC
   W64 mfn_count;
   W64 avail_mfn_count;
   W64 total_machine_pages;
-
   Level1PTE* ptl_pagedir;
   Level2PTE* ptl_pagedir_map;
   Level3PTE* ptl_level3_map;
   Level4PTE* toplevel_page_table;
-  PTLsimMonitorInfo* boot_page;
   shared_info_t* shared_info;
-
   W64 ptl_pagedir_mfn_count;
-
   mfn_t ptl_pagedir_map_mfn;
   mfn_t ptl_level3_mfn;
   mfn_t toplevel_page_table_mfn;
-  mfn_t boot_page_mfn;
   mfn_t shared_info_mfn;
-  mfn_t start_info_mfn;
-  mfn_t store_mfn;
-  mfn_t console_mfn;
-  int store_evtchn;
-  int console_evtchn;
-
   PTLsimHostCall hostreq;
-  int queued_upcall_count;
-  int abort_request;
-  int hostcall_port;
-  int monitor_hostcall_port;
-  int upcall_port;
-  int monitor_upcall_port;
-  int breakout_port;
-  int monitor_breakout_port;
+  W16 hostcall_port;
+  W16 monitor_hostcall_port;
+  W16 upcall_port;
+  W16 monitor_upcall_port;
+  W16 breakout_port;
+  W16 monitor_breakout_port;
+  W32 stack_size;
   byte* stack_top;
-  int stack_size;
   byte* heap_start;
   byte* heap_end;
-  int vcpu_count;
-  int max_pages;
-  struct Level1PTE* phys_pagedir;
-  struct Level2PTE* phys_level2_pagedir;
-  struct Level3PTE* phys_level3_pagedir;
-  mfn_t phys_level3_pagedir_mfn;
-  W64 phys_pagedir_mfn_count;
-  void* gdt_page;
-  mfn_t gdt_mfn;
-  byte* startup_log_buffer;
-  int startup_log_buffer_tail;
-  int startup_log_buffer_size;
-  int ptlsim_state; // (PTLSIM_STATE_xxx)
+  byte* per_vcpu_stack_base;
+  W64 max_pages;
+  W32s queued_upcall_count;
+  byte vcpu_count;
+  byte ptlsim_state; // (PTLSIM_STATE_xxx)
+  byte context_spinlock;
+  byte abort_request;
+  W64  vcpu_ctx_initialized;
 };
 
 W64 inject_upcall(const char* buf, size_t count, bool flush = false);
@@ -307,6 +291,28 @@ static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_B
 #define sshinfo_evtchn_pending (*((bitvec<4096>*)&sshinfo.evtchn_pending))
 #define sshinfo_evtchn_mask (*((bitvec<4096>*)&sshinfo.evtchn_mask))
 #define sshinfo_evtchn_pending_sel(vcpuid) (*((bitvec<64>*)&sshinfo.vcpu_info[vcpuid].evtchn_pending_sel))
+
+static inline W32 get_eflags() {
+  W64 eflags;
+  asm volatile("pushfq; popq %[eflags]" : [eflags] "=r" (eflags) : : "memory");
+  return eflags;
+}
+
+// The returned %rsp is advisory only!
+static inline void* get_rsp() {
+  W64 rsp;
+  asm volatile("mov %%rsp,%[out]" : [out] "=rm" (rsp));
+  return (void*)rsp;
+}
+
+static inline int current_vcpuid() {
+  W64 rsp = (W64)get_rsp();
+  W64 pervcpu = (W64)bootinfo.per_vcpu_stack_base;
+  int vcpuid = 0;
+  bool is_secondary_stack = inrange(rsp, pervcpu, (pervcpu + (PAGE_SIZE * MAX_CONTEXTS) - 1));
+  if (is_secondary_stack) vcpuid = ((rsp - pervcpu) >> 12);
+  return vcpuid;
+}
 
 struct PageFrameType {
   Waddr mfn:28, type:3, pin:1;
@@ -372,28 +378,12 @@ static inline Context& contextof(int vcpu) {
 
 #define contextcount bootinfo.vcpu_count
 
-// Maximum VCPUs per domain allowed by Xen:
-#define MAX_CONTEXTS 32
-
 //
 // Utility functions
 //
 void print_regs(ostream& os, const W64* regs);
 void print_stack(ostream& os, Waddr sp);
 int shutdown(int reason);
-
-static inline W32 get_eflags() {
-  W64 eflags;
-  asm volatile("pushfq; popq %[eflags]" : [eflags] "=r" (eflags) : : "memory");
-  return eflags;
-}
-
-// The returned %rsp is advisory only!
-static inline void* get_rsp() {
-  W64 rsp;
-  asm volatile("mov %%rsp,%[out]" : [out] "=rm" (rsp));
-  return (void*)rsp;
-}
 
 //
 // PTLsim internal page table management
@@ -542,17 +532,19 @@ W64 storemask(Waddr physaddr, W64 data, byte bytemask);
 //
 // Self modifying code support
 //
+extern struct Level1PTE* phys_pagedir;
+
 static inline bool smc_isdirty(Waddr mfn) {
   // MFN (2^28)-1 is INVALID_MFN as stored in RIPVirtPhys:
   if unlikely (mfn >= bootinfo.total_machine_pages) return false;
-  return bootinfo.phys_pagedir[mfn].d;
+  return phys_pagedir[mfn].d;
 }
 
 void smc_setdirty_internal(Level1PTE& pte, bool dirty);
 
 static inline void smc_setdirty_value(Waddr mfn, bool dirty) {
   if unlikely (mfn >= bootinfo.total_machine_pages) return;
-  Level1PTE& pte = bootinfo.phys_pagedir[mfn];
+  Level1PTE& pte = phys_pagedir[mfn];
   if likely (pte.d == dirty) return;
   smc_setdirty_internal(pte, dirty);
 }
