@@ -809,9 +809,11 @@ bool TraceDecoder::decode_complex() {
 
     becomes:
 
-    move t0 = ra
-    ld   ra,[mem],ra
-    st   [mem],t0
+    mov     t0 = ra
+    ld.acq  ra,[mem],ra
+    st.rel  [mem],t0
+
+    (ld.acq and st.rel used automatically only if LOCK prefix is set)
 
     */
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
@@ -886,6 +888,7 @@ bool TraceDecoder::decode_complex() {
     int rdreg = (rd.type == OPTYPE_MEM) ? REG_temp0 : arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     TransOp ldp(OP_ld, rdreg, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, seg[modrm.reg].selector)); ldp.internal = 1; this << ldp;
 
+    prefixes &= ~PFX_LOCK;
     if (rd.type == OPTYPE_MEM) result_store(rdreg, REG_temp5, rd);
     break;
   }
@@ -900,6 +903,7 @@ bool TraceDecoder::decode_complex() {
     if (modrm.reg >= 6) MakeInvalid();
 
     int rareg = (ra.type == OPTYPE_MEM) ? REG_temp0 : arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+    prefixes &= ~PFX_LOCK;
     if (ra.type == OPTYPE_MEM) operand_load(REG_temp0, ra);
 
     this << TransOp(OP_mov, REG_ar1, REG_zero, rareg, REG_zero, 3);
@@ -975,15 +979,25 @@ bool TraceDecoder::decode_complex() {
 
   case 0xfc: { // cld
     CheckInvalid();
-    microcode_assist(ASSIST_CLD, ripstart, rip);
-    end_of_block = 1;
+    if (dirflag) {
+      microcode_assist(ASSIST_CLD, ripstart, rip);
+      end_of_block = 1;
+    } else {
+      // DF was already clear in this context: no-op
+      this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
+    }
     break;
   }
 
   case 0xfd: { // std
     CheckInvalid();
-    microcode_assist(ASSIST_STD, ripstart, rip);
-    end_of_block = 1;
+    if (!dirflag) {
+      microcode_assist(ASSIST_STD, ripstart, rip);
+      end_of_block = 1;
+    } else {
+      // DF was already set in this context: no-op
+      this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
+    }
     break;
   }
 
@@ -995,6 +1009,7 @@ bool TraceDecoder::decode_complex() {
     W64 rep = (prefixes & (PFX_REPNZ|PFX_REPZ));
     int sizeshift = (!bit(op, 0)) ? 0 : (rex.mode64) ? 3 : opsize_prefix ? 1 : 2;
     int addrsizeshift = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
+    prefixes &= ~PFX_LOCK;
 
     CheckInvalid();
 
@@ -1013,7 +1028,7 @@ bool TraceDecoder::decode_complex() {
       if (rep) {
         TransOp chk(OP_chk_sub, REG_temp0, REG_rcx, REG_zero, REG_imm, addrsizeshift, 0, (Waddr)rip);
         chk.cond = COND_ne; // make sure rcx is not equal to zero
-        chk.memid = EXCEPTION_SkipBlock; // type of exception to raise
+        chk.chktype = EXCEPTION_SkipBlock; // type of exception to raise
         this << chk;
         bb.repblock = 1;
       }
@@ -1394,6 +1409,7 @@ bool TraceDecoder::decode_complex() {
     DECODE(eform, rd, (op & 1) ? v_mode : b_mode);
     CheckInvalid();
 
+    prefixes &= ~PFX_LOCK;
     switch (modrm.reg) {
     case 0 ... 3: // test, (inv), not, neg
       // These are handled by the fast decoder!
@@ -1482,7 +1498,6 @@ bool TraceDecoder::decode_complex() {
     // the bytes {0x78, 0x65, 0x6e} ("xen"), we check the next instruction
     // in sequence and modify its behavior in a Xen-specific manner. The
     // only supported instruction is CPUID {0x0f, 0xa2}, which Xen extends.
-    //
     //
     if (((valid_byte_count - ((int)(rip - (Waddr)bb.rip))) >= 5) && 
         (fetch(5) == 0xa20f6e6578)) { // 78 65 6e 0f a2 = 'x' 'e' 'n' <cpuid>
@@ -1628,6 +1643,7 @@ bool TraceDecoder::decode_complex() {
   case 0x1b3: // btr ra,rb    101 10 011
   case 0x1bb: { // btc ra,rb  101 11 011
     // Fast decoder handles only reg forms
+    // If the LOCK prefix is present, ld.acq and st.rel are used
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
     CheckInvalid();
@@ -1648,12 +1664,15 @@ bool TraceDecoder::decode_complex() {
       rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
       address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
 
+      if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
+      bool locked = ((prefixes & PFX_LOCK) != 0);
+
       this << TransOp(OP_sar, REG_temp2, rareg, REG_imm, REG_zero, 3, 3); // byte index
-      this << TransOp(OP_ld, REG_temp0, REG_temp1, REG_temp2, REG_zero, 0);
+      TransOp ldop(OP_ld, REG_temp0, REG_temp1, REG_temp2, REG_zero, 0); ldop.locked = locked; this << ldop;
       this << TransOp(opcode, REG_temp0, REG_temp0, rareg, REG_zero, 0, 0, 0, SETFLAG_CF);
 
       if (opcode != OP_bt) {
-        this << TransOp(OP_st, REG_mem, REG_temp1, REG_temp2, REG_temp0, 0);
+        TransOp stop(OP_st, REG_mem, REG_temp1, REG_temp2, REG_temp0, 0); stop.locked = locked; this << stop;
       }
 
       break;
@@ -1662,6 +1681,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0x1ba: { // bt|btc|btr|bts mem,imm
     // Fast decoder handles only reg forms
+    // If the LOCK prefix is present, ld.acq and st.rel are used
     DECODE(eform, rd, v_mode);
     DECODE(iform, ra, b_mode);
     if (modrm.reg < 4) MakeInvalid();
@@ -1681,11 +1701,14 @@ bool TraceDecoder::decode_complex() {
       rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
       address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
 
-      this << TransOp(OP_ld, REG_temp0, REG_temp1, REG_imm, REG_zero, 0, ra.imm.imm >> 3);
+      if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
+      bool locked = ((prefixes & PFX_LOCK) != 0);
+
+      TransOp ldop(OP_ld, REG_temp0, REG_temp1, REG_imm, REG_zero, 0, ra.imm.imm >> 3); ldop.locked = locked; this << ldop;
       this << TransOp(opcode, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, lowbits(ra.imm.imm, 3), 0, SETFLAG_CF);
 
       if (opcode != OP_bt) {
-        this << TransOp(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 0, ra.imm.imm >> 3);
+        TransOp stop(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 0, ra.imm.imm >> 3); stop.locked = locked; this << stop;
       }
 
       break;
@@ -1812,6 +1835,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0x1b0 ... 0x1b1: {
     // cmpxchg
+    // If the LOCK prefix is present, ld.acq and st.rel are used
     DECODE(eform, rd, bit(op, 0) ? v_mode : b_mode);
     DECODE(gform, ra, bit(op, 0) ? v_mode : b_mode);
     CheckInvalid();
@@ -1857,6 +1881,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0x1c0 ... 0x1c1: {
     // xadd
+    // If the LOCK prefix is present, ld.acq and st.rel are used
     DECODE(eform, rd, bit(op, 0) ? v_mode : b_mode);
     DECODE(gform, ra, bit(op, 0) ? v_mode : b_mode);
     CheckInvalid();
@@ -1901,6 +1926,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0x1ae: {
     // fxsave fxrstor ldmxcsr stmxcsr (inv) lfence mfence sfence
+    prefixes &= ~PFX_LOCK;
     switch (modrm.reg) {
     case 0: { // fxsave
       DECODE(eform, rd, q_mode);

@@ -1075,8 +1075,8 @@ struct LockableFullyAssociativeArray {
 
   int invalidate(T tag) {
     int way = tags.probe(tag);
-    if (way < 0) return;
-    invalidate_way(&data[way]);
+    if (way < 0) return -1;
+    invalidate_way(way);
     return way;
   }
 

@@ -1230,8 +1230,23 @@ enum {
 extern const char* datatype_names[DATATYPE_COUNT];
 
 struct TransOpBase {
-  W64 opcode:7, size:2, cond:4, som:1, eom:1, setflags:3, internal:1, memid:8, rd:7, ra:7, rb:7, rc:7, is_sse:1, is_x87:1, pad1:7;
-  W64 bytes:4, tagcount:4, loadcount:3, storecount:3, branchcount:1, nouserflags:1, extshift:2, cachelevel:2, datatype:4, unaligned:1, bbindex:8, pad2:31;
+  // Opcode:
+  byte opcode;
+  // Size shift, extshift
+  byte size:2, extshift:2;
+  // Condition codes (for loads/stores, cond = alignment)
+  byte cond:4, setflags:3, nouserflags:1;
+  // Loads and stores:
+  byte internal:1, locked:1, cachelevel:2, datatype:4;
+  // x86 semantics
+  byte bytes:4, som:1, eom:1, is_sse:1, is_x87:1;
+  // Operands
+  byte rd, ra, rb, rc;
+  // Index in basic block
+  byte bbindex;
+  // Misc info
+  byte unaligned:1, chktype:7;
+  // Immediates
   W64s rbimm;
   W64s rcimm;
   W64 riptaken;
@@ -1258,14 +1273,10 @@ struct TransOp: public TransOpBase {
     this->eom = 0;
     this->som = 0;
     this->setflags = setflags;
-    this->memid = memid;
     this->riptaken = 0;
     this->ripseq = 0;
     this->bytes = 0;
-    this->tagcount = 0;
-    this->loadcount = 0;
-    this->storecount = 0;
-    this->branchcount = 0;
+    this->locked = 0;
     this->internal = 0;
     this->nouserflags = 0;
     this->extshift = 0;

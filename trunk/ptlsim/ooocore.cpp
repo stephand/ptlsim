@@ -301,6 +301,7 @@ void ReorderBufferEntry::reset() {
   lfrqslot = -1;
   lsq = 0;
   load_store_second_phase = 0;
+  lock_acquired = 0;
   consumer_count = 0;
   executable_on_cluster_mask = 0;
 #ifdef ENABLE_TRANSIENT_VALUE_TRACKING
@@ -948,6 +949,27 @@ ostream& OutOfOrderCoreEvent::print(ostream& os) const {
     os << " <= ", hexstring(loadstore.data_to_store, 8*(1<<uop.size)), " = ", loadstore.sfr;
     break;
   }
+  case EVENT_STORE_LOCK_RELEASED: {
+    os << "lk-rel", " rob ", intstring(rob, -3), " stq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "lock released (original ld.acq uuid ", loadstore.locking_uuid, " rob ", loadstore.locking_rob, " on vcpu ", loadstore.locking_vcpuid, ")";
+    break;
+  }
+  case EVENT_STORE_LOCK_ANNULLED: {
+    os << "lk-anl", " rob ", intstring(rob, -3), " stq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "lock annulled (original ld.acq uuid ", loadstore.locking_uuid, " rob ", loadstore.locking_rob, " on vcpu ", loadstore.locking_vcpuid, ")";
+    break;
+  }
+  case EVENT_STORE_LOCK_REPLAY: {
+    os << "store", (loadstore.load_store_second_phase ? "2" : " "), " rob ", intstring(rob, -3), " stq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "replay because vcpuid ", loadstore.locking_vcpuid, " uop uuid ", loadstore.locking_uuid, " has lock";
+    break;
+  }
   case EVENT_LOAD_WAIT: {
     os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " ldq ", lsq,
       " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
@@ -975,6 +997,27 @@ ostream& OutOfOrderCoreEvent::print(ostream& os) const {
     if (type == EVENT_LOAD_HIT)
       os << "hit L1: value 0x", hexstring(loadstore.sfr.data, 64);
     else os << "missed L1 (lfrqslot ", lfrqslot, ") [value would be 0x", hexstring(loadstore.sfr.data, 64), "]";
+    break;
+  }
+  case EVENT_LOAD_LOCK_REPLAY: {
+    os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " ldq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "replay because vcpuid ", loadstore.locking_vcpuid, " uop uuid ", loadstore.locking_uuid, " has lock";
+    break;
+  }
+  case EVENT_LOAD_LOCK_OVERFLOW: {
+    os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " ldq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "replay because locking required but no free interlock buffers", endl;
+    break;
+  }
+  case EVENT_LOAD_LOCK_ACQUIRED: {
+    os << "lk-acq", " rob ", intstring(rob, -3), " ldq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "lock acquired";
     break;
   }
   case EVENT_LOAD_LFRQ_FULL:
@@ -1282,6 +1325,8 @@ void OutOfOrderMachine::dump_state(ostream& os) {
     if unlikely (config.event_log_enabled) core.eventlog.print(logfile);
     core.dump_ooo_state(os);
   }
+  os << "Memory interlock buffer:", endl;
+  interlocks.print(os);
 }
 
 namespace OutOfOrderModel {

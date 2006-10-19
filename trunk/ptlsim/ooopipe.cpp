@@ -97,6 +97,7 @@ void OutOfOrderCore::flush_pipeline() {
       OutOfOrderCoreEvent* event = eventlog.add(EVENT_ANNUL_FLUSH, &rob);
       event->annul.bb = rob.uop.bb; event->annul.bb_refcount = rob.uop.bb->refcount;
     }
+    rob.release_mem_lock(true);
     rob.uop.bb->release();
   }
 

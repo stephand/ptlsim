@@ -266,6 +266,8 @@ template <typename T> inline bool x86_locked_bts(T& r, T b) { byte c; asm volati
 template <typename T> inline bool x86_locked_btr(T& r, T b) { byte c; asm volatile("lock btr %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+m" (r) : [b] "r" (b) : "memory"); return c; }
 template <typename T> inline bool x86_locked_btc(T& r, T b) { byte c; asm volatile("lock btc %[b],%[r]; setc %[c]" : [c] "=r" (c), [r] "+m" (r) : [b] "r" (b) : "memory"); return c; }
 
+template <typename T> inline T bswap(T r) { asm("bswap %[r]" : [r] "+r" (r)); return r; }
+
 // This is a barrier for the compiler only, NOT the processor!
 #define barrier() asm volatile("": : :"memory")
 

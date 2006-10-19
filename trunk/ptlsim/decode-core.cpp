@@ -451,11 +451,7 @@ void TraceDecoder::put(const TransOp& transop) {
   TransOp& firstop = transbuf[0];
   if ((transbufcount-1) == 0) firstop.som = 1;
 
-  firstop.tagcount++;
   firstop.bytes = (rip - ripstart);
-  if (isstore(transop.opcode)) firstop.storecount++;
-  if (isload(transop.opcode)) firstop.loadcount++;
-  if (isbranch(transop.opcode)) firstop.branchcount++;
   if (transop.setflags)
     last_flags_update_was_atomic = (transop.setflags == 0x7);
 }
@@ -817,6 +813,8 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
 
   W64s offset = memref.mem.offset;
 
+  bool locked = ((prefixes & PFX_LOCK) != 0);
+
   if (basereg == REG_rip) {
     // [rip + imm32]: index always is zero and scale is 1
     // This mode is only possible in x86-64 code
@@ -828,10 +826,11 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     this << TransOp(OP_add, tempreg, basereg, REG_imm, REG_zero, 3, (Waddr)rip + offset);
 
     if (memop) {
-      TransOp ld(opcode, destreg, tempreg, REG_zero, srcreg, memref.mem.size);
-      ld.datatype = datatype;
-      ld.cachelevel = cachelevel;
-      this << ld;
+      TransOp ldst(opcode, destreg, tempreg, REG_zero, srcreg, memref.mem.size);
+      ldst.datatype = datatype;
+      ldst.cachelevel = cachelevel;
+      ldst.locked = locked;
+      this << ldst;
     }
   } else if (indexreg == REG_zero) {
     // [ra + imm32] or [ra]
@@ -845,6 +844,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     TransOp ldst(opcode, destreg, basereg, REG_imm, srcreg, memref.mem.size, offset);
     ldst.datatype = datatype;
     ldst.cachelevel = cachelevel;
+    ldst.locked = locked;
     this << ldst;
   } else if (offset == 0) {
     // [ra + rb*scale] or [rb*scale]
@@ -865,6 +865,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
       TransOp ldst(opcode, destreg, tempreg, REG_zero, srcreg, memref.mem.size);
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
+      ldst.locked = locked;
       this << ldst;
     }
   } else {
@@ -883,6 +884,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     TransOp ldst(opcode, destreg, REG_temp8, REG_imm, srcreg, memref.mem.size, offset);
     ldst.datatype = datatype;
     ldst.cachelevel = cachelevel;
+    ldst.locked = locked;
     this << ldst;
   }
 }
@@ -897,10 +899,13 @@ void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& m
 
 void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
                                   bool flagsonly, bool isnegop, bool ra_rb_imm_form, W64s ra_rb_imm_form_rbimm) {
+  if (flagsonly) prefixes &= ~PFX_LOCK;
+
   if ((rd.type == OPTYPE_REG) && ((ra.type == OPTYPE_REG) || (ra.type == OPTYPE_IMM))) {
     //
     // reg,reg
     //
+    prefixes &= ~PFX_LOCK; // No locking on reg,reg
     assert(rd.reg.reg >= 0 && rd.reg.reg < APR_COUNT);
     if (ra.type == OPTYPE_REG) assert(ra.reg.reg >= 0 && ra.reg.reg < APR_COUNT);
     bool isimm = (ra.type == OPTYPE_IMM);
@@ -938,6 +943,7 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
     //
     // reg,[mem]
     //
+    prefixes &= ~PFX_LOCK; // No locking on reg,[mem]
     int destreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     operand_load(REG_temp0, ra);
 
@@ -998,6 +1004,8 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
 }
 
 void TraceDecoder::move_reg_or_mem(const DecodedOperand& rd, const DecodedOperand& ra, int force_rd) {
+  prefixes &= ~PFX_LOCK; // No locking unless both src and dest are memory
+
   if ((rd.type == OPTYPE_REG) && ((ra.type == OPTYPE_REG) || (ra.type == OPTYPE_IMM))) {
     //
     // reg,reg
@@ -1064,6 +1072,7 @@ void TraceDecoder::move_reg_or_mem(const DecodedOperand& rd, const DecodedOperan
 void TraceDecoder::signext_reg_or_mem(const DecodedOperand& rd, DecodedOperand& ra, int rasize, bool zeroext) {
   int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
   int rdsize = reginfo[rd.reg.reg].sizeshift;
+  prefixes &= ~PFX_LOCK; // No locking unless both src and dest are memory
 
   if ((rd.type == OPTYPE_REG) && (ra.type == OPTYPE_REG)) {
     //

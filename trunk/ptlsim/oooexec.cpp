@@ -568,6 +568,35 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
   return true;
 }
 
+namespace OutOfOrderModel {
+  // One global interlock buffer for all VCPUs:
+  MemoryInterlockBuffer interlocks;
+};
+
+bool ReorderBufferEntry::release_mem_lock(bool forced) {
+  if likely (!lock_acquired) return false;
+
+  W64 lockaddr = lsq->physaddr << 3;
+  MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
+  assert(lock);
+
+  OutOfOrderCore& core = getcore();
+
+  if unlikely (config.event_log_enabled) {
+    OutOfOrderCoreEvent* event = core.eventlog.add_load_store((forced) ? EVENT_STORE_LOCK_ANNULLED : EVENT_STORE_LOCK_RELEASED, this, null, lockaddr);
+    event->loadstore.locking_vcpuid = lock->vcpuid;
+    event->loadstore.locking_uuid = lock->uuid;
+    event->loadstore.locking_rob = lock->rob;
+  }
+
+  assert(lock->vcpuid == core.ctx.vcpuid);
+  assert(lock->uuid == uop.uuid);
+  assert(lock->rob == index());
+  interlocks.invalidate(lockaddr);
+  lock_acquired = 0;
+  return true;
+}
+
 //
 // Stores have special dependency rules: they may issue as soon as operands ra and rb are ready,
 // even if rc (the value to store) or rs (the store buffer to inherit from) is not yet ready or
@@ -583,7 +612,6 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
 // The store is then marked as a second phase store, since the address has been generated.
 // When the store is replayed and rescheduled, it must now have all operands ready this time.
 //
-
 int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate) {
   time_this_scope(ctissuestore);
 
@@ -764,6 +792,49 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   }
 
   //
+  // Cache coherent interlocking
+  //
+  if unlikely ((contextcount > 1) && (!annul)) {
+    W64 lockaddr = state.physaddr << 3;
+    MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
+
+    if unlikely (uop.locked) {
+      assert(lock);
+      assert(lock->vcpuid == core.ctx.vcpuid);
+
+      //
+      // If we're attempting to release a lock on block X via st.rel,
+      // another ld.acq uop executed within the same macro-op running
+      // on the current core must have acquired it. Any violations of
+      // these conditions represent an error in the microcode.
+      //
+      ReorderBufferEntry& ld_acq_rob = core.ROB[lock->rob];
+      assert(ld_acq_rob.entry_valid);
+      assert(ld_acq_rob.lock_acquired);
+      assert(ld_acq_rob.uop.uuid == lock->uuid);
+      assert((ld_acq_rob.lsq->physaddr << 3) == lockaddr);
+
+      ld_acq_rob.release_mem_lock();
+    } else if unlikely (lock) {
+      //
+      // Non-interlocked store intersected with a previously
+      // locked block. We must replay the store until the block
+      // becomes unlocked.
+      //
+      if unlikely (config.event_log_enabled) {
+        event = core.eventlog.add_load_store(EVENT_STORE_LOCK_REPLAY, this, null, addr);
+        event->loadstore.locking_vcpuid = lock->vcpuid;
+        event->loadstore.locking_uuid = lock->uuid;
+      }
+
+      stats.ooocore.dcache.store.issue.replay.interlocked++;
+      replay();
+
+      return ISSUE_NEEDS_REPLAY;
+    }
+  }
+
+  //
   // At this point all operands are valid, so merge the data and mark the store as valid.
   //
 
@@ -919,6 +990,89 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     return ISSUE_NEEDS_REPLAY;
   }
 
+  //
+  // Cache coherent interlocking
+  //
+  // On SMP systems, we must check the memory interlock controller
+  // to make sure no other thread or core has started but not finished
+  // an atomic instruction on the same word as we are accessing.
+  //
+  if unlikely ((contextcount > 1) && (!annul)) {
+    W64 lockaddr = state.physaddr << 3;
+    MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
+
+    if unlikely (uop.locked) {
+      //
+      // Attempt to acquire an exclusive lock on the block via ld.acq,
+      // or replay if another core or thread already has the lock.
+      //
+      // Each block can only be locked once, i.e. locks are not recursive
+      // even within a single VCPU. Any violations of these conditions
+      // represent an error in the microcode.
+      //
+      // It may be possible for speculative execution to erroneously
+      // attempt to lock a given block twice on the same core.
+      // If this ever happens, we replay the second load until it
+      // is either gets anulled (if it was a mis-speculation), or
+      // the st.rel associated with the first ld.acq releases it.
+      //
+      if unlikely (lock) {
+        //
+        // Some other thread or core has locked up this word: replay
+        // the uop until it becomes unlocked.
+        //
+        if unlikely (config.event_log_enabled) {
+          event = core.eventlog.add_load_store(EVENT_LOAD_LOCK_REPLAY, this, null, addr);
+          event->loadstore.locking_vcpuid = lock->vcpuid;
+          event->loadstore.locking_uuid = lock->uuid;
+          event->loadstore.locking_rob = lock->rob;
+        }
+
+        // assert(lock->vcpuid != ctx.core.vcpuid);
+
+        stats.ooocore.dcache.load.issue.replay.interlocked++;
+        replay();
+        return ISSUE_NEEDS_REPLAY;
+      } else {
+        //
+        // Lock up the block:
+        //
+        lock = interlocks.select_and_lock(lockaddr);
+
+        if unlikely (!lock) {
+          //
+          // We've overflowed the interlock buffer.
+          // Replay the load until some entries free up.
+          //
+          // The maximum number of blocks lockable by any macro-op
+          // is two. As long as the lock buffer associativity is
+          // bigger than this, we will eventually get an entry.
+          //
+          if unlikely (config.event_log_enabled) {
+            core.eventlog.add_load_store(EVENT_LOAD_LOCK_OVERFLOW, this, null, addr);
+          }
+
+          stats.ooocore.dcache.load.issue.replay.interlock_overflow++;
+          replay();
+          return ISSUE_NEEDS_REPLAY;
+        }
+
+        lock->vcpuid = core.ctx.vcpuid;
+        lock->uuid = uop.uuid;
+        lock->rob = index();
+        lock_acquired = 1;
+
+        if unlikely (config.event_log_enabled) {
+          core.eventlog.add_load_store(EVENT_LOAD_LOCK_ACQUIRED, this, null, addr);
+        }
+      }
+    }
+
+    //
+    // Normal unlocked loads make no guarantees about locks
+    //
+  }
+
   state.addrvalid = 1;
 
   if unlikely (aligntype == LDST_ALIGN_HI) {
@@ -1028,6 +1182,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_LFRQ_FULL, this, null, addr);
     stats.ooocore.dcache.load.issue.replay.missbuf_full++;
 
+    release_mem_lock(true);
     state.addrvalid = 0;
     replay();
     return ISSUE_NEEDS_REPLAY;
@@ -1087,6 +1242,8 @@ void ReorderBufferEntry::replay() {
       event->replay.ready |= (operands[i]->ready()) << i;
     }
   }
+
+  assert(!lock_acquired);
 
   int operands_still_needed = 0;
 
@@ -1335,6 +1492,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     annulrob.physreg->free();
 
     if unlikely (isclass(annulrob.uop.opcode, OPCLASS_LOAD|OPCLASS_STORE)) {
+      annulrob.release_mem_lock(true);
       core.loads_in_flight -= (annulrob.lsq->store == 0);
       core.stores_in_flight -= (annulrob.lsq->store == 1);
       annulrob.lsq->reset();
@@ -1436,6 +1594,8 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     lfrqslot = -1;
   }
 
+  release_mem_lock(true);
+
   if unlikely (lsq) {
     lsq->physaddr = 0;
     lsq->addrvalid = 0;
@@ -1508,6 +1668,10 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
     // be store-store ordering cases we don't know about, i.e. if some store
     // inherits from a previous store, but that previous store actually has the
     // wrong address because of some other bogus uop providing its address.
+    //
+    // In addition, ld.acq and st.rel create additional complexity: we can never
+    // re-dispatch the ld.acq but not the st.rel and vice versa; both must be
+    // redispatched together.
     //
     bool dep = (*dependent_operands) | (robidx == index()) | isstore(uop.opcode);
 

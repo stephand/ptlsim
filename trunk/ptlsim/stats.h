@@ -286,6 +286,8 @@ struct PTLsimStats { // rootnode:
             W64 sfr_addr_not_ready;
             W64 sfr_data_not_ready;
             W64 missbuf_full;
+            W64 interlocked;
+            W64 interlock_overflow;
           } replay;
         } issue;
 
@@ -383,6 +385,7 @@ struct PTLsimStats { // rootnode:
             W64 sfr_addr_and_data_and_data_to_store_not_ready;
             W64 sfr_addr_and_data_to_store_not_ready;
             W64 sfr_data_and_data_to_store_not_ready;
+            W64 interlocked;
           } replay;
         } issue;
 

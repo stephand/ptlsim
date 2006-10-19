@@ -14,6 +14,7 @@ bool TraceDecoder::decode_sse() {
   DecodedOperand ra;
 
   is_sse = 1;
+  prefixes &= ~PFX_LOCK;
 
   switch (op) {
     //

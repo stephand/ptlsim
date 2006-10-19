@@ -363,6 +363,7 @@ bool TraceDecoder::decode_x87() {
   DecodedOperand ra;
 
   is_x87 = 1;
+  prefixes &= ~PFX_LOCK;
 
   switch (op) {
     //

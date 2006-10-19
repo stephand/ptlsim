@@ -229,6 +229,7 @@ bool TraceDecoder::decode_fast() {
     DECODE(eform, rd, v_mode);
     CheckInvalid();
 
+    prefixes &= ~PFX_LOCK;
     int sizeshift = (rd.type == OPTYPE_REG) ? reginfo[rd.reg.reg].sizeshift : rd.mem.size;
     if (sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
     int rdreg = (rd.type == OPTYPE_REG) ? arch_pseudo_reg_to_arch_reg[rd.reg.reg] : REG_temp7;
@@ -249,6 +250,7 @@ bool TraceDecoder::decode_fast() {
     if (rd.type == OPTYPE_MEM && rd.mem.size == 2) rd.mem.size = 3;
 
     if (rd.type == OPTYPE_MEM) {
+      prefixes &= ~PFX_LOCK;
       result_store(REG_temp7, REG_temp0, rd);
       this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
     } else {
@@ -261,7 +263,6 @@ bool TraceDecoder::decode_fast() {
 
   case 0x90: {
     // 0x90 (xchg eax,eax) is a NOP and in x86-64 is treated as such (i.e. does not zero upper 32 bits as usual)
-    // NOTE! We still have to output something so %rip gets incremented correctly!
     CheckInvalid();
     this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     break;
@@ -317,6 +318,7 @@ bool TraceDecoder::decode_fast() {
 
   case 0xa0 ... 0xa3: {
     // mov rAX,Ov and vice versa
+    prefixes &= ~PFX_LOCK;
     rd.gform_ext(*this, (op & 1) ? v_mode : b_mode, REG_rax);
     DECODE(iform64, ra, (use64 ? q_mode : addrsize_prefix ? w_mode : d_mode));
     CheckInvalid();
@@ -328,6 +330,7 @@ bool TraceDecoder::decode_fast() {
     ra.mem.scale = APR_zero;
     ra.mem.size = reginfo[rd.reg.reg].sizeshift;
     ra.type = OPTYPE_MEM;
+    prefixes &= ~PFX_LOCK;
     if (inrange(op, 0xa2, 0xa3)) {
       result_store(REG_rax, REG_temp0, ra);
     } else {
@@ -692,6 +695,7 @@ bool TraceDecoder::decode_fast() {
       } else if (ra.type == OPTYPE_MEM) {
         // there is no way to encode a 32-bit jump address in x86-64 mode:
         if (use64 && (ra.mem.size == 2)) ra.mem.size = 3;
+        prefixes &= ~PFX_LOCK;
         operand_load(REG_temp0, ra);
         if (iscall) {
           immediate(REG_temp6, 3, (Waddr)rip);
@@ -721,6 +725,7 @@ bool TraceDecoder::decode_fast() {
         rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       } else {
         rareg = REG_temp7;
+        prefixes &= ~PFX_LOCK;
         operand_load(rareg, ra);
       }
 
@@ -752,6 +757,7 @@ bool TraceDecoder::decode_fast() {
       srcreg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     } else {
       assert(ra.type == OPTYPE_MEM);
+      prefixes &= ~PFX_LOCK;
       operand_load(REG_temp7, ra);
       srcreg = REG_temp7;
     }
@@ -806,6 +812,7 @@ bool TraceDecoder::decode_fast() {
 
     if (rd.type == OPTYPE_MEM) {
       rd.mem.size = 0;
+      prefixes &= ~PFX_LOCK;
       result_store(r, REG_temp0, rd);
     }
     break;
@@ -862,6 +869,7 @@ bool TraceDecoder::decode_fast() {
 
     static const byte x86_prefetch_to_pt2x_cachelevel[8] = {2, 1, 2, 3};
     int level = x86_prefetch_to_pt2x_cachelevel[modrm.reg];
+    prefixes &= ~PFX_LOCK;
     operand_load(REG_temp0, ra, OP_ld_pre, level);
     break;
   }
@@ -872,6 +880,7 @@ bool TraceDecoder::decode_fast() {
     CheckInvalid();
 
     int level = 2;
+    prefixes &= ~PFX_LOCK;
     operand_load(REG_temp0, ra, OP_ld_pre, level);
     break;
   }

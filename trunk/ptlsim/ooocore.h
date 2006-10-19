@@ -391,7 +391,7 @@ namespace OutOfOrderModel {
     byte consumer_count;
     PTEUpdate pteupdate;
     Waddr origvirt;
-    byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1;
+    byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1, lock_acquired:1;
 
     int index() const { return idx; }
     void validate() { entry_valid = true; }
@@ -426,6 +426,7 @@ namespace OutOfOrderModel {
     void redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob);
     void redispatch_dependents(bool inclusive = true);
     void loadwakeup();
+    bool release_mem_lock(bool forced = false);
     ostream& print(ostream& os) const;
     stringbuf& get_operand_info(stringbuf& sb, int operand) const;
     ostream& print_operand_info(ostream& os, int operand) const;
@@ -654,6 +655,22 @@ namespace OutOfOrderModel {
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
   };
 
+  struct MemoryInterlockEntry {
+    W64 uuid;
+    W16 rob;
+    byte vcpuid;
+    void reset() { uuid = 0; rob = 0; vcpuid = 0; }
+
+    ostream& print(ostream& os, W64 physaddr) const {
+      os << "phys ", (void*)physaddr, ": vcpu ", vcpuid, ", uuid ", uuid, ", rob ", rob;
+      return os;
+    }
+  };
+
+  struct MemoryInterlockBuffer: public LockableAssociativeArray<W64, MemoryInterlockEntry, 16, 4, 8> { };
+
+  extern MemoryInterlockBuffer interlocks;
+
   //
   // Event Tracing
   //
@@ -689,11 +706,17 @@ namespace OutOfOrderModel {
     EVENT_STORE_PARALLEL_FORWARDING_MATCH,
     EVENT_STORE_ALIASED_LOAD,
     EVENT_STORE_ISSUED,
+    EVENT_STORE_LOCK_RELEASED,
+    EVENT_STORE_LOCK_ANNULLED,
+    EVENT_STORE_LOCK_REPLAY,
     EVENT_LOAD_EXCEPTION,
     EVENT_LOAD_WAIT,
     EVENT_LOAD_HIGH_ANNULLED,
     EVENT_LOAD_HIT,
     EVENT_LOAD_MISS,
+    EVENT_LOAD_LOCK_REPLAY,
+    EVENT_LOAD_LOCK_OVERFLOW,
+    EVENT_LOAD_LOCK_ACQUIRED,
     EVENT_LOAD_LFRQ_FULL,
     EVENT_LOAD_WAKEUP,
     EVENT_ALIGNMENT_FIXUP,
@@ -850,17 +873,20 @@ namespace OutOfOrderModel {
         byte ready;
       } replay;
       struct {
-        W16 cycles_left;
         W64 virtaddr;
-        byte inherit_sfr_used:1, rcready:1, load_store_second_phase:1, predicted_alias:1;
+        W64 data_to_store;
         SFR sfr;
         SFR inherit_sfr;
+        W64 inherit_sfr_uuid;
+        W64 inherit_sfr_rip;
         W16 inherit_sfr_lsq;
         W16 inherit_sfr_rob;
         W16 inherit_sfr_physreg;
-        W64 inherit_sfr_uuid;
-        W64 inherit_sfr_rip;
-        W64 data_to_store;
+        W16 cycles_left;
+        W64 locking_uuid;
+        byte inherit_sfr_used:1, rcready:1, load_store_second_phase:1, predicted_alias:1;
+        byte locking_vcpuid;
+        W16 locking_rob;
       } loadstore;
       struct {
         W16 somidx;

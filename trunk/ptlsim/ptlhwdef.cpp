@@ -453,6 +453,7 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   }
 
   if ((ld|st) && (op.cachelevel > 0)) sbname << ".L", (char)('1' + op.cachelevel);
+  if ((ld|st) && (op.locked)) sbname << ((ld) ? ".acq" : ".rel");
   if (op.internal) sbname << ".p";
   if (op.eom) sbname << ".";
 
@@ -480,8 +481,6 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   }
 
   if (isbranch(op.opcode)) sb << " [taken ", (void*)(Waddr)op.riptaken, ", seq ", (void*)(Waddr)op.ripseq, "]";
-
-  if (op.som) sb << " (", (int)op.bytes, "b ", (int)op.tagcount, "t ", (int)op.storecount, "s ", (int)op.loadcount, "l ", (int)op.branchcount, "br)";
 
   return sb;
 }
