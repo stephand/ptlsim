@@ -30,7 +30,7 @@ typedef W32 Waddr;
 #endif
 #endif // !__INSIDE_PTLSIM
 
-static inline W64 rdtsc() {
+static inline W64 ptlcall_rdtsc() {
   W32 lo, hi;
   asm volatile("rdtsc" : "=a" (lo), "=d" (hi));
   return ((W64)lo) | (((W64)hi) << 32);
