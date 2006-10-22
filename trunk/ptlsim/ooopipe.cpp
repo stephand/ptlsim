@@ -1592,7 +1592,7 @@ int ReorderBufferEntry::commit() {
   }
 
   if likely (!(br|st)) {
-    int k = clipto((int)consumer_count, 0, lengthof(stats.ooocore.frontend.consumer_count));
+    int k = clipto((int)consumer_count, 0, lengthof(stats.ooocore.frontend.consumer_count)-1);
     stats.ooocore.frontend.consumer_count[k]++;
   }
 

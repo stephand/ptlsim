@@ -486,26 +486,27 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
         W64 total = 0;
         W64 maxvalue = 0;
         W64 minvalue = -1ULL;
+        W64 weightedsum = 0;
         foreach (i, count) {
           total += values[i].w;
+          weightedsum += (values[i].w * i);
           minvalue = min((W64)values[i].w, minvalue);
           maxvalue = max((W64)values[i].w, maxvalue);
         }
 
+        double average = double(weightedsum) / double(total);
         W64 thresh = max((W64)math::ceil((double)total * printinfo.histogram_thresh), (W64)1);
         W64 base = histomin;
         int width = digits(max(histomin, histomax));
         int valuewidth = digits(maxvalue);
         int w = max(width, valuewidth);
 
-        if (!labeled_histogram) {
-          os << padding, "  ", "Range:   ", intstring(histomin, w), " ", intstring(histomax, w), endl;
-          os << padding, "  ", "Stride:  ", intstring(histostride, w), endl;
-        }
-
-        os << padding, "  ", "ValRange:", intstring(minvalue, w), " ", intstring(maxvalue, w), endl;
-        os << padding, "  ", "Total:   ", intstring(total, w), endl;
-        os << padding, "  ", "Thresh:  ", intstring(thresh, w), endl;
+        os << padding, "  ", "Minimum:          ", intstring(minvalue, 12), endl;
+        os << padding, "  ", "Maximum:          ", intstring(maxvalue, 12), endl;
+        os << padding, "  ", "Average:          ", floatstring(average, 12, 3), endl;
+        os << padding, "  ", "Total Sum:        ", intstring(total, 12), endl;
+        os << padding, "  ", "Weighted Sum:     ", intstring(weightedsum, 12), endl;
+        os << padding, "  ", "Threshold:        ", intstring(thresh, 12), endl;
 
         W64 accum = 0;
 
