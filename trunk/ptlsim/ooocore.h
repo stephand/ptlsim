@@ -244,6 +244,8 @@ namespace OutOfOrderModel {
   struct ListOfStateLists: public array<StateList*, 64> {
     int count;
 
+    ListOfStateLists() { count = 0; }
+
     int add(StateList* list);
     void reset();
   };
@@ -256,7 +258,7 @@ namespace OutOfOrderModel {
     W64 issue_source_counter;
     W32 flags;
 
-    StateList() { }
+    StateList() { count = 0; listid = 0; }
 
     void init(const char* name, ListOfStateLists& lol, W32 flags = 0) {
       reset();

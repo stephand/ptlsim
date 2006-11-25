@@ -1123,6 +1123,73 @@ struct LockableAssociativeArray {
   typedef LockableFullyAssociativeArray<T, V, waycount, stats> Set;
   Set sets[setcount];
 
+  LockableAssociativeArray() {
+    reset();
+  }
+
+  void reset() {
+    foreach (set, setcount) {
+      sets[set].reset();
+    }
+  }
+
+  static int setof(T addr) {
+    return bits(addr, log2(linesize), log2(setcount));
+  }
+
+  static T tagof(T addr) {
+    return floor(addr, linesize);
+  }
+
+  V* probe(T addr) {
+    return sets[setof(addr)].probe(tagof(addr));
+  }
+
+  V* select(T addr, T& oldaddr) {
+    return sets[setof(addr)].select(tagof(addr), oldaddr);
+  }
+
+  V* select(T addr) {
+    T dummy;
+    return select(addr, dummy);
+  }
+
+  void invalidate(T addr) {
+    sets[setof(addr)].invalidate(tagof(addr));
+  }
+
+  V* select_and_lock(T addr, bool& firstlock, T& oldtag) {
+    V* line = sets[setof(addr)].select_and_lock(tagof(addr), firstlock, oldtag);
+    return line;
+  }
+
+  V* select_and_lock(T addr, bool& firstlock) {
+    W64 dummy;
+    return select_and_lock(addr, firstlock, dummy);
+  }
+
+  V* select_and_lock(T addr) { bool dummy; return select_and_lock(addr, dummy); }
+
+  ostream& print(ostream& os) const {
+    os << "LockableAssociativeArray<", setcount, " sets, ", waycount, " ways, ", linesize, "-byte lines>:", endl;
+    foreach (set, setcount) {
+      os << "  Set ", set, ":", endl;
+      os << sets[set];
+    }
+    return os;
+  }
+};
+
+template <typename T, typename V, int size, int ways, int linesize>
+ostream& operator <<(ostream& os, const LockableAssociativeArray<T, V, size, ways, linesize>& aa) {
+  return aa.print(os);
+}
+
+template <typename T, typename V, int setcount, int waycount, int linesize, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
+struct LockableCommitRollbackAssociativeArray {
+  typedef LockableFullyAssociativeArray<T, V, waycount, stats> Set;
+  Set sets[setcount];
+
   struct ClearList {
     W16 set;
     W16 way;
@@ -1131,7 +1198,7 @@ struct LockableAssociativeArray {
   ClearList clearlist[setcount * waycount];
   ClearList* cleartail;
 
-  LockableAssociativeArray() {
+  LockableCommitRollbackAssociativeArray() {
     reset();
   }
 
@@ -1240,7 +1307,7 @@ struct LockableAssociativeArray {
 };
 
 template <typename T, typename V, int size, int ways, int linesize>
-ostream& operator <<(ostream& os, const LockableAssociativeArray<T, V, size, ways, linesize>& aa) {
+ostream& operator <<(ostream& os, const LockableCommitRollbackAssociativeArray<T, V, size, ways, linesize>& aa) {
   return aa.print(os);
 }
 
@@ -1263,8 +1330,8 @@ ostream& operator <<(ostream& os, const LockableAssociativeArray<T, V, size, way
 //
 
 template <typename T, typename V, int setcount, int waycount, int linesize, int maxdirty, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
-struct CommitRollbackCache: public LockableAssociativeArray<T, V, setcount, waycount, linesize, stats> {
-  typedef LockableAssociativeArray<T, V, setcount, waycount, linesize, stats> array_t;
+struct CommitRollbackCache: public LockableCommitRollbackAssociativeArray<T, V, setcount, waycount, linesize, stats> {
+  typedef LockableCommitRollbackAssociativeArray<T, V, setcount, waycount, linesize, stats> array_t;
   
   struct BackupCacheLine {
     W64* addr;

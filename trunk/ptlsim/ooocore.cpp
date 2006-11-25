@@ -82,11 +82,14 @@ void OutOfOrderCore::init_generic() {
   //
   branchpred.init();
   fetch_uuid = 0;
+  current_basic_block = null;
+  current_basic_block_transop_index = 0;
   current_icache_block = 0;
   round_robin_reg_file_offset = 0;
   smc_invalidate_pending = 0;
   caches.reset();
   caches.callback = &cache_callbacks;
+  setzero(robs_on_fu);
   if unlikely (config.event_log_enabled) {
     eventlog.init(config.event_log_ring_buffer_size);
     eventlog.logfile = &logfile;
