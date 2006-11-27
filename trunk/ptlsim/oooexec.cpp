@@ -361,6 +361,7 @@ int ReorderBufferEntry::issue() {
   // or re-dispatched in case of speculation failures.
   //
   release();
+  issued = 1;
 
   if likely (physreg->valid()) {
     if unlikely (br) {
@@ -766,6 +767,17 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
         continue;
       }
 
+      //
+      // If the load already issued, and it detected a dependency on
+      // this store, it will still be waiting for this store to complete.
+      // This is a perfectly valid situation and not true aliasing.
+      //
+      if unlikely (ldbuf.rob->operands[RS] == this->physreg) {
+        assert(ldbuf.rob->issued);
+        assert(ldbuf.rob->load_store_second_phase);
+        continue;
+      }
+
       state.invalid = 1;
       state.data = EXCEPTION_LoadStoreAliasing;
       state.datavalid = 1;
@@ -799,8 +811,10 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
     MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
 
     if unlikely (uop.locked) {
-      assert(lock);
-      assert(lock->vcpuid == core.ctx.vcpuid);
+      if ((!lock) || (lock->vcpuid != core.ctx.vcpuid)) {
+        logfile << "Lock failed for uuid ", uop.uuid, " over physaddr ", (void*)lockaddr, ": lock = ", lock, ", vcpuid ", (lock ? lock->vcpuid : -1), endl;
+        assert(false);
+      }
 
       //
       // If we're attempting to release a lock on block X via st.rel,
@@ -1580,6 +1594,9 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
   }
 
   stats.ooocore.dispatch.redispatch.trigger_uops++;
+
+  // Un-issue the uop:
+  issued = 0;
 
   // Remove from issue queue, if it was already in some issue queue
   if unlikely (cluster >= 0) {

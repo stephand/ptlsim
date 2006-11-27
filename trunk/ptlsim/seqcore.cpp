@@ -13,8 +13,8 @@
 #include <stats.h>
 
 // With these disabled, simulation is faster
-#define ENABLE_CHECKS
-#define ENABLE_LOGGING
+//#define ENABLE_CHECKS
+//#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -746,7 +746,8 @@ struct SequentialCore {
           logfile << endl;
         }
 
-        bb->predcount += (uop.opcode == OP_jmp) ? 1 : (state.reg.rddata == uop.riptaken);
+        bb->predcount += (uop.opcode == OP_jmp) ? (state.reg.rddata == bb->lasttarget) : (state.reg.rddata == uop.riptaken);
+        bb->lasttarget = state.reg.rddata;
       } else {
         assert((void*)synthop);
         synthop(state, radata, rbdata, rcdata, raflags, rbflags, rcflags);
@@ -869,10 +870,12 @@ struct SequentialCore {
 
 struct SequentialMachine: public PTLsimMachine {
   SequentialCore* cores[MAX_CONTEXTS];
+  bool init_done;
 
   SequentialMachine(const char* name) {
     // Add to the list of available core types
     addmachine(name, this);
+    init_done = 0;
   }
 
   //
@@ -881,6 +884,8 @@ struct SequentialMachine: public PTLsimMachine {
   // all other PTLsim subsystems are brought up.
   //
   virtual bool init(PTLsimConfig& config) {
+    if (init_done) return true;
+
     foreach (i, contextcount) {
       cores[i] = new SequentialCore(contextof(i));
       //
@@ -892,6 +897,7 @@ struct SequentialMachine: public PTLsimMachine {
       //
     }
 
+    init_done = 1;
     return true;
   }
 
@@ -979,7 +985,23 @@ struct SequentialMachine: public PTLsimMachine {
   virtual void update_stats(PTLsimStats& stats) {
     // (nop)
   }
+
+  int execute_sequential(Context& ctx) {
+    SequentialCore& core = *cores[ctx.vcpuid];
+
+    core.external_to_core_state();
+    Waddr rip = ctx.commitarf[REG_rip];
+    BasicBlock* bb = core.fetch_or_translate_basic_block(rip);
+    int result = core.execute(bb, limits<W64>::max);
+    core.core_to_external_state();
+
+    return result;
+  }
 };
 
 SequentialMachine seqmodel("seq");
 
+int execute_sequential(Context& ctx) {
+  if (!seqmodel.init_done) seqmodel.init(config);
+  return seqmodel.execute_sequential(ctx);
+}

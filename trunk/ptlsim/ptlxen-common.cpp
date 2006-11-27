@@ -205,8 +205,6 @@ void Context::saveto(vcpu_guest_context& ctx) {
   ctx.user_regs.gs = seg[SEGID_GS].selector;
 
   fxsave(*(FXSAVEStruct*)&ctx.fpu_ctxt);
-
-  assert((ctx.flags & VGCF_HVM_GUEST) == 0);
 }
 
 void Context::saveto(vcpu_extended_context& ctx) {

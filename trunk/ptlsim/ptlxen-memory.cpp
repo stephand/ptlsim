@@ -529,6 +529,14 @@ asmlinkage void do_page_fault(W64* regs) {
     print_regs(cerr, regs);
     print_stack(cerr, regs[REG_rsp]);
     cerr.flush();
+
+    if (logfile) {
+      logfile << "Cycle: ", sim_cycle, " PTLsim Internal Error: page fault @ rip ", (void*)regs[REG_rip], " while accessing ", (void*)faultaddr, " (error code ", pfec, "); rsp ", get_rsp(), endl;
+      logfile << "Registers:", endl;
+      print_regs(logfile, regs);
+      print_stack(logfile, regs[REG_rsp]);
+    }
+
     logfile.flush();
     shutdown(SHUTDOWN_crash);
     asm("ud2a");
@@ -1504,7 +1512,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
     case MMUEXT_TLB_FLUSH_MULTI:
     case MMUEXT_INVLPG_MULTI: {
       Waddr vcpumask;
-      int n = ctx.copy_from_user(&vcpumask, (Waddr)req.arg2.vcpumask, sizeof(vcpumask));
+      int n = ctx.copy_from_user(&vcpumask, *(Waddr*)&req.arg2.vcpumask, sizeof(vcpumask));
       if (n != sizeof(vcpumask)) { rc = -EFAULT; break; }
       bool single = (req.cmd == MMUEXT_INVLPG_MULTI);
       if (debug) logfile << "mmuext_op: ", (single ? "invlpg" : "flush"), " multi (mask ", 

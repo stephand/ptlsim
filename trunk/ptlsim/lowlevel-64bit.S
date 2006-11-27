@@ -176,6 +176,12 @@ switch_to_native_restore_context_lowlevel:
   mov      %rdx,offset switch_to_native_restore_context_64_to_32
   test     %rsi,1 # Is user thread 64-bit?
   cmovnz   %rcx,%rdx
+  # Only overwrite seg regs if going back to 32-bit (behavior specific to Intel x86-64 implementation)
+  jz       1f
+  mov      %fs,word ptr [saved_fs]
+  mov      %gs,word ptr [saved_gs]
+1:
+
   mov      [switch_to_native_restore_context_temp_64_or_32_func],%rcx
 
   mov      %rax,[%rdi + 8*REG_rip]        # Load %rip
@@ -203,8 +209,6 @@ switch_to_native_restore_context_lowlevel:
   mov      %r14,[%rdi + 8*REG_rax + 8*14]
   mov      %r15,[%rdi + 8*REG_rax + 8*15]
 
-  mov      %fs,word ptr [saved_fs]
-  mov      %gs,word ptr [saved_gs]
   mov      %rdi,[%rdi + 8*REG_rdi]      # Restore %rdi
 
   jmp      [switch_to_native_restore_context_temp_64_or_32_func]

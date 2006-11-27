@@ -90,10 +90,6 @@ void OutOfOrderCore::init_generic() {
   caches.reset();
   caches.callback = &cache_callbacks;
   setzero(robs_on_fu);
-  if unlikely (config.event_log_enabled) {
-    eventlog.init(config.event_log_ring_buffer_size);
-    eventlog.logfile = &logfile;
-  }
   prev_interrupts_pending = 0;
   handle_interrupt_at_next_eom = 0;
 }
@@ -1249,11 +1245,15 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
   time_this_scope(cttotal);
 
   logfile << "Starting out-of-order core toplevel loop", endl, flush;
-  logfile << "Event size: ", sizeof(OutOfOrderCoreEvent), " bytes", endl;
 
   foreach (i, contextcount) {
     OutOfOrderCore& core =* cores[i];
     Context& ctx = contextof(i);
+
+    if unlikely (config.event_log_enabled && (!core.eventlog.start)) {
+      core.eventlog.init(config.event_log_ring_buffer_size);
+      core.eventlog.logfile = &logfile;
+    }
 
     core.flush_pipeline();
 
@@ -1306,12 +1306,15 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
 
     core.core_to_external_state();
 
-    if (logable(6) | ((sim_cycle - core.last_commit_at_cycle) > 1024)) {
-      logfile << "Core State at end:", endl;
+    if (logable(6) | ((sim_cycle - core.last_commit_at_cycle) > 1024) | config.dump_state_now) {
+      logfile << "VCPU ", i, " core state at end:", endl;
       logfile << ctx;
       core.dump_ooo_state(logfile);
+      if (config.event_log_enabled) core.eventlog.print(logfile);
     }
   }
+
+  config.dump_state_now = 0;
 
   // Flush everything to remove any remaining refs to basic blocks
   flush_all_pipelines();

@@ -12,8 +12,6 @@
 #include <ptlsim.h>
 //#include <datastore.h>
 
-enum { LDST_ALIGN_NORMAL, LDST_ALIGN_LO, LDST_ALIGN_HI };
-
 struct LoadStoreInfo {
   W32 rob:16, tid:8, aligntype:2, sfrused:1, internal:1, signext:1, sizeshift:2, pad:1;
   RawDataAccessors(LoadStoreInfo, W32);

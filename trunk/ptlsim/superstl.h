@@ -140,6 +140,8 @@ namespace superstl {
 
 #undef DefineInserter
 
+#define PrintOperator(T) static inline ostream& operator <<(ostream& os, const T& obj) { return obj.print(os); }
+
   static inline stringbuf& operator <<(stringbuf& os, const stringbuf& sb) {
     os << ((char*)sb);
     return os;
@@ -2068,10 +2070,18 @@ namespace superstl {
         reset(ht);
       }
 
+      Iterator(SelfHashtable<K, T, setcount, LM, KM>& ht) {
+        reset(ht);
+      }
+
       void reset(SelfHashtable<K, T, setcount, LM, KM>* ht) {
         this->ht = ht;
         slot = 0;
         link = ht->sets[slot];
+      }
+
+      void reset(SelfHashtable<K, T, setcount, LM, KM>& ht) {
+        reset(&ht);
       }
 
       T* next() {
@@ -2228,8 +2238,16 @@ namespace superstl {
         reset(ht);
       }
 
+      Iterator(Hashtable<K, T, setcount, KM>& ht) {
+        reset(ht);
+      }
+
       void reset(Hashtable<K, T, setcount, KM>* ht) {
         base_t::Iterator::reset(ht);
+      }
+
+      void reset(Hashtable<K, T, setcount, KM>& ht) {
+        base_t::Iterator::reset(&ht);
       }
 
       KeyValuePair<K, T>* next() {
@@ -2498,6 +2516,52 @@ namespace superstl {
     }
   };
 
+  //
+  // sort - sort an array of elements
+  // @p: pointer to data to sort
+  // @n: number of elements
+  //
+  // This function does a heapsort on the given array. You may provide a
+  // comparison function optimized to your element type.
+  //
+  // Sorting time is O(n log n) both on average and worst-case. While
+  // qsort is about 20% faster on average, it suffers from exploitable
+  // O(n*n) worst-case behavior and extra memory requirements that make
+  // it less suitable for kernel use.
+  //
+  template <typename T>
+  struct DefaultComparator {
+    W64s operator ()(const T& a, const T& b) const {
+      return a - b;
+    }
+  };
+
+  template <typename T, typename Comparator>
+  void sort(T* p, size_t n, const Comparator& compare = DefaultComparator<T>()) {
+    int c;
+
+    // heapify
+    for (int i = (n/2); i >= 0; i--) {
+      for (int r = i; r * 2 < n; r = c) {
+        c = r * 2;
+        c += ((c < (n - 1)) && (compare(p[c], p[c+1]) < 0));
+        if (compare(p[r], p[c]) >= 0) break;
+        swap(p[r], p[c]);
+      }
+    }
+
+    // sort
+    for (int i = n-1; i >= 0; i--) {
+      swap(p[0], p[i]);
+      for (int r = 0; r * 2 < i; r = c) {
+        c = r * 2;
+        c += ((c < i-1) && (compare(p[c], p[c+1]) < 0));
+        if (compare(p[r], p[c]) >= 0) break;
+        swap(p[r], p[c]);
+      }
+    }
+  }
+
   static inline W64s expandword(const byte*& p, int type) {
     W64s v;
 
@@ -2639,6 +2703,60 @@ namespace superstl {
     CycleTimer& ct;
     CycleTimerScope(CycleTimer& ct_): ct(ct_) { ct.start(); }
     ~CycleTimerScope() { ct.stop(); }
+  };
+
+  //
+  // Mutex with recursive locking
+  //
+  // acquire(vcpuid) can be called multiple times
+  // with the same vcpuid, but if the vcpuid
+  // does not match locking_vcpuid, the function
+  // spins until the lock can be acquired.
+  //
+  // release(vcpuid) unlocks the mutex. The current
+  // vcpuid must equal locking_vcpu.
+  //
+  struct RecursiveMutex {
+    W16s locking_vcpuid;
+    W16 counter;
+
+    RecursiveMutex() { reset(); }
+
+    void reset() {
+      locking_vcpuid = -1;
+      counter = 0;
+    }
+
+    bool acquire(W16s current) {
+      bool acquired;
+      bool recursive;
+
+      for (;;) {
+        W16s oldv = cmpxchg(locking_vcpuid, current, W16s(-1));
+        barrier();
+        acquired = (oldv == -1);
+        recursive = (oldv == current);
+
+        if unlikely (acquired | recursive) break;
+
+        cpu_pause();
+      }
+
+      counter++;
+
+      return (!recursive);
+    }
+
+    void release(int current) {
+      assert(locking_vcpuid == current);
+      assert(counter > 0);
+
+      counter--;
+      if likely (!counter) {
+        locking_vcpuid = -1;
+        barrier();
+      }
+    }
   };
 
 } // namespace superstl

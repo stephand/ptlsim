@@ -852,7 +852,8 @@ W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
     // If problems arise with negative timer values, force this to be a fixed timer interrupt period:
     // NOTE: the hypervisor itself now contains an equivalent workaround, so disable this: 
     //
-    // ctx.timer_cycle = ctx.base_tsc + sim_cycle + timer_interrupt_period_in_cycles;
+    if (delta_cycles < timer_interrupt_period_in_cycles)
+      ctx.timer_cycle = ctx.base_tsc + sim_cycle + timer_interrupt_period_in_cycles;
     
     if (debug) {
       logfile << "set_timer_op: trigger ", trigger_nsecs_since_boot, " nsecs vs current nsecs ",

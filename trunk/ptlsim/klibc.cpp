@@ -1382,6 +1382,7 @@ int format_float(char* buf, int bufsize, double v, int precision, int pad) {
   remaining--;
   n = format_integer(buf + n + 1, max(min(remaining, precision+1), 0), fracint, 0, 0);
   total += n;
+  buf[total] = 0;
   return total;
 }
 

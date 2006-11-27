@@ -441,6 +441,7 @@ void assist_ioport_out(Context& ctx);
 // Global functions
 //
 void init_decode();
+void shutdown_decode();
 
 static const int BB_CACHE_SIZE = 16384;
 
@@ -495,6 +496,8 @@ struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_S
   BasicBlockCache(): SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_SIZE, BasicBlockHashtableLinkManager>() { }
 
   BasicBlock* translate(Context& ctx, const RIPVirtPhys& rvp);
+  void translate_in_place(BasicBlock& targetbb, Context& ctx, W64 rip);
+  BasicBlock* translate_and_clone(Context& ctx, Waddr rip);
   bool invalidate(const RIPVirtPhys& rvp, int reason);
   bool invalidate(BasicBlock* bb, int reason);
   bool invalidate_page(Waddr mfn, int reason);
@@ -506,6 +509,8 @@ struct BasicBlockCache: public SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_S
 };
 
 extern BasicBlockCache bbcache;
+
+extern odstream bbcache_dump_file;
 
 //
 // This part is used when parsing stats.h to build the

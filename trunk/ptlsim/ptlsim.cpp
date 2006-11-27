@@ -56,6 +56,7 @@ void PTLsimConfig::reset() {
   event_log_ring_buffer_size = 32768;
   flush_event_log_every_cycle = 0;
   log_backwards_from_trigger_rip = INVALIDRIP;
+  dump_state_now = 0;
 
   stats_filename.reset();
   snapshot_cycles = infinity;
@@ -95,11 +96,16 @@ void PTLsimConfig::reset() {
   dumpcode_filename = "test.dat";
   dump_at_end = 0;
   overshoot_and_dump = 0;
+  bbcache_dump_filename.reset();
 
 #ifndef PTLSIM_HYPERVISOR
   sequential_mode_insns = 0;
   exit_after_fullsim = 0;
 #endif
+
+  // Peptidal specific
+  dump_trace_sched_rip = INVALIDRIP;
+  dump_trace_exec_rip = INVALIDRIP;
 }
 
 template <>
@@ -131,6 +137,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(log_on_console,               "consolelog",           "Replicate log file messages to console");
   add(log_ptlsim_boot,              "bootlog",              "Log PTLsim early boot and injection process (for debugging)");
   add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
+  add(dump_state_now,               "dump-state-now",       "Dump the event log ring buffer and internal state of the active core");
 
   section("Event Ring Buffer Logging Control");
   add(event_log_enabled,            "ringbuf",              "Log all core events to the ring buffer for backwards-in-time debugging");
@@ -183,11 +190,16 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(dumpcode_filename,            "dumpcode",             "Save page of user code at final rip to file <dumpcode>");
   add(dump_at_end,                  "dump-at-end",          "Set breakpoint and dump core before first instruction executed on return to native mode");
   add(overshoot_and_dump,           "overshoot-and-dump",   "Set breakpoint and dump core after first instruction executed on return to native mode");
+  add(bbcache_dump_filename,        "bbdump",               "Basic block cache dump filename");
 #ifndef PTLSIM_HYPERVISOR
   // Userspace only
   add(sequential_mode_insns,        "seq",                  "Run in sequential mode for <seq> instructions before switching to out of order");
   add(exit_after_fullsim,           "exitend",              "Kill the thread after full simulation completes rather than going native");
 #endif
+
+  add(dump_trace_sched_rip,         "dump-trace-sched",     "Enable logging when trace with <rip> is scheduled");
+  add(dump_trace_exec_rip,          "dump-trace-exec",      "Enable logging when trace with <rip> is executed");
+
 };
 
 #ifndef CONFIG_ONLY
@@ -262,6 +274,7 @@ void print_usage(int argc, char** argv) {
 
 stringbuf current_stats_filename;
 stringbuf current_log_filename;
+stringbuf current_bbcache_dump_filename;
 
 void backup_and_reopen_logfile() {
   if (config.log_filename) {
@@ -348,6 +361,12 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
   } else if (config.start_log_at_iteration != infinity) {
     config.start_log_at_rip = INVALIDRIP;
     logenable = 0;
+  }
+
+  if (config.bbcache_dump_filename.set() && (config.bbcache_dump_filename != current_bbcache_dump_filename)) {
+    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
+    bbcache_dump_file.open(config.bbcache_dump_filename);
+    current_bbcache_dump_filename = config.bbcache_dump_filename;
   }
 
   if (first_time) {
@@ -494,6 +513,7 @@ void shutdown_subsystems() {
   // they may have open:
   //
   shutdown_uops();
+  shutdown_decode();
 }
 
 #endif // CONFIG_ONLY

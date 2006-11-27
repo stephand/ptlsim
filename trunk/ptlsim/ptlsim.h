@@ -95,7 +95,7 @@ void update_progress();
 //
 // Sequential core
 //
-int execute_sequential(BasicBlock* bb);
+int execute_sequential(Context& ctx);
 
 enum {
   SEQEXEC_OK = 0,
@@ -171,6 +171,7 @@ struct PTLsimConfig {
   W64 event_log_ring_buffer_size;
   bool flush_event_log_every_cycle;
   W64 log_backwards_from_trigger_rip;
+  bool dump_state_now;
 
   // Statistics Database
   stringbuf stats_filename;
@@ -216,12 +217,17 @@ struct PTLsimConfig {
   stringbuf dumpcode_filename;
   bool dump_at_end;
   bool overshoot_and_dump;
+  stringbuf bbcache_dump_filename;
 
 #ifndef PTLSIM_HYPERVISOR
   // Simulation Mode
   W64 sequential_mode_insns;
   bool exit_after_fullsim;
 #endif
+
+  // Peptidal specific
+  W64 dump_trace_sched_rip;
+  W64 dump_trace_exec_rip;
 
   void reset();
 };

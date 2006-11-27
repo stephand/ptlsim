@@ -994,7 +994,11 @@ struct XenController {
 
     if (DEBUG) cerr << "PTLsim has connected to domain ", domain, ":", endl;
 
-    if (info.flags & DOMFLAGS_PAUSED) {
+    // Support multiple Xen hypervisor API revisions:
+#ifndef XEN_DOMINF_paused
+#define XEN_DOMINF_paused DOMFLAGS_PAUSED
+#endif
+    if (info.flags & XEN_DOMINF_paused) {
       //cerr << "  Domain was already paused", endl;
     } else if ((rc = xc_domain_pause(xc, domain))) {
       cerr << "XenController: PAUSE failed (", rc, ")", endl;

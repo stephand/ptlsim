@@ -958,7 +958,7 @@ bool TraceDecoder::decode_complex() {
     this << TransOp(OP_or, REG_temp1, REG_temp1, REG_temp0, REG_zero, 2); // merge in standard flags
 
     this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
-    this << TransOp(OP_st, REG_mem, REG_rsp, REG_zero, REG_temp1, sizeshift);
+    this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp1, sizeshift, 0);
 
     break;
   }
@@ -969,7 +969,7 @@ bool TraceDecoder::decode_complex() {
     int size = (1 << sizeshift);
     CheckInvalid();
 
-    this << TransOp(OP_ld, REG_ar1, REG_rsp, REG_zero, REG_zero, sizeshift);
+    this << TransOp(OP_ld, REG_ar1, REG_rsp, REG_imm, REG_zero, sizeshift, 0);
     this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
 
     microcode_assist(ASSIST_POPF, ripstart, rip);
@@ -1065,8 +1065,8 @@ bool TraceDecoder::decode_complex() {
         */
         if (rep) assert(rep == PFX_REPZ); // only rep is allowed for movs and rep == repz here
 
-        this << TransOp(OP_ld,     REG_temp0, REG_rsi,    REG_zero,  REG_zero,  sizeshift);
-        this << TransOp(OP_st,     REG_mem,   REG_rdi,    REG_zero,  REG_temp0, sizeshift);
+        this << TransOp(OP_ld,     REG_temp0, REG_rsi,    REG_imm,  REG_zero,  sizeshift, 0);
+        this << TransOp(OP_st,     REG_mem,   REG_rdi,    REG_imm,  REG_temp0, sizeshift, 0);
         this << TransOp(OP_add,    REG_rsi,   REG_rsi,    REG_imm,   REG_zero,  addrsizeshift, increment);
         this << TransOp(OP_add,    REG_rdi,   REG_rdi,    REG_imm,   REG_zero,  addrsizeshift, increment);
         if (rep) {
@@ -1083,8 +1083,8 @@ bool TraceDecoder::decode_complex() {
       }
       case 0xa6: case 0xa7: {
         // cmps
-        this << TransOp(OP_ld,   REG_temp0, REG_rsi,    REG_zero,  REG_zero,  sizeshift);
-        this << TransOp(OP_ld,   REG_temp1, REG_rdi,    REG_zero,  REG_zero,  sizeshift);
+        this << TransOp(OP_ld,   REG_temp0, REG_rsi,    REG_imm,  REG_zero,  sizeshift, 0);
+        this << TransOp(OP_ld,   REG_temp1, REG_rdi,    REG_imm,  REG_zero,  sizeshift, 0);
         this << TransOp(OP_add,  REG_rsi,   REG_rsi,    REG_imm,   REG_zero,  addrsizeshift, increment);
         this << TransOp(OP_add,  REG_rdi,   REG_rdi,    REG_imm,   REG_zero,  addrsizeshift, increment);
         this << TransOp(OP_sub,  REG_temp2, REG_temp0,  REG_temp1, REG_zero,  sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
@@ -1134,7 +1134,7 @@ bool TraceDecoder::decode_complex() {
       case 0xaa: case 0xab: {
         // stos
         if (rep) assert(rep == PFX_REPZ); // only rep is allowed for movs and rep == repz here
-        this << TransOp(OP_st,   REG_mem,   REG_rdi,    REG_zero,  REG_rax, sizeshift);
+        this << TransOp(OP_st,   REG_mem,   REG_rdi,    REG_imm,  REG_rax, sizeshift, 0);
         this << TransOp(OP_add,  REG_rdi,   REG_rdi,    REG_imm,   REG_zero, addrsizeshift, increment);
         if (rep) {
           TransOp sub(OP_sub,  REG_rcx,   REG_rcx,    REG_imm,   REG_zero, addrsizeshift, 1, 0, SETFLAG_ZF);     // sub     rcx = rcx,1 [zf internal]
@@ -1153,9 +1153,9 @@ bool TraceDecoder::decode_complex() {
         if (rep) assert(rep == PFX_REPZ); // only rep is allowed for movs and rep == repz here
 
         if (sizeshift >= 2) {
-          this << TransOp(OP_ld,   REG_rax,   REG_rsi,    REG_zero,  REG_zero, sizeshift);
+          this << TransOp(OP_ld,   REG_rax,   REG_rsi,    REG_imm,  REG_zero, sizeshift, 0);
         } else {
-          this << TransOp(OP_ld,   REG_temp0, REG_rsi,    REG_zero,  REG_zero, sizeshift);
+          this << TransOp(OP_ld,   REG_temp0, REG_rsi,    REG_imm,  REG_zero, sizeshift, 0);
           this << TransOp(OP_mov,  REG_rax,   REG_rax,    REG_temp0, REG_zero, sizeshift);
         }
 
@@ -1175,7 +1175,7 @@ bool TraceDecoder::decode_complex() {
       }
       case 0xae: case 0xaf: {
         // scas
-        this << TransOp(OP_ld,   REG_temp1, REG_rdi,    REG_zero,  REG_zero, sizeshift);           // ldSZ    t1 = [rdi]
+        this << TransOp(OP_ld,   REG_temp1, REG_rdi,    REG_imm,  REG_zero, sizeshift, 0);           // ldSZ    t1 = [rdi]
         this << TransOp(OP_add,  REG_rdi,   REG_rdi,    REG_imm,   REG_zero, addrsizeshift, increment);
         this << TransOp(OP_sub,  REG_temp2, REG_temp1,  REG_rax,   REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU); // sub    t2 = t1,rax (zco)
 

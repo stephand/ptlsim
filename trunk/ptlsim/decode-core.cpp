@@ -32,6 +32,8 @@ typedef SelfHashtable<W64, BasicBlockChunkList, 16384, BasicBlockChunkListHashta
 BasicBlockPageCache bbpages;
 CycleTimer translate_timer("translate");
 
+odstream bbcache_dump_file;
+
 //
 // Calling convention:
 // rip = return RIP after insn
@@ -162,7 +164,8 @@ void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
   TransOp& lo = buf.uops[idx];
   lo = transop;
   lo.ra = REG_temp9;
-  lo.rb = REG_zero;
+  lo.rb = REG_imm;
+  lo.rbimm = 0;
   lo.cond = LDST_ALIGN_LO;
   lo.unaligned = 0;
   lo.eom = 0;
@@ -172,20 +175,21 @@ void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
   TransOp& hi = buf.uops[idx];
   hi = transop;
   hi.ra = REG_temp9;
-  hi.rb = REG_zero;
+  hi.rb = REG_imm;
+  hi.rbimm = 0;
   hi.cond = LDST_ALIGN_HI;
   hi.unaligned = 0;
   hi.som = 0;
   buf.synthops[idx] = null; // loads and stores are not synthesized
 
   if (ld) {
-    // ld rd = [ra+rb]        =>   ld.lo rd = [ra+rb]           and    ld.hi rd = [ra+rb],rd
+    // ld rd = [ra+rb]        =>   ld.lo rd = [rt]           and    ld.hi rd = [rt],rd
     lo.rd = REG_temp4;
     lo.size = 3; // always load 64-bit word
     hi.rb = REG_temp4;
   } else {
     //
-    // For stores, expand     st sfrd = [ra+rb],rc    =>   st.lo sfrd1 = [ra+rb],rc    and    st.hi sfrd2 = [ra+rb],rc
+    // For stores, expand     st sfrd = [ra+rb],rc    =>   st.lo sfrd1 = [rt],rc    and    st.hi sfrd2 = [rt],rc
     //
     // Make sure high part issues first in program order, so if there is
     // a page fault on the high page it overlaps, this will be triggered
@@ -470,13 +474,25 @@ void TraceDecoder::lastop() {
 
   foreach (i, transbufcount) {
     TransOp& transop = transbuf[i];
-    if (bb.count >= MAX_BB_UOPS) {
+    if unlikely (bb.count >= MAX_BB_UOPS) {
       logfile << "ERROR: Too many transops (", bb.count, ") in basic block (max ", MAX_BB_UOPS, " allowed)", endl, flush;
       assert(bb.count < MAX_BB_UOPS);
     }
 
     bool ld = isload(transop.opcode);
     bool st = isstore(transop.opcode);
+    bool br = isbranch(transop.opcode);
+    if unlikely (br) {
+      switch (transop.opcode) {
+      case OP_br: bb.type = BB_TYPE_COND; break;
+      case OP_bru: bb.type = BB_TYPE_UNCOND; break;
+      case OP_jmp: bb.type = BB_TYPE_INDIR; break;
+      case OP_brp: bb.type = BB_TYPE_ASSIST; break;
+      default: assert(false); break;
+      }
+      bb.call = ((transop.extshift & BRANCH_HINT_PUSH_RAS) != 0);
+      bb.ret = ((transop.extshift & BRANCH_HINT_POP_RAS) != 0);
+    }
 
     transop.unaligned = 0;
     transop.bytes = bytes;
@@ -826,7 +842,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     this << TransOp(OP_add, tempreg, basereg, REG_imm, REG_zero, 3, (Waddr)rip + offset);
 
     if (memop) {
-      TransOp ldst(opcode, destreg, tempreg, REG_zero, srcreg, memref.mem.size);
+      TransOp ldst(opcode, destreg, tempreg, REG_imm, srcreg, memref.mem.size, 0);
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
@@ -862,7 +878,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
 
     if (memop) {
       // No need for this when we're only doing address generation:
-      TransOp ldst(opcode, destreg, tempreg, REG_zero, srcreg, memref.mem.size);
+      TransOp ldst(opcode, destreg, tempreg, REG_imm, srcreg, memref.mem.size, 0);
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
@@ -1154,11 +1170,11 @@ void TraceDecoder::decode_prefixes() {
 
 void print_invalid_insns(int op, const byte* ripstart, const byte* rip, int valid_byte_count, const PageFaultErrorCode& pfec, Waddr faultaddr) {
   if (pfec) {
-    if (logable(1)) logfile << "translate: page fault at iteration ", iterations, ", ", total_user_insns_committed, " commits: ",
+    if (logable(4)) logfile << "translate: page fault at iteration ", iterations, ", ", total_user_insns_committed, " commits: ",
       "ripstart ", ripstart, ", rip ", rip, ": required ", (rip - ripstart), " more bytes but only fetched ", valid_byte_count, " bytes; ",
       "page fault error code: ", pfec, endl, flush;
   } else {
-    if (logable(1)) logfile << "translate: invalid opcode at iteration ", iterations, ": ", (void*)(Waddr)op, " commits ", total_user_insns_committed, " (at ripstart ", ripstart, ", rip ", rip, "); may be speculative", endl, flush;
+    if (logable(4)) logfile << "translate: invalid opcode at iteration ", iterations, ": ", (void*)(Waddr)op, " commits ", total_user_insns_committed, " (at ripstart ", ripstart, ", rip ", rip, "); may be speculative", endl, flush;
     if (!config.dumpcode_filename.empty()) {
       byte insnbuf[256];
       PageFaultErrorCode copypfec;
@@ -1182,6 +1198,11 @@ bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
   if unlikely (bb->refcount) {
     logfile << "Warning: basic block ", bb, " ", *bb, " is still in use somewhere (refcount ", bb->refcount, ")", endl;
     return false;
+  }
+
+  if unlikely (bbcache_dump_file) {
+    bbcache_dump_file.write((BasicBlockBase*)bb, sizeof(BasicBlockBase));
+    bbcache_dump_file.write(bb->transops, bb->count * sizeof(TransOp));
   }
 
   pagelist = bbpages.get(bb->rip.mfnlo);
@@ -1662,7 +1683,7 @@ ostream& printflags(ostream& os, W64 flags) {
 // a BasicBlock, except in the very rare case where one or
 // both covered mfns are dirty and must be invalidated, and
 // the invalidation fails because some other object has
-// references to some of the basic blocks..
+// references to some of the basic blocks.
 //
 BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   if unlikely ((rvp.rip == config.start_log_at_rip) && (rvp.rip != 0xffffffffffffffffULL)) {
@@ -1703,6 +1724,8 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
     if (!trans.translate()) break;
   }
 
+  trans.bb.hitcount = 0;
+  trans.bb.predcount = 0;
   bb = trans.bb.clone();
   //
   // Acquire a reference to the new basic block right away,
@@ -1759,6 +1782,72 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   return bb;
 }
 
+//
+// Translate one basic block, just to get the uops: do not
+// allocate an entry in the BB cache and do not add the BB
+// to any lists. Instead, just copy the raw translated
+// uops to targetbb and return.
+//
+// This function does not allocate any memory.
+//
+void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Waddr rip) {
+  if unlikely ((rip == config.start_log_at_rip) && (rip != 0xffffffffffffffffULL)) {
+    config.start_log_at_iteration = 0;
+    logenable = 1;
+  }
+
+  RIPVirtPhys rvp = rip;
+  rvp.update(ctx);
+
+  TraceDecoder trans(rvp);
+  trans.fillbuf(ctx);
+
+  if (logable(5) | log_code_page_ops) {
+    logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+  }
+
+  for (;;) {
+    if (!trans.translate()) break;
+  }
+
+  trans.bb.hitcount = 0;
+  trans.bb.predcount = 0;
+
+  memcpy(&targetbb, &trans.bb, sizeof(BasicBlockBase));
+  memcpy(&targetbb.transops, &trans.bb.transops, trans.bb.count * sizeof(TransOp));
+
+  if (logable(5)) {
+    logfile << "=====================================================================", endl;
+    logfile << targetbb, endl;
+    logfile << "End of basic block: rip ", trans.bb.rip, " -> taken rip 0x", (void*)(Waddr)trans.bb.rip_taken, ", not taken rip 0x", (void*)(Waddr)trans.bb.rip_not_taken, endl;
+  }
+}
+
+BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
+  if unlikely ((rip == config.start_log_at_rip) && (rip != 0xffffffffffffffffULL)) {
+    config.start_log_at_iteration = 0;
+    logenable = 1;
+  }
+
+  RIPVirtPhys rvp = rip;
+  rvp.update(ctx);
+
+  TraceDecoder trans(rvp);
+  trans.fillbuf(ctx);
+
+  if (logable(5) | log_code_page_ops) {
+    logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+  }
+
+  for (;;) {
+    if (!trans.translate()) break;
+  }
+
+  BasicBlock* bb = trans.bb.clone();
+
+  return bb;
+}
+
 ostream& BasicBlockCache::print(ostream& os) {
   dynarray<BasicBlock*> bblist;
   getentries(bblist);
@@ -1791,4 +1880,9 @@ void bbcache_reclaim(size_t bytes, int urgency) {
 
 void init_decode() {
   ptl_mm_register_reclaim_handler(bbcache_reclaim);
+}
+
+void shutdown_decode() {
+  bbcache.flush();
+  if (bbcache_dump_file) bbcache_dump_file.close();
 }

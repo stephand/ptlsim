@@ -65,7 +65,7 @@ bool TraceDecoder::decode_fast() {
       this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (use64 ? 3 : 2), size);
     } else {
       // pop
-      this << TransOp(OP_ld, r, REG_rsp, REG_zero, REG_zero, sizeshift);
+      this << TransOp(OP_ld, r, REG_rsp, REG_imm, REG_zero, sizeshift, 0);
       if (r != REG_rsp) {
         // Only update %rsp if the target register is not itself %rsp
         this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, (use64 ? 3 : 2), size);
@@ -234,7 +234,7 @@ bool TraceDecoder::decode_fast() {
     if (sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
     int rdreg = (rd.type == OPTYPE_REG) ? arch_pseudo_reg_to_arch_reg[rd.reg.reg] : REG_temp7;
 
-    this << TransOp(OP_ld, rdreg, REG_rsp, REG_zero, REG_zero, sizeshift);
+    this << TransOp(OP_ld, rdreg, REG_rsp, REG_imm, REG_zero, sizeshift, 0);
 
     //
     // Special ordering semantics: if the destination is memory
@@ -486,7 +486,7 @@ bool TraceDecoder::decode_fast() {
 
     CheckInvalid();
 
-    this << TransOp(OP_ld, REG_temp7, REG_rsp, REG_zero, REG_zero, sizeshift);
+    this << TransOp(OP_ld, REG_temp7, REG_rsp, REG_imm, REG_zero, sizeshift, 0);
     this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, addend);
     if (!last_flags_update_was_atomic)
       this << TransOp(OP_collcc, REG_temp5, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
@@ -545,10 +545,10 @@ bool TraceDecoder::decode_fast() {
     CheckInvalid();
 
     // Make idempotent by checking new rsp (aka rbp) alignment first:
-    this << TransOp(OP_ld, REG_temp0, REG_rbp, REG_zero, REG_zero, sizeshift);
+    this << TransOp(OP_ld, REG_temp0, REG_rbp, REG_imm, REG_zero, sizeshift, 0);
 
     this << TransOp(OP_mov, REG_rsp, REG_zero, REG_rbp, REG_zero, sizeshift);
-    this << TransOp(OP_ld, REG_rbp, REG_rsp, REG_zero, REG_zero, sizeshift);
+    this << TransOp(OP_ld, REG_rbp, REG_rsp, REG_imm, REG_zero, sizeshift, 0);
     this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
 
     break;

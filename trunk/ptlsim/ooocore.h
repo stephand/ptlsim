@@ -24,13 +24,13 @@
 #define stop_timer(ct) (0)
 #endif
 
-#define MAX_OPERANDS 4
-#define RA 0
-#define RB 1
-#define RC 2
-#define RS 3
-
 namespace OutOfOrderModel {
+  static const int MAX_OPERANDS = 4;
+  static const int RA = 0;
+  static const int RB = 1;
+  static const int RC = 2;
+  static const int RS = 3;
+  
   //
   // NOTE: This file only specifies the configuration for the out of order core;
   // the uops and functional units are declared in ptlhwdef.h and ptlhwdef.cpp
@@ -393,7 +393,7 @@ namespace OutOfOrderModel {
     byte consumer_count;
     PTEUpdate pteupdate;
     Waddr origvirt;
-    byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1, lock_acquired:1;
+    byte entry_valid:1, issued:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1, lock_acquired:1;
 
     int index() const { return idx; }
     void validate() { entry_valid = true; }
@@ -1132,6 +1132,7 @@ namespace OutOfOrderModel {
     Queue<FetchBufferEntry, FETCH_QUEUE_SIZE> fetchq;
     RIPVirtPhys fetchrip;
     BasicBlock* current_basic_block;
+    TransOpBuffer unaligned_ldst_buf;
     int current_basic_block_transop_index;
     bool stall_frontend;
     bool waiting_for_icache_fill;

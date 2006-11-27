@@ -141,6 +141,7 @@ void OutOfOrderCore::reset_fetch_unit(W64 realrip) {
   waiting_for_icache_fill = 0;
   fetchq.reset();
   current_basic_block_transop_index = 0;
+  unaligned_ldst_buf.reset();
 }
 
 //
@@ -320,8 +321,6 @@ bool OutOfOrderCore::fetch() {
     stats.ooocore.fetch.stop.icache_miss++;
     return true;
   }
-
-  TransOpBuffer unaligned_ldst_buf;
 
   while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
     if unlikely (!fetchq.remaining()) {

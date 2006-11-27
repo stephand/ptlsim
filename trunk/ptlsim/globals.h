@@ -293,6 +293,21 @@ static inline T xadd(T& v, T incr) {
   return incr;
 }
 
+template <typename T>
+static inline T cmpxchg(T& mem, T newv, T cmpv) {
+	switch (sizeof(T)) {
+  case 1: asm volatile("lock cmpxchgb %[newv],%[mem]" : [mem] "+m" (mem), [cmpv] "+a" (cmpv), [newv] "+r" (newv) : : "memory"); break;
+  case 2: asm volatile("lock cmpxchgw %[newv],%[mem]" : [mem] "+m" (mem), [cmpv] "+a" (cmpv), [newv] "+r" (newv) : : "memory"); break;
+  case 4: asm volatile("lock cmpxchgl %[newv],%[mem]" : [mem] "+m" (mem), [cmpv] "+a" (cmpv), [newv] "+r" (newv) : : "memory"); break;
+  case 8: asm volatile("lock cmpxchgq %[newv],%[mem]" : [mem] "+m" (mem), [cmpv] "+a" (cmpv), [newv] "+r" (newv) : : "memory"); break;
+	}
+
+  // Return the old value in the slot (so we can check if it matches newv)
+  return cmpv;
+}
+
+static inline void cpu_pause() { asm volatile("pause" : : : "memory"); }
+
 static inline void prefetch(const void* x) { asm volatile("prefetcht0 (%0)" : : "r" (x)); }
 
 static inline void cpuid(int op, W32& eax, W32& ebx, W32& ecx, W32& edx) {

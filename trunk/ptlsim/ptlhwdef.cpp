@@ -389,18 +389,18 @@ extern const char* datatype_names[DATATYPE_COUNT];
  * flags that uop will test.
  */
 const CondCodeToFlagRegs cond_code_to_flag_regs[16] = {
-  {0, REG_zero, REG_of},   // of:               jo
-  {0, REG_zero, REG_of},   // !of:              jno
-  {0, REG_zero, REG_cf},   // cf:               jb jc jnae
-  {0, REG_zero, REG_cf},   // !cf:              jnb jnc jae
-  {0, REG_zf,   REG_zero}, // zf:               jz je
-  {0, REG_zf,   REG_zero}, // !zf:              jnz jne
+  {0, REG_of,   REG_of},   // of:               jo          (rb only)
+  {0, REG_of,   REG_of},   // !of:              jno         (rb only)
+  {0, REG_cf,   REG_cf},   // cf:               jb jc jnae  (rb only)
+  {0, REG_cf,   REG_cf},   // !cf:              jnb jnc jae (rb only)
+  {0, REG_zf,   REG_zf},   // zf:               jz je       (ra only)
+  {0, REG_zf,   REG_zf},   // !zf:              jnz jne     (ra only)
   {1, REG_zf,   REG_cf},   // cf|zf:            jbe jna
   {1, REG_zf,   REG_cf},   // !cf & !zf:        jnbe ja
-  {0, REG_zf,   REG_zero}, // sf:               js 
-  {0, REG_zf,   REG_zero}, // !sf:              jns
-  {0, REG_zf,   REG_zero}, // pf:               jp jpe
-  {0, REG_zf,   REG_zero}, // !pf:              jnp jpo
+  {0, REG_zf,   REG_zf},   // sf:               js          (ra only)
+  {0, REG_zf,   REG_zf},   // !sf:              jns         (ra only)
+  {0, REG_zf,   REG_zf},   // pf:               jp jpe      (ra only)
+  {0, REG_zf,   REG_zf},   // !pf:              jnp jpo     (ra only)
   {1, REG_zf,   REG_of},   // sf != of:         jl jnge (*)
   {1, REG_zf,   REG_of},   // sf == of:         jnl jge (*)
   {1, REG_zf,   REG_of},   // zf | (sf != of):  jle jng (*)
@@ -415,7 +415,7 @@ const CondCodeToFlagRegs cond_code_to_flag_regs[16] = {
 
 const char* cond_code_names[16] = { "o", "no", "c", "nc", "e", "ne", "be", "nbe", "s", "ns", "p", "np", "l", "nl", "le", "nle" };
 const char* x86_flag_names[32] = {
-  "c", "X", "p", "W", "a", "?", "z", "s", "t", "i", "d", "o", "iopl0", "iopl1", "nt", "0",
+  "c", "X", "p", "W", "a", "B", "z", "s", "t", "i", "d", "o", "iopl0", "iopl1", "nt", "0",
   "rf", "vm", "ac", "vif", "vip", "id", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31"
 };
 
@@ -461,7 +461,11 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   sb << " = ";
   if (ld|st) sb << "[";
   sb << arch_reg_names[op.ra];
-  if (op.rb == REG_imm) { sb << ",", op.rbimm; } else  { sb << ",", arch_reg_names[op.rb]; }
+  if (op.rb == REG_imm) {
+    if (abs(op.rbimm) <= 32768) sb << ",", op.rbimm; else sb << ",", (void*)op.rbimm;
+  } else {
+    sb << ",", arch_reg_names[op.rb];
+  }
   if (ld|st) sb << "]";
   if ((op.opcode == OP_mask) | (op.opcode == OP_maskb)) {
     MaskControlInfo mci(op.rcimm);
@@ -473,7 +477,9 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   if ((op.opcode == OP_adda || op.opcode == OP_suba) && (op.extshift != 0)) sb << "*", (1 << op.extshift);
 
   if (op.setflags) {
-    sb << " [";
+    sb << " ";
+    if (op.nouserflags) sb << "int:";
+    sb << "[";
     for (int i = 0; i < SETFLAG_COUNT; i++) {
       if (bit(op.setflags, i)) sb << setflag_names[i];
     }
@@ -517,6 +523,9 @@ void BasicBlock::reset(const RIPVirtPhys& rip) {
   refcount = 0;
   repblock = 0;
   invalidblock = 0;
+  call = 0;
+  ret = 0;
+  type = BB_TYPE_COND;
   usedregs = 0;
   count = 0;
   tagcount = 0;
@@ -529,6 +538,7 @@ void BasicBlock::reset(const RIPVirtPhys& rip) {
   predcount = 0;
   confidence = 0;
   lastused = 0;
+  marked = 0;
 }
 
 //
@@ -549,18 +559,8 @@ void BasicBlock::free() {
 BasicBlock* BasicBlock::clone() {
   BasicBlock* bb = (BasicBlock*)malloc(sizeof(BasicBlockBase) + (count * sizeof(TransOp)));
 
-  bb->rip = rip;
-  bb->rip_taken = rip_taken;
-  bb->rip_not_taken = rip_not_taken;
-  bb->count = count;
-  bb->refcount = refcount;
-  bb->repblock = repblock;
-  bb->tagcount = tagcount;
-  bb->memcount = memcount;
-  bb->storecount = storecount;
-  bb->user_insn_count = user_insn_count;
-  bb->bytes = bytes;
-  bb->usedregs = usedregs;
+  memcpy(bb, this, sizeof(BasicBlockBase));
+
   bb->synthops = null;
   // hashlink, mfnlo_loc, mfnhi_loc are always updated after cloning
   bb->hashlink.reset();
@@ -582,8 +582,8 @@ ostream& operator <<(ostream& os, const BasicBlock& bb) {
     const TransOp& transop = bb.transops[i];
     os << "  ", (void*)rip, ": ", transop;
 
-    if (transop.som) os << " [som bytes ", transop.bytes, "]";
-    if (transop.eom) os << " [eom]";
+    // if (transop.som) os << " [som bytes ", transop.bytes, "]";
+    // if (transop.eom) os << " [eom]";
     os << endl;
 
     if (transop.som) bytes_in_insn = transop.bytes;

@@ -712,10 +712,11 @@ inline void uop_impl_condbranch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 r
   W64 ripseq = state.brreg.ripseq;
   bool taken = evaluate_cond<evaltype>(raflags, rbflags);
   state.reg.rddata = (taken) ? riptaken : ripseq;
-  state.reg.rdflags = 0;
+  state.reg.rdflags = (taken) ? 0 : FLAG_BRMIS;
+
   if (excepting & (!taken)) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
-    state.reg.rdflags = FLAG_INV;
+    state.reg.rdflags = (FLAG_INV | FLAG_BRMIS);
   }
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype, excepting, riptaken, ripseq);
 }
@@ -742,10 +743,11 @@ inline void uop_impl_alu_and_condbranch(IssueState& state, W64 ra, W64 rb, W64 r
   int flags = func(ra, rb);
   bool taken = evaluate_cond<evaltype>(flags, flags);
   state.reg.rddata = (taken) ? riptaken : ripseq;
-  state.reg.rdflags = flags;
+  state.reg.rdflags = flags | (taken ? 0 : FLAG_BRMIS);
+
   if (excepting & (!taken)) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
-    state.reg.rdflags = FLAG_INV;
+    state.reg.rdflags = (FLAG_INV | FLAG_BRMIS);
   }
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype, excepting, riptaken, ripseq);
 }
@@ -765,7 +767,7 @@ void uop_impl_jmp(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rb
   W64 riptaken = state.brreg.riptaken;
   bool taken = (riptaken == ra);
   state.reg.rddata = ra;
-  state.reg.rdflags = 0;
+  state.reg.rdflags = (taken) ? 0 : FLAG_BRMIS;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_jmp, 0, 0, 0, riptaken, riptaken);
 }
 
@@ -777,7 +779,7 @@ void uop_impl_jmp_ex(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
 
   if (!taken) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
-    state.reg.rdflags = FLAG_INV;
+    state.reg.rdflags = (FLAG_INV | FLAG_BRMIS);
   }
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_jmp, 0, 0, 1, riptaken, riptaken);
 }

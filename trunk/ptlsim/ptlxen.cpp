@@ -373,6 +373,7 @@ int switch_to_native(bool pause = false) {
 // Shutdown PTLsim and the domain
 //
 int shutdown(int reason) {
+  shutdown_subsystems();
   flush_stats();
   logfile.close();
   cerr.close();
@@ -663,7 +664,14 @@ asmlinkage void ptl_internal_trap(int trapid, const char* name, W64* regs) {
   print_regs(cerr, regs);
   cerr << flush;
   print_stack(cerr, regs[REG_rsp]);
-  if (logfile) logfile.close();
+  if (logfile) {
+    logfile << "PTLsim Internal Error: unhandled trap ", trapid, " (", name, "): error code ", hexstring(regs[REG_ar1], 32), endl;
+    logfile << "Registers:", endl;
+    print_regs(logfile, regs);
+    print_stack(logfile, regs[REG_rsp]);
+    logfile << flush;
+  }
+  logfile.close();
   cerr.flush();
   cout.flush();
 
@@ -721,10 +729,16 @@ static trap_info_t trap_table[] = {
 
 asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
-  sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ")", endl;
+  sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
 
   logfile << sb, flush;
   cerr << sb, flush;
+
+  if (logfile) {
+    PTLsimMachine* machine = PTLsimMachine::getcurrent();
+    if (machine) machine->dump_state(logfile);
+  }
+
   // Make sure the ring buffer is flushed too:
   logfile.close();
   asm("ud2a");
@@ -2309,7 +2323,7 @@ int main(int argc, char** argv) {
       cerr << "Returned from switch to native: now back in sim", endl, flush;
       foreach (i, contextcount) {
         logfile << "VCPU ", i, ":", endl;
-        logfile << contextof(0), endl;
+        logfile << contextof(i), endl;
       }
       logfile << sshinfo, endl, flush;
 

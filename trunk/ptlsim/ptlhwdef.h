@@ -25,12 +25,13 @@
 #define FLAG_PF    0x004     // (1 << 2)
 #define FLAG_WAIT  0x008     // (1 << 3)
 #define FLAG_AF    0x010     // (1 << 4)
+#define FLAG_BRMIS 0x020     // (1 << 5)
 #define FLAG_ZF    0x040     // (1 << 6)
 #define FLAG_SF    0x080     // (1 << 7)
 #define FLAG_OF    0x800     // (1 << 11)
 #define FLAG_SF_ZF 0x0c0     // (1 << 7) | (1 << 6)
 #define FLAG_ZAPS  0x0d4     // 000011010100
-#define FLAG_NOT_WAIT_INV 0x08f5 // 00000100011110101: exclude others not in ZAPS/CF/OF
+#define FLAG_NOT_WAIT_INV 0x08d5 // 00000100011010101: exclude others not in ZAPS/CF/OF
 
 #define COND_o   0
 #define COND_no  1
@@ -173,6 +174,12 @@ enum {
   EXCEPTION_PageFaultOnRead,
   EXCEPTION_PageFaultOnWrite,
   EXCEPTION_PageFaultOnExec,
+
+  EXCEPTION_LSATFull,
+  EXCEPTION_SFRMismatch,
+  EXCEPTION_StoreLoadForwarding,
+  EXCEPTION_StoreStoreAliasing,
+
   EXCEPTION_LoadStoreAliasing,
   EXCEPTION_CheckFailed,
   EXCEPTION_SkipBlock,
@@ -204,7 +211,7 @@ static inline const char* exception_name(W64 exception) {
 // kernel vs user mode, flag values, segmentation assumptions, etc.
 //
 // Most of this information is only relevant for full system PTLsim/X.
-// The userspace PTLsin only needs the RIP, use64, df, etc.
+// The userspace PTLsim only needs the RIP, use64, df, etc.
 //
 struct Context;
 
@@ -1289,6 +1296,8 @@ struct TransOp: public TransOpBase {
   }
 };
 
+enum { LDST_ALIGN_NORMAL, LDST_ALIGN_LO, LDST_ALIGN_HI };
+
 ostream& operator <<(ostream& os, const TransOpBase& op);
 stringbuf& operator <<(stringbuf& os, const TransOpBase& op);
 
@@ -1327,6 +1336,8 @@ struct BasicBlockChunkList: public ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK> {
   BasicBlockChunkList(W64 mfn): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { this->mfn = mfn; }
 };
 
+enum { BB_TYPE_COND, BB_TYPE_UNCOND, BB_TYPE_INDIR, BB_TYPE_ASSIST };
+
 struct BasicBlockBase {
   RIPVirtPhys rip;
   selflistlink hashlink;
@@ -1340,7 +1351,8 @@ struct BasicBlockBase {
   byte tagcount;
   byte memcount;
   byte storecount;
-  byte repblock:1, invalidblock:1;
+  byte type:4, repblock:1, invalidblock:1, call:1, ret:1;
+  byte marked:1;
   W64 usedregs;
   uopimpl_func_t* synthops;
   int refcount;
@@ -1348,6 +1360,7 @@ struct BasicBlockBase {
   W32 predcount;
   W32 confidence;
   W64 lastused;
+  W64 lasttarget;
 
   void acquire() {
     refcount++;
