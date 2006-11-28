@@ -174,12 +174,10 @@ enum {
   EXCEPTION_PageFaultOnRead,
   EXCEPTION_PageFaultOnWrite,
   EXCEPTION_PageFaultOnExec,
-
   EXCEPTION_LSATFull,
   EXCEPTION_SFRMismatch,
   EXCEPTION_StoreLoadForwarding,
   EXCEPTION_StoreStoreAliasing,
-
   EXCEPTION_LoadStoreAliasing,
   EXCEPTION_CheckFailed,
   EXCEPTION_SkipBlock,

@@ -742,7 +742,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
     // (see notes on Load Replay Conditions below)
     //
 
-    if unlikely ((!ldbuf.store) & ldbuf.addrvalid & (ldbuf.physaddr == state.physaddr)) {
+    if unlikely ((!ldbuf.store) & ldbuf.addrvalid & ldbuf.rob->issued & (ldbuf.physaddr == state.physaddr)) {
       //
       // Check for the extremely rare case where:
       // - load is in the ready_to_load state at the start of the simulated 
@@ -764,17 +764,6 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
       if unlikely (parallel_forwarding_match) {
         if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_STORE_PARALLEL_FORWARDING_MATCH, this, &ldbuf, addr);
         stats.ooocore.dcache.store.parallel_aliasing++;
-        continue;
-      }
-
-      //
-      // If the load already issued, and it detected a dependency on
-      // this store, it will still be waiting for this store to complete.
-      // This is a perfectly valid situation and not true aliasing.
-      //
-      if unlikely (ldbuf.rob->operands[RS] == this->physreg) {
-        assert(ldbuf.rob->issued);
-        assert(ldbuf.rob->load_store_second_phase);
         continue;
       }
 

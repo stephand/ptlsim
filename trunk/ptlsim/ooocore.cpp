@@ -299,6 +299,7 @@ void ReorderBufferEntry::reset() {
   physreg = (PhysicalRegister*)null;
   lfrqslot = -1;
   lsq = 0;
+  issued = 0;
   load_store_second_phase = 0;
   lock_acquired = 0;
   consumer_count = 0;
