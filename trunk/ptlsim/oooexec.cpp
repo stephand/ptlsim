@@ -265,16 +265,19 @@ int ReorderBufferEntry::issue() {
   if likely (ra.nonnull()) {
     ra.get_state_list().issue_source_counter++;
     ra.all_consumers_sourced_from_bypass &= (ra.state == PHYSREG_BYPASS);
+    per_physregfile_stats_update(stats.ooocore.issue.source, ra.rfid, [ra.state]++);
   }
 
   if likely ((!uop.rbimm) & (rb.nonnull())) { 
     rb.get_state_list().issue_source_counter++;
     rb.all_consumers_sourced_from_bypass &= (rb.state == PHYSREG_BYPASS);
+    per_physregfile_stats_update(stats.ooocore.issue.source, rb.rfid, [rb.state]++);
   }
 
   if unlikely ((!uop.rcimm) & (rc.nonnull())) {
     rc.get_state_list().issue_source_counter++;
     rc.all_consumers_sourced_from_bypass &= (rc.state == PHYSREG_BYPASS);
+    per_physregfile_stats_update(stats.ooocore.issue.source, rc.rfid, [rc.state]++);
   }
 
   bool propagated_exception = 0;

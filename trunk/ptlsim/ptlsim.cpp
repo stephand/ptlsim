@@ -431,6 +431,8 @@ W64 last_printed_status_at_user_insn;
 W64 last_printed_status_at_cycle;
 W64 ticks_per_update;
 
+W64 last_stats_captured_at_cycle = 0;
+
 void update_progress() {
   W64 ticks = rdtsc();
   W64s delta = (ticks - last_printed_status_at_ticks);
@@ -451,6 +453,16 @@ void update_progress() {
     last_printed_status_at_ticks = ticks;
     last_printed_status_at_cycle = sim_cycle;
     last_printed_status_at_user_insn = total_user_insns_committed;
+  }
+
+  if unlikely ((sim_cycle - last_stats_captured_at_cycle) >= config.snapshot_cycles) {
+    last_stats_captured_at_cycle = sim_cycle;
+    capture_stats_snapshot();
+  }
+
+  if unlikely (config.snapshot_now.set()) {
+    capture_stats_snapshot(config.snapshot_now);
+    config.snapshot_now.reset();
   }
 }
 

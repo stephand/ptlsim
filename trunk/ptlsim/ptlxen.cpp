@@ -2125,8 +2125,6 @@ W64 handle_forced_upcall(PTLsimConfig& config, char* reqstr) {
 int assist_requested_break = 0;
 stringbuf assist_requested_break_command;
 
-W64 last_stats_captured_at_cycle = 0;
-
 //
 // Check if an async user-supplied event should stop the
 // current simulation run.
@@ -2144,16 +2142,6 @@ bool check_for_async_sim_break() {
       logfile << "Requested exit from simulation loop", endl, flush;
     }
     return true;
-  }
-
-  if unlikely ((sim_cycle - last_stats_captured_at_cycle) >= config.snapshot_cycles) {
-    last_stats_captured_at_cycle = sim_cycle;
-    capture_stats_snapshot();
-  }
-
-  if unlikely (config.snapshot_now.set()) {
-    capture_stats_snapshot(config.snapshot_now);
-    config.snapshot_now.reset();
   }
 
   return false;

@@ -18,6 +18,7 @@ struct PTLstatsConfig {
   stringbuf mode_collect_sum;
   stringbuf mode_collect_average;
   stringbuf mode_table;
+  stringbuf mode_slice;
 
   stringbuf table_row_names;
   stringbuf table_col_names;
@@ -34,7 +35,7 @@ struct PTLstatsConfig {
 
   stringbuf snapshot;
   stringbuf subtract_branch;
-  
+
   W64 show_sum_of_subtrees_only;
   
   W64 maxdepth;
@@ -49,6 +50,7 @@ struct PTLstatsConfig {
   bool show_stars_in_histogram;
   
   bool percent_of_toplevel;
+  bool slice_cumulative;
   
   W64 invert_gains;
 
@@ -66,6 +68,7 @@ void PTLstatsConfig::reset() {
   mode_collect_sum.reset();
   mode_collect_average.reset();
   mode_table.reset();
+  mode_slice.reset();
 
   table_row_names.reset();
   table_col_names.reset();
@@ -97,7 +100,8 @@ void PTLstatsConfig::reset() {
   show_stars_in_histogram = 1;
   
   percent_of_toplevel = 0;
-  
+  slice_cumulative = 0;
+
   invert_gains = 0;
 
   print_datastore_info = 0;
@@ -117,6 +121,7 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(mode_histogram,                   "histogram",                 "Histogram of specific node (specify path to node)");
   add(mode_bargraph,                    "bargraph",                  "Bargraph of one node across multiple data stores");
   add(mode_table,                       "table",                     "Table of one node across multiple data stores");
+  add(mode_slice,                       "slice",                     "Slice of every snapshot, in list format");
 
   section("Table or Bar Graph");
   add(table_row_names,                  "rows",                      "Row names (comma separated)");
@@ -137,6 +142,7 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(maxdepth,                         "maxdepth",                  "Maximum tree depth");
   add(percent_digits,                   "percent-digits",            "Precision of percentage listings in digits");
   add(percent_of_toplevel,              "percent-of-toplevel",       "Show percent relative to toplevel node, not parent node");
+  add(slice_cumulative,                 "slice-cumulative",          "Show slice through each snapshot without subtracting from previous");
 
   section("Graph and Histogram Options");
   add(graph_title,                      "title",                     "Graph Title");
@@ -1256,6 +1262,54 @@ int main(int argc, char* argv[]) {
     create_grouped_bargraph(cout, config.mode_bargraph, config.table_row_names, config.table_col_names,
                             config.table_row_col_pattern, config.table_scale_rel_to_col, config.graph_title,
                             config.graph_width, config.graph_height);
+  } else if (config.mode_slice.set()) {
+    if (!reader.open(filename)) {
+      cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
+      return 2;
+    }
+
+    dynarray<char*> colnames;
+    colnames.tokenize(config.mode_slice, ",");
+
+    cout << padstring("Snapshot", 16);
+    foreach (i, colnames.length) {
+      cout << ' ', padstring(colnames[i], 16);
+    }
+    cout << endl;
+
+    W64* previous = new W64[colnames.length];
+    foreach (i, colnames.length) previous[i] = 0;
+
+    foreach (i, reader.header.record_count) {
+      DataStoreNode* dsroot = reader.get(i);
+
+      cout << intstring(i, 16);
+
+      foreach (col, colnames.length) {
+        DataStoreNode* ds = dsroot->searchpath(colnames[col]);
+
+        if (!ds) {
+          cerr << "ptlstats: Error: cannot find subtree '", colnames[col], "' in column ", col, endl;
+          break;
+        }
+        
+        if (ds->type != DataStoreNode::DS_NODE_TYPE_INT) {
+          cerr << "ptlstats: Error: slice '", colnames[col], "' cannot be taken for this node time", endl;
+          break;
+        }
+        
+        W64 rawvalue = W64(*ds);
+        W64 value = (config.slice_cumulative) ? rawvalue : (rawvalue - previous[col]);
+        cout << ' ', intstring(value, 16);
+        previous[col] = rawvalue;
+      }
+
+      cout << endl;
+      delete dsroot;  
+    }
+
+    delete[] previous;
+
   } else {
     if (!reader.open(filename)) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;

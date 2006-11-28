@@ -177,7 +177,7 @@ DataStoreNode* DataStoreNode::searchpath(const char* path) const {
   if (path[0] == '/') path++;
 
   char* pbase = strdup(path);
-  tokens.tokenize(pbase, "/");
+  tokens.tokenize(pbase, "/.");
 
   const DataStoreNode* ds = this;
 
@@ -468,6 +468,8 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
     else os << "[ ", floatstring(p, 3 + printinfo.percent_digits, printinfo.percent_digits), "% ] ";
   }
 
+  bool hide_subnodes = 0;
+
   switch (type) {
   case DS_NODE_TYPE_NULL: {
     os << name;
@@ -481,6 +483,7 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
       os << "[", count, "] = {";
 
       if (histogramarray) {
+        hide_subnodes = 1;
         os << endl;
 
         W64 total = 0;
@@ -590,7 +593,7 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
     return os;
   }
 
-  if (subnodes) {
+  if (subnodes && (!hide_subnodes)) {
     bool isint = ((selfsum - math::floor(selfsum)) < 0.0001);
     if (summable) {
       os << " (total ";
@@ -1026,6 +1029,8 @@ DataStoreNode* DataStoreNodeTemplate::reconstruct(const W64*& p) {
         ds->labels = new char* [count];
         foreach (i, count) {
           ds->labels[i] = strdup(labels[i]);
+          DataStoreNode* subds = new DataStoreNode(labels[i], W64s(p[i]));
+          ds->add(subds);
         }
       }
         

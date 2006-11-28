@@ -1232,13 +1232,11 @@ int OutOfOrderCore::writeback(int cluster) {
     // For simulation purposes, final value is already in rob->physreg,
     // so we don't need to actually write anything back here.
     //
-
+    stats.ooocore.writeback.writebacks[rob->physreg->rfid]++;
     rob->physreg->writeback();
     rob->cycles_left = -1;
 
     rob->changestate(rob_ready_to_commit_queue);
-
-    stats.ooocore.writeback.total_writebacks++;
   }
 
   per_cluster_stats_update(stats.ooocore.writeback.width, cluster, [writecount]++);
