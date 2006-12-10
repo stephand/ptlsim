@@ -225,10 +225,6 @@ struct PTLsimConfig {
   bool exit_after_fullsim;
 #endif
 
-  // Peptidal specific
-  W64 dump_trace_sched_rip;
-  W64 dump_trace_exec_rip;
-
   void reset();
 };
 
