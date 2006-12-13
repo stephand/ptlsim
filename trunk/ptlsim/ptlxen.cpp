@@ -260,6 +260,15 @@ int xen_shutdown_domain(int reason) {
 	return HYPERVISOR_sched_op(SCHEDOP_shutdown, &reason);
 }
 
+int current_vcpuid() {
+  W64 rsp = (W64)get_rsp();
+  W64 pervcpu = (W64)bootinfo.per_vcpu_stack_base;
+  int vcpuid = 0;
+  bool is_secondary_stack = inrange(rsp, pervcpu, (pervcpu + (PAGE_SIZE * MAX_CONTEXTS) - 1));
+  if (is_secondary_stack) vcpuid = ((rsp - pervcpu) >> 12);
+  return vcpuid;
+}
+
 //
 // Host calls to PTLmon
 //
@@ -373,7 +382,7 @@ int switch_to_native(bool pause = false) {
 // Shutdown PTLsim and the domain
 //
 int shutdown(int reason) {
-  shutdown_subsystems();
+  if (reason != SHUTDOWN_crash) shutdown_subsystems();
   flush_stats();
   logfile.close();
   cerr.close();
@@ -731,6 +740,13 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
   stringbuf sb;
   sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
 
+  if (logfile) {
+    logfile << sb, flush;
+    PTLsimMachine* machine = PTLsimMachine::getcurrent();
+    if (machine) machine->dump_state(logfile);
+    logfile.close();
+  }
+
   logfile << sb, flush;
   cerr << sb, flush;
 
@@ -741,7 +757,12 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
 
   // Make sure the ring buffer is flushed too:
   logfile.close();
+  cerr.flush();
+  cout.flush();
+
+  // Force crash here:
   asm("ud2a");
+
   abort();
 }
 
@@ -1051,7 +1072,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     arg1 = fixup_guest_stack_selector(arg1);
     ctx.kernel_ss = arg1;
     ctx.kernel_sp = arg2;
-    logfile << "stack_switch: ", (void*)ctx.kernel_ss, ":", (void*)ctx.kernel_sp, endl;
+    if (debug) logfile << "stack_switch: ", (void*)ctx.kernel_ss, ":", (void*)ctx.kernel_sp, endl;
     rc = 0;
     break;
   }
@@ -1070,7 +1091,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
   case __HYPERVISOR_fpu_taskswitch: {
     ctx.cr0.ts = arg1;
-    logfile << "fpu_taskswitch: TS = ", ctx.cr0.ts, endl;
+    if (debug) logfile << "fpu_taskswitch: TS = ", ctx.cr0.ts, endl;
     rc = 0;
     break;
   };
@@ -1127,7 +1148,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     Waddr physaddr = arg1;
     W64 desc = arg2;
 
-    logfile << "update_descriptor: physaddr ", (void*)arg1, " (mfn ", (arg1 >> 12), ", entry ", (lowbits(arg1, 12) / 8), ") = 0x", hexstring(desc, 64), endl;
+    if (debug) logfile << "update_descriptor: physaddr ", (void*)arg1, " (mfn ", (arg1 >> 12), ", entry ", (lowbits(arg1, 12) / 8), ") = 0x", hexstring(desc, 64), endl;
     rc = HYPERVISOR_update_descriptor(physaddr, desc);
     break;
   };
@@ -1161,7 +1182,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   case __HYPERVISOR_xen_version: {
     // NOTE: xen_version is sometimes used as a no-op call just to get pending events processed
 
-    logfile << "xen_version: tyoe ", arg1, " => buf ", (void*)arg2, endl;
+    if (debug) logfile << "xen_version: type ", arg1, " => buf ", (void*)arg2, endl;
 
     static const int struct_sizes[] = {
       0, // XENVER_version
@@ -1240,12 +1261,12 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     rc = 0;
     switch (arg1) {
     case SEGBASE_FS:
-      logfile << "set_segment_base: kernel_fs = ", (void*)arg2, endl;
+      if (debug) logfile << "set_segment_base: kernel_fs = ", (void*)arg2, endl;
       ctx.fs_base = arg2;
       ctx.seg[SEGID_FS].base = arg2;
       break;
     case SEGBASE_GS_USER:
-      logfile << "set_segment_base: user_gs = ", (void*)arg2, endl;
+      if (debug) logfile << "set_segment_base: user_gs = ", (void*)arg2, endl;
       ctx.gs_base_user = arg2;
       //
       // Update the MSR so the new user base gets restored
@@ -1255,7 +1276,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       ctx.swapgs_base = arg2;
       break;
     case SEGBASE_GS_KERNEL:
-      logfile << "set_segment_base: kernel_gs = ", (void*)arg2, endl;
+      if (debug) logfile << "set_segment_base: kernel_gs = ", (void*)arg2, endl;
       ctx.gs_base_kernel = arg2;
       ctx.seg[SEGID_GS].base = arg2;
       break;
@@ -1267,7 +1288,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       // swapgs; mov %k0,%gs; swapgs; hack they have to use.
       //
       ctx.swapgs();
-      logfile << "set_segment_base: user_gs_sel = ", (void*)arg2, endl;
+      if (debug) logfile << "set_segment_base: user_gs_sel = ", (void*)arg2, endl;
       int exception = ctx.write_segreg(SEGID_GS, arg2);
       ctx.swapgs(); // put it back in the base to restore for user mode
       rc = (exception) ? -EINVAL : 0;
@@ -1290,8 +1311,9 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
 
   case __HYPERVISOR_nmi_op: {
     // not supported outside dom0
-    logfile << "nmi_op: not supported", endl;
+    if (debug) logfile << "nmi_op: not supported", endl;
     rc = -EINVAL;
+    break;
   }
 
   case __HYPERVISOR_sched_op: {
@@ -1531,7 +1553,7 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
   Waddr frame = (kernel_mode) ? commitarf[REG_rsp] : kernel_sp;
   Waddr origframe = frame;
 
-  if (logable(2)) logfile << "Create bounce frame from ", (kernel_mode ? "kernel" : "user"), " rip ", 
+  if (logable(2)) logfile << "[vcpu ", vcpuid, "] Create bounce frame from ", (kernel_mode ? "kernel" : "user"), " rip ", 
     (void*)(Waddr)commitarf[REG_rip], " to kernel rip ", (void*)(Waddr)target_rip,
     " at rsp ", (void*)(Waddr)frame, endl;
 
@@ -1647,7 +1669,7 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
   rvp.update(*this);
 
   if (logable(2)) {
-    logfile << "Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (RIPVirtPhys)rvp, ": error code ";
+    logfile << "[vcpu ", vcpuid, "] Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (RIPVirtPhys)rvp, ": error code ";
     if likely (exception == EXCEPTION_x86_page_fault) {
       logfile << PageFaultErrorCode(errorcode), " (", (void*)(Waddr)errorcode, ") @ virtaddr ", (void*)virtaddr;
     } else {

@@ -8,7 +8,9 @@
 #include <globals.h>
 #include <ptlsim.h>
 #include <datastore.h>
+#define CPT_STATS
 #include <stats.h>
+#undef CPT_STATS
 
 #include <elf.h>
 
@@ -19,6 +21,10 @@
 PTLsimConfig config;
 ConfigurationParser<PTLsimConfig> configparser;
 PTLsimStats stats;
+
+//for smt:
+#define ISSUE_QUEUE_SIZE 32
+#define MAX_THREAD_SIZE 2
 
 ostream logfile;
 bool logenable = 0;
@@ -103,9 +109,8 @@ void PTLsimConfig::reset() {
   exit_after_fullsim = 0;
 #endif
 
-  // Peptidal specific
-  dump_trace_sched_rip = INVALIDRIP;
-  dump_trace_exec_rip = INVALIDRIP;
+  reserved_iq_entries = 0;
+  use_icount = 1;
 }
 
 template <>
@@ -196,10 +201,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(sequential_mode_insns,        "seq",                  "Run in sequential mode for <seq> instructions before switching to out of order");
   add(exit_after_fullsim,           "exitend",              "Kill the thread after full simulation completes rather than going native");
 #endif
-
-  add(dump_trace_sched_rip,         "dump-trace-sched",     "Enable logging when trace with <rip> is scheduled");
-  add(dump_trace_exec_rip,          "dump-trace-exec",      "Enable logging when trace with <rip> is executed");
-
+  add(reserved_iq_entries,           "reserved_iq_entries",            "the number of iq entries guaranteed for each thread, default is sqrt(iq size/number of thread)");
+  add(use_icount,           "use_icount",            "use icount to select fetch thread");
 };
 
 #ifndef CONFIG_ONLY
@@ -215,7 +218,7 @@ void print_banner(ostream& os, const PTLsimStats& stats, int argc, char** argv) 
   os << "//  ", endl;
 #ifdef __x86_64__
 #ifdef PTLSIM_HYPERVISOR
-  os << "//  PTLsim: Cycle Accurate x86-64 Full System Simulator", endl;
+  os << "//  PTLsim: Cycle Accurate x86-64 Full System SMP/SMT Simulator", endl;
 #else
   os << "//  PTLsim: Cycle Accurate x86-64 Simulator", endl;
 #endif
@@ -294,7 +297,7 @@ StatsFileWriter statswriter;
 void capture_stats_snapshot(const char* name) {
   if unlikely (!statswriter) return;
 
-  if (logable(1)|1) {
+  if (logable(100)|1) {
     logfile << "Making stats snapshot uuid ", statswriter.next_uuid();
     if (name) logfile << " named ", name;
     logfile << " at cycle ", sim_cycle, endl;
@@ -445,7 +448,12 @@ void update_progress() {
     stringbuf sb;
     sb << "Completed ", intstring(sim_cycle, 13), " cycles, ", intstring(total_user_insns_committed, 13), " commits: ", 
       intstring((W64)cycles_per_sec, 9), " cycles/sec, ", intstring((W64)insns_per_sec, 9), ", insns/sec";
-    
+
+    sb << ": rip";
+    foreach (i, contextcount) {
+      sb << ' ', (void*)contextof(i).commitarf[REG_rip];
+    }
+
     logfile << sb, endl, flush;
 #ifdef PTLSIM_HYPERVISOR
     cerr << "\r  ", sb, flush;
@@ -485,7 +493,9 @@ bool simulate(const char* machinename) {
   }
 
   logfile << "Switching to simulation core '", machinename, "'...", endl, flush;
+  cerr <<  "Switching to simulation core '", machinename, "'...", endl, flush;
   logfile << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
+  cerr << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
 
   // Update stats every half second:
   ticks_per_update = seconds_to_ticks(0.5);

@@ -185,6 +185,7 @@ struct TraceDecoder {
   void move_reg_or_mem(const DecodedOperand& rd, const DecodedOperand& ra, int force_rd = REG_zero);
   void signext_reg_or_mem(const DecodedOperand& rd, DecodedOperand& ra, int rasize, bool zeroext = false);
   void microcode_assist(int assistid, Waddr selfrip, Waddr nextrip);
+  void memory_fence_if_locked(int type);
 
   int fillbuf(Context& ctx);
   inline W64 fetch(int n) { W64 r = lowbits(*((W64*)&insnbytes[byteoffset]), n*8); rip += n; byteoffset += n; return r; }
@@ -215,6 +216,17 @@ static inline TraceDecoder* operator <<(TraceDecoder* dec, const TransOp& transo
 static inline TraceDecoder& operator <<(TraceDecoder& dec, const TransOp& transop) {
   dec.put(transop);
   return dec;
+}
+
+//
+// Generate a memory fence of the specified type.
+//
+inline void TraceDecoder::memory_fence_if_locked(int type = MF_TYPE_LFENCE|MF_TYPE_SFENCE) {
+  if likely (!(prefixes & PFX_LOCK)) return;
+
+  TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+  mf.extshift = type;
+  this << mf;
 }
 
 enum {

@@ -224,6 +224,8 @@ struct PTLsimConfig {
   W64 sequential_mode_insns;
   bool exit_after_fullsim;
 #endif
+  W64 reserved_iq_entries;
+  bool use_icount;
 
   void reset();
 };

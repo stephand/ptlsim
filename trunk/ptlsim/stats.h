@@ -17,6 +17,7 @@
 #define STATS_ONLY
 #include <decode.h>
 #include <ooocore.h>
+#include <smtcore.h>
 #include <dcache.h>
 #include <branchpred.h>
 #undef STATS_ONLY
@@ -249,6 +250,7 @@ struct PTLsimStats { // rootnode:
         W64 skipblock;
         W64 barrier;
         W64 smc;
+        W64 memlocked;
         W64 stop;
       } result;
 
@@ -294,6 +296,7 @@ struct PTLsimStats { // rootnode:
             W64 missbuf_full;
             W64 interlocked;
             W64 interlock_overflow;
+            W64 fence;
           } replay;
         } issue;
 
@@ -314,6 +317,7 @@ struct PTLsimStats { // rootnode:
           W64 independent;
           W64 predicted_alias_unresolved;
           W64 stq_address_match;
+          W64 stq_address_not_ready;
         } dependency;
         
         struct type { // node: summable
@@ -392,6 +396,7 @@ struct PTLsimStats { // rootnode:
             W64 sfr_addr_and_data_to_store_not_ready;
             W64 sfr_data_and_data_to_store_not_ready;
             W64 interlocked;
+            W64 fence;
           } replay;
         } issue;
 
@@ -434,6 +439,349 @@ struct PTLsimStats { // rootnode:
       } cputime;
     } simulator;
   } ooocore;
+
+  //
+  // SMT Core
+  //
+  struct smtcore {
+    W64 cycles;
+    struct fetch {
+      struct stop { // node: summable
+        W64 stalled;
+        W64 icache_miss;
+        W64 fetchq_full;
+        W64 issueq_quota_full;
+        W64 bogus_rip;
+        W64 microcode_assist;
+        W64 branch_taken;
+        W64 full_width;
+      } stop;
+
+      W64 opclass[OPCLASS_COUNT]; // label: opclass_names
+      W64 width[SMTModel::FETCH_WIDTH+1]; // histo: 0, SMTModel::FETCH_WIDTH, 1
+
+      W64 blocks;
+      W64 uops;
+      W64 user_insns;
+    } fetch;
+    struct frontend {
+      struct status { // node: summable
+        W64 complete;
+        W64 fetchq_empty;
+        W64 rob_full;
+        W64 physregs_full;
+        W64 ldq_full;
+        W64 stq_full;
+      } status;
+
+      W64 width[SMTModel::FRONTEND_WIDTH+1]; // histo: 0, SMTModel::FRONTEND_WIDTH, 1
+
+      struct renamed {
+        W64 none;
+        W64 reg;
+        W64 flags;
+        W64 reg_and_flags;
+      } renamed;
+
+      struct alloc {
+        W64 reg;
+        W64 ldreg;
+        W64 sfr;
+        W64 br;
+      } alloc;
+
+      // NOTE: This is capped at 255 consumers to keep the size reasonable:
+      W64 consumer_count[256]; // histo: 0, 255, 1
+    } frontend;
+    struct dispatch {
+      W64 width[SMTModel::DISPATCH_WIDTH+1]; // histo: 0, SMTModel::DISPATCH_WIDTH, 1
+
+      struct source { // node: summable
+        W64 integer[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+        W64 fp[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+        W64 st[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+        W64 br[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      } source;
+
+      W64 cluster[SMTModel::MAX_CLUSTERS]; // label: SMTModel::cluster_names
+
+      struct redispatch {
+        W64 trigger_uops;
+        W64 deadlock_flushes;
+        W64 deadlock_uops_flushed;
+        W64 dependent_uops[SMTModel::ROB_SIZE+1]; // histo: 0, SMTModel::ROB_SIZE, 1
+      } redispatch;
+
+    } dispatch;
+    struct issue {
+      W64 uops;
+      double uipc;
+      struct result { // node: summable
+        W64 no_fu;
+        W64 replay;
+        W64 misspeculated;
+        W64 refetch;
+        W64 branch_mispredict;
+        W64 exception;
+        W64 complete;
+      } result;
+      struct width {
+#ifdef MULTI_IQ
+        W64 int0[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+        W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+        W64 ld[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+        W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#else
+        W64 all[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#endif
+      } width;
+
+      struct source { // node: summable
+        W64 integer[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+        W64 fp[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+        W64 st[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+        W64 br[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      } source;
+      W64 opclass[OPCLASS_COUNT]; // label: opclass_names
+    } issue;
+    struct writeback {
+      W64 writebacks[SMTModel::PHYS_REG_FILE_COUNT]; // label: SMTModel::phys_reg_file_names
+      struct width {
+#ifdef MULTI_IQ
+        W64 int0[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+        W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+        W64 ld[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+        W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#else
+        W64 all[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#endif
+      } width;
+    } writeback;
+
+    struct commit {
+      W64 uops;
+      W64 insns;
+      double uipc;
+      double ipc;
+      struct freereg { // node: summable
+        W64 pending;
+        W64 free;
+      } freereg;
+
+      W64 free_regs_recycled;
+
+      struct result { // node: summable
+        W64 none;
+        W64 ok;
+        W64 exception;
+        W64 skipblock;
+        W64 barrier;
+        W64 smc;
+        W64 memlocked;
+        W64 stop;
+      } result;
+
+      struct setflags { // node: summable
+        W64 yes;
+        W64 no;
+      } setflags;
+
+      W64 width[SMTModel::COMMIT_WIDTH+1]; // histo: 0, SMTModel::COMMIT_WIDTH, 1
+      W64 opclass[OPCLASS_COUNT]; // label: opclass_names
+    } commit;
+
+    struct branchpred {
+      W64 predictions;
+      W64 updates;
+
+      // These counters are [0] = mispred, [1] = correct
+      W64 cond[2]; // label: branchpred_outcome_names
+      W64 indir[2]; // label: branchpred_outcome_names
+      W64 ret[2]; // label: branchpred_outcome_names
+      W64 summary[2]; // label: branchpred_outcome_names
+      struct ras { // node: summable
+        W64 pushes;
+        W64 overflows;
+        W64 pops;
+        W64 underflows;
+        W64 annuls;
+      } ras;
+    } branchpred;
+
+    struct lsap_handling{ // node: summable
+      W64 lsap_avoid_old_dep;;
+      W64 lsap_avoid_not_issued_dep;
+      W64 lsap_avoid_not_issued_false_dep;
+      W64 lsap_flush_issued_dep;
+    }lsap_handling;
+
+    struct dcache {
+      struct load {
+        struct issue { // node: summable
+          W64 complete;
+          W64 miss;
+          W64 exception;
+          W64 ordering;
+          W64 unaligned;
+          struct replay { // node: summable
+            W64 sfr_addr_and_data_not_ready;
+            W64 sfr_addr_not_ready;
+            W64 sfr_data_not_ready;
+            W64 missbuf_full;
+            W64 interlocked;
+            W64 interlock_overflow;
+            W64 fence;
+          } replay;
+        } issue;
+
+        struct hit { // node: summable
+          W64 L1;
+          W64 L2;
+          W64 L3;
+          W64 mem;
+        } hit;
+        
+        struct forward { // node: summable
+          W64 cache;
+          W64 sfr;
+          W64 sfr_and_cache;
+        } forward;
+        
+        struct dependency { // node: summable
+          W64 independent;
+          W64 predicted_alias_unresolved;
+          W64 stq_address_match;
+          W64 stq_address_not_ready;
+          W64 fence;
+        } dependency;
+        
+        struct type { // node: summable
+          W64 aligned;
+          W64 unaligned;
+          W64 internal;
+        } type;
+        
+        W64 size[4]; // label: sizeshift_names
+
+        W64 datatype[DATATYPE_COUNT]; // label: datatype_names
+
+        struct transfer { // node: summable
+          W64 L2_to_L1_full;
+          W64 L2_to_L1_partial;
+          W64 L2_L1I_full;
+        } transfer;
+        
+        struct dtlb { // node: summable
+          W64 hits;
+          W64 misses;
+        } dtlb;
+      } load;
+    
+      struct fetch {
+        struct hit { // node: summable
+          W64 L1;
+          W64 L2;
+          W64 L3;
+          W64 mem;
+        } hit;
+        
+        struct itlb { // node: summable
+          W64 hits;
+          W64 misses;
+        } itlb;
+      } fetch;
+
+      struct prefetch { // node: summable
+        W64 in_L1;
+        W64 in_L2;
+        W64 required;
+      } prefetch;
+    
+      struct missbuf {
+        W64 inserts;
+        struct deliver { // node: summable
+          W64 mem_to_L3;
+          W64 L3_to_L2;
+          W64 L2_to_L1D;
+          W64 L2_to_L1I;
+        } deliver;
+      } missbuf;
+
+      struct lfrq {
+        W64 inserts;
+        W64 wakeups;
+        W64 annuls;
+        W64 resets;
+        W64 total_latency;
+        double average_latency;
+        W64 width[CacheSubsystem::MAX_WAKEUPS_PER_CYCLE+1]; // histo: 0, CacheSubsystem::MAX_WAKEUPS_PER_CYCLE+1, 1
+      } lfrq;
+
+      struct store {
+        struct issue { // node: summable
+          W64 complete;
+          W64 exception;
+          W64 ordering;
+          W64 unaligned;
+          struct replay { // node: summable
+            W64 sfr_addr_and_data_not_ready;
+            W64 sfr_addr_not_ready;
+            W64 sfr_data_not_ready;
+            W64 sfr_addr_and_data_and_data_to_store_not_ready;
+            W64 sfr_addr_and_data_to_store_not_ready;
+            W64 sfr_data_and_data_to_store_not_ready;
+            W64 interlocked;
+            W64 fence;
+          } replay;
+        } issue;
+
+        struct forward { // node: summable
+          W64 zero;
+          W64 sfr;
+        } forward;
+        
+        struct type { // node: summable
+          W64 aligned;
+          W64 unaligned;
+          W64 internal;
+        } type;
+        
+        W64 size[4]; // label: sizeshift_names
+
+        W64 datatype[DATATYPE_COUNT]; // label: datatype_names
+
+        W64 parallel_aliasing;
+
+        W64 prefetches;
+      } store;
+
+      struct fence { // node: summable
+        W64 lfence;
+        W64 sfence;
+        W64 mfence;
+      } fence;
+    } dcache;
+
+    struct simulator {
+      double total_time;
+      struct cputime { // node: summable
+        double fetch;
+        double decode;
+        double rename;
+        double frontend;
+        double dispatch;
+        double issue;
+        double issueload;
+        double issuestore;
+        double complete;
+        double transfer;
+        double writeback;
+        double commit;
+      } cputime;
+    } simulator;
+    
+  } smtcore;
+
   struct external {
     W64 assists[ASSIST_COUNT]; // label: assist_names
     W64 traps[256]; // label: x86_exception_names

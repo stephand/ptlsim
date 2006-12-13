@@ -26,6 +26,9 @@
 #define __INSIDE_PTLSIM__
 #include <ptlcalls.h>
 
+// Userspace PTLsim only supports one VCPU:
+int current_vcpuid() { return 0; }
+
 static inline W64 do_syscall_64bit(W64 syscallid, W64 arg1, W64 arg2, W64 arg3, W64 arg4, W64 arg5, W64 arg6) {
   W64 rc;
   asm volatile ("movq %5,%%r10\n"

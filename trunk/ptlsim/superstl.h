@@ -25,6 +25,8 @@
 #define FMT_SPECIAL	32 /* 0x */
 #define FMT_LARGE	  64 /* use 'ABCDEF' instead of 'abcdef' */
 
+int current_vcpuid();
+
 namespace superstl {
   //
   // String buffer
@@ -284,6 +286,7 @@ namespace superstl {
   }
 
   static inline ostream& operator <<(ostream& os, const char* v) {
+    if unlikely (!v) v = "<null>";
     os.write(v, strlen(v));
     return os;
   }
@@ -2727,7 +2730,8 @@ namespace superstl {
       counter = 0;
     }
 
-    bool acquire(W16s current) {
+    bool acquire() {
+      W16s current = current_vcpuid();
       bool acquired;
       bool recursive;
 
@@ -2747,7 +2751,8 @@ namespace superstl {
       return (!recursive);
     }
 
-    void release(int current) {
+    void release() {
+      W16s current = current_vcpuid();
       assert(locking_vcpuid == current);
       assert(counter > 0);
 

@@ -261,6 +261,7 @@ namespace superstl {
   // Writers
   //
   stringbuf& operator <<(stringbuf& os, const char* v) {
+    if unlikely (!v) v = "<null>";
     int bytes = strlen(v) + 1;
     os.reserve(bytes);
     memcpy(os.p, v, bytes);

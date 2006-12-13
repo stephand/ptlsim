@@ -854,7 +854,9 @@ W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
     //
     if (delta_cycles < timer_interrupt_period_in_cycles)
       ctx.timer_cycle = ctx.base_tsc + sim_cycle + timer_interrupt_period_in_cycles;
-    
+
+    delta_cycles = ctx.timer_cycle - (ctx.base_tsc + sim_cycle);
+
     if (debug) {
       logfile << "set_timer_op: trigger ", trigger_nsecs_since_boot, " nsecs vs current nsecs ",
         current_nsecs_since_boot, " (delta ", delta_nsecs, " nsecs in future) => delta ", delta_cycles,
@@ -893,7 +895,7 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     break;
   }
   default:
-    if (debug) logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;
+    logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;
     abort();
   }
 

@@ -418,7 +418,6 @@ bool TraceDecoder::decode_x87() {
     int translated_opcode = x87_translate_opcode[x87op];
     int ra = ((dcform|deform) & (!memform)) ? x87_dcde_translate_ra[x87op] : x87_d8da_translate_ra[x87op];
     int rb = ((dcform|deform) & (!memform)) ? x87_dcde_translate_rb[x87op] : x87_d8da_translate_rb[x87op];
-    if (logable(1)) logfile << ripstart, ": op ", (void*)(Waddr)op, ", x87op ", x87op, ", ra ", arch_reg_names[ra], ", rb ", arch_reg_names[rb], endl;
     TransOp uop(translated_opcode, REG_temp0, ra, rb, REG_zero, 2); uop.datatype = DATATYPE_DOUBLE; this << uop;
 
     if (translated_opcode == OP_cmpccf) {

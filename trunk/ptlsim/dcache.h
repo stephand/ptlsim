@@ -13,8 +13,11 @@
 //#include <datastore.h>
 
 struct LoadStoreInfo {
-  W32 rob:16, tid:8, aligntype:2, sfrused:1, internal:1, signext:1, sizeshift:2, pad:1;
-  RawDataAccessors(LoadStoreInfo, W32);
+  W16 rob;
+  W8  threadid;
+  W8  sizeshift:2, aligntype:2, sfrused:1, internal:1, signext:1, pad1:1;
+  W32 pad32;
+  RawDataAccessors(LoadStoreInfo, W64);
 };
 
 namespace CacheSubsystem {
@@ -24,7 +27,7 @@ namespace CacheSubsystem {
 #ifndef STATS_ONLY
 
 // non-debugging only:
-#define __RELEASE__
+//#define __RELEASE__
 #ifdef __RELEASE__
 #undef assert
 #define assert(x) (x)
@@ -208,7 +211,7 @@ namespace CacheSubsystem {
       int hitcountslot = clipto(hitcount / HITCOUNT_INTERVAL, 0, HITCOUNT_SLOTS-1);
       line_hitcount_histogram[hitcountslot]++;
 
-      if (logable(1) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": evicted(", (void*)tag, "): lifetime ", lifetime, ", deadtime ", deadtime, ", hitcount ", hitcount, " (line addr ", &line, ")", endl;
+      if (logable(6) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": evicted(", (void*)tag, "): lifetime ", lifetime, ", deadtime ", deadtime, ", hitcount ", hitcount, " (line addr ", &line, ")", endl;
     }
 
     static void filled(V& line, W64 tag) {
@@ -216,7 +219,7 @@ namespace CacheSubsystem {
       line.lasttime = sim_cycle;
       line.hitcount = 1;
 
-      if (logable(1) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": filled(", (void*)tag, ")", " (line addr ", &line, ")", endl;
+      if (logable(6) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": filled(", (void*)tag, ")", " (line addr ", &line, ")", endl;
     }
 
     static void inserted(V& line, W64 newtag, int way) {
@@ -229,7 +232,7 @@ namespace CacheSubsystem {
     }
 
     static void probed(V& line, W64 tag, int way, bool hit) { 
-      if (logable(1) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": probe(", (void*)tag, "): ", (hit ? "HIT" : "miss"), " way ", way, ": hitcount ", line.hitcount, ", filltime ", line.filltime, ", lasttime ", line.lasttime, " (line addr ", &line, ")", endl;
+      if (logable(6) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": probe(", (void*)tag, "): ", (hit ? "HIT" : "miss"), " way ", way, ": hitcount ", line.hitcount, ", filltime ", line.filltime, ", lasttime ", line.lasttime, " (line addr ", &line, ")", endl;
       if (hit) {
         line.hitcount++;
         line.lasttime = sim_cycle;
@@ -390,7 +393,7 @@ namespace CacheSubsystem {
       addr >>= 12;
       W64 oldtag;
       int way = base_t::select(addr, oldtag);
-      if (logable(1)) {
+      if (logable(6)) {
         logfile << "TLB insertion of virt page ", (void*)(Waddr)addr, " (virt addr ", 
           (void*)(Waddr)(addr << 12), ") into way ", way, ": ",
           ((oldtag != addr) ? "evicted old entry" : "already present"), endl;
@@ -428,13 +431,14 @@ namespace CacheSubsystem {
       this->data = data;
       this->mask = mask;
       this->lsi = lsi;
+      this->lsi.threadid = lsi.threadid; 
       this->fillL1 = 1;
       this->fillL2 = 1;
       this->initcycle = sim_cycle;
     }
 
     ostream& print(ostream& os) const {
-      os << "  ", "0x", hexstring(data, 64), " @ ", (void*)(Waddr)addr, " -> rob ", lsi.rob;
+      os << " TH ", lsi.threadid, "  ", "0x", hexstring(data, 64), " @ ", (void*)(Waddr)addr, " -> rob ", lsi.rob;
       os << ": shift ", lsi.sizeshift, ", signext ", lsi.signext, ", mask ", bitstring(mask, 8, true);
       return os;
     }
@@ -457,6 +461,10 @@ namespace CacheSubsystem {
     LoadFillReqQueue(): hierarchy(*((CacheHierarchy*)null)) { reset(); }
     LoadFillReqQueue(CacheHierarchy& hierarchy_): hierarchy(hierarchy_) { reset(); }
 
+    // Clear entries belonging to one thread
+    void reset(int threadid);
+
+    // Reset all threads
     void reset() {
       freemap.setall();
       ready = 0;
@@ -507,8 +515,10 @@ namespace CacheSubsystem {
       W16 state;
       W16 dcache:1, icache:1;    // L1I vs L1D
       W32 cycles;
-      bitvec<LFRQ_SIZE> lfrqmap;  // which LFRQ entries should this load wake up?
+      W16 rob; // to identify which thread.
+      W8 threadid;
 
+      bitvec<LFRQ_SIZE> lfrqmap;  // which LFRQ entries should this load wake up?
       void reset() {
         lfrqmap = 0;
         addr = 0xffffffffffffffffULL;
@@ -516,6 +526,8 @@ namespace CacheSubsystem {
         cycles = 0;
         icache = 0;
         dcache = 0;
+        rob = 0xffff;
+        threadid = 0xff;
       }
     };
 
@@ -527,12 +539,14 @@ namespace CacheSubsystem {
     bitvec<SIZE> freemap;
     
     void reset();
+    void reset(int threadid);
     void restart();
     bool full() const { return (!freemap); }
     int find(W64 addr);
-    int initiate_miss(W64 addr, bool hit_in_L2, bool icache = 0);
-    int initiate_miss(const LoadFillReq& req, bool hit_in_L2);
+    int initiate_miss(W64 addr, bool hit_in_L2, bool icache = 0, int rob = 0xffff, int threadid = 0xfe);
+    int initiate_miss(const LoadFillReq& req, bool hit_in_L2, int rob = 0xffff);
     void annul_lfrq(int slot);
+    void annul_lfrq(int slot, int threadid);
     void clock();
 
     ostream& print(ostream& os) const;
@@ -566,27 +580,21 @@ namespace CacheSubsystem {
     bool covered_by_sfr(W64 addr, SFR* sfr, int sizeshift);
     void annul_lfrq_slot(int lfrqslot);
     int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR& sfra, LoadStoreInfo lsi);
-    
-    W64 commitstore(const SFR& sfr);
-    
+    bool lfrq_or_missbuf_full() const { return lfrq.full() | missbuf.full(); }
+
+    W64 commitstore(const SFR& sfr, int threadid = 0xff);
+
     void initiate_prefetch(W64 addr, int cachelevel);
-    
+
     bool probe_icache(Waddr virtaddr, Waddr physaddr);
-    int initiate_icache_miss(W64 addr);
+    int initiate_icache_miss(W64 addr, int rob = 0xffff, int threadid = 0xff);
 
     void reset();
     void clock();
     void complete();
+    void complete(int threadid);
     ostream& print(ostream& os);
   };
-
-  //extern void init_cache();
-
-  //void dcache_print_commit();
-  //void dcache_print_rollback();
-  //void dcache_save_stats(DataStoreNode& ds);
-  //ostream& dcache_print(ostream& os);
-
 #endif // STATS_ONLY
 };
 #endif // _DCACHE_H_

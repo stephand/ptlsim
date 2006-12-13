@@ -425,7 +425,7 @@ static const bool debug_unmap_phys_page_tree = 1;
 inline void unmap_level1_page_tree(mfn_t mfn) {
   // No need to unmap actual leaf physical pages - those are just data pages
   Level1PTE& physpte = phys_pagedir[mfn];
-  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "        L1: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (debug_unmap_phys_page_tree & logable(100)) logfile << "        L1: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
 
@@ -433,7 +433,7 @@ inline void unmap_level2_page_tree(mfn_t mfn) {
   Level2PTE* ptes = (Level2PTE*)phys_to_mapped_virt(mfn << 12);
   foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level1_page_tree(ptes[i].mfn);
   Level1PTE& physpte = phys_pagedir[mfn];
-  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "      L2: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (debug_unmap_phys_page_tree & logable(100)) logfile << "      L2: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
 
@@ -441,7 +441,7 @@ void unmap_level3_page_tree(mfn_t mfn) {
   Level3PTE* ptes = (Level3PTE*)phys_to_mapped_virt(mfn << 12);
   foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level2_page_tree(ptes[i].mfn);
   Level1PTE& physpte = phys_pagedir[mfn];
-  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "    L3: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (debug_unmap_phys_page_tree & logable(100)) logfile << "    L3: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
 
@@ -449,12 +449,12 @@ void unmap_level4_page_tree(mfn_t mfn) {
   Level4PTE* ptes = (Level4PTE*)phys_to_mapped_virt(mfn << 12);
   foreach (i, PTES_PER_PAGE) if unlikely (ptes[i].p) unmap_level3_page_tree(ptes[i].mfn);
   Level1PTE& physpte = phys_pagedir[mfn];
-  if unlikely (debug_unmap_phys_page_tree & logable(1)) logfile << "  L4: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
+  if unlikely (debug_unmap_phys_page_tree & logable(100)) logfile << "  L4: mfn ", intstring(mfn, 8), ((physpte.p & physpte.rw) ? " (unmap)" : ""), endl;
   if unlikely (physpte.p & physpte.rw) physpte <= physpte.P(0);
 }
 
 void unmap_phys_page_tree(mfn_t root) {
-  if (logable(1)) logfile << "Unmapping page tree starting at root mfn ", root, endl;
+  if (logable(100)) logfile << "Unmapping page tree starting at root mfn ", root, endl;
   unmap_level4_page_tree(root);
   commit_page_table_updates();
 }
@@ -474,13 +474,13 @@ void unmap_address_space() {
 
   int n = 0;
 
-  if (logable(1)) logfile << "unmap_address_space: check ", physmap_level1_pages, " PTEs:", endl, flush;
+  if (logable(100)) logfile << "unmap_address_space: check ", physmap_level1_pages, " PTEs:", endl, flush;
 
   foreach (i, physmap_level1_pages) {
     Level2PTE& l2pte = phys_level2_pagedir[i];
     if unlikely (l2pte.p) {
       l2pte <= l2pte.P(0);
-      if (logable(1)) logfile << "  update ", intstring(n, 6), ": pte ", intstring(i, 6), " <= not present", endl;
+      if (logable(100)) logfile << "  update ", intstring(n, 6), ": pte ", intstring(i, 6), " <= not present", endl;
       n++;
     }
   }
@@ -538,6 +538,7 @@ asmlinkage void do_page_fault(W64* regs) {
     }
 
     logfile.flush();
+    assert(0);
     shutdown(SHUTDOWN_crash);
     asm("ud2a");
   }

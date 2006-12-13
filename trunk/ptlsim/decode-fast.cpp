@@ -33,7 +33,11 @@ bool TraceDecoder::decode_fast() {
     int subop = bits(op, 3, 3);
     int translated_opcode = translate_opcode[subop];
     int rcreg = ((subop == 2) | (subop == 3)) ? REG_cf : REG_zero;
+
+    if (subop == 7) prefixes &= ~PFX_LOCK;
+    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
     alu_reg_or_mem(translated_opcode, rd, ra, FLAGS_DEFAULT_ALU, rcreg, (subop == 7));
+    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
 
     break;
   }
@@ -184,7 +188,11 @@ bool TraceDecoder::decode_fast() {
     int subop = modrm.reg;
     int translated_opcode = translate_opcode[subop];
     int rcreg = ((subop == 2) | (subop == 3)) ? REG_cf : REG_zero;
+
+    if (subop == 7) prefixes &= ~PFX_LOCK;
+    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
     alu_reg_or_mem(translated_opcode, rd, ra, FLAGS_DEFAULT_ALU, rcreg, (subop == 7));
+    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
 
     break;
   }
@@ -616,11 +624,15 @@ bool TraceDecoder::decode_fast() {
       break;
     case 2: { // not
       // As an exception to the rule, NOT does not generate any flags. Go figure.
+      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
       alu_reg_or_mem(OP_nor, rd, rd, 0, REG_zero);
+      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
       break;
     }
     case 3: { // neg r1 => sub r1 = 0, r1
+      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
       alu_reg_or_mem(OP_sub, rd, rd, FLAGS_DEFAULT_ALU, REG_zero, false, true);
+      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
       break;
     }
     default:
@@ -647,7 +659,11 @@ bool TraceDecoder::decode_fast() {
     CheckInvalid();
     ra.type = OPTYPE_IMM;
     ra.imm.imm = +1;
+
+    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
     alu_reg_or_mem((bit(modrm.reg, 0)) ? OP_sub : OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
+    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+
     break;
   }
 
@@ -661,7 +677,11 @@ bool TraceDecoder::decode_fast() {
       CheckInvalid();
       ra.type = OPTYPE_IMM;
       ra.imm.imm = +1;
+
+      if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
       alu_reg_or_mem((bit(modrm.reg, 0)) ? OP_sub : OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
+      if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+
       break;
     }
     case 2:

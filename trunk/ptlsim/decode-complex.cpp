@@ -809,11 +809,18 @@ bool TraceDecoder::decode_complex() {
 
     becomes:
 
-    mov     t0 = ra
-    ld.acq  ra,[mem],ra
-    st.rel  [mem],t0
+    mov     t7 = ra
+    ld.acq  t6 = [mem]
+    # create artificial data dependency on t6 -> t7 (always let t7 pass through)
+    sel.c   t7 = t7,t6,(zero)
+    st.rel  [mem] = t7
+    mov     ra,t6
 
-    (ld.acq and st.rel used automatically only if LOCK prefix is set)
+    Notice that the st.rel is artificially forced to depend on the ld.acq
+    so as to guarantee we won't try to unlock before we lock should these
+    uops be reordered.
+
+    ld.acq and st.rel are always used for memory operands, regardless of LOCK prefix
 
     */
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
@@ -848,30 +855,55 @@ bool TraceDecoder::decode_complex() {
         this << TransOp(OP_maskb, rareg, rareg, REG_temp0, REG_imm, 3, 0, maskctl2);
       }
     } else {
+      // xchg [mem],reg is always locked:
+      prefixes |= PFX_LOCK;
+
+      memory_fence_if_locked();
+
       if (rahigh)
         this << TransOp(OP_maskb, REG_temp7, REG_zero, rareg, REG_imm, 3, 0, MaskControlInfo(0, 8, 8));
       else this << TransOp(OP_mov, REG_temp7, REG_zero, rareg, REG_zero, 3);
 
       //
-      // ld ra = [mem],ra
+      // ld t6 = [mem]
       //
       int destreg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       int mergewith = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
       if (sizeshift >= 2) {
         // zero extend 32-bit to 64-bit or just load as 64-bit:
-        operand_load(destreg, rd);
+        operand_load(REG_temp6, rd);
       } else {
         // need to merge 8-bit or 16-bit data:
         operand_load(REG_temp0, rd);
         if (reginfo[rd.reg.reg].hibyte)
-          this << TransOp(OP_maskb, destreg, destreg, REG_temp0, REG_imm, 3, 0, MaskControlInfo(56, 8, 56));
-        else this << TransOp(OP_mov, destreg, destreg, REG_temp0, REG_zero, sizeshift);
+          this << TransOp(OP_maskb, REG_temp6, destreg, REG_temp0, REG_imm, 3, 0, MaskControlInfo(56, 8, 56));
+        else this << TransOp(OP_mov, REG_temp6, destreg, REG_temp0, REG_zero, sizeshift);
       }
+
+      //
+      // Create artificial data dependency:
+      //
+      // This is not on the critical path since the ld result is available
+      // immediately in an out of order machine.
+      //
+      // sel.c   t7 = t7,t6,(zero)            # ra always selected (passthrough)
+      //
+      TransOp dummyop(OP_sel, REG_temp7, REG_temp7, REG_temp6, REG_zero, 3);
+      dummyop.cond = COND_c;
+      this << dummyop;
 
       //
       // st [mem] = t0
       //
       result_store(REG_temp7, REG_temp0, rd);
+
+      //
+      // mov ra = zero,t6
+      // Always move the full size: the temporary was already merged above
+      //
+      this << TransOp(OP_mov, destreg, REG_zero, REG_temp6, REG_zero, 3);
+
+      memory_fence_if_locked();
     }
     break;
   }
@@ -1659,13 +1691,15 @@ bool TraceDecoder::decode_complex() {
       this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
       break;
     } else {
+      if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
+      bool locked = ((prefixes & PFX_LOCK) != 0);
+
+      memory_fence_if_locked();
+
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
 
       rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
       address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
-
-      if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
-      bool locked = ((prefixes & PFX_LOCK) != 0);
 
       this << TransOp(OP_sar, REG_temp2, rareg, REG_imm, REG_zero, 3, 3); // byte index
       TransOp ldop(OP_ld, REG_temp0, REG_temp1, REG_temp2, REG_zero, 0); ldop.locked = locked; this << ldop;
@@ -1674,6 +1708,8 @@ bool TraceDecoder::decode_complex() {
       if (opcode != OP_bt) {
         TransOp stop(OP_st, REG_mem, REG_temp1, REG_temp2, REG_temp0, 0); stop.locked = locked; this << stop;
       }
+
+      memory_fence_if_locked();
 
       break;
     }
@@ -1698,11 +1734,13 @@ bool TraceDecoder::decode_complex() {
       this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, REG_imm, REG_zero, 3, ra.imm.imm, 0, SETFLAG_CF);
       break;
     } else {
-      rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
-      address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
-
       if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
       bool locked = ((prefixes & PFX_LOCK) != 0);
+
+      memory_fence_if_locked();
+
+      rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
+      address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
 
       TransOp ldop(OP_ld, REG_temp0, REG_temp1, REG_imm, REG_zero, 0, ra.imm.imm >> 3); ldop.locked = locked; this << ldop;
       this << TransOp(opcode, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, lowbits(ra.imm.imm, 3), 0, SETFLAG_CF);
@@ -1710,6 +1748,8 @@ bool TraceDecoder::decode_complex() {
       if (opcode != OP_bt) {
         TransOp stop(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 0, ra.imm.imm >> 3); stop.locked = locked; this << stop;
       }
+
+      memory_fence_if_locked();
 
       break;
     }
@@ -1862,6 +1902,10 @@ bool TraceDecoder::decode_complex() {
 
     */
 
+    if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
+
+    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+
     operand_load(REG_temp0, rd, OP_ld, 1);
 
     this << TransOp(OP_sub, REG_temp1, REG_rax, REG_temp0, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
@@ -1874,7 +1918,9 @@ bool TraceDecoder::decode_complex() {
     selreg.cond = COND_ne;
     this << selreg;
 
-    result_store(REG_temp2, REG_temp0, rd);
+    if likely (rd.type == OPTYPE_MEM) result_store(REG_temp2, REG_temp0, rd);
+
+    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
 
     break;
   }
@@ -1907,10 +1953,17 @@ bool TraceDecoder::decode_complex() {
 
     */
 
+    // xadd [mem],reg is always locked:
+    if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
+
+    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+
     operand_load(REG_temp0, rd, OP_ld, 1);
     this << TransOp(OP_add, REG_temp1, REG_temp0, rareg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
     result_store(REG_temp1, REG_temp2, rd);
     this << TransOp(OP_mov, rareg, rareg, REG_temp0, REG_zero, sizeshift);
+
+    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
 
     break;
   }
@@ -1976,9 +2029,14 @@ bool TraceDecoder::decode_complex() {
     case 5: // lfence
     case 6: // mfence
     case 7: { // sfence
-      //++MTY TODO SMP
       CheckInvalid();
-      this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
+      TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+      switch (modrm.reg) {
+      case 5: mf.extshift = MF_TYPE_LFENCE; break;
+      case 6: mf.extshift = MF_TYPE_SFENCE; break;
+      case 7: mf.extshift = MF_TYPE_SFENCE|MF_TYPE_LFENCE; break;
+      }
+      this << mf;
       break;
     }
     default:

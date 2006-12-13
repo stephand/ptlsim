@@ -1295,7 +1295,7 @@ bool BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
 // recently used BBs.
 //
 int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
-  bool DEBUG = 1; //logable(1);
+  bool DEBUG = 1; // logable(1);
 
   if (!count) return 0;
 
@@ -1720,7 +1720,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   }
 
   for (;;) {
-    //if (DEBUG) logfile << "rip ", (void*)trans.rip, ", relrip = ", (void*)(trans.rip - trans.bb.rip), endl, flush;
+    // if (DEBUG) logfile << "rip ", (void*)trans.rip, ", relrip = ", (void*)(trans.rip - trans.bb.rip), endl, flush;
     if (!trans.translate()) break;
   }
 

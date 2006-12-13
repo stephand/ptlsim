@@ -1193,6 +1193,7 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
   case OP_ld:
   case OP_ldx:
   case OP_st:
+  case OP_mf:
     func = uop_impl_nop; break;
   case OP_rotl: 
     func = implmap_rotl[size][setflags]; break;

@@ -188,7 +188,7 @@ enum {
   EXCEPTION_COUNT
 };
 
-static const int MAX_BB_BYTES = 255;
+static const int MAX_BB_BYTES = 128;
 static const int MAX_BB_X86_INSNS = 63;
 static const int MAX_BB_UOPS = 63;
 static const int MAX_BB_PER_PAGE = 4096;
@@ -904,7 +904,7 @@ struct Context: public ContextBase {
 ostream& operator <<(ostream& os, const Context& ctx);
 
 #ifndef PTLSIM_HYPERVISOR
-extern Context ctx;
+extern Context ctx; 
 #endif
 
 // Other flags not defined above
@@ -970,31 +970,32 @@ extern struct FunctionalUnit FU[FU_COUNT];
 #define OPCLASS_BARRIER                 (OPCLASS_ASSIST)
 #define OPCLASS_BRANCH                  (OPCLASS_COND_BRANCH|OPCLASS_INDIR_BRANCH|OPCLASS_UNCOND_BRANCH|OPCLASS_ASSIST)
 
-#define OPCLASS_LOAD                    ((1 << 10) | OPCLASS_USESRC)
-#define OPCLASS_STORE                   ((1 << 11) | OPCLASS_USESRC)
-#define OPCLASS_PREFETCH                (1 << 12)
-#define OPCLASS_MEM                     (OPCLASS_LOAD|OPCLASS_STORE|OPCLASS_PREFETCH)
+#define OPCLASS_LOAD                    ((1 << 11) | OPCLASS_USESRC)
+#define OPCLASS_STORE                   ((1 << 12) | OPCLASS_USESRC)
+#define OPCLASS_PREFETCH                (1 << 13)
+#define OPCLASS_FENCE                   ((1 << 10) | OPCLASS_STORE)
+#define OPCLASS_MEM                     (OPCLASS_LOAD|OPCLASS_STORE|OPCLASS_PREFETCH|OPCLASS_FENCE)
 
-#define OPCLASS_SIMPLE_SHIFT            (1 << 13)
-#define OPCLASS_SHIFTROT                ((1 << 14) | OPCLASS_USESFLAGS | OPCLASS_USESRC)
-#define OPCLASS_MULTIPLY                (1 << 15)
-#define OPCLASS_BITSCAN                 (1 << 16)
-#define OPCLASS_FLAGS                   (1 << 17)
-#define OPCLASS_CHECK                   (1 << 18)
+#define OPCLASS_SIMPLE_SHIFT            (1 << 14)
+#define OPCLASS_SHIFTROT                ((1 << 15) | OPCLASS_USESFLAGS | OPCLASS_USESRC)
+#define OPCLASS_MULTIPLY                (1 << 16)
+#define OPCLASS_BITSCAN                 (1 << 17)
+#define OPCLASS_FLAGS                   (1 << 18)
+#define OPCLASS_CHECK                   (1 << 19)
 
 #define OPCLASS_CONDITIONAL             (OPCLASS_SELECT|OPCLASS_COND_BRANCH|OPCLASS_CHECK)
 
-#define OPCLASS_FP_ALU                  (1 << 19)
-#define OPCLASS_FP_DIVSQRT              (1 << 20)
-#define OPCLASS_FP_COMPARE              (1 << 21)
-#define OPCLASS_FP_PERMUTE              (1 << 22)
-#define OPCLASS_FP_CONVERTI2F           (1 << 23)
-#define OPCLASS_FP_CONVERTF2I           (1 << 24)
-#define OPCLASS_FP_CONVERTFP            (1 << 25)
+#define OPCLASS_FP_ALU                  (1 << 20)
+#define OPCLASS_FP_DIVSQRT              (1 << 21)
+#define OPCLASS_FP_COMPARE              (1 << 22)
+#define OPCLASS_FP_PERMUTE              (1 << 23)
+#define OPCLASS_FP_CONVERTI2F           (1 << 24)
+#define OPCLASS_FP_CONVERTF2I           (1 << 25)
+#define OPCLASS_FP_CONVERTFP            (1 << 26)
 
 #define OPCLASS_FP                      (OPCLASS_FP_ALU | OPCLASS_FP_DIVSQRT | OPCLASS_FP_COMPARE | OPCLASS_FP_PERMUTE | OPCLASS_FP_CONVERTI2F | OPCLASS_FP_CONVERTF2I, OPCLASS_FP_CONVERTFP)
 
-#define OPCLASS_COUNT                   26
+#define OPCLASS_COUNT                   27
 
 #define OPCLASS_USECOND                 (OPCLASS_COND_BRANCH|OPCLASS_SELECT|OPCLASS_CHECK)
 
@@ -1065,6 +1066,7 @@ enum {
   OP_ldx,
   OP_ld_pre,
   OP_st,
+  OP_mf,
   // Shifts, rotates and complex masking
   OP_shl,
   OP_shr,
@@ -1184,6 +1186,10 @@ union PermbControlInfo {
 static inline W32 make_mask_control_info(int ms, int mc, int ds) {
   return (ms) | (mc << 6) | (ds << 12);
 }
+
+// These go in the extshift field of mf (memory fence) uops:
+#define MF_TYPE_SFENCE (1 << 0)
+#define MF_TYPE_LFENCE (1 << 1)
 
 // These go in the extshift field of branch and/or jump operations; they are used as hints only: 
 #define BRANCH_HINT_PUSH_RAS (1 << 0)

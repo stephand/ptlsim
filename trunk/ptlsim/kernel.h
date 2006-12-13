@@ -179,6 +179,9 @@ public:
 
   bool fastcheck(Waddr addr, spat_t top) const {
 #ifdef __x86_64__
+    // Is it outside of userspace address range?
+    if unlikely (addr >> 48) return 0;
+
     W64 chunkid = pageid(addr) >> log2(SPAT_PAGES_PER_CHUNK);
 
     if unlikely (!top[chunkid])

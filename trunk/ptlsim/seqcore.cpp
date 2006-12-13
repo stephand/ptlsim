@@ -712,7 +712,17 @@ struct SequentialCore {
         arf[REG_flags] = saved_flags;
         return SEQEXEC_EXCEPTION;
       } else if unlikely (ld|st) {
-        int status = (ld) ? issueload(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate) : issuestore(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate);
+        int status;
+        if likely (ld) {
+          status = issueload(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate);
+        } else if unlikely (uop.opcode == OP_mf) {
+          // Memory fences are NOPs on the in-order core:
+          status = ISSUE_COMPLETED;
+          sfr.data = 0;
+        } else {
+          assert(st);
+          status = issuestore(uop, sfr, origvirt, radata, rbdata, rcdata, pteupdate);
+        }
 
         state.reg.rddata = sfr.data;
         state.reg.rdflags = 0;
@@ -784,7 +794,7 @@ struct SequentialCore {
 
       assert(!ctx.exception);
 
-      if unlikely (st) {
+      if unlikely (uop.opcode == OP_st) {
         if (sfr.bytemask) {
           storemask(sfr.physaddr << 3, sfr.data, sfr.bytemask);
           Waddr mfn = (sfr.physaddr << 3) >> 12;
@@ -914,7 +924,7 @@ struct SequentialMachine: public PTLsimMachine {
 
       core.external_to_core_state();
 
-      if (logable(1)) {
+      if (logable(100)) {
         logfile << "VCPU ", i, " initial state:", endl;
         core.print_state(logfile);
         logfile << endl;
@@ -922,7 +932,7 @@ struct SequentialMachine: public PTLsimMachine {
     }
 
 #ifdef PTLSIM_HYPERVISOR
-    if (logable(1)) {
+    if (logable(100)) {
       logfile << "Shared info at start:", endl;
       logfile << sshinfo;
     }
@@ -966,7 +976,7 @@ struct SequentialMachine: public PTLsimMachine {
 
       core.core_to_external_state();
 
-      if (logable(1)) {
+      if (logable(100)) {
         logfile << "Core State at end:", endl;
         logfile << ctx;
       }

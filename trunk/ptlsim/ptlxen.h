@@ -305,15 +305,6 @@ static inline void* get_rsp() {
   return (void*)rsp;
 }
 
-static inline int current_vcpuid() {
-  W64 rsp = (W64)get_rsp();
-  W64 pervcpu = (W64)bootinfo.per_vcpu_stack_base;
-  int vcpuid = 0;
-  bool is_secondary_stack = inrange(rsp, pervcpu, (pervcpu + (PAGE_SIZE * MAX_CONTEXTS) - 1));
-  if (is_secondary_stack) vcpuid = ((rsp - pervcpu) >> 12);
-  return vcpuid;
-}
-
 struct PageFrameType {
   Waddr mfn:28, type:3, pin:1;
   

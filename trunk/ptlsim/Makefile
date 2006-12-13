@@ -3,7 +3,7 @@
 # PTLsim: Cycle Accurate x86-64 Simulator
 # Makefile
 #
-# Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+# Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
 #
 
 ifeq ($(findstring x86_64,$(MACHTYPE)),x86_64)
@@ -14,11 +14,11 @@ endif
 # Build PTLsim/X full system simulator:
 #
 # Make sure you have Xen installed and have applied
-# xen-3.0-ptlsim.diff before doing this!
+# the PTLsim hypervisor patches before trying this!
 #
-# PTLsim/X only runs on 64-bit x86-64 processors,
-# but can still run 32-bit code and operating systems
-# under it. See the FAQ for details.
+# PTLsim/X only runs on 64-bit x86-64 host processors,
+# but can still run 32-bit code and guest operating
+# systems. See the manual and FAQ for details.
 #
 # PTLSIM_HYPERVISOR=1
 
@@ -35,7 +35,10 @@ INCFLAGS += -DPTLSIM_HYPERVISOR -D__XEN__
 endif
 
 ifdef __x86_64__
-CFLAGS = -O99 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
+CFLAGS = -O99 -g -fomit-frame-pointer -pipe -march=k8 -falign-functions=16 -funroll-loops -funit-at-a-time -minline-all-stringops
+#CFLAGS = -O2 -g3 -march=k8 -falign-functions=16 -minline-all-stringops
+# -O1 doesn't work
+#CFLAGS = -O2 -g -fomit-frame-pointer -march=k8 -falign-functions=16 -minline-all-stringops
 #CFLAGS = -O1 -g3 -march=k8 -falign-functions=16
 CFLAGS32BIT = $(CFLAGS) -m32
 else
@@ -52,6 +55,7 @@ endif
 
 CFLAGS += -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
 
+
 BASEOBJS = superstl.o config.o mathlib.o syscalls.o
 STDOBJS = glibc.o
 
@@ -66,11 +70,11 @@ else
 COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
 
-OOOOBJS = ooocore.o ooopipe.o oooexec.o branchpred.o dcache.o
+OOOOBJS = ooocore.o ooopipe.o oooexec.o smtcore.o smtpipe.o smtexec.o branchpred.o dcache.o
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
 COMMONINCLUDES = logic.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h
-OOOINCLUDES = branchpred.h ooocore.h cpthwdef.h
+OOOINCLUDES = branchpred.h ooocore.h smtcore.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
 COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-core.cpp decode-fast.cpp decode-complex.cpp decode-x87.cpp decode-sse.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp makeusage.cpp
@@ -78,7 +82,8 @@ COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-c
 ifdef PTLSIM_HYPERVISOR
 COMMONCPPFILES += lowlevel-64bit-xen.S ptlxen.cpp ptlxen-memory.cpp ptlxen-events.cpp ptlxen-common.cpp ptlmon.cpp ptlctl.cpp
 endif
-OOOCPPFILES = ooocore.cpp ooopipe.cpp oooexec.cpp seqcore.cpp branchpred.cpp
+OOOCPPFILES = ooocore.cpp ooopipe.cpp oooexec.cpp smtcore.cpp smtpipe.cpp smtexec.cpp seqcore.cpp branchpred.cpp
+
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
 CFLAGS += -D__PTLSIM_OOO_ONLY__
@@ -195,7 +200,7 @@ CPPFILES = $(COMMONCPPFILES) $(PT2XCPPFILES) $(OOOCPPFILES)
 # Miscellaneous:
 #
 
-DISTFILES = $(CPPFILES) $(INCLUDEFILES) Makefile ptlsim.lds ptlsim32.lds COPYING README 
+DISTFILES = $(CPPFILES) $(INCLUDEFILES) Makefile *.lds dstbuild COPYING README 
 
 dist: $(DISTFILES)
 	tar zcvf ptlsim-`date "+%Y%m%d%H%M%S"`.tar.gz $(DISTFILES)

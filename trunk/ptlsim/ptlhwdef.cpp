@@ -16,7 +16,7 @@ extern void print_message(const char* text);
 
 const char* opclass_names[OPCLASS_COUNT] = {
   "logic", "addsub", "addsubc", "addshift", "sel", "cmp", "br.cc", "jmp", "bru", 
-  "assist", "ld", "st", "ld.pre", "shiftsimple", "shift", "mul", "bitscan", "flags",  "chk", 
+  "assist", "mf", "ld", "st", "ld.pre", "shiftsimple", "shift", "mul", "bitscan", "flags",  "chk", 
   "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f"
 };
 
@@ -156,6 +156,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"ldx",            OPCLASS_LOAD,          L, opABC,       ANYLDU}, // load sign extended
   {"ld.pre",         OPCLASS_PREFETCH,      1, opAB,        ANYLDU}, // prefetch
   {"st",             OPCLASS_STORE,         1, opABC,       ANYSTU}, // store
+  {"mf",             OPCLASS_FENCE,         1, 0,           STU0  }, // memory fence (extshift holds type: 01 = st, 10 = ld, 11 = ld.st)
   // Shifts, rotates and complex masking
   {"shl",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
   {"shr",            OPCLASS_SHIFTROT,      A, opABC|ccC,   ANYALU},
@@ -450,8 +451,13 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   sbname << (fp ? fptype_names[op.size] : size_names[op.size]);
 
   if (isclass(op.opcode, OPCLASS_USECOND)) sbname << ".", cond_code_names[op.cond];
-  if (isload(op.opcode) || isstore(op.opcode)) {
-    sbname << ((op.cond == LDST_ALIGN_LO) ? ".low" : (op.cond == LDST_ALIGN_HI) ? ".high" : "");
+
+  if (ld|st) {
+    if (op.opcode == OP_mf) {
+      static const char* mf_names[4] = {"none", "st", "ld", "all"};
+      sbname << '.', mf_names[op.extshift];
+    }
+    sbname << ((op.cond == LDST_ALIGN_LO) ? ".lo" : (op.cond == LDST_ALIGN_HI) ? ".hi" : "");
   } else if (op.opcode == OP_mask) {
     sbname << ((op.cond == 0) ? "" : (op.cond == 1) ? ".z" : (op.cond == 2) ? ".x" : ".???");
   }
