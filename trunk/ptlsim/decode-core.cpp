@@ -425,15 +425,8 @@ static const byte insn_is_simple[512] = {
 
 static int transop_histogram[MAX_TRANSOPS_PER_USER_INSN+1];
 
-TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
-  bb.reset(rvp);
-  rip = rvp;
-  ripstart = rvp;
-  use64 = rvp.use64;
-  kernel = rvp.kernel;
-  dirflag = rvp.df;
+void TraceDecoder::reset() {
   byteoffset = 0;
-
   transbufcount = 0;
   pfec = 0;
   faultaddr = 0;
@@ -446,6 +439,33 @@ TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
   some_insns_complex = 0;
   used_microcode_assist = 0;
   end_of_block = false;
+}
+
+TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
+  reset();
+  bb.reset(rvp);
+  rip = rvp;
+  ripstart = rvp;
+  use64 = rvp.use64;
+  kernel = rvp.kernel;
+  dirflag = rvp.df;
+}
+
+TraceDecoder::TraceDecoder(Context& ctx, Waddr rip) {
+  reset();
+  use64 = ctx.use64;
+  kernel = ctx.kernel_mode;
+  dirflag = ((ctx.internal_eflags & FLAG_DF) != 0);
+
+  bb.reset();
+  setzero(bb.rip);
+  bb.rip.rip = rip;
+  bb.rip.use64 = use64;
+  bb.rip.kernel = kernel;
+  bb.rip.df = dirflag;
+
+  rip = rip;
+  ripstart = rip;
 }
 
 void TraceDecoder::put(const TransOp& transop) {
@@ -1514,18 +1534,20 @@ void TraceDecoder::invalidate() {
 // extends onto an invalid page. Return the number
 // of valid bytes, if any.
 //
-// We limit BBs to at most MAX_BB_BYTES; this ensures
+// We limit BBs to at most insnbytes_bufsize; this ensures
 // we can do a bulk copy of the potentially unaligned
 // instruction bytes into insnbytes once at the start,
 // rather than having to constantly do checks.
 //
 
-int TraceDecoder::fillbuf(Context& ctx) {
+int TraceDecoder::fillbuf(Context& ctx, byte* insnbytes, int insnbytes_bufsize) {
+  this->insnbytes = insnbytes;
+  this->insnbytes_bufsize = insnbytes_bufsize;
   byteoffset = 0;
   faultaddr = 0;
   pfec = 0;
   invalid = 0;
-  valid_byte_count = ctx.copy_from_user(insnbytes, bb.rip, MAX_BB_BYTES, pfec, faultaddr, true);
+  valid_byte_count = ctx.copy_from_user(insnbytes, bb.rip, insnbytes_bufsize, pfec, faultaddr, true, ptelo, ptehi);
   return valid_byte_count;
 }
 
@@ -1645,7 +1667,7 @@ bool TraceDecoder::translate() {
   } else {
     // Block did not end with a branch: do we have more room for another x86 insn?
     if (((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN))
-        || ((rip - bb.rip) >= (MAX_BB_BYTES-15))
+        || ((rip - bb.rip) >= (insnbytes_bufsize-15))
         || (user_insn_count >= MAX_BB_X86_INSNS)) {
       if (logable(5)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
       // bb.rip_taken and bb.rip_not_taken were already filled out for the last instruction.
@@ -1708,8 +1730,10 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
 
   translate_timer.start();
 
+  byte insnbuf[MAX_BB_BYTES];
+
   TraceDecoder trans(rvp);
-  trans.fillbuf(ctx);
+  trans.fillbuf(ctx, insnbuf, sizeof(insnbuf));
 
   if (logable(5) | log_code_page_ops) {
     logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
@@ -1799,8 +1823,10 @@ void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Wad
   RIPVirtPhys rvp = rip;
   rvp.update(ctx);
 
+  byte insnbuf[MAX_BB_BYTES];
+
   TraceDecoder trans(rvp);
-  trans.fillbuf(ctx);
+  trans.fillbuf(ctx, insnbuf, sizeof(insnbuf));
 
   if (logable(5) | log_code_page_ops) {
     logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
@@ -1832,8 +1858,10 @@ BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
   RIPVirtPhys rvp = rip;
   rvp.update(ctx);
 
+  byte insnbuf[MAX_BB_BYTES];
+
   TraceDecoder trans(rvp);
-  trans.fillbuf(ctx);
+  trans.fillbuf(ctx, insnbuf, sizeof(insnbuf));
 
   if (logable(5) | log_code_page_ops) {
     logfile << "Translating ", rvp, " (", trans.valid_byte_count, " bytes valid) at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;

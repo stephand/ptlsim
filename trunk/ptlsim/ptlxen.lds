@@ -11,28 +11,28 @@ SEARCH_DIR("/usr/x86_64-suse-linux/lib64"); SEARCH_DIR("/usr/local/lib64"); SEAR
 SECTIONS
 {
   /* Start at PML4(510): */
-  . = 0xffffff0000000000;
+  . = 0x0000000000000000;
   .bootpage       : { *(.bootpage) }
 
-  . = 0xffffff0000001000;
+  . = 0x0000000000001000;
   .hypercall      : { *(.hypercall) }
 
-  . = 0xffffff0000002000;
+  . = 0x0000000000002000;
   .shinfo      : { *(.shinfo) }
 
-  . = 0xffffff0000003000;
+  . = 0x0000000000003000;
   .sshinfo     : { *(.sshinfo) }
 
-  . = 0xffffff0000004000;
+  . = 0x0000000000004000;
   .xfer        : { *(.xfer) }
 
-  . = 0xffffff0000005000;
+  . = 0x0000000000005000;
   .ctx         : { *(.ctx)  }
 
   /* Skip 32 VCPU context pages */
-  . = 0xffffff0000025000;
+  . = 0x0000000000025000;
 
-  PROVIDE (__executable_start = 0xffffff0000004000);
+  PROVIDE (__executable_start = 0x0000000000004000);
 
   .interp         : { *(.interp) }
   .hash           : { *(.hash) }

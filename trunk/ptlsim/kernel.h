@@ -257,12 +257,15 @@ static inline Waddr mapped_virt_to_phys(void* rawvirt) {
   return (Waddr)rawvirt;
 }
 
-inline int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
+inline int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec, Level1PTE& ptelo, Level1PTE& ptehi) {
   bool readable;
   bool executable;
 
   int n = 0;
   pfec = 0;
+
+  ptelo = 0;
+  ptehi = 0;
 
   readable = asp.fastcheck((byte*)addr, asp.readmap);
   if likely (forexec) executable = asp.fastcheck((byte*)addr, asp.execmap);

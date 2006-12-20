@@ -32,6 +32,13 @@
 
 using namespace SMTModel;
 
+static void force_logging_enabled() {
+  logenable = 1;
+  config.start_log_at_iteration = 0;
+  config.loglevel = 99;
+  config.flush_event_log_every_cycle = 1;
+}
+
 namespace SMTModel {
   byte uop_executable_on_cluster[OP_MAX_OPCODE];
   W32 forward_at_cycle_lut[MAX_CLUSTERS][MAX_FORWARDING_LATENCY+1];
@@ -90,51 +97,36 @@ static void init_luts() {
 }
 
 void ThreadContext::reset() {
-  //      setzero(thread_ctx);
   setzero(specrrt);
   setzero(commitrrt);
 
-  // Fetch-related structures
   setzero(fetchrip);
   current_basic_block = null;
   current_basic_block_transop_index = -1;
-
   stall_frontend = false;
   waiting_for_icache_fill = false;
-
-  // Last block in icache we fetched into our buffer
-  current_icache_block = 0;
   fetch_uuid = 0;
+  current_icache_block = 0;
   loads_in_flight = 0;
   stores_in_flight = 0;
   prev_interrupts_pending = false;
   handle_interrupt_at_next_eom = false;
+  stop_at_next_eom = false;
 
   last_commit_at_cycle = 0;
   smc_invalidate_pending = 0;
   setzero(smc_invalidate_rvp);
       
-  //commit
   chk_recovery_rip = 0;
-
-  /// current split ld or st
   unaligned_ldst_buf.reset();
-
-  //    LoadStoreAliasPredictor lsap;
-
-  //inside_spinlock_now = 0;
-  //entered_spinlock_at_cycle = 0;
   consecutive_commits_inside_spinlock = 0;
 
-  // statistics:
   total_uops_committed = 0;
   total_insns_committed = 0;
   dispatch_deadlock_countdown = 0;    
   issueq_count = 0;
-  max_issueq_count = 0;
-
   queued_mem_lock_release_count = 0;
-
+  branchpred.init();
 }
 
 void ThreadContext::init() {
@@ -156,37 +148,30 @@ void ThreadContext::init() {
   rob_memory_fence_list("memory-fence", rob_states, 0);
   rob_ready_to_commit_queue("ready-to-commit", rob_states, ROB_STATE_READY);
 
-  fetch_uuid = 0;
-  current_icache_block = 0;
-  prev_interrupts_pending = 0;
-  handle_interrupt_at_next_eom = 0;
-  current_basic_block = null; 
-  current_basic_block_transop_index = 0; 
+  reset();
+}
 
-  branchpred.init();
-  issueq_count = 0;
-  total_uops_committed = 0;
-  total_insns_committed = 0;
+void SMTCore::reset() {
+  round_robin_reg_file_offset = 0;
+  caches.reset();
+  caches.callback = &cache_callbacks;
+  setzero(robs_on_fu);
+  foreach_issueq(reset(coreid));
+  
+  reserved_iq_entries = (int)sqrt(ISSUE_QUEUE_SIZE / MAX_THREADS_PER_CORE);
+  assert(reserved_iq_entries && reserved_iq_entries < ISSUE_QUEUE_SIZE);
 
-  if(config.reserved_iq_entries){
-    max_issueq_count = ISSUE_QUEUE_SIZE - config.reserved_iq_entries;
-    logfile << " set thread ", threadid, " max_issueq_count ", max_issueq_count, " from reserved_iq_entries ", config.reserved_iq_entries, endl;
-  }else{
-    max_issueq_count = ISSUE_QUEUE_SIZE - (int)sqrt(ISSUE_QUEUE_SIZE/MAX_THREAD_SIZE);
-    logfile << " set thread ", threadid, " max_issueq_count ", max_issueq_count, endl;        
-  }
+  foreach_issueq(set_reserved_entries(reserved_iq_entries * MAX_THREADS_PER_CORE));
+  foreach_issueq(reset_shared_entries());
+
+  foreach (i, threadcount) threads[i]->reset();
 }
 
 void SMTCore::init_generic() {
   //
   // Miscellaneous
   //
-
-  round_robin_reg_file_offset = 0;
-  caches.reset();
-  caches.callback = &cache_callbacks;
-  setzero(robs_on_fu);
-  foreach_issueq(reset(coreid));
+  reset();
 }
 
 template <typename T> 
@@ -320,7 +305,6 @@ ostream& RegisterRenameTable::print(ostream& os) const {
 //
 bool SMTCore::runcycle() {
   bool exiting = 0;
-
   //
   // Detect edge triggered transition from 0->1 for
   // pending interrupt events, then wait for current
@@ -329,26 +313,39 @@ bool SMTCore::runcycle() {
   //
 
 #ifdef PTLSIM_HYPERVISOR
-  foreach(i, MAX_THREAD_SIZE){
-    if(!thread_ctx[i]) continue;
-    ThreadContext& thread = *thread_ctx[i];
-    bool current_interrupts_pending = thread.ctx.check_events();
-    bool edge_triggered = ((!thread.prev_interrupts_pending) & current_interrupts_pending);
-    thread.handle_interrupt_at_next_eom |= edge_triggered;
-    thread.prev_interrupts_pending = current_interrupts_pending;
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    bool current_interrupts_pending = thread->ctx.check_events();
+    bool edge_triggered = ((!thread->prev_interrupts_pending) & current_interrupts_pending);
+    thread->handle_interrupt_at_next_eom |= edge_triggered;
+    thread->prev_interrupts_pending = current_interrupts_pending;
   }
 #endif
 
   int total_issueq_count = 0;
+  int total_issueq_reserved_free = 0;
 
-  foreach (i, MAX_THREAD_SIZE) {
-    if(!thread_ctx[i]) continue;
-    ThreadContext& thread = *thread_ctx[i];
-    total_issueq_count += thread.issueq_count;
+  foreach (i, MAX_THREADS_PER_CORE) {
+    ThreadContext* thread = threads[i];
+    if unlikely (!thread) {
+      total_issueq_reserved_free += reserved_iq_entries;
+    } else {
+      total_issueq_count += thread->issueq_count;
+      if(thread->issueq_count < reserved_iq_entries){
+        db " thread.issueq_count ", thread->issueq_count, " < reserved_iq_entries ", reserved_iq_entries, endl;
+        total_issueq_reserved_free += reserved_iq_entries - thread->issueq_count;
+      }
+    }
   }
 
   if (total_issueq_count != issueq_all.count) {
     logfile << " cycle ", sim_cycle, " total_issueq_count ", total_issueq_count, " != iq count ", issueq_all.count, endl;
+    assert(0);
+  }
+
+  if ((ISSUE_QUEUE_SIZE - issueq_all.count) != (issueq_all.shared_entries + total_issueq_reserved_free)) {
+    logfile << " cycle ", sim_cycle, " ISSUE_QUEUE_SIZE ", ISSUE_QUEUE_SIZE, " - issueq_all.count ",  issueq_all.count, " !=  issueq_all.shared_entries ", issueq_all.shared_entries, 
+      " + total_issueq_reserved_free ", total_issueq_reserved_free, endl;
     assert(0);
   }
 
@@ -363,92 +360,95 @@ bool SMTCore::runcycle() {
   dispatchcount = 0;
   //  fetchcount = 0;
   //  prepcount = 0;
-  int thread_id;
+  int tid;
 
-  int commitrc[MAX_THREAD_SIZE];
+  int commitrc[MAX_THREADS_PER_CORE];
 
-  //++MTY Is this a good idea? Each thread could commit in parallel since the hardware is dedicated for each thread.
-  thread_id = sim_cycle & (MAX_THREAD_SIZE -1);
-  foreach (i, MAX_THREAD_SIZE) {
-    //TODO: each commit COMMIT_WIDTH number of uops, will be changed
-    if (!thread_ctx[thread_id]) continue;
-    commitrc[thread_id] = thread_ctx[thread_id]->commit();
-    thread_id = add_index_modulo(thread_id, +1, MAX_THREAD_SIZE);
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    if unlikely (!thread->ctx.running) continue;
+    commitrc[i] = thread->commit();
   }
-  
-  thread_id = sim_cycle & (MAX_THREAD_SIZE -1);
-  foreach (i, MAX_THREAD_SIZE) {
-    if (!thread_ctx[thread_id]) continue;      
-    for_each_cluster(j) thread_ctx[thread_id]->writeback(j);
-    thread_id = add_index_modulo(thread_id, +1, MAX_THREAD_SIZE);
-  } 
 
-  //
-  // Shared pipeline stages
-  //
+  tid = sim_cycle % MAX_THREADS_PER_CORE;
 
-  foreach (i, MAX_THREAD_SIZE) {
-    if (!thread_ctx[i]) continue;
-    for_each_cluster(j) { thread_ctx[i]->transfer(j); }
+  foreach (i, MAX_THREADS_PER_CORE) {
+    if unlikely (!threads[tid]) continue;
+    ThreadContext* thread = threads[tid];
+    if unlikely (!thread->ctx.running) continue;
+    for_each_cluster(j) thread->writeback(j);
+    tid = add_index_modulo(tid, +1, MAX_THREADS_PER_CORE);
+
+    for_each_cluster(j) thread->transfer(j);
   }
 
   for_each_cluster(i) { issue(i); }
-  
-  foreach (i, MAX_THREAD_SIZE){
-    if (!thread_ctx[i]) continue;
-    for_each_cluster(j) { thread_ctx[i]->complete(j); }
+
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    if unlikely (!thread->ctx.running) continue;
+    for_each_cluster(j) { thread->complete(j); }
   }
 
-  int dispatchrc[MAX_THREAD_SIZE];
+  int dispatchrc[MAX_THREADS_PER_CORE];
 
-  thread_id = sim_cycle & (MAX_THREAD_SIZE -1);
-  foreach (i, MAX_THREAD_SIZE) {
-    if (!thread_ctx[thread_id]) continue;
-    dispatchrc[thread_id] = thread_ctx[thread_id]->dispatch();
-    thread_id = add_index_modulo(thread_id, +1, MAX_THREAD_SIZE);
+  tid = sim_cycle % MAX_THREADS_PER_CORE;
+  foreach (i, MAX_THREADS_PER_CORE) {
+    if (!threads[tid]) continue;
+    ThreadContext* thread = threads[tid];
+    if unlikely (!thread->ctx.running) continue;
+    dispatchrc[tid] = thread->dispatch();
+    tid = add_index_modulo(tid, +1, MAX_THREADS_PER_CORE);
   }
 
   //
   // Select the thread from which to fetch instructions
   // 
-  thread_id = 0;
-  if (thread_ctx[0] && thread_ctx[1]) {
-    if (config.use_icount) {
-      // current only work for two threads:
-      if (thread_ctx[0]->issueq_count > thread_ctx[1]->issueq_count){
-        if (logable(100)) logfile << " cycle ", sim_cycle, " TH 1 fetch() first  thread_ctx[0]->issueq_count ", 
-                            thread_ctx[0]->issueq_count, " > thread_ctx[1]->issueq_count ",  thread_ctx[1]->issueq_count, endl;
-        thread_id = 1;
-      } else {
-        if(logable(100)) logfile << " cycle ", sim_cycle, " TH 0 fetch() first  thread_ctx[0]->issueq_count ",
-                           thread_ctx[0]->issueq_count, " <= thread_ctx[1]->issueq_count ",  thread_ctx[1]->issueq_count, endl;         
-        thread_id = 0;
-      }
-    } else { /// rr:
-      thread_id = sim_cycle & (MAX_THREAD_SIZE -1);
-    }
-  } else {//single thread:
-    thread_id = 0;      
+
+  W16 iq_used[MAX_THREADS_PER_CORE];
+  W16 thread_idx[MAX_THREADS_PER_CORE];
+
+  //
+  // ICOUNT policy: give fetch priority to thread with smallest
+  // number of occupied issue queue slots.
+  //
+  // This means we sort in ascending order, with any unused threads
+  // (if any) given the lowest priority.
+  //
+
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    iq_used[i] = thread->issueq_count;
+    if unlikely (!thread->ctx.running) iq_used[i] = ISSUE_QUEUE_SIZE;
+    thread_idx[i] = i;
   }
 
+  sort(thread_idx, threadcount, SortPrecomputedIndexListComparator<W16, false>(iq_used));
+ 
   //
-  // Do frontend stages
+  // Do frontend stages in priority order
   //
-  foreach (i, MAX_THREAD_SIZE) {
-    ThreadContext* thread = thread_ctx[thread_id];
-    if (!thread) continue;
+  foreach (j, MAX_THREADS_PER_CORE) {
+    int i = thread_idx[j];
+    ThreadContext* thread = threads[i];
+    if unlikely (!thread) continue;
+    if unlikely (!thread->ctx.running) continue;
 
-    if likely (dispatchrc[thread_id] >= 0) {
+    if likely (dispatchrc[i] >= 0) {
       thread->frontend();
       thread->rename();
       thread->fetch();
     }
-    thread_id = add_index_modulo(thread_id, +1, MAX_THREAD_SIZE);
   }
 
+  //
   // Always clock the issue queues: they're independent of all threads
+  //
   foreach_issueq(clock());
 
+  //
+  // Flush event log ring buffer
+  //
   if unlikely (config.event_log_enabled) {
     if unlikely (config.flush_event_log_every_cycle) {
       eventlog.flush(true);
@@ -457,15 +457,20 @@ bool SMTCore::runcycle() {
 
 #ifdef ENABLE_CHECKS
   // This significantly slows down simulation; only enable it if absolutely needed:
-  //check_refcounts();
+  // check_refcounts();
 #endif
 
-  foreach (i, MAX_THREAD_SIZE) {
-    if (!thread_ctx[i]) continue;
-    if unlikely (commitrc[i] == COMMIT_RESULT_SMC) {
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    if unlikely (!thread->ctx.running) continue;
+    int rc = commitrc[i];
+    if likely ((rc == COMMIT_RESULT_OK) | (rc == COMMIT_RESULT_NONE)) continue;
+
+    switch (rc) {
+    case COMMIT_RESULT_SMC: {
       if (logable(3)) logfile << "Potentially cross-modifying SMC detected: global flush required (cycle ", sim_cycle, ", ", total_user_insns_committed, " commits)", endl, flush;
       //
-      //++MTY DO NOT GLOBALLY FLUSH! It will cut off the other thread(s) in the
+      // DO NOT GLOBALLY FLUSH! It will cut off the other thread(s) in the
       // middle of their currently committing x86 instruction, causing massive
       // internal corruption on any VCPUs that happen to be straddling the
       // instruction boundary.
@@ -481,31 +486,44 @@ bool SMTCore::runcycle() {
       // "invisible" list, where they cannot be looked up anymore,
       // but their memory is not freed until the lock is released.
       //
-      thread_ctx[i]->flush_pipeline();
-      thread_ctx[i]->invalidate_smc();
-      exiting = 0;
-    } else if unlikely (commitrc[i] == COMMIT_RESULT_EXCEPTION) {
-      exiting = !thread_ctx[i]->handle_exception();
-    } else if unlikely (commitrc[i] == COMMIT_RESULT_BARRIER) {
-      exiting = !thread_ctx[i]->handle_barrier();
-    } else if unlikely (commitrc[i] == COMMIT_RESULT_INTERRUPT) {
-      thread_ctx[i]->handle_interrupt();
-    } else if unlikely (commitrc[i] == COMMIT_RESULT_STOP) {
-      exiting = 1;
+      thread->flush_pipeline();
+      thread->invalidate_smc();
+      break;
+    }
+    case COMMIT_RESULT_EXCEPTION: {
+      exiting = !thread->handle_exception();
+      break;
+    }
+    case COMMIT_RESULT_BARRIER: {
+      exiting = !thread->handle_barrier();
+      break;
+    }
+    case COMMIT_RESULT_INTERRUPT: {
+      thread->handle_interrupt();
+      break;
+    }
+    case COMMIT_RESULT_STOP: {
+      thread->flush_pipeline();
+      thread->stall_frontend = 1;
+      machine.stopped[thread->ctx.vcpuid] = 1;
+      // Wait for other cores to sync up, so don't exit right away
+      break;
+    }
     }
   }
 
-  foreach (i, MAX_THREAD_SIZE) {
-    if (!thread_ctx[i]) continue;
-    ThreadContext& thread = *thread_ctx[i];
-    if unlikely ((sim_cycle - thread.last_commit_at_cycle) > 1024) {
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    if unlikely (!thread->ctx.running) break;
+
+    if unlikely ((sim_cycle - thread->last_commit_at_cycle) > 1024) {
       stringbuf sb;
-      sb << "TH ", thread.threadid, " WARNING: At cycle ", sim_cycle, ", ", total_user_insns_committed, 
-        " user commits: no instructions have committed for ", (sim_cycle - thread.last_commit_at_cycle),
-        " cycles; the pipeline could be deadlocked", endl;
+      sb << "[vcpu ", thread->ctx.vcpuid, "] thread ", thread->threadid, ": WARNING: At cycle ",
+        sim_cycle, ", ", total_user_insns_committed,  " user commits: no instructions have committed for ",
+        (sim_cycle - thread->last_commit_at_cycle), " cycles; the pipeline could be deadlocked", endl;
       logfile << sb, flush;
       cerr << sb, flush;
-      exiting = 1; // I am not sure we should exit if there is no insn scheduled on this thread
+      exiting = 1;
     }
   }
 
@@ -605,7 +623,7 @@ stringbuf& ReorderBufferEntry::get_operand_info(stringbuf& sb, int operand) cons
   return sb;
 }
 
-ThreadContext& ReorderBufferEntry::getthread() const { return *getcore().thread_ctx[threadid]; }
+ThreadContext& ReorderBufferEntry::getthread() const { return *getcore().threads[threadid]; }
 
 issueq_tag_t ReorderBufferEntry::get_tag() {
   int mask = ((1 << MAX_THREADS_BIT) - 1) << MAX_ROB_IDX_BIT;
@@ -689,11 +707,15 @@ void ThreadContext::print_rename_tables(ostream& os) {
 
 void SMTCore::print_smt_state(ostream& os) {
   os << " print smt statistics :", endl;
-  foreach(i, MAX_THREAD_SIZE){
-    if(!thread_ctx[i]) continue;
-    os << "Thread ", i, "\n total_uops_committed ", thread_ctx[i]->total_uops_committed, "\n uipc ", thread_ctx[i]->total_uops_committed*1.0/sim_cycle, "\n total_insns_committed ",  thread_ctx[i]->total_insns_committed, "\n ipc ", thread_ctx[i]->total_insns_committed*1.0/sim_cycle, endl;
+
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    os << "Thread ", i, ":", endl,
+      "  total_uops_committed ", thread->total_uops_committed, endl,
+      "  uipc ", double(thread->total_uops_committed) / double(iterations), endl,
+      "  total_insns_committed ",  thread->total_insns_committed,
+      "  ipc ", double(thread->total_insns_committed) / double(iterations), endl;
   }
-  os << flush;
 }
 
 void ThreadContext::dump_smt_state(ostream& os) {
@@ -707,6 +729,7 @@ void ThreadContext::dump_smt_state(ostream& os) {
 
 void SMTCore::dump_smt_state(ostream& os) {
   os << "SMT common structures:", endl;
+
   print_list_of_state_lists<PhysicalRegister>(os, physreg_states, "Physical register states");
   foreach (i, PHYS_REG_FILE_COUNT) {
     os << physregfiles[i];
@@ -717,9 +740,9 @@ void SMTCore::dump_smt_state(ostream& os) {
   foreach_issueq(print(os));
   caches.print(os);
 
-  foreach(i, MAX_THREAD_SIZE){
-    if(!thread_ctx[i]) continue;
-    thread_ctx[i]->dump_smt_state(os);
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    thread->dump_smt_state(os);
   }
 }
 
@@ -732,7 +755,7 @@ void SMTCore::dump_smt_state(ostream& os) {
 void SMTCore::check_refcounts() {
   // this should be for each thread instead of whole core:
   // for now, we just work on thread[0];
-  ThreadContext& thread = *thread_ctx[0];
+  ThreadContext& thread = *threads[0];
   Queue<ReorderBufferEntry, ROB_SIZE>& ROB = thread.ROB;
   RegisterRenameTable& specrrt = thread.specrrt;
   RegisterRenameTable& commitrrt = thread.commitrrt;
@@ -788,7 +811,7 @@ void SMTCore::check_refcounts() {
 void SMTCore::check_rob() {
   // this should be for each thread instead of whole core:
   // for now, we just work on thread[0];
-  ThreadContext& thread = *thread_ctx[0];
+  ThreadContext& thread = *threads[0];
   Queue<ReorderBufferEntry, ROB_SIZE>& ROB = thread.ROB;
 
   foreach (i, ROB_SIZE) {
@@ -796,15 +819,16 @@ void SMTCore::check_rob() {
     if (!rob.entry_valid) continue;
     assert(inrange((int)rob.forward_cycle, 0, (MAX_FORWARDING_LATENCY+1)-1));
   }
-  foreach (j, numberOfThread){
-    ThreadContext& thread = *thread_ctx[j];
+
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
     foreach (i, rob_states.count) {
-      StateList& list = *(thread.rob_states[i]);
+      StateList& list = *(thread->rob_states[i]);
       ReorderBufferEntry* rob;
       foreach_list_mutable(list, rob, entry, nextentry) {
         assert(inrange(rob->index(), 0, ROB_SIZE-1));
         assert(rob->current_state_list == &list);
-        if (!((rob->current_state_list != &thread.rob_free_list) ? rob->entry_valid : (!rob->entry_valid))) {
+        if (!((rob->current_state_list != &thread->rob_free_list) ? rob->entry_valid : (!rob->entry_valid))) {
           logfile << "ROB ", rob->index(), " list = ", rob->current_state_list->name, " entry_valid ", rob->entry_valid, endl, flush;
           dump_smt_state(logfile);
         assert(false);
@@ -1540,11 +1564,15 @@ SMTMachine::SMTMachine(const char* name) {
 
 bool SMTMachine::init(PTLsimConfig& config) {
   // Note: we only create a single core for all contexts for now.
-  assert(MAX_SMT_CORES == 1);
   cores[0] = new SMTCore(0, *this);
 
   foreach (i, contextcount) {
-    cores[0]->init_thread(i, contextof(i));
+    SMTCore& core = *cores[0];
+    core.threadcount++;
+    ThreadContext* thread = new ThreadContext(core, i, contextof(i));
+    core.threads[i] = thread;
+    thread->init();
+
     //
     // Note: in a multi-processor model, config may
     // specify various ways of slicing contextcount up
@@ -1566,9 +1594,12 @@ bool SMTMachine::init(PTLsimConfig& config) {
 int SMTMachine::run(PTLsimConfig& config) {
   time_this_scope(cttotal);
 
-  logfile << "Starting checkpointed core toplevel loop", endl, flush;
+  logfile << "Starting SMT core toplevel loop", endl, flush;
 
+  // All VCPUs are running:
+  stopped = 0;
 
+  cores[0]->reset();
   cores[0]->flush_pipeline_all();
 
   logfile << "IssueQueue states:", endl;
@@ -1580,8 +1611,9 @@ int SMTMachine::run(PTLsimConfig& config) {
   }
 
   bool exiting = false;
+  bool stopping = false;
 
-  while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
+  for (;;) {
     if unlikely (iterations >= config.start_log_at_iteration) {
       if unlikely (!logenable) logfile << "Start logging at level ", config.loglevel, " in cycle ", iterations, endl, flush;
       logenable = 1;
@@ -1590,43 +1622,58 @@ int SMTMachine::run(PTLsimConfig& config) {
     update_progress();
     inject_events();
 
-    SMTCore& core =* cores[0]; /// only one core for now.`
-    foreach (i, MAX_THREAD_SIZE) {
-      ThreadContext* threadpr = core.thread_ctx[i];
-      if (!threadpr) continue;
-      
-      Context& ctx = threadpr->ctx;
+    SMTCore& core =* cores[0]; // only one core for now
+    foreach (i, core.threadcount) {
+      ThreadContext* thread = core.threads[i];
 #ifdef PTLSIM_HYPERVISOR
-      if unlikely (!ctx.running) {
-        if (ctx.check_events()) threadpr->handle_interrupt();
+      if unlikely (!thread->ctx.running) {
+        if unlikely (stopping) {
+          // Thread is already waiting for an event: stop it now
+          logfile << "[vcpu ", thread->ctx.vcpuid, "] Already stopped at cycle ", sim_cycle, endl;
+          stopped[thread->ctx.vcpuid] = 1;
+        } else {
+          if (thread->ctx.check_events()) thread->handle_interrupt();
+        }
         continue;
       }
 #endif
     }
+
     exiting |= core.runcycle();
 
-    exiting |= check_for_async_sim_break();
+    if unlikely (check_for_async_sim_break() && (!stopping)) {
+      logfile << "Waiting for all VCPUs to reach stopping point, starting at cycle ", sim_cycle, endl;
+      // force_logging_enabled();
+      SMTCore& core =* cores[0];
+      foreach (i, core.threadcount) core.threads[i]->stop_at_next_eom = 1;
+      stopping = 1;
+    }
 
     stats.summary.cycles++;
     stats.smtcore.cycles++;
     sim_cycle++;
     iterations++;
 
+    if unlikely (stopping) {
+      // logfile << "Waiting for all VCPUs to stop at ", sim_cycle, ": mask = ", stopped, " (need ", contextcount, " VCPUs)", endl;
+      exiting |= (stopped.integer() == bitmask(contextcount));
+    }
+
     if unlikely (exiting) break;
   }
 
   logfile << "Exiting SMT mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
 
+  SMTCore& core =* cores[0]; /// only one core for now.
 
-  SMTCore& core =* cores[0]; /// only one core for now.`
-  foreach (i, MAX_THREAD_SIZE){
-    ThreadContext* threadpr = core.thread_ctx[i];
-    if (!threadpr) continue;
-    threadpr->core_to_external_state();
+  foreach (i, core.threadcount) {
+    ThreadContext* thread = core.threads[i];
 
-    if (logable(6) | ((sim_cycle - threadpr->last_commit_at_cycle) > 1024) | config.dump_state_now) {
-      logfile << "Core State at end: thread ", threadpr->threadid, " context: ", endl;
-      logfile << threadpr->ctx;
+    thread->core_to_external_state();
+
+    if (logable(6) | ((sim_cycle - thread->last_commit_at_cycle) > 1024) | config.dump_state_now) {
+      logfile << "Core State at end for thread ", thread->threadid, ": ", endl;
+      logfile << thread->ctx;
     }
   }
 
@@ -1642,7 +1689,9 @@ int SMTMachine::run(PTLsimConfig& config) {
 
 void SMTMachine::dump_state(ostream& os) {
   os << " dump_state include event if -ringbuf enabled: ",endl;
-  foreach (i, contextcount) {
+  //  foreach (i, contextcount) {
+  foreach (i, MAX_SMT_CORES) {
+    os << " dump_state for core ", i,endl,flush;
     if (!cores[i]) continue;
     SMTCore& core =* cores[i];
     Context& ctx = contextof(i);
@@ -1654,16 +1703,18 @@ void SMTMachine::dump_state(ostream& os) {
     core.dump_smt_state(os);
     core.print_smt_state(os);
   }
-  os << "Memory interlock buffer:", endl;
+  os << "Memory interlock buffer:", endl, flush;
   interlocks.print(os);
-  foreach (i, 2) {
-    ThreadContext& thread = *cores[0]->thread_ctx[i];
-    os << "Thread ", i, ":", endl;
-    os << "rip:                                 ", (void*)thread.ctx.commitarf[REG_rip], endl;
-    os << "consecutive_commits_inside_spinlock: ", thread.consecutive_commits_inside_spinlock, endl;
-    os << "State:", endl;
-    os << thread.ctx;
-  }
+  /*
+   foreach (i, threadcount) {
+     ThreadContext* thread = *cores[0]->threads[i];
+     os << "Thread ", i, ":", endl;
+     os << "  rip:                                 ", (void*)thread.ctx.commitarf[REG_rip], endl;
+     os << "  consecutive_commits_inside_spinlock: ", thread.consecutive_commits_inside_spinlock, endl;
+     os << "  State:", endl;
+     os << thread.ctx;
+   }
+  */
 }
 
 namespace SMTModel {
@@ -1711,6 +1762,7 @@ void SMTMachine::update_stats(PTLsimStats& stats) {
 //
 void SMTMachine::flush_all_pipelines() {
   assert(cores[0]);
+  SMTCore* core = cores[0];
 
   //
   // Make sure all pipelines are flushed BEFORE
@@ -1718,11 +1770,11 @@ void SMTMachine::flush_all_pipelines() {
   // Otherwise there will still be some remaining
   // references to to the basic block
   //
-  cores[0]->flush_pipeline_all();
+  core->flush_pipeline_all();
 
-  foreach(i, MAX_THREAD_SIZE){
-    if(!cores[0]->thread_ctx[i]) continue;
-    cores[0]->thread_ctx[i]->invalidate_smc();
+  foreach (i, core->threadcount) {
+    ThreadContext* thread = core->threads[i];
+    thread->invalidate_smc();
   }  
 }
 

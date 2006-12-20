@@ -22,10 +22,6 @@ PTLsimConfig config;
 ConfigurationParser<PTLsimConfig> configparser;
 PTLsimStats stats;
 
-//for smt:
-#define ISSUE_QUEUE_SIZE 32
-#define MAX_THREAD_SIZE 2
-
 ostream logfile;
 bool logenable = 0;
 W64 sim_cycle = 0;
@@ -108,9 +104,6 @@ void PTLsimConfig::reset() {
   sequential_mode_insns = 0;
   exit_after_fullsim = 0;
 #endif
-
-  reserved_iq_entries = 0;
-  use_icount = 1;
 }
 
 template <>
@@ -165,7 +158,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
 
   section("Trace Stop Point");
   add(stop_at_user_insns,           "stopinsns",            "Stop after executing <stopinsns> user instructions");
-  add(stop_at_iteration,            "stop",                 "Stop after <stop> cycles");
+  add(stop_at_iteration,            "stopcycle",            "Stop after <stop> cycles");
   add(stop_at_rip,                  "stoprip",              "Stop before rip <stoprip> is translated for the first time");
   add(stop_at_user_insns_relative,  "stopinsns-rel",        "Stop after executing <stopinsns-rel> user instructions relative to start of current run");
   add(insns_in_last_basic_block,    "bbinsns",              "In final basic block, only translate <bbinsns> user instructions");
@@ -201,8 +194,6 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(sequential_mode_insns,        "seq",                  "Run in sequential mode for <seq> instructions before switching to out of order");
   add(exit_after_fullsim,           "exitend",              "Kill the thread after full simulation completes rather than going native");
 #endif
-  add(reserved_iq_entries,           "reserved_iq_entries",            "the number of iq entries guaranteed for each thread, default is sqrt(iq size/number of thread)");
-  add(use_icount,           "use_icount",            "use icount to select fetch thread");
 };
 
 #ifndef CONFIG_ONLY

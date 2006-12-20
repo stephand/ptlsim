@@ -19,9 +19,9 @@
 #define MAX_THREADS_BIT 4
 #define MAX_ROB_IDX_BIT 12
 
-#define MAX_THREAD_SIZE 2
+#define MAX_THREADS_PER_CORE 8
 #define mydb if(logable(101)) logfile << "TH ", threadid, " CYC ", sim_cycle, " ", 
-static const char* thread_names[MAX_THREAD_SIZE] = {"thread_0", "thread_1"};
+//static const char* thread_names[MAX_THREADS_PER_CORE] = {"thread_0", "thread_1"};
 
 //#define ENABLE_SIM_TIMING
 #ifdef ENABLE_SIM_TIMING
@@ -49,11 +49,11 @@ namespace SMTModel {
   // Global limits
   //
   
-  const int MAX_ISSUE_WIDTH = 8;
+  const int MAX_ISSUE_WIDTH = 4;
   
   // Largest size of any physical register file or the store queue:
-  const int MAX_PHYS_REG_FILE_SIZE = 256; //128;
-  const int PHYS_REG_FILE_SIZE = 256;
+  const int MAX_PHYS_REG_FILE_SIZE = 512; //128;
+  const int PHYS_REG_FILE_SIZE = 512;
   const int PHYS_REG_NULL = 0;
   
   //
@@ -175,7 +175,38 @@ namespace SMTModel {
     bitvec<size> allready;
     int count;
     byte coreid;
-    
+    /// a thread can used either sharing_entries or its own reserved_entries
+//     int reserved_entries_used[MAX_THREADS_PER_CORE];
+//     int shared_entries_used[MAX_THREADS_PER_CORE];
+    int shared_entries;
+    int reserved_entries;
+#define db  if(logable(1)) logfile << " db cycle ", sim_cycle,
+    //#define db_entries   if(logable(1)) logfile << " db cycle ", sim_cycle, " issueq_all.shared_entries ", issueq_all.shared_entries, endl
+    void set_reserved_entries(int num) { reserved_entries = num; }
+    bool reset_shared_entries(){ 
+      shared_entries = size - reserved_entries; 
+      db " set free_shared_entries ", shared_entries,endl;
+      return true;
+    }
+    bool alloc_resered_entry(){
+      db " before alloc a iq in reserved pool ", shared_entries, " ";
+      assert(shared_entries > 0);
+      shared_entries--;
+      db " alloc a iq in reserved pool ", shared_entries, endl, flush;
+      return true;
+    }
+    bool free_shared_entry(){
+      db " before free a iq in reserved pool ", shared_entries, " ";
+      assert(shared_entries < size  - reserved_entries);
+      shared_entries++;
+      db " free a iq in reserved pool ", shared_entries, endl, flush;
+      return true;
+    }    
+    bool shared_empty(){
+      db " shared_entries in reserved pool ", shared_entries, endl, flush;
+      return (shared_entries == 0);
+    }
+
     bool remaining() const { return (size - count); }
     bool empty() const { return (!count); }
     bool full() const { return (!remaining()); }
@@ -195,7 +226,9 @@ namespace SMTModel {
     bool broadcast(tag_t uopid);
     int issue();
     bool replay(int slot, const tag_t* operands, const tag_t* preready);
+    bool switch_to_end(int slot, const tag_t* operands, const tag_t* preready);
     bool remove(int slot);
+
     ostream& print(ostream& os) const;
     void tally_broadcast_matches(tag_t sourceid, const bitvec<size>& mask, int operand) const;
 
@@ -424,6 +457,7 @@ namespace SMTModel {
     W64 annul_after_and_including() { return annul(false); }
     int commit();
     void replay();
+    void replay_locked();
     int pseudocommit();
     void redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob);
     void redispatch_dependents(bool inclusive = true);
@@ -1061,7 +1095,7 @@ namespace SMTModel {
   name[0](description "-all", rob_states, flags);
 #endif
 
-  static const int ISSUE_QUEUE_SIZE = 32;
+  static const int ISSUE_QUEUE_SIZE = 64;
 
   // How many bytes of x86 code to fetch into decode buffer at once
   static const int ICACHE_FETCH_GRANULARITY = 16;
@@ -1119,6 +1153,7 @@ namespace SMTModel {
     int stores_in_flight;
     bool prev_interrupts_pending;
     bool handle_interrupt_at_next_eom;
+    bool stop_at_next_eom;
 
     W64 last_commit_at_cycle;
     bool smc_invalidate_pending;
@@ -1140,7 +1175,7 @@ namespace SMTModel {
     W64 total_insns_committed;
     int dispatch_deadlock_countdown;    
     int issueq_count;
-    int max_issueq_count;
+    //    int reserved_issueq_entries;
 
     //
     // List of memory locks that will be removed from
@@ -1152,7 +1187,7 @@ namespace SMTModel {
     byte queued_mem_lock_release_count;
     W64 queued_mem_lock_release_list[4];
 
-    ThreadContext(SMTCore& core_, int threadid_, Context& ctx_): core(core_), threadid(threadid_), ctx(ctx_){
+    ThreadContext(SMTCore& core_, int threadid_, Context& ctx_): core(core_), threadid(threadid_), ctx(ctx_) {
       reset();
     }
 
@@ -1194,8 +1229,10 @@ namespace SMTModel {
   struct SMTCore {
     int coreid;
     SMTMachine& machine;
-    ThreadContext* thread_ctx[MAX_THREAD_SIZE];
-    int numberOfThread;
+    ThreadContext* threads[MAX_THREADS_PER_CORE];
+    int threadcount;
+
+#define foreach_thread(T) for (ThreadContext* T = threads; T < (threads + threadcount); T++)
 
     ListOfStateLists rob_states;
     ListOfStateLists lsq_states;
@@ -1212,6 +1249,7 @@ namespace SMTModel {
     //
     // Issue Queues (one per cluster)
     //
+    int reserved_iq_entries;
 #define declare_issueq_templates template struct IssueQueue<ISSUE_QUEUE_SIZE>
 #ifdef MULTI_IQ
     IssueQueue<ISSUE_QUEUE_SIZE> issueq_int0;
@@ -1271,25 +1309,18 @@ namespace SMTModel {
 #define for_each_cluster(iter) foreach (iter, MAX_CLUSTERS)
 #define for_each_operand(iter) foreach (iter, MAX_OPERANDS)
 
-    SMTCore(int coreid_, SMTMachine& machine_): coreid(coreid_),  numberOfThread(0), machine(machine_), cache_callbacks(*this) {
-      setzero(thread_ctx);
+    SMTCore(int coreid_, SMTMachine& machine_): coreid(coreid_), machine(machine_), cache_callbacks(*this) {
+      threadcount = 0;
+      setzero(threads);
     }
     
     ~SMTCore(){};
-
-    void init_thread(int threadid_, Context& ctx_) {
-      //      logfile << " number of threads ", numberOfThread, endl;
-      //     assert(threadid_ == numberOfThread);
-      numberOfThread++;
-      ThreadContext& thread = *new ThreadContext(*this, threadid_, ctx_);
-      thread_ctx[threadid_] = &thread;
-      thread.init();
-    };
 
     // 
     // Initialize structures independent of the core parameters
     //
     void init_generic();
+    void reset();
 
     //
     // Initialize all structures for the first time
@@ -1301,8 +1332,8 @@ namespace SMTModel {
       //
       physregfiles[0]("int", coreid, 0, PHYS_REG_FILE_SIZE);
       physregfiles[1]("fp", coreid, 1, PHYS_REG_FILE_SIZE);
-      physregfiles[2]("st", coreid, 2, STQ_SIZE * MAX_THREAD_SIZE);
-      physregfiles[3]("br", coreid, 3, MAX_BRANCHES_IN_FLIGHT * MAX_THREAD_SIZE);
+      physregfiles[2]("st", coreid, 2, STQ_SIZE * MAX_THREADS_PER_CORE);
+      physregfiles[3]("br", coreid, 3, MAX_BRANCHES_IN_FLIGHT * MAX_THREADS_PER_CORE);
     }
 
     //
@@ -1365,7 +1396,7 @@ namespace SMTModel {
 
   struct SMTMachine: public PTLsimMachine {
     SMTCore* cores[MAX_SMT_CORES];
-
+    bitvec<MAX_CONTEXTS> stopped;
     SMTMachine(const char* name);
     virtual bool init(PTLsimConfig& config);
     virtual int run(PTLsimConfig& config);

@@ -506,6 +506,8 @@ ostream& operator <<(ostream& os, const SlabAllocator& slaballoc);
 //
 ExtentAllocator<4096, 512, 512> pagealloc;
 
+static const W32 SLAB_PAGE_MAGIC = 0x42414c53; // 'SLAB'
+
 struct SlabAllocator {
 #ifdef __x86_64__
   // 64-bit x86-64: 8 + 8 = 16 bytes
@@ -518,12 +520,19 @@ struct SlabAllocator {
   static const int GRANULARITY = sizeof(FreeObjectHeader);
 
   // 32 bytes on both x86-64 and 32-bit x86
-  struct PageHeader: public selflistlink {
+  struct PageHeader {
+    selflistlink link;
     FreeObjectHeader* freelist;
     SlabAllocator* allocator;
-    W64s freecount;
-    W64 pad;
-    FreeObjectHeader objs[];
+    W32s freecount;
+    W32 magic;
+
+    FreeObjectHeader* getbase() const { return (FreeObjectHeader*)floor(Waddr(this), PAGE_SIZE); }
+
+    static PageHeader* headerof(void* p) {
+      PageHeader* h = (PageHeader*)(floor(Waddr(p), PAGE_SIZE) + PAGE_SIZE - sizeof(PageHeader));
+      return h;
+    }
   };
 
   W64 current_objs_allocated;
@@ -585,7 +594,13 @@ struct SlabAllocator {
 
     if (!page_is_slab_bitmap[pfn]) return null;
 
-    PageHeader* page = (PageHeader*)floor((Waddr)p, PAGE_SIZE);
+    PageHeader* page = PageHeader::headerof(p);
+
+    if unlikely (page->magic != SLAB_PAGE_MAGIC) {
+      cerr << "Slab corruption: p = ", p, ", h = ", page, ", allocator ", page->allocator, ", magic = 0x", hexstring(page->magic, 32), ", caller ", __builtin_return_address(0), endl, flush;
+      abort();
+    }
+
     return page->allocator;
   }
 
@@ -599,8 +614,8 @@ struct SlabAllocator {
     
     if unlikely (!page->freelist) {
       assert(page->freecount == 0);
-      page->unlink();
-      page->addto((selflistlink*&)full_pages);
+      page->link.unlink();
+      page->link.addto((selflistlink*&)full_pages);
     }
 
     allocs++;
@@ -619,14 +634,17 @@ struct SlabAllocator {
     // We need the pages in the low 2 GB of the address space so we can use
     // page_is_slab_bitmap to find out if it's a slab or genalloc page:
     //
-    PageHeader* page = (PageHeader*)ptl_alloc_private_32bit_page();
-    if unlikely (!page) return null;
+    byte* rawpage = (byte*)ptl_alloc_private_32bit_page();
+    if unlikely (!rawpage) return null;
+
+    PageHeader* page = PageHeader::headerof(rawpage);
 
     page_allocs++;
     current_pages_allocated++;
     peak_pages_allocated = max(current_pages_allocated, peak_pages_allocated);
 
-    page->reset();
+    page->magic = SLAB_PAGE_MAGIC;
+    page->link.reset();
     page->freelist = null;
     page->freecount = 0;
     page->allocator = this;
@@ -635,7 +653,7 @@ struct SlabAllocator {
     assert(pfn < PTL_PAGE_POOL_SIZE);
     page_is_slab_bitmap[pfn] = 1;
 
-    FreeObjectHeader* obj = page->objs;
+    FreeObjectHeader* obj = page->getbase();
     FreeObjectHeader* prevobj = (FreeObjectHeader*)&page->freelist;
 
     foreach (i, max_objects_per_page) {
@@ -659,12 +677,12 @@ struct SlabAllocator {
     if unlikely (!page) {
       page = alloc_new_page();
       assert(page);
-      page->addto((selflistlink*&)partial_pages);
+      page->link.addto((selflistlink*&)partial_pages);
     }
 
     if likely (page == free_pages) {
-      page->unlink();
-      page->addto((selflistlink*&)partial_pages);
+      page->link.unlink();
+      page->link.addto((selflistlink*&)partial_pages);
       free_page_count--;
       assert(free_page_count >= 0);
     }
@@ -681,7 +699,7 @@ struct SlabAllocator {
     current_bytes_allocated -= min((W64)objsize, current_bytes_allocated);
 
     FreeObjectHeader* obj = (FreeObjectHeader*)p;
-    PageHeader* page = (PageHeader*)floor((Waddr)p, PAGE_SIZE);
+    PageHeader* page = PageHeader::headerof(p);
     obj->reset();
     obj->addto((selflistlink*&)page->freelist);
 
@@ -690,8 +708,8 @@ struct SlabAllocator {
 
     if unlikely (page->freecount == max_objects_per_page) {
       assert(page->freelist); // all free?
-      page->unlink();
-      page->addto((selflistlink*&)free_pages);
+      page->link.unlink();
+      page->link.addto((selflistlink*&)free_pages);
       free_page_count++;
     }
 
@@ -708,13 +726,14 @@ struct SlabAllocator {
       PageHeader* page = free_pages;
       if (!page) break;
       assert(page->freecount == max_objects_per_page);
-      page->unlink();
-      
-      Waddr pfn = (((Waddr)page) - PTL_PAGE_POOL_BASE) >> 12;
+      page->link.unlink();
+
+      Waddr pfn = (Waddr(page->getbase()) - PTL_PAGE_POOL_BASE) >> 12;
       assert(pfn < PTL_PAGE_POOL_SIZE);
       page_is_slab_bitmap[pfn] = 0;
 
-      ptl_free_private_page(page);
+      page->magic = 0;
+      ptl_free_private_page((void*)page->getbase());
       page_frees++;
       if likely (current_pages_allocated > 0) current_pages_allocated--;
       n++;
@@ -725,7 +744,7 @@ struct SlabAllocator {
 
   ostream& print_page_chain(ostream& os, PageHeader* page) const {
     while (page) {
-      os << "  Page ", page, ": free list size ", page->freecount, ", prev ", page->prev, ", next ", page->next, ":", endl;
+      os << "  Page ", page, ": free list size ", page->freecount, ", prev ", page->link.prev, ", next ", page->link.next, ":", endl;
       FreeObjectHeader* obj = page->freelist;
       int c = 0;
       while (obj) {
@@ -736,7 +755,7 @@ struct SlabAllocator {
       if (c != page->freecount) {
         os << "    WARNING: c = ", c, " vs page->freecount ", page->freecount, endl, flush;
       }
-      page = (PageHeader*)page->next;
+      page = (PageHeader*)page->link.next;
     }
     return os;
   }
@@ -793,6 +812,23 @@ static const int SLAB_ALLOC_SLOT_COUNT = (SLAB_ALLOC_LARGE_OBJ_THRESH / SlabAllo
 
 SlabAllocator slaballoc[SLAB_ALLOC_SLOT_COUNT];
 
+void ptl_mm_dump(ostream& os) {
+#ifdef PTLSIM_HYPERVISOR
+  os << "Page allocator:", endl;
+  pagealloc.print(os);
+#endif
+
+  os << "General allocator:", endl;
+  genalloc.print(os);
+
+  foreach (i, SLAB_ALLOC_SLOT_COUNT) {
+    os << "Slab Allocator ", i, ":", endl;
+    slaballoc[i].print(os);
+  }
+
+  os << flush;
+}
+
 #ifdef PTLSIM_HYPERVISOR
 
 extern ostream logfile;
@@ -815,18 +851,8 @@ void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
   cerr << "ptl_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
   logfile << "ptl_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
 
-  logfile << "Page allocator:", endl;
-  pagealloc.print(logfile);
+  ptl_mm_dump(logfile);
 
-  logfile << "General allocator:", endl;
-  genalloc.print(logfile);
-
-  foreach (i, SLAB_ALLOC_SLOT_COUNT) {
-    logfile << "Slab Allocator ", i, ":", endl;
-    slaballoc[i].print(logfile);
-  }
-
-  logfile << flush;
   cerr << flush;
   abort();
 }
@@ -991,6 +1017,37 @@ void* ptl_mm_alloc(size_t bytes) {
     if unlikely (enable_mm_logging) logfile << "ptl_mm_alloc(", bytes, ") from genpool => p ", p, " called from ", (void*)__builtin_return_address(0), endl;
     return p;
   }
+}
+
+//
+// Allocate a block aligned to a (1 << alignbits) boundary.
+//
+// This always uses the slab allocator, so only small allocations
+// of less than 1024 bytes are allowed. If you need a larger
+// aligned extent, use the page allocator.
+//
+void* ptl_mm_alloc_aligned(int alignbits) {
+  Waddr bytes = 1 << alignbits;
+
+  if unlikely (bytes > SLAB_ALLOC_LARGE_OBJ_THRESH) return null;
+
+  //
+  // Allocate from slab
+  //
+  bytes = ceil(bytes, SlabAllocator::GRANULARITY);
+  int slot = (bytes >> log2(SlabAllocator::GRANULARITY))-1;
+  assert(slot < SLAB_ALLOC_SLOT_COUNT);
+  void* p = slaballoc[slot].alloc();
+  if unlikely (!p) {
+    ptl_mm_reclaim(bytes);
+    p = slaballoc[slot].alloc();
+  }
+
+  if unlikely (enable_mm_logging) logfile << "ptl_mm_alloc(", bytes, ") from slab ", slot, " => p ", p, " called from ", (void*)__builtin_return_address(0), endl;
+
+  assert(lowbits(Waddr(p), alignbits) == 0);
+
+  return p;
 }
 
 size_t ptl_mm_getsize(void* p) {

@@ -34,8 +34,11 @@ typedef unsigned long mfn_t;
 typedef unsigned long pte_t;
 
 #define PML4_SHIFT (12+9+9+9)
-#define PTLSIM_VIRT_BASE 0xffffff0000000000ULL // PML4 entry 510
-#define PHYS_VIRT_BASE   0xfffffe0000000000ULL // PML4 entry 508 (enough for 2^39 bytes physical RAM)
+//#define PTLSIM_VIRT_BASE 0xffffff0000000000ULL // PML4 entry 510
+//#define PHYS_VIRT_BASE   0xfffffe0000000000ULL // PML4 entry 508 (enough for 2^39 bytes physical RAM)
+#define PTLSIM_VIRT_BASE 0x0000000000000000ULL // PML4 entry 0
+#define PHYS_VIRT_BASE   0x0000010000000000ULL // PML4 entry 2 (enough for 2^39 bytes physical RAM)
+
 #define PTLSIM_RESERVED_VIRT_BASE 0xfffffe0000000000ULL // Start of guest-inaccessible PTLsim region
 #define PTLSIM_RESERVED_VIRT_END  0xffffff7fffffffffULL // End of guest-inaccessible PTLsim region
 // PML4 entry 511 is usually occupied by Linux itself

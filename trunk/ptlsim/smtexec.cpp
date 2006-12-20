@@ -50,38 +50,21 @@ void IssueQueue<size, operandcount>::reset(int coreid) {
 template <int size, int operandcount>
 void IssueQueue<size, operandcount>::reset(int coreid, int threadid) {
   this->coreid = coreid;
-  /*
-  count = 0;
-  valid = 0;
-  issued = 0;
-  allready = 0;
-  foreach (i, operandcount) {
-    tags[i].reset();
-  }
-  uopids.reset();
-  */
+  SMTCore& core = getcore();
 
-  foreach (i, size){   
-    if (valid[i]) { 
+  foreach (i, size) {
+    if likely (valid[i]) { 
       int slot_threadid = uopids[i] >> MAX_ROB_IDX_BIT;
-      if (slot_threadid == threadid) {
-        if (logable(100)) logfile << " flush thread ", threadid, " idx ", i, endl;
+      if likely (slot_threadid == threadid) {
         remove(i);
-        // now i+1 is moved to possition of where i use to be, so:
+        // Now i+1 is moved to possition of where i used to be:
         i--;
   
-        ThreadContext& thread =  *coreof(coreid).thread_ctx[threadid];
-        thread.issueq_count--;
-        mydb " after reset(core, threadid) for one, issueq_count ", thread.issueq_count, endl;
-
-//         valid[i] = 0;
-//         issued[i] = 0;
-//         allready[i] = 0;
-//         foreach (j, operandcount) {
-//           tags[j][i] = 0;
-//         }
-//         uopids[i] = 0;
-        
+        ThreadContext* thread = core.threads[threadid];
+        if (thread->issueq_count > core.reserved_iq_entries) {
+          issueq_operation_on_cluster(core, cluster, free_shared_entry());
+        }
+        thread->issueq_count--;
       }
     }
   }
@@ -131,8 +114,8 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
   SMTCore& core = getcore();
   int threadid, rob_idx;
   decode_tag(sourceid, threadid, rob_idx);
-  ThreadContext& thread = *(core.thread_ctx[threadid]);
-  const ReorderBufferEntry* source = &thread.ROB[rob_idx];
+  ThreadContext* thread = core.threads[threadid];
+  const ReorderBufferEntry* source = &thread->ROB[rob_idx];
 
   bitvec<size> temp = mask;
 
@@ -144,7 +127,7 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
     decode_tag(robid, threadid_tmp, rob_idx_tmp);
     assert(threadid_tmp == threadid);
     assert(inrange(rob_idx_tmp, 0, ROB_SIZE-1));
-    const ReorderBufferEntry* target = &thread.ROB[rob_idx_tmp];
+    const ReorderBufferEntry* target = &thread->ROB[rob_idx_tmp];
 
     temp[slot] = 0;
 
@@ -211,6 +194,16 @@ bool IssueQueue<size, operandcount>::replay(int slot, const tag_t* operands, con
     else tags[operand].insertslot(slot, operands[operand]);
   }
   
+  return true;
+}
+
+template <int size, int operandcount>
+bool IssueQueue<size, operandcount>::switch_to_end(int slot, const tag_t* operands, const tag_t* preready){
+  tag_t uopid = uopids[slot];
+  /// remove
+  remove(slot);
+  /// insert to end:
+  insert(uopid, operands, preready);
   return true;
 }
 
@@ -1039,7 +1032,8 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
       }
 
       stats.smtcore.dcache.store.issue.replay.interlocked++;
-      replay();
+      //replay();
+      replay_locked();
       return ISSUE_NEEDS_REPLAY;
     }
 
@@ -1308,7 +1302,8 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
       // if (lock->threadid == threadid) assert(uop.uuid < lock->uuid); //++MTY not needed
 
       stats.smtcore.dcache.load.issue.replay.interlocked++;
-      replay();
+      //replay();
+      replay_locked();
       return ISSUE_NEEDS_REPLAY;
     }
 
@@ -1531,14 +1526,12 @@ int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
 //
 void SMTCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
   int idx = lsi.rob;
-  ThreadContext& thread = *core.thread_ctx[lsi.threadid];
-  Queue<ReorderBufferEntry, ROB_SIZE>& ROB = thread.ROB;
+  ThreadContext* thread = core.threads[lsi.threadid];
   assert(inrange(idx, 0, ROB_SIZE-1));
-  //   assert(lsi.rob < ROB_SIZE && lsi.rob >=0);
-  ReorderBufferEntry& rob = ROB[idx];
+  ReorderBufferEntry& rob = thread->ROB[idx];
 
   if(logable(100)) logfile << " dcache_wakeup ", rob, endl;
-  assert(rob.current_state_list == &thread.rob_cache_miss_list);
+  assert(rob.current_state_list == &thread->rob_cache_miss_list);
 
   rob.loadwakeup();
 }
@@ -1559,7 +1552,7 @@ void ReorderBufferEntry::loadwakeup() {
 }
 
 void ReorderBufferEntry::fencewakeup() {
-  ThreadContext& thread = *getcore().thread_ctx[threadid];
+  ThreadContext& thread = getthread();
 
   if unlikely (config.event_log_enabled) getcore().eventlog.add_commit(EVENT_COMMIT_FENCE_COMPLETED, this);
 
@@ -1644,7 +1637,52 @@ void ReorderBufferEntry::replay() {
     changestate(get_ready_to_issue_list());
   }
 
-  issueq_operation_on_cluster(core, cluster, replay(iqslot, uopids, preready));
+  issueq_operation_on_cluster(core, cluster, replay(iqslot, uopids, preready));  
+}
+
+
+void ReorderBufferEntry::replay_locked() {
+  SMTCore& core = getcore();
+  ThreadContext& thread = getthread();
+
+  if unlikely (config.event_log_enabled) {
+    SMTCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
+    foreach (i, MAX_OPERANDS) {
+      operands[i]->fill_operand_info(event->replay.opinfo[i]);
+      event->replay.ready |= (operands[i]->ready()) << i;
+    }
+  }
+
+  assert(!lock_acquired);
+ 
+  int operands_still_needed = 0;
+
+  issueq_tag_t uopids[MAX_OPERANDS];
+  issueq_tag_t preready[MAX_OPERANDS];
+
+  foreach (operand, MAX_OPERANDS) {
+    PhysicalRegister& source_physreg = *operands[operand];
+    ReorderBufferEntry& source_rob = *source_physreg.rob;
+
+    if likely (source_physreg.state == PHYSREG_WAITING) {
+      uopids[operand] = source_rob.get_tag();
+      preready[operand] = 0;
+      operands_still_needed++;
+    } else {
+      // No need to wait for it
+      uopids[operand] = 0;
+      preready[operand] = 1;
+    }
+  }
+
+  if unlikely (operands_still_needed) {
+    changestate(thread.rob_dispatched_list[cluster]);
+  } else {
+    changestate(get_ready_to_issue_list());
+  }
+  
+  // issueq_operation_on_cluster(core, cluster, replay(iqslot, uopids, preready));  
+  issueq_operation_on_cluster(core, cluster, switch_to_end(iqslot,  uopids, preready));  
 }
 
 //
@@ -1656,7 +1694,14 @@ void ReorderBufferEntry::release() {
   issueq_operation_on_cluster(getcore(), cluster, release(iqslot));
   
   ThreadContext& thread = getthread();
+  SMTCore& core = thread.core;
+
+  if (thread.issueq_count > core.reserved_iq_entries){
+    issueq_operation_on_cluster(core, cluster, free_shared_entry());
+  }
   thread.issueq_count--;
+
+  db " thread ", thread.threadid, " release() issueq_count ", thread.issueq_count, endl;
   mydb " after issue(), issueq_count ", thread.issueq_count, endl;
 
   iqslot = -1;
@@ -1689,10 +1734,9 @@ int SMTCore::issue(int cluster) {
     issueq_operation_on_cluster_with_result(getcore(), cluster, robid, uopof(iqslot));
     int threadid, idx;
     decode_tag(robid, threadid, idx);
-    ThreadContext& thread = *thread_ctx[threadid];
-    Queue<ReorderBufferEntry, ROB_SIZE>& ROB = thread.ROB;
+    ThreadContext* thread = threads[threadid];
     assert(inrange(idx, 0, ROB_SIZE-1));
-    ReorderBufferEntry& rob = ROB[idx];
+    ReorderBufferEntry& rob = thread->ROB[idx];
 
     rob.iqslot = iqslot;
     int rc = rob.issue();
@@ -1825,6 +1869,9 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     bool rc;
     issueq_operation_on_cluster_with_result(core, annulrob.cluster, rc, annuluop(annulrob.get_tag()));  
     if(rc){
+      if (thread.issueq_count > core.reserved_iq_entries){
+        issueq_operation_on_cluster(core, cluster, free_shared_entry());
+      }
       thread.issueq_count--;
       mydb " after annul() one rob, issueq_count ", thread.issueq_count, endl;
     }
@@ -1994,8 +2041,13 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     bool found = 0;
     issueq_operation_on_cluster_with_result(getcore(), cluster, found, annuluop(get_tag()));
     if(found){
+      if (thread.issueq_count > core.reserved_iq_entries){
+        issueq_operation_on_cluster(core, cluster, free_shared_entry());
+      }
+      db " after redispatch(), issueq_count ", thread.issueq_count, endl;
       thread.issueq_count--;
       mydb " after redispatch(), issueq_count ", thread.issueq_count, endl;
+
     }
     if unlikely (config.event_log_enabled) event->redispatch.iqslot = found;
     cluster = -1;

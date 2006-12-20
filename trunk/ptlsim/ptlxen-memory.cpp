@@ -1075,46 +1075,45 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
   return pte_to_mapped_virt(virtaddr, pte);
 }
 
-int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec) {
-  Level1PTE pte;
-
+int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec, Level1PTE& ptelo, Level1PTE& ptehi) {
   int n = 0;
 
   pfec = 0;
-  pte = virt_to_pte(source);
+  ptehi = 0;
+  ptelo = virt_to_pte(source);
 
-  if unlikely ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
+  if unlikely ((!ptelo.p) | (forexec & ptelo.nx) | ((!kernel_mode) & (!ptelo.us))) {
     faultaddr = source;
-    pfec.p = pte.p;
+    pfec.p = ptelo.p;
     pfec.nx = forexec;
     pfec.us = (!kernel_mode);
     return 0;
   }
 
   n = min(4096 - lowbits(source, 12), (Waddr)bytes);
-  memcpy(target, pte_to_mapped_virt(source, pte), n);
+  memcpy(target, pte_to_mapped_virt(source, ptelo), n);
 
   PTEUpdate pteupdate = 0;
   pteupdate.a = 1;
 
-  if unlikely (!pte.a) update_pte_acc_dirty(source, pteupdate);
+  if unlikely (!ptelo.a) update_pte_acc_dirty(source, pteupdate);
 
   // All the bytes were on the first page
   if likely (n == bytes) return n;
 
   // Go on to second page, if present
-  pte = virt_to_pte(source + n);
-  if unlikely ((!pte.p) | (forexec & pte.nx) | ((!kernel_mode) & (!pte.us))) {
+  ptehi = virt_to_pte(source + n);
+  if unlikely ((!ptehi.p) | (forexec & ptehi.nx) | ((!kernel_mode) & (!ptehi.us))) {
     faultaddr = source + n;
-    pfec.p = pte.p;
+    pfec.p = ptehi.p;
     pfec.nx = forexec;
     pfec.us = (!kernel_mode);
     return n;
   }
 
-  if (!pte.a) update_pte_acc_dirty(source + n, pteupdate);
+  if (!ptehi.a) update_pte_acc_dirty(source + n, pteupdate);
 
-  memcpy((byte*)target + n, pte_to_mapped_virt(source + n, pte), bytes - n);
+  memcpy((byte*)target + n, pte_to_mapped_virt(source + n, ptehi), bytes - n);
   n = bytes;
   return n;
 }

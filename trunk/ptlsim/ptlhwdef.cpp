@@ -523,13 +523,10 @@ ostream& RIPVirtPhysBase::print(ostream& os) const {
   return os;
 }
 
-void BasicBlock::reset(const RIPVirtPhys& rip) {
+void BasicBlock::reset() {
   hashlink.reset();
   mfnlo_loc.reset();
   mfnhi_loc.reset();
-  this->rip = rip;
-  rip_taken = rip;
-  rip_not_taken = rip;
   refcount = 0;
   repblock = 0;
   invalidblock = 0;
@@ -549,6 +546,13 @@ void BasicBlock::reset(const RIPVirtPhys& rip) {
   confidence = 0;
   lastused = 0;
   marked = 0;
+}
+
+void BasicBlock::reset(const RIPVirtPhys& rip) {
+  reset();
+  this->rip = rip;
+  rip_taken = rip;
+  rip_not_taken = rip;
 }
 
 //

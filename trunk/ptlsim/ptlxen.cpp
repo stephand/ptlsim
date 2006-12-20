@@ -15,6 +15,7 @@
 #define __INSIDE_PTLSIM__
 #include <ptlcalls.h>
 
+
 //
 // Xen hypercalls
 //
@@ -1921,9 +1922,6 @@ void ptlsim_init() {
   config.reset();
   configparser.setup();
 
-  init_uops();
-  init_decode();
-
   //
   // Wait for ptlmon to properly convert the context
   //
@@ -1936,7 +1934,9 @@ void ptlsim_init() {
   //
   build_physmap_page_tables();
   inject_ptlsim_into_toplevel(get_cr3_mfn());
-  // switch_page_table(contextof(0).cr3 >> 12);
+
+  init_uops();
+  init_decode();
 
   //
   // Initialize the non-trivial parts of the VCPU contexts.
@@ -2163,6 +2163,11 @@ bool check_for_async_sim_break() {
     if unlikely (config.native | config.stop | config.kill) {
       logfile << "Requested exit from simulation loop", endl, flush;
     }
+    return true;
+  }
+
+  if unlikely ((iterations >= config.stop_at_iteration) || (total_user_insns_committed >= config.stop_at_user_insns)) {
+    logfile << "Stopping simulation loop at specified limits (", iterations, " iterations, ", total_user_insns_committed, " commits)", endl;
     return true;
   }
 

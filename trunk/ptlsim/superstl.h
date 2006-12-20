@@ -2539,6 +2539,17 @@ namespace superstl {
     }
   };
 
+  template <typename T, bool backwards = 0>
+  struct SortPrecomputedIndexListComparator {
+    T* values;
+
+    SortPrecomputedIndexListComparator(T* values) { this->values = values; }
+
+    W64s operator ()(int a, int b) const {
+      return (backwards) ? (values[b] - values[a]) : (values[a] - values[b]);
+    }
+  };
+
   template <typename T, typename Comparator>
   void sort(T* p, size_t n, const Comparator& compare = DefaultComparator<T>()) {
     int c;

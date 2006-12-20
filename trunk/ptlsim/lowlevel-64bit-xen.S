@@ -79,8 +79,10 @@ ptlsim_preinit_entry:
 #define TRAP_simd_error       19
 #define TRAP_deferred_nmi     31
 
-#define PTLSIM_VIRT_BASE 0xffffff0000000000 // PML4 entry 510
-#define PHYS_VIRT_BASE   0xfffffe0000000000 // PML4 entry 509 (enough for 2^39 bytes physical RAM)
+//#define PTLSIM_VIRT_BASE 0xffffff0000000000 // PML4 entry 510
+//#define PHYS_VIRT_BASE   0xfffffe0000000000 // PML4 entry 509 (enough for 2^39 bytes physical RAM)
+#define PTLSIM_VIRT_BASE 0x0000000000000000 // PML4 entry 0
+#define PHYS_VIRT_BASE   0x0000010000000000 // PML4 entry 2 (enough for 2^39 bytes physical RAM)
 
 #define PTLSIM_BOOT_PAGE_PFN 0
 #define PTLSIM_BOOT_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_BOOT_PAGE_PFN * 4096))

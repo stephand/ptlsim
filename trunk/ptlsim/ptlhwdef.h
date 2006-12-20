@@ -736,6 +736,11 @@ struct RunstateInfo {
   W64 time[4];
 };
 
+#else
+
+// Dummy type for usermode
+typedef W64 Level1PTE;
+
 #endif
 
 //
@@ -835,8 +840,15 @@ struct Context: public ContextBase {
 
   void propagate_x86_exception(byte exception, W32 errorcode = 0, Waddr virtaddr = 0);
   void* check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate);
-  int copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec = false);
   int copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr);
+
+  int copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec, Level1PTE& ptelo, Level1PTE& ptehi);
+
+  int copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec = false) {
+    Level1PTE ptelo;
+    Level1PTE ptehi;
+    return copy_from_user(target, source, bytes, pfec, faultaddr, forexec, ptelo, ptehi);
+  }
 
   int copy_from_user(void* target, Waddr source, int bytes) {
     PageFaultErrorCode pfec;
@@ -1380,6 +1392,7 @@ struct BasicBlockBase {
 struct BasicBlock: public BasicBlockBase {
   TransOp transops[MAX_BB_UOPS*2];
 
+  void reset();
   void reset(const RIPVirtPhys& rip);
   BasicBlock* clone();
   void free();

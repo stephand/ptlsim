@@ -145,11 +145,11 @@ struct TraceDecoder {
   BasicBlock bb;
   TransOp transbuf[MAX_TRANSOPS_PER_USER_INSN];
   int transbufcount;
-
   byte use64;
   byte kernel;
   byte dirflag;
-  byte insnbytes[MAX_BB_BYTES];
+  byte* insnbytes;
+  int insnbytes_bufsize;
   Waddr rip;
   Waddr ripstart;
   int byteoffset;
@@ -171,8 +171,13 @@ struct TraceDecoder {
   bool used_microcode_assist;
   bool some_insns_complex;
 
-  TraceDecoder(const RIPVirtPhys& rvp);
+  Level1PTE ptelo;
+  Level1PTE ptehi;
 
+  TraceDecoder(const RIPVirtPhys& rvp);
+  TraceDecoder(Context& ctx, Waddr rip);
+
+  void reset();
   void decode_prefixes();
   void immediate(int rdreg, int sizeshift, W64s imm, bool issigned = true);
   int bias_by_segreg(int basereg);
@@ -187,7 +192,7 @@ struct TraceDecoder {
   void microcode_assist(int assistid, Waddr selfrip, Waddr nextrip);
   void memory_fence_if_locked(int type);
 
-  int fillbuf(Context& ctx);
+  int fillbuf(Context& ctx, byte* insnbytes_, int insnbytes_bufsize_);
   inline W64 fetch(int n) { W64 r = lowbits(*((W64*)&insnbytes[byteoffset]), n*8); rip += n; byteoffset += n; return r; }
   inline byte fetch1() { byte r = *((byte*)&insnbytes[byteoffset]); rip += 1; byteoffset += 1; return r; }
   inline W16 fetch2() { W16 r = *((W16*)&insnbytes[byteoffset]); rip += 2; byteoffset += 2; return r; }

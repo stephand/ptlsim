@@ -22,6 +22,7 @@ void ptl_free_private_page(void* addr);
 void ptl_zero_private_page(void* addr);
 
 void* ptl_mm_alloc(size_t bytes);
+void* ptl_mm_alloc_aligned(int alignbits);
 void ptl_mm_free(void* p);
 
 typedef void (*mm_reclaim_handler_t)(size_t bytes, int urgency);
@@ -32,6 +33,7 @@ class DataStoreNode;
 DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root);
 void ptl_mm_init(byte* heap_start = null, byte* heap_end = null);
 size_t ptl_mm_getsize(void* p);
+void ptl_mm_dump(ostream& os);
 
 #ifdef __x86_64__
 

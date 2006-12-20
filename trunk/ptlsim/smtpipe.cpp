@@ -39,10 +39,10 @@
 using namespace SMTModel;
 
 void SMTCoreCacheCallbacks::icache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
-  ThreadContext& thread = *core.thread_ctx[lsi.threadid];
+  ThreadContext* thread = core.threads[lsi.threadid];
 
-  if (logable(6)) logfile << "[vcpu ", thread.ctx.vcpuid, "] i-cache wakeup of physaddr ", (void*)(Waddr)physaddr, endl;
-  thread.waiting_for_icache_fill = 0;
+  if (logable(6)) logfile << "[vcpu ", thread->ctx.vcpuid, "] i-cache wakeup of physaddr ", (void*)(Waddr)physaddr, endl;
+  thread->waiting_for_icache_fill = 0;
 }
 
 //
@@ -100,9 +100,9 @@ void ThreadContext::annul_fetchq() {
 
 void SMTCore::flush_pipeline_all() {
   // Clear per-thread state:
-  foreach (i, MAX_THREAD_SIZE){
-    if (!thread_ctx[i]) continue;
-    thread_ctx[i]->flush_pipeline();
+  foreach (i, threadcount) {
+    ThreadContext* thread = threads[i];
+    thread->flush_pipeline();
   }
   // Clear out everything global:
   setzero(robs_on_fu);
@@ -141,6 +141,7 @@ void ThreadContext::flush_pipeline() {
       obj->reset(threadid);
     }     
   }
+
   // free all register in arch state:
   foreach (i, PHYS_REG_FILE_COUNT){
     StateList& list = core.physregfiles[i].states[PHYSREG_PENDINGFREE];
@@ -171,12 +172,10 @@ void ThreadContext::flush_pipeline() {
   }
   loads_in_flight = 0;
   stores_in_flight = 0;
-
   foreach_issueq(reset(core.coreid, threadid));
 
   dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
   last_commit_at_cycle = sim_cycle;
-
   external_to_core_state();
   if (logable(100)) dump_smt_state(logfile);
 }
@@ -246,6 +245,7 @@ void ThreadContext::external_to_core_state() {
 #endif
     PhysicalRegisterFile& rf = core.physregfiles[rfid];
     PhysicalRegister* physreg = (i == REG_zero) ? zeroreg : rf.alloc(threadid);
+    assert(physreg); /// need increase rf size if failed.
     physreg->archreg = i;
     physreg->data = ctx.commitarf[i];
     physreg->flags = 0;
@@ -297,7 +297,7 @@ void ThreadContext::redispatch_deadlock_recovery() {
   W64 previous_last_commit_at_cycle = last_commit_at_cycle;
   flush_pipeline();
   last_commit_at_cycle = previous_last_commit_at_cycle; /// so we can exit after no commit after deadlock recovery a few times in a roll
-  logfile << "TH ", threadid, " reset thread.last_commit_at_cycle to be before redispatch_deadlock_recovery() ", previous_last_commit_at_cycle, endl;
+  logfile << "[vcpu ", ctx.vcpuid, "] thread ", threadid, ": reset thread.last_commit_at_cycle to be before redispatch_deadlock_recovery() ", previous_last_commit_at_cycle, endl;
   /*
   //
   // This is a more selective scheme than the full pipeline flush.
@@ -416,24 +416,38 @@ bool ThreadContext::fetch() {
       break;
     }
 
-    if unlikely (issueq_count > max_issueq_count) {
-//       if unlikely (config.event_log_enabled) {
-//         event = eventlog.add(EVENT_FETCH_STALLED);
-//         event->threadid = threadid;
-//       }
-      //mydb " fetch stalled: issueq_count ", issueq_count, " > max_issueq_count ", max_issueq_count, endl;
-      if unlikely (config.event_log_enabled) { 
-        if (!fetchcount) {
-          event =  eventlog.add(EVENT_FETCH_IQ_QUOTA_FULL); 
-          event->threadid = threadid;
-          event->issueq_count = issueq_count;
-          event->uuid = fetch_uuid;
-        }
+    if ((issueq_count + fetchcount)>= core.reserved_iq_entries) {
+      bool empty = false;
+      issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
+      if(empty) {
+        db " no sharing entry left, stop fetch. ", endl;
+        break;
+      } else {
+        db " find sharing entry left, cont. fetch. ", endl;
       }
+    }else {
+      db " still have reserved entry left, cont. fetch. ", endl;
+    } 
 
-      stats.smtcore.fetch.stop.issueq_quota_full++;
-      break;
-    }
+//     //    if unlikely (issueq_count > max_issueq_count) {
+//     if (0) {
+// //       if unlikely (config.event_log_enabled) {
+// //         event = eventlog.add(EVENT_FETCH_STALLED);
+// //         event->threadid = threadid;
+// //       }
+//       //mydb " fetch stalled: issueq_count ", issueq_count, " > max_issueq_count ", max_issueq_count, endl;
+//       if unlikely (config.event_log_enabled) { 
+//         if (!fetchcount) {
+//           event =  eventlog.add(EVENT_FETCH_IQ_QUOTA_FULL); 
+//           event->threadid = threadid;
+//           event->issueq_count = issueq_count;
+//           event->uuid = fetch_uuid;
+//         }
+//       }
+
+//       stats.smtcore.fetch.stop.issueq_quota_full++;
+//       break;
+//     }
 
     if unlikely ((fetchrip.rip == config.start_log_at_rip) && (fetchrip.rip != 0xffffffffffffffffULL)) {
       config.start_log_at_iteration = 0;
@@ -1213,15 +1227,19 @@ int ThreadContext::dispatch() {
   foreach_list_mutable(rob_ready_to_dispatch_list, rob, entry, nextentry) {
     if unlikely (core.dispatchcount >= DISPATCH_WIDTH) break;
 
-    if unlikely (issueq_count > max_issueq_count) {
-//       if unlikely (config.event_log_enabled) {
-//         event = eventlog.add(EVENT_FETCH_STALLED);
-//         event->threadid = threadid;
-//       }
-      //mydb " dispatch stalled: issueq_count ", issueq_count, " > max_issueq_count ", max_issueq_count, endl;
-      //stats.smtcore.fetch.stop.issueq_quota_full++;
-      break;
-    }
+    ///    if unlikely (issueq_count > max_issueq_count) {
+    //    if(0){
+   
+//     if unlikely (issueq_count > core.reserved_iq_entries){
+//       if(
+// //       if unlikely (config.event_log_enabled) {
+// //         event = eventlog.add(EVENT_FETCH_STALLED);
+// //         event->threadid = threadid;
+// //       }
+//       //mydb " dispatch stalled: issueq_count ", issueq_count, " > max_issueq_count ", max_issueq_count, endl;
+//       //stats.smtcore.fetch.stop.issueq_quota_full++;
+//       break;
+//     }
 
     // All operands start out as valid, then get put on wait queues if they are not actually ready.
 
@@ -1244,6 +1262,22 @@ int ThreadContext::dispatch() {
             break;
 #endif
     }
+
+    /// check if we can use this cluster:
+    if (issueq_count >= core.reserved_iq_entries) {
+      bool empty = false;
+      issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
+      if(empty) {
+        db " no sharing entry left, stop dispatch. ", endl;
+        break;
+      } else {
+        db " find sharing entry left, cont. dispatch. ", endl;
+        issueq_operation_on_cluster(core, cluster, alloc_resered_entry());
+      }
+    }else {
+      db " still have reserved entry left, cont. dispatch. ", endl;
+    } 
+    db " thread ", threadid, " dispatch() issueq_count ", issueq_count + 1, endl;
 
     int operands_still_needed = rob->find_sources();
     if likely (operands_still_needed) {
@@ -1494,8 +1528,6 @@ int ThreadContext::writeback(int cluster) {
 //
 
 int ThreadContext::commit() {
-  //Queue<ReorderBufferEntry, ROB_SIZE>& ROB = ROB;
-
   time_this_scope(ctcommit);
 
   //
@@ -1521,7 +1553,6 @@ int ThreadContext::commit() {
   // Commit ROB entries *in program order*, stopping at the first ROB that is 
   // not ready to commit or has an exception.
   //
-
   int rc = COMMIT_RESULT_OK;
 
   foreach_forward(ROB, i) {
@@ -1532,10 +1563,6 @@ int ThreadContext::commit() {
     if likely (rc == COMMIT_RESULT_OK) {
       core.commitcount++;
       last_commit_at_cycle = sim_cycle;
-      if (total_user_insns_committed >= config.stop_at_user_insns) {
-        rc = COMMIT_RESULT_STOP;
-        break;
-      }
     } else {
       break;
     }
@@ -1575,6 +1602,7 @@ void ThreadContext::flush_mem_lock_release_list() {
   queued_mem_lock_release_count = 0;
 }
 
+#ifdef PTLSIM_HYPERVISOR
 bool rip_is_in_spinlock(W64 rip) {
   bool inside_spinlock_now =
     inrange(rip, 0xffffffff803d3fbcULL, 0xffffffff803d404fULL) | // .text.lock.spinlock
@@ -1584,27 +1612,12 @@ bool rip_is_in_spinlock(W64 rip) {
 
   return inside_spinlock_now;
 }
+#endif
 
 int ReorderBufferEntry::commit() {
   SMTCore& core = getcore();
-
   ThreadContext& thread = getthread();
   Context& ctx = thread.ctx;
-  Queue<ReorderBufferEntry, ROB_SIZE>& ROB = thread.ROB;
-  BranchPredictorInterface& branchpred = thread.branchpred;
-  Queue<LoadStoreQueueEntry, LSQ_SIZE>& LSQ = thread.LSQ;
-  RegisterRenameTable& specrrt = thread.specrrt;
-  RegisterRenameTable& commitrrt = thread.commitrrt;
-  int& loads_in_flight = thread.loads_in_flight;
-  int& stores_in_flight = thread.stores_in_flight;
-  bool& prev_interrupts_pending = thread.prev_interrupts_pending;
-  bool& handle_interrupt_at_next_eom = thread.handle_interrupt_at_next_eom;
-
-  bool& smc_invalidate_pending = thread.smc_invalidate_pending;
-  RIPVirtPhys& smc_invalidate_rvp = thread.smc_invalidate_rvp;
-
-  W64& chk_recovery_rip = thread.chk_recovery_rip;
-
   bool all_ready_to_commit = true;
   bool macro_op_has_exceptions = false;
 
@@ -1658,8 +1671,8 @@ int ReorderBufferEntry::commit() {
   // asynchronous interrupts are only taken after committing or excepting the
   // EOM uop in a macro-op.
   //
-  foreach_forward_from(ROB, this, j) {
-    ReorderBufferEntry& subrob = ROB[j];
+  foreach_forward_from(thread.ROB, this, j) {
+    ReorderBufferEntry& subrob = thread.ROB[j];
 
     if unlikely (!subrob.ready_to_commit()) {
       all_ready_to_commit = false;
@@ -1710,7 +1723,7 @@ int ReorderBufferEntry::commit() {
 
   assert(ready_to_commit());
 
-  PhysicalRegister* oldphysreg = commitrrt[uop.rd];
+  PhysicalRegister* oldphysreg = thread.commitrrt[uop.rd];
 
   bool ld = isload(uop.opcode);
   bool st = isstore(uop.opcode);
@@ -1723,7 +1736,7 @@ int ReorderBufferEntry::commit() {
 
     // See notes in handle_exception():
     if likely (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
-      chk_recovery_rip = ctx.commitarf[REG_rip] + uop.bytes;
+      thread.chk_recovery_rip = ctx.commitarf[REG_rip] + uop.bytes;
       if unlikely (config.event_log_enabled) event->type = EVENT_COMMIT_SKIPBLOCK;
       stats.smtcore.commit.result.skipblock++;
     } else {
@@ -1748,8 +1761,8 @@ int ReorderBufferEntry::commit() {
     // hold refs to the affected basic blocks in the pipeline. Queue the
     // updates for later.
     //
-    smc_invalidate_pending = 1;
-    smc_invalidate_rvp = uop.rip;
+    thread.smc_invalidate_pending = 1;
+    thread.smc_invalidate_rvp = uop.rip;
 
     stats.smtcore.commit.result.smc++;
     return COMMIT_RESULT_SMC;
@@ -1817,11 +1830,12 @@ int ReorderBufferEntry::commit() {
   // more than (value of -deadlock-debug-limit) commits, dump all state,
   // dump the event log and abort the simulation.
   //
+#if 0
   {
     W64 rip = uop.rip.rip;
     bool inside_spinlock_now = rip_is_in_spinlock(rip);
-    bool thread0_stuck_in_spinlock = rip_is_in_spinlock(core.thread_ctx[0]->ctx.commitarf[REG_rip]);
-    bool thread1_stuck_in_spinlock = rip_is_in_spinlock(core.thread_ctx[1]->ctx.commitarf[REG_rip]);
+    bool thread0_stuck_in_spinlock = rip_is_in_spinlock(core.thread[0]->ctx.commitarf[REG_rip]);
+    bool thread1_stuck_in_spinlock = rip_is_in_spinlock(core.thread[1]->ctx.commitarf[REG_rip]);
 
     if unlikely (inside_spinlock_now)
                   thread.consecutive_commits_inside_spinlock++;
@@ -1830,8 +1844,8 @@ int ReorderBufferEntry::commit() {
     if (thread.consecutive_commits_inside_spinlock >= 512) {
       logfile << "WARNING: at cycle ", sim_cycle, ": vcpu ", thread.ctx.vcpuid, " potentially deadlocked inside spinlock (commit rip ", (void*)ctx.commitarf[REG_rip],
         ", count ", thread.consecutive_commits_inside_spinlock, ", int mask ", sshinfo.vcpu_info[thread.ctx.vcpuid].evtchn_upcall_mask, endl, flush;
-      logfile << "Thread 0 rip ", (void*)core.thread_ctx[0]->ctx.commitarf[REG_rip], endl;
-      logfile << "Thread 1 rip ", (void*)core.thread_ctx[1]->ctx.commitarf[REG_rip], endl;
+      logfile << "Thread 0 rip ", (void*)core.thread[0]->ctx.commitarf[REG_rip], endl;
+      logfile << "Thread 1 rip ", (void*)core.thread[1]->ctx.commitarf[REG_rip], endl;
 
       thread.consecutive_commits_inside_spinlock = 0;
 
@@ -1842,6 +1856,7 @@ int ReorderBufferEntry::commit() {
       }
     }
   }
+#endif
 #endif
 
   if (st) assert(lsq->addrvalid && lsq->datavalid);
@@ -1866,9 +1881,9 @@ int ReorderBufferEntry::commit() {
   }
 
   if likely (archdest_can_commit[uop.rd]) {
-    commitrrt[uop.rd]->uncommitref(uop.rd, thread.threadid);
-    commitrrt[uop.rd] = physreg;
-    commitrrt[uop.rd]->addcommitref(uop.rd, thread.threadid);
+    thread.commitrrt[uop.rd]->uncommitref(uop.rd, thread.threadid);
+    thread.commitrrt[uop.rd] = physreg;
+    thread.commitrrt[uop.rd]->addcommitref(uop.rd, thread.threadid);
 
     if likely (uop.rd < ARCHREG_COUNT) ctx.commitarf[uop.rd] = physreg->data;
 
@@ -1896,19 +1911,19 @@ int ReorderBufferEntry::commit() {
     if unlikely (config.event_log_enabled) event->commit.state.reg.rdflags = ctx.commitarf[REG_flags];
 
     if likely (uop.setflags & SETFLAG_ZF) {
-      commitrrt[REG_zf]->uncommitref(REG_zf, thread.threadid);
-      commitrrt[REG_zf] = physreg;
-      commitrrt[REG_zf]->addcommitref(REG_zf, thread.threadid);
+      thread.commitrrt[REG_zf]->uncommitref(REG_zf, thread.threadid);
+      thread.commitrrt[REG_zf] = physreg;
+      thread.commitrrt[REG_zf]->addcommitref(REG_zf, thread.threadid);
     }
     if likely (uop.setflags & SETFLAG_CF) {
-      commitrrt[REG_cf]->uncommitref(REG_cf, thread.threadid);
-      commitrrt[REG_cf] = physreg;
-      commitrrt[REG_cf]->addcommitref(REG_cf, thread.threadid);
+      thread.commitrrt[REG_cf]->uncommitref(REG_cf, thread.threadid);
+      thread.commitrrt[REG_cf] = physreg;
+      thread.commitrrt[REG_cf]->addcommitref(REG_cf, thread.threadid);
     }
     if likely (uop.setflags & SETFLAG_OF) {
-      commitrrt[REG_of]->uncommitref(REG_of, thread.threadid);
-      commitrrt[REG_of] = physreg;
-      commitrrt[REG_of]->addcommitref(REG_of, thread.threadid);
+      thread.commitrrt[REG_of]->uncommitref(REG_of, thread.threadid);
+      thread.commitrrt[REG_of] = physreg;
+      thread.commitrrt[REG_of]->addcommitref(REG_of, thread.threadid);
     }
   }
 
@@ -1927,10 +1942,10 @@ int ReorderBufferEntry::commit() {
   // Free physical registers, load/store queue entries, etc.
   //
   if unlikely (ld|st) {
-    loads_in_flight -= (lsq->store == 0);
-    stores_in_flight -= (lsq->store == 1);
+    thread.loads_in_flight -= (lsq->store == 0);
+    thread.stores_in_flight -= (lsq->store == 1);
     lsq->reset();
-    LSQ.commit(lsq);
+    thread.LSQ.commit(lsq);
   }
 
   assert(archdest_can_commit[uop.rd]);
@@ -1988,7 +2003,7 @@ int ReorderBufferEntry::commit() {
       event->commit.predtaken = predtaken;
     }
 
-    branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip]);
+    thread.branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip]);
     stats.smtcore.branchpred.updates++;
   }
 
@@ -2021,8 +2036,13 @@ int ReorderBufferEntry::commit() {
     return COMMIT_RESULT_BARRIER;
   }
 
-  if unlikely (uop_is_eom & handle_interrupt_at_next_eom) {
-    handle_interrupt_at_next_eom = 0;
+  if unlikely (uop_is_eom & thread.stop_at_next_eom) {
+    logfile << "[vcpu ", thread.ctx.vcpuid, "] Stopping at cycle ", sim_cycle, " (", total_user_insns_committed, " commits)", endl;
+    return COMMIT_RESULT_STOP;
+  }
+
+  if unlikely (uop_is_eom & thread.handle_interrupt_at_next_eom) {
+    thread.handle_interrupt_at_next_eom = 0;
     return COMMIT_RESULT_INTERRUPT;
   }
 
