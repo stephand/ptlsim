@@ -1387,16 +1387,20 @@ int ReorderBufferEntry::commit() {
   // asynchronous interrupts are only taken after committing or excepting the
   // EOM uop in a macro-op.
   //
+
+  bool found_eom = 0;
+
   foreach_forward_from(core.ROB, this, j) {
     ReorderBufferEntry& subrob = core.ROB[j];
 
+    found_eom |= subrob.uop.eom;
+
     if unlikely (!subrob.ready_to_commit()) {
       all_ready_to_commit = false;
-      break;
     }
 
 #ifdef PTLSIM_HYPERVISOR
-    if unlikely ((subrob.uop.is_sse|subrob.uop.is_x87) && (core.ctx.cr0.ts | (subrob.uop.is_x87 & core.ctx.cr0.em))) {
+    if unlikely ((subrob.uop.is_sse|subrob.uop.is_x87) && (ctx.cr0.ts | (subrob.uop.is_x87 & ctx.cr0.em))) {
       subrob.physreg->data = EXCEPTION_FloatingPointNotAvailable;
       subrob.physreg->flags = FLAG_INV;
       if unlikely (subrob.lsq) subrob.lsq->invalid = 1;
@@ -1412,24 +1416,35 @@ int ReorderBufferEntry::commit() {
       // load is OK but the store has PageFaultOnWrite. We take
       // the first exception in uop order.
       //
-      core.ctx.exception = LO32(subrob.physreg->data);
-      core.ctx.error_code = HI32(subrob.physreg->data);
+      ctx.exception = LO32(subrob.physreg->data);
+      ctx.error_code = HI32(subrob.physreg->data);
+
 #ifdef PTLSIM_HYPERVISOR
       // Capture the faulting virtual address for page faults
-      if ((core.ctx.exception == EXCEPTION_PageFaultOnRead) |
-          (core.ctx.exception == EXCEPTION_PageFaultOnWrite)) {
-        core.ctx.cr2 = subrob.origvirt;
+      if ((ctx.exception == EXCEPTION_PageFaultOnRead) |
+          (ctx.exception == EXCEPTION_PageFaultOnWrite)) {
+        ctx.cr2 = subrob.origvirt;
       }
 #endif
 
       if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_EXCEPTION_DETECTED, &subrob);
 
       macro_op_has_exceptions = true;
+      all_ready_to_commit = true;
+      found_eom = true;
       break;
     }
     
     if likely (subrob.uop.eom) break;
   }
+
+  //
+  // Protect against the extremely rare case where only one x86
+  // instruction is in flight and its EOM uop has not even made
+  // it into the ROB by the time the first uop is ready to commit.
+  //
+
+  all_ready_to_commit &= found_eom;
 
   if unlikely (!all_ready_to_commit) {
     stats.ooocore.commit.result.none++;

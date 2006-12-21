@@ -59,6 +59,7 @@ void PTLsimConfig::reset() {
   flush_event_log_every_cycle = 0;
   log_backwards_from_trigger_rip = INVALIDRIP;
   dump_state_now = 0;
+  abort_at_end = 0;
 
   stats_filename.reset();
   snapshot_cycles = infinity;
@@ -136,6 +137,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(log_ptlsim_boot,              "bootlog",              "Log PTLsim early boot and injection process (for debugging)");
   add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
   add(dump_state_now,               "dump-state-now",       "Dump the event log ring buffer and internal state of the active core");
+  add(abort_at_end,                 "abort-at-end",         "Abort current simulation after next command (don't wait for next x86 boundary)");
 
   section("Event Ring Buffer Logging Control");
   add(event_log_enabled,            "ringbuf",              "Log all core events to the ring buffer for backwards-in-time debugging");

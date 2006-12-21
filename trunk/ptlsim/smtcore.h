@@ -19,9 +19,7 @@
 #define MAX_THREADS_BIT 4
 #define MAX_ROB_IDX_BIT 12
 
-#define MAX_THREADS_PER_CORE 8
-#define mydb if(logable(101)) logfile << "TH ", threadid, " CYC ", sim_cycle, " ", 
-//static const char* thread_names[MAX_THREADS_PER_CORE] = {"thread_0", "thread_1"};
+#define MAX_THREADS_PER_CORE 2
 
 //#define ENABLE_SIM_TIMING
 #ifdef ENABLE_SIM_TIMING
@@ -52,8 +50,8 @@ namespace SMTModel {
   const int MAX_ISSUE_WIDTH = 4;
   
   // Largest size of any physical register file or the store queue:
-  const int MAX_PHYS_REG_FILE_SIZE = 512; //128;
-  const int PHYS_REG_FILE_SIZE = 512;
+  const int MAX_PHYS_REG_FILE_SIZE = 128; //128;
+  const int PHYS_REG_FILE_SIZE = 128;
   const int PHYS_REG_NULL = 0;
   
   //
@@ -61,7 +59,7 @@ namespace SMTModel {
   // #define BIG_ROB below to use the correct associative search logic
   // (16-bit tags vs 8-bit tags).
   //
-  // SMT always has BIG_ROB enabled: high 5 bits are used for thread id
+  // SMT always has BIG_ROB enabled: high 4 bits are used for thread id
   //
 #define BIG_ROB
 
@@ -175,35 +173,25 @@ namespace SMTModel {
     bitvec<size> allready;
     int count;
     byte coreid;
-    /// a thread can used either sharing_entries or its own reserved_entries
-//     int reserved_entries_used[MAX_THREADS_PER_CORE];
-//     int shared_entries_used[MAX_THREADS_PER_CORE];
     int shared_entries;
     int reserved_entries;
-#define db  if(logable(1)) logfile << " db cycle ", sim_cycle,
-    //#define db_entries   if(logable(1)) logfile << " db cycle ", sim_cycle, " issueq_all.shared_entries ", issueq_all.shared_entries, endl
+
     void set_reserved_entries(int num) { reserved_entries = num; }
     bool reset_shared_entries(){ 
       shared_entries = size - reserved_entries; 
-      db " set free_shared_entries ", shared_entries,endl;
       return true;
     }
     bool alloc_resered_entry(){
-      db " before alloc a iq in reserved pool ", shared_entries, " ";
       assert(shared_entries > 0);
       shared_entries--;
-      db " alloc a iq in reserved pool ", shared_entries, endl, flush;
       return true;
     }
     bool free_shared_entry(){
-      db " before free a iq in reserved pool ", shared_entries, " ";
       assert(shared_entries < size  - reserved_entries);
       shared_entries++;
-      db " free a iq in reserved pool ", shared_entries, endl, flush;
       return true;
     }    
     bool shared_empty(){
-      db " shared_entries in reserved pool ", shared_entries, endl, flush;
       return (shared_entries == 0);
     }
 
@@ -379,9 +367,9 @@ namespace SMTModel {
     W64 uuid;
     uopimpl_func_t synthop;
     BranchPredictorUpdateInfo predinfo;
-    BasicBlock* bb;
     W16 index;
     W8 threadid;
+    byte ld_st_truly_unaligned;
 
     int init(int index) { this->index = index; return 0; }
     void validate() { }
@@ -544,9 +532,6 @@ namespace SMTModel {
   //
   // Physical Register File
   //
-
-  //#define DETAIL
-#define mydbr if(logable(100)) logfile << "TH ", threadid, " CYC ", sim_cycle, " ", 
  
   struct PhysicalRegister: public selfqueuelink {
     ReorderBufferEntry* rob;
@@ -579,7 +564,10 @@ namespace SMTModel {
 
   private:
     void addref() { refcount++; }
-    void unref() { refcount--; assert((idx == 0) || (refcount >= 0)); }
+    void unref() {
+      refcount--;
+      assert((idx == 0) || (refcount >= 0));
+    }
 
   public:
 
@@ -890,11 +878,10 @@ namespace SMTModel {
         commit.state.reg.rdflags = rob->physreg->flags;
       }
       // taken, predtaken only for branches
+      commit.ld_st_truly_unaligned = rob->uop.ld_st_truly_unaligned;
       commit.pteupdate = rob->pteupdate;
       // oldphysreg filled in later
       // oldphysreg_refcount filled in later
-      commit.bb_refcount = rob->uop.bb->refcount;
-      commit.bb = rob->uop.bb;
       commit.origvirt = rob->origvirt;
       commit.total_user_insns_committed = total_user_insns_committed;
       // target_rip filled in later
@@ -922,7 +909,6 @@ namespace SMTModel {
     union {
       struct {
         W16s missbuf;
-        BasicBlock* bb;
         W64 predrip;
         W16 bb_uop_count;
       } fetch;
@@ -978,9 +964,7 @@ namespace SMTModel {
         W16 eomidx;
         W16 startidx;
         W16 endidx;
-        W16 bb_refcount;
         byte annulras;
-        BasicBlock* bb;
       } annul;
       struct {
         StateList* current_state_list;
@@ -1010,12 +994,10 @@ namespace SMTModel {
       } writeback;
       struct {
         IssueState state;
-        byte taken:1, predtaken:1;
+        byte taken:1, predtaken:1, ld_st_truly_unaligned:1;
         PTEUpdateBase pteupdate;
         W16s oldphysreg;
         W16 oldphysreg_refcount;
-        W16 bb_refcount;
-        BasicBlock* bb;
         W64 origvirt;
         W64 total_user_insns_committed;
         W64 target_rip;
@@ -1101,6 +1083,8 @@ namespace SMTModel {
   static const int ICACHE_FETCH_GRANULARITY = 16;
   // Deadlock timeout: if nothing dispatches for this many cycles, flush the pipeline
   static const int DISPATCH_DEADLOCK_COUNTDOWN_CYCLES = 256;
+  // Size of unaligned predictor Bloom filter
+  static const int UNALIGNED_PREDICTOR_SIZE = 4096;
 
   struct ThreadContext {
     SMTCore& core;
@@ -1158,14 +1142,9 @@ namespace SMTModel {
     W64 last_commit_at_cycle;
     bool smc_invalidate_pending;
     RIPVirtPhys smc_invalidate_rvp;
-
-    //commit
     W64 chk_recovery_rip;
 
-    /// current split ld or st
     TransOpBuffer unaligned_ldst_buf;
-
-    //    struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 8> { };
     LoadStoreAliasPredictor lsap;
 
     W64 consecutive_commits_inside_spinlock;
@@ -1175,7 +1154,6 @@ namespace SMTModel {
     W64 total_insns_committed;
     int dispatch_deadlock_countdown;    
     int issueq_count;
-    //    int reserved_issueq_entries;
 
     //
     // List of memory locks that will be removed from
@@ -1212,6 +1190,7 @@ namespace SMTModel {
     BasicBlock* fetch_or_translate_basic_block(const RIPVirtPhys& rvp);
     void redispatch_deadlock_recovery();
     void flush_mem_lock_release_list();
+    int get_priority() const;
 
     void dump_smt_state(ostream& os);
     void print_smt_state(ostream& os);
@@ -1227,24 +1206,24 @@ namespace SMTModel {
   // checkpointed core
   //
   struct SMTCore {
-    int coreid;
     SMTMachine& machine;
-    ThreadContext* threads[MAX_THREADS_PER_CORE];
-    int threadcount;
+    int coreid;
+    SMTCore& getcore() const { return coreof(coreid); }
 
-#define foreach_thread(T) for (ThreadContext* T = threads; T < (threads + threadcount); T++)
+    int threadcount;
+    ThreadContext* threads[MAX_THREADS_PER_CORE];
 
     ListOfStateLists rob_states;
     ListOfStateLists lsq_states;
 
     EventLog eventlog;
     ListOfStateLists physreg_states;
-    /// bandwidth counters:
+    // Bandwidth counters:
     int commitcount;
     int writecount;
     int dispatchcount;
-    //    int fetchcount;
-    //    int prepcount;
+
+    byte round_robin_tid;
 
     //
     // Issue Queues (one per cluster)
@@ -1351,25 +1330,23 @@ namespace SMTModel {
 
     // Major core structures
     PhysicalRegisterFile physregfiles[PHYS_REG_FILE_COUNT];
-
-    // Dispatch
     int round_robin_reg_file_offset;
-
-    // Issue
     W32 fu_avail;
     ReorderBufferEntry* robs_on_fu[FU_COUNT];
     int loads_in_this_cycle;
     W32 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
-
-    // Commit
     CacheSubsystem::CacheHierarchy caches;
     SMTCoreCacheCallbacks cache_callbacks;
 
+    // Unaligned load/store predictor
+    bitvec<UNALIGNED_PREDICTOR_SIZE> unaligned_predictor;
+    static int hash_unaligned_predictor_slot(const RIPVirtPhysBase& rvp);
+    bool get_unaligned_hint(const RIPVirtPhysBase& rvp) const;
+    void set_unaligned_hint(const RIPVirtPhysBase& rvp, bool value);
+
     // Pipeline Stages
     bool runcycle();
-
     void flush_pipeline_all();
-
     bool fetch();
     void rename();
     void frontend();
@@ -1380,16 +1357,11 @@ namespace SMTModel {
     int writeback(int cluster);
     int commit();
 
-    //BasicBlock* fetch_or_translate_basic_block(Context& ctx, const RIPVirtPhys& rvp);
-
     // Debugging
     void dump_smt_state(ostream& os);
     void print_smt_state(ostream& os);
-    // Debugging
-
     void check_refcounts();
     void check_rob();
-    SMTCore& getcore() const { return coreof(coreid); }
   };
 
 #define MAX_SMT_CORES 1
@@ -1450,7 +1422,6 @@ namespace SMTModel {
   };
 
 #else // single issueq
-
   const Cluster clusters[MAX_CLUSTERS] = {
     {"all",  4, (FU_ALU0|FU_ALU1|FU_STU0|FU_STU1|FU_LDU0|FU_LDU1|FU_FPU0|FU_FPU1)},
    };

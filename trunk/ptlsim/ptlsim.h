@@ -172,6 +172,7 @@ struct PTLsimConfig {
   bool flush_event_log_every_cycle;
   W64 log_backwards_from_trigger_rip;
   bool dump_state_now;
+  bool abort_at_end;
 
   // Statistics Database
   stringbuf stats_filename;

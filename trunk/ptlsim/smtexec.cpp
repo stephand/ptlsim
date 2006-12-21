@@ -493,19 +493,9 @@ int ReorderBufferEntry::issue() {
         // Early misprediction handling. Annul everything after the
         // branch and restart fetching in the correct direction
         //
-        mydb " before call annnul issue queue: ", endl;
-        if(logable(100)){ 
-          //foreach_issueq(print(logfile));
-          core.issueq_all.print(logfile);
-        }
         thread.annul_fetchq();
         annul_after();
 
-        mydb " after call annnul issue queue: ", endl;
-        if(logable(100)){ 
-          //          foreach_issueq(print(logfile));
-          core.issueq_all.print(logfile);
-        }
         //
         // The fetch queue is reset and fetching is redirected to the
         // correct branch direction.
@@ -559,6 +549,8 @@ void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W
   addr &= ctx.virt_addr_mask;
   origaddr = addr;
   annul = 0;
+
+  uop.ld_st_truly_unaligned = (lowbits(origaddr, sizeshift) != 0);
 
   switch (aligntype) {
   case LDST_ALIGN_NORMAL:
@@ -634,7 +626,7 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
     //
     if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_ALIGNMENT_FIXUP, this, null, addr);
 
-    uop.bb->transops[uop.bbindex].unaligned = 1;
+    core.set_unaligned_hint(uop.rip, 1);
 
     thread.annul_fetchq();
     W64 recoveryrip = annul_after_and_including();
@@ -922,58 +914,6 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
         stats.smtcore.dcache.store.parallel_aliasing++;
         continue;
       }
-
-      /*
-        //++MTY Is this even needed now? These events almost never happen:
-        checking ldbuf.rob->issued eliminates all these events.
-
-#if 1
-      /// first, we avoid to redispatch ld already waiting for this st.
-      /// secondly, we will not redispatch ld still in issue queue.
-      /// be careful this ld might mistakenly waiting for other st! so
-      /// we must check it and rollback if this happens
-      
-      //  core.lsap.select(ldbuf.rob->uop.rip); /// this will update the lsap too many times and force out some valid entries
-      if(ldbuf.rob->operands[RS] == physreg) {
-        mydb " ldbuf ", ldbuf , " rob ", *ldbuf.rob, " already depend on physreg!", endl;
-        stats.smtcore.lsap_handling.lsap_avoid_old_dep++;
-        continue;
-      } else if (!ldbuf.rob->issued && ldbuf.rob->operands[RS] == &core.physregfiles[0][PHYS_REG_NULL]){
-        mydb " ldbuf ", ldbuf , " rob ", *ldbuf.rob, " not issued yet!", endl;
-        stats.smtcore.lsap_handling.lsap_avoid_not_issued_dep++;
-        continue;
-      }else if(!ldbuf.rob->issued){
-        assert(ldbuf.rob->operands[RS] != physreg && ldbuf.rob->operands[RS] != &core.physregfiles[0][PHYS_REG_NULL]);
-        /// can we fix this and continue?
-        ldbuf.rob->operands[RS]->unref(*this, threadid);
-        ldbuf.rob->operands[RS] = physreg;
-        ldbuf.rob->operands[RS]->addref(*this, threadid);        
-        stats.smtcore.lsap_handling.lsap_avoid_not_issued_false_dep++;
-        continue;
-      } else{
-        // must redispatch or flush
-        assert(ldbuf.rob->issued);
-        stats.smtcore.lsap_handling.lsap_flush_issued_dep++;
-      }
-
-#else
-      
-      if(!ldbuf.datavalid){
-        if(!(ldbuf.rob->current_state_list == &thread.rob_issued_list[ldbuf.rob->cluster] ||
-             ldbuf.rob->current_state_list == &thread.rob_ready_to_load_list[ldbuf.rob->cluster] ||
-             ldbuf.rob->current_state_list == &thread.rob_ready_to_issue_list[ldbuf.rob->cluster] ||
-             ldbuf.rob->current_state_list == &thread.rob_cache_miss_list
-             )){
-          if(logable(100)) logfile << " this is not a memory violation! it still in ", ldbuf.rob->current_state_list->name, " list", endl;
-          ///must in one of these lists:
-          assert(ldbuf.rob->current_state_list ==  &thread.rob_dispatched_list[ldbuf.rob->cluster] || 
-                 ldbuf.rob->current_state_list ==  &thread.rob_ready_to_dispatch_list ||
-                 ldbuf.rob->current_state_list == & thread.rob_frontend_list);
-          continue;
-        }
-      }
-#endif
-      */
 
       state.invalid = 1;
       state.data = EXCEPTION_LoadStoreAliasing;
@@ -1701,9 +1641,6 @@ void ReorderBufferEntry::release() {
   }
   thread.issueq_count--;
 
-  db " thread ", thread.threadid, " release() issueq_count ", thread.issueq_count, endl;
-  mydb " after issue(), issueq_count ", thread.issueq_count, endl;
-
   iqslot = -1;
 }
 
@@ -1873,7 +1810,6 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
         issueq_operation_on_cluster(core, cluster, free_shared_entry());
       }
       thread.issueq_count--;
-      mydb " after annul() one rob, issueq_count ", thread.issueq_count, endl;
     }
 
     annulrob.iqslot = -1;
@@ -1974,13 +1910,6 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
       branchpred.annulras(annulrob.uop.predinfo);
     }
 
-    // Release our lock on the cached basic block containing this uop
-    if unlikely (config.event_log_enabled) {
-      event->annul.bb = annulrob.uop.bb;
-      event->annul.bb_refcount = annulrob.uop.bb->refcount;
-    }
-    annulrob.uop.bb->release();
-
     annulrob.reset();
 
     ROB.annul(annulrob);
@@ -2044,10 +1973,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
       if (thread.issueq_count > core.reserved_iq_entries){
         issueq_operation_on_cluster(core, cluster, free_shared_entry());
       }
-      db " after redispatch(), issueq_count ", thread.issueq_count, endl;
       thread.issueq_count--;
-      mydb " after redispatch(), issueq_count ", thread.issueq_count, endl;
-
     }
     if unlikely (config.event_log_enabled) event->redispatch.iqslot = found;
     cluster = -1;

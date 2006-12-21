@@ -12,7 +12,8 @@
 // { find & }; ptlctl -stopinsns 20m -run : -native ; /bin/ls -la / &
 // { find & }; { find & }; ptlctl -stopinsns 20m -run : -native
 // { tar zc /usr /var /bin /sbin | tar ztv & }; { tar zc /usr /var /bin /sbin | tar ztv & }; ptlctl -stopinsns 100m -run : -native
-// ptlctl -stopinsns 200m -run : -native; { tar c /usr /var /bin /sbin | tar tv & }; { tar c /usr /var /bin /sbin | tar tv & }; { find / & }; { find / & }; 
+// ptlctl -abort-at-end -run : -native; { tar c /usr /var /bin /sbin | tar tv & }; { tar c /usr /var /bin /sbin | tar tv & }; { find / & }; { find / & }; 
+// ptlctl -core smt -stopinsns 20m -run : -native; { tar c /usr /var /bin /sbin | tar tv & }; { tar c /usr /var /bin /sbin | tar tv & }; { find / & }; { find / & }; 
 
 #include <globals.h>
 #include <elf.h>
@@ -83,12 +84,6 @@ void ThreadContext::annul_fetchq() {
       if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_ANNUL_FETCHQ_RAS, fetchbuf);
       branchpred.annulras(fetchbuf.predinfo);
     }
-    // Also release the reference to the uop's basic block
-    if unlikely (config.event_log_enabled) {
-      SMTCoreEvent* event = core.eventlog.add(EVENT_ANNUL_FETCHQ, fetchbuf);
-      event->annul.bb = fetchbuf.bb; event->annul.bb_refcount = fetchbuf.bb->refcount;
-    }
-    fetchbuf.bb->release();
   }
 }
 
@@ -114,29 +109,17 @@ void ThreadContext::flush_pipeline() {
 
   foreach_forward(ROB, i) {
     ReorderBufferEntry& rob = ROB[i];
-    // Release our lock on the cached basic block containing each uop
-    if unlikely (config.event_log_enabled) {
-      SMTCoreEvent* event = core.eventlog.add(EVENT_ANNUL_FLUSH, &rob);
-      event->annul.bb = rob.uop.bb; event->annul.bb_refcount = rob.uop.bb->refcount;
-    }
     rob.release_mem_lock(true);
     flush_mem_lock_release_list();
-    rob.uop.bb->release();
     rob.physreg->reset(threadid); // free all register allocated by rob:
   }
 
   // free all register in arch state:
   foreach (i, PHYS_REG_FILE_COUNT){
     StateList& list = core.physregfiles[i].states[PHYSREG_ARCH];
-    //   if(logable(100)){
-        // check list:
     PhysicalRegister* obj;
     int n = 0;
-    if(logable(100)) logfile << "\nflush rfid ", i, " arch list :", endl;
     foreach_list_mutable( list, obj, entry, nextentry) {
-      if ((n % 16) == 0) if(logable(100)) logfile  << " ";
-      if(logable(100)) logfile  << " ", intstring(obj->index(), -3);
-      if (((n % 16) == 15) || (n == list.count-1)) if(logable(100)) logfile << endl;
       n++;
       obj->reset(threadid);
     }     
@@ -147,11 +130,7 @@ void ThreadContext::flush_pipeline() {
     StateList& list = core.physregfiles[i].states[PHYSREG_PENDINGFREE];
     PhysicalRegister* obj;
     int n = 0;
-    if(logable(100)) logfile << "flush rfid ", i, " pending list :", endl;
     foreach_list_mutable( list, obj, entry, nextentry) {
-      if ((n % 16) == 0) if(logable(100)) logfile  << " ";
-      if(logable(100)) logfile  << " ", intstring(obj->index(), -3);
-      if (((n % 16) == 15) || (n == list.count-1)) if(logable(100)) logfile << endl;
       n++;
       obj->reset(threadid);
     }     
@@ -177,10 +156,11 @@ void ThreadContext::flush_pipeline() {
   dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
   last_commit_at_cycle = sim_cycle;
   external_to_core_state();
-  if (logable(100)) dump_smt_state(logfile);
 }
 
-// call this in response to a branch mispredict:
+//
+// Respond to a branch mispredict or other redirection:
+//
 void ThreadContext::reset_fetch_unit(W64 realrip) {
   if (current_basic_block) {
     // Release our lock on the cached basic block we're currently fetching
@@ -359,16 +339,24 @@ static void print_fetch_bb_address_ringbuf(ostream& os) {
   }
 }
 
+int SMTCore::hash_unaligned_predictor_slot(const RIPVirtPhysBase& rvp) {
+  W32 h = rvp.rip ^ rvp.mfnlo;
+  return lowbits(h, log2(UNALIGNED_PREDICTOR_SIZE));
+}
+
+bool SMTCore::get_unaligned_hint(const RIPVirtPhysBase& rvp) const {
+  int slot = hash_unaligned_predictor_slot(rvp);
+  return unaligned_predictor[slot];
+}
+
+void SMTCore::set_unaligned_hint(const RIPVirtPhysBase& rvp, bool value) {
+  int slot = hash_unaligned_predictor_slot(rvp);
+  assert(inrange(slot, 0, UNALIGNED_PREDICTOR_SIZE));
+  unaligned_predictor[slot] = value;
+}
+
 bool ThreadContext::fetch() {
-  //Queue<FetchBufferEntry, FETCH_QUEUE_SIZE>& fetchq = fetchq;
-  //RIPVirtPhys& fetchrip = fetchrip;
-  //BasicBlock*& current_basic_block = current_basic_block;
-  //int& current_basic_block_transop_index = current_basic_block_transop_index;
-  //bool& stall_frontend = stall_frontend;
-  //bool& waiting_for_icache_fill = waiting_for_icache_fill;
-  //W64& fetch_uuid = fetch_uuid;
-  //W64& current_icache_block = current_icache_block;
-  //BranchPredictorInterface& branchpred = branchpred;
+  SMTCore& core = getcore();
   EventLog& eventlog = core.eventlog;
 
   time_this_scope(ctfetch);
@@ -398,11 +386,6 @@ bool ThreadContext::fetch() {
     return true;
   }
 
-  // this need to be changed to be global so we don't split a unaligned ld twice.
-  // it caused problem in lock if ld acq is generated twice in full system mode
-  //  TransOpBuffer unaligned_ldst_buf;
-  //TransOpBuffer &unaligned_ldst_buf = unaligned_ldst_buf;
-
   while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
     if unlikely (!fetchq.remaining()) {
       if unlikely (config.event_log_enabled) { 
@@ -420,34 +403,14 @@ bool ThreadContext::fetch() {
       bool empty = false;
       issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
       if(empty) {
-        db " no sharing entry left, stop fetch. ", endl;
+        // no sharing entry left, stop fetch
         break;
       } else {
-        db " find sharing entry left, cont. fetch. ", endl;
+        // find sharing entry left, cont. fetch.
       }
     }else {
-      db " still have reserved entry left, cont. fetch. ", endl;
+      // still have reserved entry left, cont. fetch.
     } 
-
-//     //    if unlikely (issueq_count > max_issueq_count) {
-//     if (0) {
-// //       if unlikely (config.event_log_enabled) {
-// //         event = eventlog.add(EVENT_FETCH_STALLED);
-// //         event->threadid = threadid;
-// //       }
-//       //mydb " fetch stalled: issueq_count ", issueq_count, " > max_issueq_count ", max_issueq_count, endl;
-//       if unlikely (config.event_log_enabled) { 
-//         if (!fetchcount) {
-//           event =  eventlog.add(EVENT_FETCH_IQ_QUOTA_FULL); 
-//           event->threadid = threadid;
-//           event->issueq_count = issueq_count;
-//           event->uuid = fetch_uuid;
-//         }
-//       }
-
-//       stats.smtcore.fetch.stop.issueq_quota_full++;
-//       break;
-//     }
 
     if unlikely ((fetchrip.rip == config.start_log_at_rip) && (fetchrip.rip != 0xffffffffffffffffULL)) {
       config.start_log_at_iteration = 0;
@@ -510,14 +473,15 @@ bool ThreadContext::fetch() {
 
     assert(current_basic_block->synthops);
 
-    //assert(unaligned_ldst_buf.index >= 0);
-    //assert(unaligned_ldst_buf.index < 4);
-
     if likely (!unaligned_ldst_buf.get(transop, synthop)) {
       transop = current_basic_block->transops[current_basic_block_transop_index];
       synthop = current_basic_block->synthops[current_basic_block_transop_index];
     }
 
+    transop.unaligned = core.get_unaligned_hint(fetchrip) && 
+      ((transop.opcode == OP_ld) | (transop.opcode == OP_ldx) | (transop.opcode == OP_st)) &&
+      (transop.cond == LDST_ALIGN_NORMAL);
+    transop.ld_st_truly_unaligned = 0;
     transop.rip = fetchrip;
     transop.uuid = fetch_uuid;
     transop.threadid = threadid;
@@ -536,8 +500,6 @@ bool ThreadContext::fetch() {
     }
 
     assert(transop.bbindex == current_basic_block_transop_index);
-    transop.bb = current_basic_block;
-    transop.bb->acquire();
     transop.synthop = synthop;
 
     current_basic_block_transop_index += (unaligned_ldst_buf.empty());
@@ -548,7 +510,6 @@ bool ThreadContext::fetch() {
       // We've hit an assist: stall the frontend until we resume or redirect
       if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_ASSIST, transop);
       stats.smtcore.fetch.stop.microcode_assist++;
-      //mydb " stall_frontend for barrier",endl;
       stall_frontend = 1;      
     }
 
@@ -598,7 +559,6 @@ bool ThreadContext::fetch() {
 
     if unlikely (config.event_log_enabled) {
       event = eventlog.add(EVENT_FETCH_OK, transop);
-      event->fetch.bb = current_basic_block;
       event->fetch.predrip = predrip;
     }
 
@@ -649,7 +609,7 @@ BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp
     assert(current_basic_block);
     if unlikely (config.event_log_enabled) {
       SMTCoreEvent* event = core.eventlog.add(EVENT_FETCH_TRANSLATE, rvp);
-      event->fetch.bb = current_basic_block; event->fetch.bb_uop_count = current_basic_block->count;
+      event->fetch.bb_uop_count = current_basic_block->count;
       event->threadid = threadid;
     }
   }
@@ -676,16 +636,6 @@ BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp
 //
 
 void ThreadContext::rename() {
-  /*
-  Queue<ReorderBufferEntry, ROB_SIZE>& ROB = ROB;
-  Queue<LoadStoreQueueEntry, LSQ_SIZE>& LSQ = LSQ;
-  Queue<FetchBufferEntry, FETCH_QUEUE_SIZE>& fetchq = fetchq;
-  RegisterRenameTable& specrrt = specrrt;
-  RegisterRenameTable& commitrrt = commitrrt;
-  int& loads_in_flight = loads_in_flight;
-  int& stores_in_flight = stores_in_flight;
-  */
-
   SMTCoreEvent* event;
 
   time_this_scope(ctrename);
@@ -783,12 +733,6 @@ void ThreadContext::rename() {
       lsq.datavalid = 0;
       lsq.addrvalid = 0;
       lsq.invalid = 0;
-    }
-
-    //++MTY
-    if (transop.opcode == OP_mf) {
-      assert(opinfo[transop.opcode].opclass == OPCLASS_FENCE);
-      assert(isstore(transop.opcode));
     }
 
     stats.smtcore.frontend.alloc.reg += (!(ld|st|br));
@@ -1146,7 +1090,6 @@ bool ReorderBufferEntry::find_sources() {
   ThreadContext& thread = getthread();
   thread.issueq_count++;
   assert(thread.issueq_count >= 0 && thread.issueq_count <= ISSUE_QUEUE_SIZE);
-  //mydb " after dispatch(), issueq_count ", thread.issueq_count, endl;
 
   assert(ok);
 
@@ -1227,20 +1170,6 @@ int ThreadContext::dispatch() {
   foreach_list_mutable(rob_ready_to_dispatch_list, rob, entry, nextentry) {
     if unlikely (core.dispatchcount >= DISPATCH_WIDTH) break;
 
-    ///    if unlikely (issueq_count > max_issueq_count) {
-    //    if(0){
-   
-//     if unlikely (issueq_count > core.reserved_iq_entries){
-//       if(
-// //       if unlikely (config.event_log_enabled) {
-// //         event = eventlog.add(EVENT_FETCH_STALLED);
-// //         event->threadid = threadid;
-// //       }
-//       //mydb " dispatch stalled: issueq_count ", issueq_count, " > max_issueq_count ", max_issueq_count, endl;
-//       //stats.smtcore.fetch.stop.issueq_quota_full++;
-//       break;
-//     }
-
     // All operands start out as valid, then get put on wait queues if they are not actually ready.
 
     rob->cluster = rob->select_cluster();
@@ -1257,9 +1186,9 @@ int ThreadContext::dispatch() {
         foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
       }
 #ifdef MULTI_IQ
-            continue; // try the next uop to avoid deadlock on re-dispatches
+      continue; // try the next uop to avoid deadlock on re-dispatches
 #else
-            break;
+      break;
 #endif
     }
 
@@ -1268,16 +1197,15 @@ int ThreadContext::dispatch() {
       bool empty = false;
       issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
       if(empty) {
-        db " no sharing entry left, stop dispatch. ", endl;
+        // no sharing entry left, stop dispatch.
         break;
       } else {
-        db " find sharing entry left, cont. dispatch. ", endl;
+        // find sharing entry left, cont. dispatch.
         issueq_operation_on_cluster(core, cluster, alloc_resered_entry());
       }
     }else {
-      db " still have reserved entry left, cont. dispatch. ", endl;
+      // still have reserved entry left, cont. dispatch.
     } 
-    db " thread ", threadid, " dispatch() issueq_count ", issueq_count + 1, endl;
 
     int operands_still_needed = rob->find_sources();
     if likely (operands_still_needed) {
@@ -1302,18 +1230,8 @@ int ThreadContext::dispatch() {
   } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
     dispatch_deadlock_countdown--;
     if (!dispatch_deadlock_countdown) {
-      if (logable(6)) logfile << "TH ", threadid, " Dispatch deadlock at cycle ", sim_cycle, ", commits ", total_user_insns_committed, ": recovering...", endl;
-      if(logable(100)){
-        logfile <<  " before dispatch recovery for TH ", threadid,  endl;
-        core.issueq_all.print(logfile);
-      }
-   
+      // if (logable(6)) logfile << "TH ", threadid, " Dispatch deadlock at cycle ", sim_cycle, ", commits ", total_user_insns_committed, ": recovering...", endl;
       redispatch_deadlock_recovery();
-      if(logable(100)){
-        logfile <<  " after dispatch recovery for TH ", threadid,  endl;
-        core.issueq_all.print(logfile);
-      }
-      //     assert(0);
       dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
       return -1;
     }
@@ -1671,12 +1589,16 @@ int ReorderBufferEntry::commit() {
   // asynchronous interrupts are only taken after committing or excepting the
   // EOM uop in a macro-op.
   //
+
+  bool found_eom = 0;
+
   foreach_forward_from(thread.ROB, this, j) {
     ReorderBufferEntry& subrob = thread.ROB[j];
 
+    found_eom |= subrob.uop.eom;
+
     if unlikely (!subrob.ready_to_commit()) {
       all_ready_to_commit = false;
-      break;
     }
 
 #ifdef PTLSIM_HYPERVISOR
@@ -1710,18 +1632,26 @@ int ReorderBufferEntry::commit() {
       if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_EXCEPTION_DETECTED, &subrob);
 
       macro_op_has_exceptions = true;
+      all_ready_to_commit = true;
+      found_eom = true;
       break;
     }
     
     if likely (subrob.uop.eom) break;
   }
 
+  //
+  // Protect against the extremely rare case where only one x86
+  // instruction is in flight and its EOM uop has not even made
+  // it into the ROB by the time the first uop is ready to commit.
+  //
+
+  all_ready_to_commit &= found_eom;
+
   if unlikely (!all_ready_to_commit) {
     stats.smtcore.commit.result.none++;
     return COMMIT_RESULT_NONE;
   }
-
-  assert(ready_to_commit());
 
   PhysicalRegister* oldphysreg = thread.commitrrt[uop.rd];
 
@@ -1767,6 +1697,8 @@ int ReorderBufferEntry::commit() {
     stats.smtcore.commit.result.smc++;
     return COMMIT_RESULT_SMC;
   }
+
+  assert(ready_to_commit());
 
   //
   // If this is a store uop, we must check for an outstanding lock
@@ -1946,6 +1878,7 @@ int ReorderBufferEntry::commit() {
     thread.stores_in_flight -= (lsq->store == 1);
     lsq->reset();
     thread.LSQ.commit(lsq);
+    core.set_unaligned_hint(uop.rip, uop.ld_st_truly_unaligned);
   }
 
   assert(archdest_can_commit[uop.rd]);
@@ -2006,9 +1939,6 @@ int ReorderBufferEntry::commit() {
     thread.branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip]);
     stats.smtcore.branchpred.updates++;
   }
-
-  // Release our lock on the cached basic block containing this uop
-  uop.bb->release();
 
   if likely (uop.eom) {
     total_user_insns_committed++;

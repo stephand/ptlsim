@@ -152,6 +152,7 @@ void ThreadContext::init() {
 }
 
 void SMTCore::reset() {
+  round_robin_tid = 0;
   round_robin_reg_file_offset = 0;
   caches.reset();
   caches.callback = &cache_callbacks;
@@ -164,13 +165,12 @@ void SMTCore::reset() {
   foreach_issueq(set_reserved_entries(reserved_iq_entries * MAX_THREADS_PER_CORE));
   foreach_issueq(reset_shared_entries());
 
+  unaligned_predictor.reset();
+
   foreach (i, threadcount) threads[i]->reset();
 }
 
 void SMTCore::init_generic() {
-  //
-  // Miscellaneous
-  //
   reset();
 }
 
@@ -301,6 +301,33 @@ ostream& RegisterRenameTable::print(ostream& os) const {
 }
 
 //
+// Get the thread priority, with lower numbers receiving higher priority.
+// This is used to regulate the order in which fetch, rename, frontend
+// and dispatch slots are filled in each cycle.
+//
+// The well known ICOUNT algorithm adds up the number of uops in
+// the frontend pipeline stages and gives highest priority to
+// the thread with the lowest number, since this thread is moving
+// uops through very quickly and can make more progress.
+//
+int ThreadContext::get_priority() const {
+  int priority =
+    fetchq.count +
+    rob_frontend_list.count +
+    rob_ready_to_dispatch_list.count;
+
+  for_each_cluster (cluster) {
+    priority +=
+      rob_dispatched_list[cluster].count +
+      rob_ready_to_issue_list[cluster].count +
+      rob_ready_to_store_list[cluster].count +
+      rob_ready_to_load_list[cluster].count;
+  }
+
+  return priority;
+}
+
+//
 // Execute one cycle of the entire core state machine
 //
 bool SMTCore::runcycle() {
@@ -332,7 +359,6 @@ bool SMTCore::runcycle() {
     } else {
       total_issueq_count += thread->issueq_count;
       if(thread->issueq_count < reserved_iq_entries){
-        db " thread.issueq_count ", thread->issueq_count, " < reserved_iq_entries ", reserved_iq_entries, endl;
         total_issueq_reserved_free += reserved_iq_entries - thread->issueq_count;
       }
     }
@@ -349,94 +375,81 @@ bool SMTCore::runcycle() {
     assert(0);
   }
 
-  // All FUs are available at top of cycle:
   fu_avail = bitmask(FU_COUNT);
   loads_in_this_cycle = 0;
   caches.clock();
 
-  /// reset counters:
+  //
+  // Backend and issue pipe stages run with round robin priority
+  //
+  int commitrc[MAX_THREADS_PER_CORE];
   commitcount = 0;
   writecount = 0;
-  dispatchcount = 0;
-  //  fetchcount = 0;
-  //  prepcount = 0;
-  int tid;
 
-  int commitrc[MAX_THREADS_PER_CORE];
-
-  foreach (i, threadcount) {
-    ThreadContext* thread = threads[i];
-    if unlikely (!thread->ctx.running) continue;
-    commitrc[i] = thread->commit();
-  }
-
-  tid = sim_cycle % MAX_THREADS_PER_CORE;
-
-  foreach (i, MAX_THREADS_PER_CORE) {
-    if unlikely (!threads[tid]) continue;
+  foreach (permute, threadcount) {
+    int tid = add_index_modulo(round_robin_tid, +permute, threadcount);
     ThreadContext* thread = threads[tid];
     if unlikely (!thread->ctx.running) continue;
-    for_each_cluster(j) thread->writeback(j);
-    tid = add_index_modulo(tid, +1, MAX_THREADS_PER_CORE);
 
+    commitrc[tid] = thread->commit();
+    for_each_cluster(j) thread->writeback(j);
     for_each_cluster(j) thread->transfer(j);
   }
 
+  //
+  // Issue whatever is ready
+  //
   for_each_cluster(i) { issue(i); }
 
-  foreach (i, threadcount) {
-    ThreadContext* thread = threads[i];
-    if unlikely (!thread->ctx.running) continue;
-    for_each_cluster(j) { thread->complete(j); }
-  }
-
+  //
+  // Most of the frontend (except fetch!) also works with round robin priority
+  //
   int dispatchrc[MAX_THREADS_PER_CORE];
-
-  tid = sim_cycle % MAX_THREADS_PER_CORE;
-  foreach (i, MAX_THREADS_PER_CORE) {
-    if (!threads[tid]) continue;
+  dispatchcount = 0;
+  foreach (permute, threadcount) {
+    int tid = add_index_modulo(round_robin_tid, +permute, threadcount);
     ThreadContext* thread = threads[tid];
     if unlikely (!thread->ctx.running) continue;
+
+    for_each_cluster(j) { thread->complete(j); }
+
     dispatchrc[tid] = thread->dispatch();
-    tid = add_index_modulo(tid, +1, MAX_THREADS_PER_CORE);
+
+    if likely (dispatchrc[tid] >= 0) {
+      thread->frontend();
+      thread->rename();
+    }
   }
 
   //
-  // Select the thread from which to fetch instructions
-  // 
-
-  W16 iq_used[MAX_THREADS_PER_CORE];
-  W16 thread_idx[MAX_THREADS_PER_CORE];
-
-  //
-  // ICOUNT policy: give fetch priority to thread with smallest
-  // number of occupied issue queue slots.
+  // Compute fetch priorities (default is ICOUNT algorithm)
   //
   // This means we sort in ascending order, with any unused threads
   // (if any) given the lowest priority.
   //
 
+  int priority_value[MAX_THREADS_PER_CORE];
+  int priority_index[MAX_THREADS_PER_CORE];
+
   foreach (i, threadcount) {
+    priority_index[i] = i;
     ThreadContext* thread = threads[i];
-    iq_used[i] = thread->issueq_count;
-    if unlikely (!thread->ctx.running) iq_used[i] = ISSUE_QUEUE_SIZE;
-    thread_idx[i] = i;
+    priority_value[i] = thread->get_priority();
+    if unlikely (!thread->ctx.running) priority_value[i] = limits<int>::max;
   }
 
-  sort(thread_idx, threadcount, SortPrecomputedIndexListComparator<W16, false>(iq_used));
- 
+  sort(priority_index, threadcount, SortPrecomputedIndexListComparator<int, false>(priority_value));
+
   //
-  // Do frontend stages in priority order
+  // Fetch in thread priority order
   //
-  foreach (j, MAX_THREADS_PER_CORE) {
-    int i = thread_idx[j];
+  foreach (j, threadcount) {
+    int i = priority_index[j];
     ThreadContext* thread = threads[i];
-    if unlikely (!thread) continue;
+    assert(thread);
     if unlikely (!thread->ctx.running) continue;
 
     if likely (dispatchrc[i] >= 0) {
-      thread->frontend();
-      thread->rename();
       thread->fetch();
     }
   }
@@ -445,6 +458,11 @@ bool SMTCore::runcycle() {
   // Always clock the issue queues: they're independent of all threads
   //
   foreach_issueq(clock());
+
+  //
+  // Advance the round robin priority index
+  //
+  round_robin_tid = add_index_modulo(round_robin_tid, +1, threadcount);
 
   //
   // Flush event log ring buffer
@@ -486,6 +504,15 @@ bool SMTCore::runcycle() {
       // "invisible" list, where they cannot be looked up anymore,
       // but their memory is not freed until the lock is released.
       //
+      foreach (i, threadcount) {
+        ThreadContext* t = threads[i];
+        if (logable(3)) {
+          logfile << "  [vcpu ", i, "] current_basic_block = ", t->current_basic_block;  ": ";
+          if (t) logfile << t->current_basic_block->rip;
+          logfile << endl;
+        }
+      }
+
       thread->flush_pipeline();
       thread->invalidate_smc();
       break;
@@ -617,7 +644,7 @@ stringbuf& ReorderBufferEntry::get_operand_info(stringbuf& sb, int operand) cons
     sb << " (pending free for ", arch_reg_names[physreg.archreg], ")"; break;
   default:
     // Cannot be in free state!
-    sb << " (FREE)"; assert(false); break;
+    sb << " (FREE)"; break;
   }
 
   return sb;
@@ -651,8 +678,10 @@ ostream& ReorderBufferEntry::print(ostream& os) const {
   get_operand_info(rbinfo, 1);
   get_operand_info(rcinfo, 2);
 
-  os << "rob ", intstring(index(), -3), " uuid ", intstring(uop.uuid, 16), " ", padstring(current_state_list->name, -24), " @ ", padstring((cluster >= 0) ? clusters[cluster].name : "???", -4), " ", padstring(name, -12), " r", 
-    intstring(physreg->index(), -3), " ", padstring(arch_reg_names[uop.rd], -6);
+  os << "rob ", intstring(index(), -3), " uuid ", intstring(uop.uuid, 16), " rip 0x", hexstring(uop.rip, 48), " ",
+    padstring(current_state_list->name, -24), " ", (uop.som ? "SOM" : "   "), " ", (uop.eom ? "EOM" : "   "), 
+    " @ ", padstring((cluster >= 0) ? clusters[cluster].name : "???", -4), " ",
+    padstring(name, -12), " r", intstring(physreg->index(), -3), " ", padstring(arch_reg_names[uop.rd], -6);
   if (isload(uop.opcode)) 
     os << " ld", intstring(lsq->index(), -3);
   else if (isstore(uop.opcode))
@@ -706,7 +735,7 @@ void ThreadContext::print_rename_tables(ostream& os) {
 }
 
 void SMTCore::print_smt_state(ostream& os) {
-  os << " print smt statistics :", endl;
+  os << "Print SMT statistics:", endl;
 
   foreach (i, threadcount) {
     ThreadContext* thread = threads[i];
@@ -739,6 +768,10 @@ void SMTCore::dump_smt_state(ostream& os) {
   os << "Issue Queues:", endl;
   foreach_issueq(print(os));
   caches.print(os);
+
+  os << "Unaligned predictor:", endl;
+  os << "  ", unaligned_predictor.popcount(), " unaligned bits out of ", UNALIGNED_PREDICTOR_SIZE, " bits", endl;
+  os << "  Raw data: ", unaligned_predictor, endl;
 
   foreach (i, threadcount) {
     ThreadContext* thread = threads[i];
@@ -1146,14 +1179,17 @@ ostream& SMTCoreEvent::print(ostream& os) const {
   case EVENT_FETCH_ASSIST:
     os <<  "fetch  rip ", rip, ": branch into assist microcode: ", uop; break;
   case EVENT_FETCH_TRANSLATE:
-    os <<  "xlate  rip ", rip, ": BB ", fetch.bb, " of ", fetch.bb_uop_count, " uops"; break;
+    os <<  "xlate  rip ", rip, ": ", fetch.bb_uop_count, " uops"; break;
   case EVENT_FETCH_OK: {
     os <<  "fetch  rip ", rip, ": ", uop, 
-      " (BB ", fetch.bb, " uopid ", uop.bbindex;
+      " (uopid ", uop.bbindex;
     if (uop.som) os << "; SOM";
     if (uop.eom) os << "; EOM ", uop.bytes, " bytes";
     os << ")";
     if (uop.eom && fetch.predrip) os << " -> pred ", (void*)fetch.predrip;
+    if (isload(uop.opcode) | isstore(uop.opcode)) {
+      os << "; unaligned pred slot ", SMTCore::hash_unaligned_predictor_slot(rip), " -> ", uop.unaligned;
+    }
     break;
   }
     //
@@ -1374,7 +1410,7 @@ ostream& SMTCoreEvent::print(ostream& os) const {
     break;
   }
   case EVENT_ALIGNMENT_FIXUP:
-    os << "algnfx", " rip ", rip, ": set unaligned bit for uop ", uop.bbindex, " and refetch"; break;
+    os << "algnfx", " rip ", rip, ": set unaligned bit for uop ", uop.bbindex, " (unaligned predictor slot ", SMTCore::hash_unaligned_predictor_slot(rip), ") and refetch"; break;
   case EVENT_FENCE_ISSUED:
     os << "mfence rob ", intstring(rob, -3), " lsq ", lsq, " r", intstring(physreg, -3), ": memory fence (", uop, ")"; break;
   case EVENT_ANNUL_NO_FUTURE_UOPS:
@@ -1392,7 +1428,6 @@ ostream& SMTCoreEvent::print(ostream& os) const {
     if (ld|st) os << " lsq", lsq;
     if (lfrqslot >= 0) os << " lfrq", lfrqslot;
     if (annul.annulras) os << " ras";
-    os << " bb ", annul.bb, " (", annul.bb->refcount, " refs)";
     break;
   }
   case EVENT_ANNUL_PSEUDOCOMMIT: {
@@ -1408,10 +1443,8 @@ ostream& SMTCoreEvent::print(ostream& os) const {
   }
   case EVENT_ANNUL_FETCHQ_RAS:
     os << "anlras rip ", rip, ": annul RAS update still in fetchq"; break;
-  case EVENT_ANNUL_FETCHQ:
-    os << "anlbbc rip ", rip, ": annul bb ", annul.bb, " (", annul.bb_refcount, " refs)"; break;
   case EVENT_ANNUL_FLUSH:
-    os << "flush  rob ", intstring(rob, -3), " rip ", rip, " bb ", annul.bb, " (", annul.bb_refcount, " refs)"; break;
+    os << "flush  rob ", intstring(rob, -3), " rip ", rip; break;
   case EVENT_REDISPATCH_DEPENDENTS:
     os << "redisp rob ", intstring(rob, -3), " find all dependents"; break;
   case EVENT_REDISPATCH_DEPENDENTS_DONE:
@@ -1476,7 +1509,7 @@ ostream& SMTCoreEvent::print(ostream& os) const {
   case EVENT_COMMIT_SKIPBLOCK:
     os << "skipbk rob ", intstring(rob, -3), " skip block: advance rip by ", uop.bytes, " to ", (void*)(Waddr)(rip.rip + uop.bytes), " [EOM #", commit.total_user_insns_committed, "]"; break;
   case EVENT_COMMIT_SMC_DETECTED:
-    os << "smcdet rob ", intstring(rob, -3), ": self-modifying code at rip ", rip, " detected (mfn was dirty); invalidate and retry [EOM #", commit.total_user_insns_committed, "]"; break;
+    os << "smcdet rob ", intstring(rob, -3), " self-modifying code at rip ", rip, " detected (mfn was dirty); invalidate and retry [EOM #", commit.total_user_insns_committed, "]"; break;
   case EVENT_COMMIT_MEM_LOCKED:
     os << "waitlk rob ", intstring(rob, -3), " wait for lock on physaddr ", (void*)(commit.state.st.physaddr << 3), " to be released"; break;
   case EVENT_COMMIT_OK: {
@@ -1505,6 +1538,7 @@ ostream& SMTCoreEvent::print(ostream& os) const {
         
     if unlikely (ld|st) {
       os << " [lsq ", lsq, "]";
+      os << " [upslot ", SMTCore::hash_unaligned_predictor_slot(rip), " = ", commit.ld_st_truly_unaligned, "]";
     }
         
     if likely (commit.oldphysreg > 0) {
@@ -1527,7 +1561,6 @@ ostream& SMTCoreEvent::print(ostream& os) const {
       os << " [brupdate", (commit.taken ? " tk" : " nt"), (commit.predtaken ? " pt" : " np"), ((commit.taken == commit.predtaken) ? " ok" : " MP"), "]";
     }
         
-    os << " [bb ", commit.bb, ", ", commit.bb_refcount, " refs]";    
     if (uop.eom) os << " [EOM #", commit.total_user_insns_committed, "]";
     break;
   }
@@ -1646,6 +1679,12 @@ int SMTMachine::run(PTLsimConfig& config) {
       // force_logging_enabled();
       SMTCore& core =* cores[0];
       foreach (i, core.threadcount) core.threads[i]->stop_at_next_eom = 1;
+      if (config.abort_at_end) {
+        config.abort_at_end = 0;
+        logfile << "Abort immediately: do not wait for next x86 boundary nor flush pipelines", endl;
+        stopped = 1;
+        exiting = 1;
+      }
       stopping = 1;
     }
 

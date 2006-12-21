@@ -741,6 +741,8 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
   stringbuf sb;
   sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
 
+  cerr << sb, flush;
+
   if (logfile) {
     logfile << sb, flush;
     PTLsimMachine* machine = PTLsimMachine::getcurrent();
@@ -748,16 +750,7 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
     logfile.close();
   }
 
-  logfile << sb, flush;
-  cerr << sb, flush;
-
-  if (logfile) {
-    PTLsimMachine* machine = PTLsimMachine::getcurrent();
-    if (machine) machine->dump_state(logfile);
-  }
-
   // Make sure the ring buffer is flushed too:
-  logfile.close();
   cerr.flush();
   cout.flush();
 
