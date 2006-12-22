@@ -454,7 +454,11 @@ TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
 TraceDecoder::TraceDecoder(Context& ctx, Waddr rip) {
   reset();
   use64 = ctx.use64;
+#ifdef PTLSIM_HYPERVISOR
   kernel = ctx.kernel_mode;
+#else
+  kernel = 0;
+#endif
   dirflag = ((ctx.internal_eflags & FLAG_DF) != 0);
 
   bb.reset();

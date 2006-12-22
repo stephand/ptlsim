@@ -20,7 +20,7 @@ endif
 # but can still run 32-bit code and guest operating
 # systems. See the manual and FAQ for details.
 #
-# PTLSIM_HYPERVISOR=1
+PTLSIM_HYPERVISOR=1
 
 CC = g++
 
@@ -70,7 +70,10 @@ else
 COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
 
-OOOOBJS = ooocore.o ooopipe.o oooexec.o smtcore.o smtpipe.o smtexec.o branchpred.o dcache.o
+OOOOBJS = ooocore.o ooopipe.o oooexec.o branchpred.o dcache.o
+ifdef PTLSIM_HYPERVISOR
+OOOOBJS += smtcore.o smtpipe.o smtexec.o 
+endif
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
 COMMONINCLUDES = logic.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h

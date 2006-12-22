@@ -17,7 +17,9 @@
 #define STATS_ONLY
 #include <decode.h>
 #include <ooocore.h>
+#ifdef PTLSIM_HYPERVISOR
 #include <smtcore.h>
+#endif
 #include <dcache.h>
 #include <branchpred.h>
 #undef STATS_ONLY
@@ -132,7 +134,9 @@ struct PTLsimStats { // rootnode:
   } decoder;
 
   OutOfOrderCoreStats ooocore;
+#ifdef PTLSIM_HYPERVISOR
   SMTCoreStats smtcore;
+#endif
 
   DataCacheStats dcache;
 
