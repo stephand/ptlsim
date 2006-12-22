@@ -2286,6 +2286,16 @@ int main(int argc, char** argv) {
     bool native = xchg(config.native, false);
     bool kill = xchg(config.kill, false);
 
+    if unlikely (run && (contextcount > MAX_SIMULATED_VCPUS)) {
+      run = 0;
+      stringbuf sb;
+      sb << endl;
+      sb << "ERROR: this domain has ", contextcount, " VCPUs, but PTLsim was compiled with a limit of ", MAX_SIMULATED_VCPUS, " VCPUs", endl;
+      sb << "You must increase MAX_SIMULATED_VCPUs and recompile to support this configuration.", endl, endl;
+      cerr << sb;
+      if (logfile) logfile << sb;
+    }
+
     if (run) {
       update_time();
       bootinfo.abort_request = 0;

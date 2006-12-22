@@ -216,11 +216,9 @@ void PhysicalRegisterFile::init(const char* name, int coreid, int rfid, int size
   this->frees = 0;
 
   foreach (i, MAX_PHYSREG_STATE) {
-
     stringbuf sb;
     sb << name, "-", physreg_state_names[i];
     states[i].init(sb, getcore().physreg_states);
-    //    states[i].init(physreg_state_names[i], getcore().physreg_states);
   }
 
   foreach (i, size) {
@@ -229,21 +227,14 @@ void PhysicalRegisterFile::init(const char* name, int coreid, int rfid, int size
 }
 
 PhysicalRegister* PhysicalRegisterFile::alloc(W8 threadid, int r) {
-  //  PhysicalRegister* physreg = (PhysicalRegister*)((r >= 0) ? states[PHYSREG_FREE].remove(&(*this)[r]) : states[PHYSREG_FREE].dequeue());
-    
   PhysicalRegister* physreg = (PhysicalRegister*)((r == 0) ? &(*this)[r] : states[PHYSREG_FREE].peek());
   if unlikely (!physreg) return null;
-  //  physreg->state = PHYSREG_NONE;
   physreg->changestate(PHYSREG_WAITING);
   physreg->flags = FLAG_WAIT;
   physreg->threadid = threadid;
   allocations++;
 
-  if(states[PHYSREG_FREE].count <0){
-    logfile << " underflow free list: ", *physreg, endl;
-    //cores[coreid]->dump_smt_state(logfile);
-    assert(0);
-  }
+  assert(states[PHYSREG_FREE].count >= 0);
   return physreg;
 }
 
@@ -349,6 +340,9 @@ bool SMTCore::runcycle() {
   }
 #endif
 
+  //
+  // Compute reserved issue queue entries to avoid starvation:
+  //
   int total_issueq_count = 0;
   int total_issueq_reserved_free = 0;
 
@@ -364,16 +358,8 @@ bool SMTCore::runcycle() {
     }
   }
 
-  if (total_issueq_count != issueq_all.count) {
-    logfile << " cycle ", sim_cycle, " total_issueq_count ", total_issueq_count, " != iq count ", issueq_all.count, endl;
-    assert(0);
-  }
-
-  if ((ISSUE_QUEUE_SIZE - issueq_all.count) != (issueq_all.shared_entries + total_issueq_reserved_free)) {
-    logfile << " cycle ", sim_cycle, " ISSUE_QUEUE_SIZE ", ISSUE_QUEUE_SIZE, " - issueq_all.count ",  issueq_all.count, " !=  issueq_all.shared_entries ", issueq_all.shared_entries, 
-      " + total_issueq_reserved_free ", total_issueq_reserved_free, endl;
-    assert(0);
-  }
+  assert (total_issueq_count == issueq_all.count);
+  assert((ISSUE_QUEUE_SIZE - issueq_all.count) == (issueq_all.shared_entries + total_issueq_reserved_free));
 
   fu_avail = bitmask(FU_COUNT);
   loads_in_this_cycle = 0;
@@ -442,6 +428,11 @@ bool SMTCore::runcycle() {
 
   //
   // Fetch in thread priority order
+  //
+  // NOTE: True ICOUNT only fetches the highest priority
+  // thread per cycle, since there is usually only one
+  // instruction cache port. In a banked i-cache, we can
+  // fetch from multiple threads every cycle.
   //
   foreach (j, threadcount) {
     int i = priority_index[j];
@@ -1744,16 +1735,19 @@ void SMTMachine::dump_state(ostream& os) {
   }
   os << "Memory interlock buffer:", endl, flush;
   interlocks.print(os);
-  /*
-   foreach (i, threadcount) {
-     ThreadContext* thread = *cores[0]->threads[i];
-     os << "Thread ", i, ":", endl;
-     os << "  rip:                                 ", (void*)thread.ctx.commitarf[REG_rip], endl;
-     os << "  consecutive_commits_inside_spinlock: ", thread.consecutive_commits_inside_spinlock, endl;
-     os << "  State:", endl;
-     os << thread.ctx;
-   }
-  */
+#if 0
+  //
+  // For debugging only:
+  //
+  foreach (i, threadcount) {
+    ThreadContext* thread = *cores[0]->threads[i];
+    os << "Thread ", i, ":", endl;
+    os << "  rip:                                 ", (void*)thread.ctx.commitarf[REG_rip], endl;
+    os << "  consecutive_commits_inside_spinlock: ", thread.consecutive_commits_inside_spinlock, endl;
+    os << "  State:", endl;
+    os << thread.ctx;
+  }
+#endif
 }
 
 namespace SMTModel {
@@ -1773,9 +1767,17 @@ namespace SMTModel {
 };
 
 void SMTMachine::update_stats(PTLsimStats& stats) {
-  stats.smtcore.issue.uipc = (double)stats.smtcore.issue.uops / (double)stats.smtcore.cycles;
-  stats.smtcore.commit.uipc = (double)stats.smtcore.commit.uops / (double)stats.smtcore.cycles;
-  stats.smtcore.commit.ipc = (double)stats.smtcore.commit.insns / (double)stats.smtcore.cycles;
+  foreach (vcpuid, contextcount) {
+    PerContextSMTStats& s = per_context_smtcore_stats_ref(vcpuid);
+    s.issue.uipc = s.issue.uops / (double)stats.smtcore.cycles;
+    s.commit.uipc = (double)s.commit.uops / (double)stats.smtcore.cycles;
+    s.commit.ipc = (double)s.commit.insns / (double)stats.smtcore.cycles;
+  }
+
+  PerContextSMTStats& s = stats.smtcore.total;
+  s.issue.uipc = s.issue.uops / (double)stats.smtcore.cycles;
+  s.commit.uipc = (double)s.commit.uops / (double)stats.smtcore.cycles;
+  s.commit.ipc = (double)s.commit.insns / (double)stats.smtcore.cycles;
 
   stats.smtcore.simulator.total_time = cttotal.seconds();
   stats.smtcore.simulator.cputime.fetch = ctfetch.seconds();

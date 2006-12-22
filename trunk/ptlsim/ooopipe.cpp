@@ -374,7 +374,7 @@ bool OutOfOrderCore::fetch() {
 
       stats.ooocore.fetch.blocks++;
       current_icache_block = req_icache_block;
-      stats.ooocore.dcache.fetch.hit.L1++;
+      per_context_dcache_stats_update(0, fetch.hit.L1++);
     }
 
     FetchBufferEntry& transop = *fetchq.alloc();

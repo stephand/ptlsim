@@ -504,9 +504,13 @@ struct DataStoreNodeTemplate: public DataStoreNodeTemplateBase {
 
   enum NodeType { DS_NODE_TYPE_NULL, DS_NODE_TYPE_INT, DS_NODE_TYPE_FLOAT, DS_NODE_TYPE_NODE, DS_NODE_TYPE_STRING, DS_NODE_TYPE_LABELED_HISTOGRAM };
 
+  void init(const char* name, int type = DS_NODE_TYPE_NULL, int count = 1, const char** labels = null);
+
   DataStoreNodeTemplate() { name = null; labels = null; parent = null; }
 
   DataStoreNodeTemplate(const char* name, int type = DS_NODE_TYPE_NULL, int count = 1, const char** labels = null);
+
+  DataStoreNodeTemplate(const DataStoreNodeTemplate& base, const char* name = null);
 
   ~DataStoreNodeTemplate();
 
@@ -522,6 +526,9 @@ struct DataStoreNodeTemplate: public DataStoreNodeTemplateBase {
   // Simple null container node
   DataStoreNodeTemplate& add(const char* key) { return add(new DataStoreNodeTemplate(key, DS_NODE_TYPE_NULL)); }
   DataStoreNodeTemplate& operator ()(const char* key) { return add(key); }
+
+  // Cloned template node
+  DataStoreNodeTemplate& add(const char* key, DataStoreNodeTemplate& base);
 
   // Integer
   DataStoreNodeTemplate& addint(const char* key, int count = 1) { return add(new DataStoreNodeTemplate(key, DS_NODE_TYPE_INT, count)); }

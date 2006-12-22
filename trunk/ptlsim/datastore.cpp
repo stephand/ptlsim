@@ -838,7 +838,7 @@ odstream& DataStoreNode::write(odstream& os) const {
   return os;
 }
 
-DataStoreNodeTemplate::DataStoreNodeTemplate(const char* name, int type, int count, const char** labels) {
+void DataStoreNodeTemplate::init(const char* name, int type, int count, const char** labels) {
   magic = DataStoreNodeTemplateBase::MAGIC;
   length = sizeof(DataStoreNodeTemplateBase);
   this->name = strdup(name);
@@ -866,6 +866,32 @@ DataStoreNodeTemplate::DataStoreNodeTemplate(const char* name, int type, int cou
       this->labels[i] = strdup(labels[i]);
     }
   }
+}
+
+DataStoreNodeTemplate::DataStoreNodeTemplate(const char* name, int type, int count, const char** labels) {
+  init(name, type, count, labels);
+}
+
+DataStoreNodeTemplate::DataStoreNodeTemplate(const DataStoreNodeTemplate& base, const char* newname) {
+  init((newname) ? newname : base.name, base.type, base.count, (const char**)base.labels);
+  summable = base.summable;
+  histogramarray = base.histogramarray;
+  identical_subtrees = base.identical_subtrees;
+  // labeled_histogram inherited automatically
+  histomin = base.histomin;
+  histomax = base.histomax;
+  histostride = base.histostride;
+  limit = base.limit;
+
+  foreach (i, base.subnodes.length) {
+    add(new DataStoreNodeTemplate(*base.subnodes[i], (const char*)base.subnodes[i]->name));
+  }
+}
+
+DataStoreNodeTemplate& DataStoreNodeTemplate::add(const char* key, DataStoreNodeTemplate& base) {
+  DataStoreNodeTemplate& t =* new DataStoreNodeTemplate(base, key);
+  add(t);
+  return t;
 }
 
 DataStoreNodeTemplate::~DataStoreNodeTemplate() {
@@ -927,7 +953,6 @@ ostream& DataStoreNodeTemplate::generate_struct_def(ostream& os, int depth) cons
     assert(false);
   }
 
-  //os << "// subnodes = ", subnodes, endl;
   foreach (i, subnodes.length) {
     subnodes[i]->generate_struct_def(os, depth + 1);
   }

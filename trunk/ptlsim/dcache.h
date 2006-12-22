@@ -20,6 +20,9 @@ struct LoadStoreInfo {
   RawDataAccessors(LoadStoreInfo, W64);
 };
 
+#define per_context_dcache_stats_ref(vcpuid) (*(((PerContextDataCacheStats*)&stats.dcache.vcpu0) + (vcpuid)))
+#define per_context_dcache_stats_update(vcpuid, expr) stats.dcache.total.expr, per_context_dcache_stats_ref(vcpuid).expr
+
 namespace CacheSubsystem {
   // How many load wakeups can be driven into the core each cycle:
   const int MAX_WAKEUPS_PER_CYCLE = 2;
@@ -597,4 +600,81 @@ namespace CacheSubsystem {
   };
 #endif // STATS_ONLY
 };
+
+struct PerContextDataCacheStats { // rootnode:
+  struct load {
+    struct hit { // node: summable
+      W64 L1;
+      W64 L2;
+      W64 L3;
+      W64 mem;
+    } hit;
+        
+    struct dtlb { // node: summable
+      W64 hits;
+      W64 misses;
+    } dtlb;
+  } load;
+ 
+  struct fetch {
+    struct hit { // node: summable
+      W64 L1;
+      W64 L2;
+      W64 L3;
+      W64 mem;
+    } hit;
+    
+    struct itlb { // node: summable
+      W64 hits;
+      W64 misses;
+    } itlb;
+  } fetch;
+  
+  struct store {
+    W64 prefetches;
+  } store;
+};
+
+struct DataCacheStats { // rootnode:
+  struct load {
+    struct transfer { // node: summable
+      W64 L2_to_L1_full;
+      W64 L2_to_L1_partial;
+      W64 L2_L1I_full;
+    } transfer;
+  } load;
+
+  struct missbuf {
+    W64 inserts;
+    struct deliver { // node: summable
+      W64 mem_to_L3;
+      W64 L3_to_L2;
+      W64 L2_to_L1D;
+      W64 L2_to_L1I;
+    } deliver;
+  } missbuf;
+
+  struct prefetch { // node: summable
+    W64 in_L1;
+    W64 in_L2;
+    W64 required;
+  } prefetch;
+
+  struct lfrq {
+    W64 inserts;
+    W64 wakeups;
+    W64 annuls;
+    W64 resets;
+    W64 total_latency;
+    double average_latency;
+    W64 width[CacheSubsystem::MAX_WAKEUPS_PER_CYCLE+1]; // histo: 0, CacheSubsystem::MAX_WAKEUPS_PER_CYCLE+1, 1
+  } lfrq;
+
+  PerContextDataCacheStats total;
+  PerContextDataCacheStats vcpu0;
+  PerContextDataCacheStats vcpu1;
+  PerContextDataCacheStats vcpu2;
+  PerContextDataCacheStats vcpu3;
+};
+
 #endif // _DCACHE_H_

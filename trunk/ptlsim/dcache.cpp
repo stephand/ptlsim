@@ -51,7 +51,7 @@ void LoadFillReqQueue<size>::restart() {
     annul(idx);
   }
   reset();
-  stats.ooocore.dcache.lfrq.resets++;
+  stats.dcache.lfrq.resets++;
 }
 
 template <int size>
@@ -66,14 +66,14 @@ void LoadFillReqQueue<size>::reset(int threadid) {
     }
   }
 
-  stats.ooocore.dcache.lfrq.resets++;
+  stats.dcache.lfrq.resets++;
 }
 
 template <int size>
 void LoadFillReqQueue<size>::annul(int lfrqslot) {
   LoadFillReq& req = reqs[lfrqslot];
   if (logable(6)) logfile << "  Annul LFRQ slot ", lfrqslot, endl;
-  stats.ooocore.dcache.lfrq.annuls++;
+  stats.dcache.lfrq.annuls++;
   hierarchy.missbuf.annul_lfrq(lfrqslot);
   changestate(lfrqslot, ready, freemap);
 }
@@ -87,7 +87,7 @@ int LoadFillReqQueue<size>::add(const LoadFillReq& req) {
   int idx = freemap.lsb();
   changestate(idx, freemap, waiting);         
   reqs[idx] = req;
-  stats.ooocore.dcache.lfrq.inserts++;
+  stats.dcache.lfrq.inserts++;
   return idx;
 }
 
@@ -139,17 +139,17 @@ void LoadFillReqQueue<size>::clock() {
       // avoid overflow induced erroneous values:
       // logfile << "LFRQ: warning: cycle counter wraparound in initcycle latency (current ", sim_cycle, " vs init ", req.initcycle, " = delta ", delta, ")", endl;
     } else {
-      stats.ooocore.dcache.lfrq.total_latency += delta;
+      stats.dcache.lfrq.total_latency += delta;
     }
         
-    stats.ooocore.dcache.lfrq.wakeups++;
+    stats.dcache.lfrq.wakeups++;
     wakeupcount++;
     if likely (hierarchy.callback) hierarchy.callback->dcache_wakeup(req.lsi, req.addr);
 
     changestate(idx, ready, freemap);
   }
 
-  stats.ooocore.dcache.lfrq.width[wakeupcount]++;
+  stats.dcache.lfrq.width[wakeupcount]++;
 }
 
 template <int size>
@@ -240,7 +240,7 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
 
   idx = freemap.lsb();
   freemap[idx] = 0;
-  stats.ooocore.dcache.missbuf.inserts++;
+  stats.dcache.missbuf.inserts++;
   Entry& mb = missbufs[idx];
   mb.addr = addr;
   mb.lfrqmap = 0;
@@ -258,7 +258,7 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
     mb.state = STATE_DELIVER_TO_L1;
     mb.cycles = L2_LATENCY;
 
-    if unlikely (icache) stats.ooocore.dcache.fetch.hit.L2++; else stats.ooocore.dcache.load.hit.L2++;
+    if unlikely (icache) per_context_dcache_stats_update(mb.threadid, fetch.hit.L2++); else per_context_dcache_stats_update(mb.threadid, load.hit.L2++);
     return idx;
   }
 
@@ -267,14 +267,15 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
     if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", idx, ": enter state deliver to L2 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
     mb.state = STATE_DELIVER_TO_L2;
     mb.cycles = L3_LATENCY;
-    if (icache) stats.ooocore.dcache.fetch.hit.L3++; else stats.ooocore.dcache.load.hit.L3++;
+    if (icache) per_context_dcache_stats_update(mb.threadid, fetch.hit.L3++); else per_context_dcache_stats_update(mb.threadid, load.hit.L3++);
     return idx;
   }
 
   if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", idx, ": enter state deliver to L3 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
   mb.state = STATE_DELIVER_TO_L3;
   mb.cycles = MAIN_MEM_LATENCY;
-  if unlikely (icache) stats.ooocore.dcache.fetch.hit.mem++; else stats.ooocore.dcache.load.hit.mem++;
+
+  if unlikely (icache) per_context_dcache_stats_update(mb.threadid, fetch.hit.mem++); else per_context_dcache_stats_update(mb.threadid, load.hit.mem++);
 
   return idx;
 }
@@ -320,7 +321,7 @@ void MissBuffer<SIZE>::clock() {
         hierarchy.L3.validate(mb.addr);
         mb.cycles = L3_LATENCY;
         mb.state = STATE_DELIVER_TO_L2;
-        stats.ooocore.dcache.missbuf.deliver.mem_to_L3++;
+        stats.dcache.missbuf.deliver.mem_to_L3++;
       }
       break;
     }
@@ -332,7 +333,7 @@ void MissBuffer<SIZE>::clock() {
         hierarchy.L2.validate(mb.addr);
         mb.cycles = L2_LATENCY;
         mb.state = STATE_DELIVER_TO_L1;
-        stats.ooocore.dcache.missbuf.deliver.L3_to_L2++;
+        stats.dcache.missbuf.deliver.L3_to_L2++;
       }
       break;
     }
@@ -347,7 +348,7 @@ void MissBuffer<SIZE>::clock() {
           // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
           // foreach (i, L2_LINE_SIZE / L1_LINE_SIZE) L1.validate(mb.addr + i*L1_LINE_SIZE, bitvec<L1_LINE_SIZE>().setall());
           hierarchy.L1.validate(mb.addr, bitvec<L1_LINE_SIZE>().setall());
-          stats.ooocore.dcache.missbuf.deliver.L2_to_L1D++;
+          stats.dcache.missbuf.deliver.L2_to_L1D++;
           hierarchy.lfrq.wakeup(mb.addr, mb.lfrqmap);
         }
         if unlikely (mb.icache) {
@@ -356,7 +357,7 @@ void MissBuffer<SIZE>::clock() {
           // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
           // foreach (i, L2_LINE_SIZE / L1I_LINE_SIZE) L1I.validate(mb.addr + i*L1I_LINE_SIZE, bitvec<L1I_LINE_SIZE>().setall());
           hierarchy.L1I.validate(mb.addr, bitvec<L1I_LINE_SIZE>().setall());
-          stats.ooocore.dcache.missbuf.deliver.L2_to_L1I++;
+          stats.dcache.missbuf.deliver.L2_to_L1I++;
           LoadStoreInfo lsi = 0;
           lsi.rob = mb.rob;
           lsi.threadid = mb.threadid;
@@ -443,9 +444,9 @@ int CacheHierarchy::issueload_slowpath(IssueState& state, W64 addr, W64 origaddr
 
   if likely (!L1line) {
     //L1line = L1.select(addr);
-    stats.ooocore.dcache.load.transfer.L2_to_L1_full++;
+    stats.dcache.load.transfer.L2_to_L1_full++;
   } else {
-    stats.ooocore.dcache.load.transfer.L2_to_L1_partial++;
+    stats.dcache.load.transfer.L2_to_L1_partial++;
   }
 
   int L2hit = 0;
@@ -561,21 +562,21 @@ void CacheHierarchy::initiate_prefetch(W64 addr, int cachelevel) {
   L1CacheLine* L1line = L1.probe(addr);
     
   if unlikely (L1line) {
-    stats.ooocore.dcache.prefetch.in_L1++;
+    stats.dcache.prefetch.in_L1++;
     return;
   }
     
   L2CacheLine* L2line = L2.probe(addr);
     
   if unlikely (L2line) {
-    stats.ooocore.dcache.prefetch.in_L2++;
+    stats.dcache.prefetch.in_L2++;
     if (PREFETCH_STOPS_AT_L2) return; // only move up to L2 level, and it's already there
   }
     
   if (DEBUG) logfile << "Prefetch requested for ", (void*)(Waddr)addr, " to cache level ", cachelevel, endl;
     
   missbuf.initiate_miss(addr, L2line);
-  stats.ooocore.dcache.prefetch.required++;
+  stats.dcache.prefetch.required++;
 }
 
 //
@@ -625,7 +626,7 @@ W64 CacheHierarchy::commitstore(const SFR& sfr, int threadid) {
   L2line->valid |= ((W64)sfr.bytemask << lowbits(addr, 6));
 
   if unlikely (!L1line->valid.allset()) {
-    stats.ooocore.dcache.store.prefetches++;
+    per_context_dcache_stats_update(threadid, store.prefetches++);
     missbuf.initiate_miss(addr, L2line->valid.allset(), false, 0xffff, threadid);
   }
 

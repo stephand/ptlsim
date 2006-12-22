@@ -20,6 +20,7 @@ $target = $ARGV[0];
 
 @stack = ();
 $node = "root";
+$topnode = "";
 $depth = 0;
 $enabled = 0;
 
@@ -36,6 +37,7 @@ while (<STDIN>) {
 
   if (/^\s*struct\s+(\w+)\s*\{\s*\/\/\s*rootnode\:\s*(.*)/) {
     padding($depth);
+    $topnode = $1;
     $node = $1;
     $enabled = 1;
     print("DataStoreNodeTemplate $node(\"" . $node . "\"); {\n");
@@ -91,7 +93,8 @@ while (<STDIN>) {
     padding($depth);
     if ($type eq 'W64') { print("$node.addint(\"$name\");\n"); }
     elsif ($type eq 'double') { print("$node.addfloat(\"$name\");\n"); }
-    else { die("// line $.: Unknown type: $type\n"); }
+    #else { die("// line $.: Unknown type: $type\n"); }
+    else { print("$node.add(\"$name\", $type);\n"); }
   } elsif (/^\s*(\w+)\s+(\w+)\s*\[(.+)\]\s*\;\s*$/) {
     # type name[size]
     $type = $1; $name = $2; $dims = $3;
@@ -125,24 +128,15 @@ while (<STDIN>) {
   $enabled = ($depth != 0);
 
   if (!$enabled) {
-    print("\n");
-    print("  odstream os(cout.filehandle());\n");
-    print("  os << $target;\n");
-    print("  os.close();\n");
-    print("}\n");
+    if ($topnode eq $target) {
+      print("\n");
+      print("  odstream os(cout.filehandle());\n");
+      print("  os << $target;\n");
+      print("  os.close();\n");
+      print("}\n");
+    }
+
+    $topnode = "";
   }
 }
 
-#  if ((!$enabled) && (/\s*dststruct\s+(\w+)\s*\{/)) {
-#    if ($1 eq $target) {
-#      $enabled = 1;
-#
-#      $node = "root";
-#      $depth++;
-#
-#      print("DataStoreNodeTemplate& build_template() {\n");
-#      print("  DataStoreNodeTemplate& root =* new DataStoreNodeTemplate(\"" . $target . "\"); {\n");
-#      next;
-#    }
-#  }
-#  next if (!$enabled);

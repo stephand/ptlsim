@@ -1029,7 +1029,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     state.datavalid = 1;
 
     stats.ooocore.dcache.load.issue.complete++;
-    stats.ooocore.dcache.load.hit.L1++;
+    per_context_dcache_stats_update(0, load.hit.L1++);
     return ISSUE_COMPLETED;
   }
 
