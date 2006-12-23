@@ -1,0 +1,3 @@
+#!/bin/sh
+DOMAIN=$1
+sudo xm create $DOMAIN --paused; sudo xm list; sudo xm sched-credit -d $DOMAIN -w 16; sudo xm console $DOMAIN;

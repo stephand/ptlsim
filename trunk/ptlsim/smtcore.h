@@ -50,7 +50,7 @@ namespace SMTModel {
   const int MAX_ISSUE_WIDTH = 4;
   
   // Largest size of any physical register file or the store queue:
-  const int MAX_PHYS_REG_FILE_SIZE = 128; //128;
+  const int MAX_PHYS_REG_FILE_SIZE = 256;
   const int PHYS_REG_FILE_SIZE = 128;
   const int PHYS_REG_NULL = 0;
   
@@ -66,7 +66,7 @@ namespace SMTModel {
   const int ROB_SIZE = 128;
   
   // Maximum number of branches in the pipeline at any given time
-  const int MAX_BRANCHES_IN_FLIGHT = 64; //32;
+  const int MAX_BRANCHES_IN_FLIGHT = 16;
 
   // Set this to combine the integer and FP phys reg files:
   // #define UNIFIED_INT_FP_PHYS_REG_FILE
