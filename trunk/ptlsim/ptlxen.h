@@ -513,7 +513,7 @@ ostream& print_page_table_with_types(ostream& os, Level1PTE* ptes);
 // Page Table Walks
 //
 
-Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn);
+Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn, int level = 0);
 Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG);
 Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);

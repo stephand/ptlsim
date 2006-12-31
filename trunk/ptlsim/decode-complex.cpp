@@ -858,7 +858,7 @@ bool TraceDecoder::decode_complex() {
       // xchg [mem],reg is always locked:
       prefixes |= PFX_LOCK;
 
-      memory_fence_if_locked();
+      if (memory_fence_if_locked(0)) break;
 
       if (rahigh)
         this << TransOp(OP_maskb, REG_temp7, REG_zero, rareg, REG_imm, 3, 0, MaskControlInfo(0, 8, 8));
@@ -903,7 +903,7 @@ bool TraceDecoder::decode_complex() {
       //
       this << TransOp(OP_mov, destreg, REG_zero, REG_temp6, REG_zero, 3);
 
-      memory_fence_if_locked();
+      if (memory_fence_if_locked(1)) break;
     }
     break;
   }
@@ -1047,14 +1047,10 @@ bool TraceDecoder::decode_complex() {
 
     // only actually code if it is the very first insn in the block!
     // otherwise emit a branch:
-    if (rep && ((Waddr)ripstart != (Waddr)bb.rip)) {
+    if (rep && (!first_insn_in_bb())) {
       if (!last_flags_update_was_atomic) 
         this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
-      TransOp br(OP_bru, REG_rip, REG_zero, REG_zero, REG_zero, 3);
-      br.riptaken = (Waddr)ripstart;
-      br.ripseq = (Waddr)ripstart;
-      this << br;
-      end_of_block = 1;
+      split_before();
     } else {
       // This is the very first x86 insn in the block, so translate it as a loop!
       if (rep) {
@@ -1552,7 +1548,7 @@ bool TraceDecoder::decode_complex() {
 #ifdef PTLSIM_HYPERVISOR
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
-    if (!kernel) MakeInvalid();
+    if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
     CheckInvalid();
 
     int offset;
@@ -1582,7 +1578,7 @@ bool TraceDecoder::decode_complex() {
 #ifdef PTLSIM_HYPERVISOR
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
-    if (!kernel) MakeInvalid();
+    if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
     CheckInvalid();
 
     int offset;
@@ -1613,7 +1609,7 @@ bool TraceDecoder::decode_complex() {
 #ifdef PTLSIM_HYPERVISOR
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
-    if (!kernel) MakeInvalid();
+    if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
     CheckInvalid();
 
     int offset;
@@ -1643,7 +1639,7 @@ bool TraceDecoder::decode_complex() {
 #ifdef PTLSIM_HYPERVISOR
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
-    if (!kernel) MakeInvalid();
+    if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
     CheckInvalid();
 
     this << TransOp(OP_mov, REG_ar1, REG_zero, arch_pseudo_reg_to_arch_reg[ra.reg.reg], REG_zero, reginfo[ra.reg.reg].sizeshift);
@@ -1694,7 +1690,7 @@ bool TraceDecoder::decode_complex() {
       if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
       bool locked = ((prefixes & PFX_LOCK) != 0);
 
-      memory_fence_if_locked();
+      if (memory_fence_if_locked(0)) break;
 
       int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
 
@@ -1702,14 +1698,15 @@ bool TraceDecoder::decode_complex() {
       address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
 
       this << TransOp(OP_sar, REG_temp2, rareg, REG_imm, REG_zero, 3, 3); // byte index
-      TransOp ldop(OP_ld, REG_temp0, REG_temp1, REG_temp2, REG_zero, 0); ldop.locked = locked; this << ldop;
+      this << TransOp(OP_add, REG_temp2, REG_temp1, REG_temp2, REG_zero, 3, 3); // add offset
+      TransOp ldop(OP_ld, REG_temp0, REG_temp2, REG_imm, REG_zero, 0, 0); ldop.locked = locked; this << ldop;
       this << TransOp(opcode, REG_temp0, REG_temp0, rareg, REG_zero, 0, 0, 0, SETFLAG_CF);
 
       if (opcode != OP_bt) {
-        TransOp stop(OP_st, REG_mem, REG_temp1, REG_temp2, REG_temp0, 0); stop.locked = locked; this << stop;
+        TransOp stop(OP_st, REG_mem, REG_temp2, REG_imm, REG_temp0, 0, 0); stop.locked = locked; this << stop;
       }
 
-      memory_fence_if_locked();
+      if (memory_fence_if_locked(1)) break;
 
       break;
     }
@@ -1737,7 +1734,7 @@ bool TraceDecoder::decode_complex() {
       if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
       bool locked = ((prefixes & PFX_LOCK) != 0);
 
-      memory_fence_if_locked();
+      if (memory_fence_if_locked(0)) break;
 
       rd.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
       address_generate_and_load_or_store(REG_temp1, REG_zero, rd, OP_add, 0, 0, true);
@@ -1749,7 +1746,7 @@ bool TraceDecoder::decode_complex() {
         TransOp stop(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 0, ra.imm.imm >> 3); stop.locked = locked; this << stop;
       }
 
-      memory_fence_if_locked();
+      if (memory_fence_if_locked(1)) break;
 
       break;
     }
@@ -1904,7 +1901,7 @@ bool TraceDecoder::decode_complex() {
 
     if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
 
-    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
 
     operand_load(REG_temp0, rd, OP_ld, 1);
 
@@ -1920,7 +1917,7 @@ bool TraceDecoder::decode_complex() {
 
     if likely (rd.type == OPTYPE_MEM) result_store(REG_temp2, REG_temp0, rd);
 
-    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
     break;
   }
@@ -1956,14 +1953,14 @@ bool TraceDecoder::decode_complex() {
     // xadd [mem],reg is always locked:
     if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
 
-    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
 
     operand_load(REG_temp0, rd, OP_ld, 1);
     this << TransOp(OP_add, REG_temp1, REG_temp0, rareg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
     result_store(REG_temp1, REG_temp2, rd);
     this << TransOp(OP_mov, rareg, rareg, REG_temp0, REG_zero, sizeshift);
 
-    if likely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
     break;
   }
@@ -2030,13 +2027,19 @@ bool TraceDecoder::decode_complex() {
     case 6: // mfence
     case 7: { // sfence
       CheckInvalid();
-      TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
-      switch (modrm.reg) {
-      case 5: mf.extshift = MF_TYPE_LFENCE; break;
-      case 6: mf.extshift = MF_TYPE_SFENCE; break;
-      case 7: mf.extshift = MF_TYPE_SFENCE|MF_TYPE_LFENCE; break;
+
+      if (first_insn_in_bb()) {
+        TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+        switch (modrm.reg) {
+        case 5: mf.extshift = MF_TYPE_LFENCE; break;
+        case 6: mf.extshift = MF_TYPE_SFENCE; break;
+        case 7: mf.extshift = MF_TYPE_SFENCE|MF_TYPE_LFENCE; break;
+        }
+        this << mf;
+        split_after();
+      } else {
+        split_before();
       }
-      this << mf;
       break;
     }
     default:

@@ -380,28 +380,54 @@ namespace CacheSubsystem {
   // is 36 bits.
   //
   template <int tlbid, int size>
-  struct TranslationLookasideBuffer: public FullyAssociativeTagsNbitOneHot<size, 36> {
-    typedef FullyAssociativeTagsNbitOneHot<size, 36> base_t;
+  struct TranslationLookasideBuffer: public FullyAssociativeTagsNbitOneHot<size, 40> {
+    typedef FullyAssociativeTagsNbitOneHot<size, 40> base_t;
     TranslationLookasideBuffer(): base_t() { }
 
     void reset() {
       base_t::reset();
     }
 
-    bool probe(W64 addr) {
-      return (base_t::probe(addr >> 12) >= 0);
+    // Get the 40-bit TLB tag (36 bit virtual page ID plus 4 bit threadid)
+    static W64 tagof(W64 addr, W64 threadid) {
+      return bits(addr, 12, 36) | (threadid << 36);
     }
 
-    bool insert(W64 addr) {
-      addr >>= 12;
+    bool probe(W64 addr, int threadid = 0) {
+      W64 tag = tagof(addr, threadid);
+      return (base_t::probe(tag) >= 0);
+    }
+
+    bool insert(W64 addr, int threadid = 0) {
+      addr = floor(addr, PAGE_SIZE);
+      W64 tag = tagof(addr, threadid);
       W64 oldtag;
-      int way = base_t::select(addr, oldtag);
+      int way = base_t::select(tag, oldtag);
+      W64 oldaddr = lowbits(oldtag, 36) << 12;
       if (logable(6)) {
         logfile << "TLB insertion of virt page ", (void*)(Waddr)addr, " (virt addr ", 
-          (void*)(Waddr)(addr << 12), ") into way ", way, ": ",
-          ((oldtag != addr) ? "evicted old entry" : "already present"), endl;
+          (void*)(Waddr)(addr), ") into way ", way, ": ",
+          ((oldtag != tag) ? "evicted old entry" : "already present"), endl;
       }
-      return (oldtag != addr);
+      return (oldtag != tag);
+    }
+
+    int flush_all() {
+      reset();
+      return size;
+    }
+
+    int flush_thread(W64 threadid) {
+      W64 tag = threadid << 36;
+      W64 tagmask = 0xfULL << 36;
+      bitvec<size> slotmask = base_t::masked_match(tag, tagmask);
+      int n = slotmask.popcount();
+      base_t::masked_invalidate(slotmask);
+      return n;
+    }
+
+    int flush_virt(Waddr virtaddr, W64 threadid) {
+      return invalidate(tagof(virtaddr, threadid));
     }
   };
 
@@ -564,7 +590,7 @@ namespace CacheSubsystem {
     virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
   };
-  
+
   struct CacheHierarchy {
     LoadFillReqQueue<LFRQ_SIZE> lfrq;
     MissBuffer<MISSBUF_COUNT> missbuf;
@@ -582,7 +608,7 @@ namespace CacheSubsystem {
     bool probe_cache_and_sfr(W64 addr, const SFR* sfra, int sizeshift);
     bool covered_by_sfr(W64 addr, SFR* sfr, int sizeshift);
     void annul_lfrq_slot(int lfrqslot);
-    int issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR& sfra, LoadStoreInfo lsi);
+    int issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi);
     bool lfrq_or_missbuf_full() const { return lfrq.full() | missbuf.full(); }
 
     W64 commitstore(const SFR& sfr, int threadid = 0xff);
@@ -614,6 +640,12 @@ struct PerContextDataCacheStats { // rootnode:
       W64 hits;
       W64 misses;
     } dtlb;
+
+    struct tlbwalk { // node: summable
+      W64 L1_dcache_hit;
+      W64 L1_dcache_miss;
+      W64 no_lfrq_mb;
+    } tlbwalk;
   } load;
  
   struct fetch {
@@ -628,6 +660,12 @@ struct PerContextDataCacheStats { // rootnode:
       W64 hits;
       W64 misses;
     } itlb;
+
+    struct tlbwalk { // node: summable
+      W64 L1_dcache_hit;
+      W64 L1_dcache_miss;
+      W64 no_lfrq_mb;      
+    } tlbwalk;
   } fetch;
   
   struct store {

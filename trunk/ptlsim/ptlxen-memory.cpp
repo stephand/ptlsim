@@ -318,7 +318,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
         
     assert(update_ptl_pte(l2pte, l2pte.P(1)) == 0);
         
-    if (logable(2) | force_page_fault_logging) {
+    if (logable(4) | force_page_fault_logging) {
       logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ",
         (void*)faultaddr, ": added L2 PTE slot ", level2_slot_index, " (L1 mfn ",
         l2pte.mfn, ") to PTLsim physmap; toplevel cr3 mfn ", get_cr3_mfn(), endl;
@@ -377,7 +377,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
       assert(rc == 0);
       return 3;
     } else {
-      if unlikely (logable(2) | force_page_fault_logging) {
+      if unlikely (logable(4) | force_page_fault_logging) {
         logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ", 
           (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn,
           " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
@@ -385,7 +385,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
       return 2;
     }
   } else {
-    if unlikely (logable(2) | force_page_fault_logging) {
+    if unlikely (logable(4) | force_page_fault_logging) {
       logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip,
         "] ", (void*)faultaddr, ": added L1 PTE for guest mfn ", mfn, 
         ", toplevel cr3 mfn ", get_cr3_mfn(), " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
@@ -855,7 +855,7 @@ Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG) {
 // Walk the page table, but return the physical address of the PTE itself
 // that maps the specified virtual address
 //
-Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn) {
+Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn, int level) {
   static const bool DEBUG = 0;
   VirtAddr virt(rawvirt);
 
@@ -863,22 +863,29 @@ Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn) {
 
   Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
   if (DEBUG) logfile << "  level4 @ ", &level4, " (mfn ", ((((Waddr)&level4) & 0xffffffff) >> 12), ", entry ", virt.lm.level4, ")", endl, flush;
-  if (unlikely(!level4.p)) return 0;
+  if unlikely (!level4.p) return 0;
+  if unlikely (level >= 3) return ((Waddr)&level4) - PHYS_VIRT_BASE;
 
   Level3PTE& level3 = ((Level3PTE*)phys_to_mapped_virt(level4.mfn << 12))[virt.lm.level3];
   if (DEBUG) logfile << "  level3 @ ", &level3, " (mfn ", ((((Waddr)&level3) & 0xffffffff) >> 12), ", entry ", virt.lm.level3, ")", endl, flush;
-  if (unlikely(!level3.p)) return 0;
+  if unlikely (!level3.p) return 0;
+  if unlikely (level >= 2) return ((Waddr)&level3) - PHYS_VIRT_BASE;
 
   Level2PTE& level2 = ((Level2PTE*)phys_to_mapped_virt(level3.mfn << 12))[virt.lm.level2];
   if (DEBUG) logfile << "  level2 @ ", &level2, " (mfn ", ((((Waddr)&level2) & 0xffffffff) >> 12), ", entry ", virt.lm.level2, ") [pte ", level2, "]", endl, flush;
-  if (unlikely(!level2.p)) return 0;
+  if unlikely (!level2.p) return 0;
+  if unlikely (level >= 1) return ((Waddr)&level2) - PHYS_VIRT_BASE;
 
-  if (unlikely(level2.psz)) return ((Waddr)&level2) - PHYS_VIRT_BASE;
+  if unlikely (level2.psz) return ((Waddr)&level2) - PHYS_VIRT_BASE;
 
   Level1PTE& level1 = ((Level1PTE*)phys_to_mapped_virt(level2.mfn << 12))[virt.lm.level1];
   if (DEBUG) logfile << "  level1 @ ", &level1, " (mfn ", ((((Waddr)&level1) & 0xffffffff) >> 12), ", entry ", virt.lm.level1, ")", endl, flush;
 
   return ((Waddr)&level1) - PHYS_VIRT_BASE;
+}
+
+W64 Context::virt_to_pte_phys_addr(Waddr virtaddr, int level) {
+  return ::virt_to_pte_phys_addr(virtaddr, (cr3 >> 12), level);
 }
 
 //
@@ -1066,7 +1073,16 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
       pfec.us = (!kernel_mode);
     }
 
-    if (exception) return null;
+    if unlikely (exception) {
+      //
+      // Flush out the bogus TLB entry to avoid an infinite loop after the
+      // kernel updates the page tables. Technically only valid PTEs should
+      // be cached in the TLB, but we don't know what "valid" means until
+      // we do the full protection checks. Hence we just invalidate it here:
+      //
+      flush_tlb_virt(virtaddr);
+      return null;
+    }
   }
 
   pteupdate.a = (!pte.a);
@@ -1087,6 +1103,7 @@ int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErro
     pfec.p = ptelo.p;
     pfec.nx = forexec;
     pfec.us = (!kernel_mode);
+    flush_tlb_virt(source);
     return 0;
   }
 
@@ -1108,6 +1125,7 @@ int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErro
     pfec.p = ptehi.p;
     pfec.nx = forexec;
     pfec.us = (!kernel_mode);
+    flush_tlb_virt(source + n);
     return n;
   }
 
@@ -1128,6 +1146,7 @@ int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorC
     pfec.p = pte.p;
     pfec.rw = 1;
     pfec.us = (!kernel_mode);
+    flush_tlb_virt(target);
     return 0;
   }
 
@@ -1152,6 +1171,7 @@ int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorC
     pfec.p = pte.p;
     pfec.rw = 1;
     pfec.us = (!kernel_mode);
+    flush_tlb_virt(target + nlo);
     return nlo;
   }
 
@@ -1189,6 +1209,7 @@ RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
   invalid = ((!pte.p) | pte.nx | ((!ctx.kernel_mode) & (!pte.us)));
   mfnlo = (invalid) ? INVALID : pte.mfn;
   mfnhi = mfnlo;
+  if unlikely (invalid) ctx.flush_tlb_virt(rip);
 
   int page_crossing = ((lowbits(rip, 12) + (bytes-1)) >> 12);
 
@@ -1209,6 +1230,7 @@ RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
     pte = ctx.virt_to_pte(rip + (bytes-1));
     invalid = ((!pte.p) | pte.nx | ((!ctx.kernel_mode) & (!pte.us)));
     mfnhi = (invalid) ? INVALID : pte.mfn;
+    if unlikely (invalid) ctx.flush_tlb_virt(rip + (bytes-1));
   }
 
   return *this;
@@ -1283,6 +1305,7 @@ W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W
   Waddr ptephys = virt_to_pte_phys_addr(va, ctx.cr3 >> 12);
   if (!ptephys) {
     if (debug) logfile << "update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12), ": cannot resolve PTE address", endl, flush;
+    ctx.flush_tlb_virt(va);
     return W64(-EINVAL);
   }
     

@@ -17,7 +17,7 @@ extern void print_message(const char* text);
 const char* opclass_names[OPCLASS_COUNT] = {
   "logic", "addsub", "addsubc", "addshift", "sel", "cmp", "br.cc", "jmp", "bru", 
   "assist", "mf", "ld", "st", "ld.pre", "shiftsimple", "shift", "mul", "bitscan", "flags",  "chk", 
-  "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f"
+  "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f",
 };
 
 //
@@ -234,9 +234,6 @@ const char* exception_names[EXCEPTION_COUNT] = {
   "PageRead",
   "PageWrite",
   "PageExec",
-  "LSATFull",
-  "SFRMismatch",
-  "StLdForward",
   "StStAlias",
   "LdStAlias",
   "CheckFailed",
@@ -546,6 +543,7 @@ void BasicBlock::reset() {
   confidence = 0;
   lastused = 0;
   marked = 0;
+  mfence = 0;
 }
 
 void BasicBlock::reset(const RIPVirtPhys& rip) {

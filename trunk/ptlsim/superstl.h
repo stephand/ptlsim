@@ -2541,9 +2541,9 @@ namespace superstl {
 
   template <typename T, bool backwards = 0>
   struct SortPrecomputedIndexListComparator {
-    T* values;
+    const T* values;
 
-    SortPrecomputedIndexListComparator(T* values) { this->values = values; }
+    SortPrecomputedIndexListComparator(const T* values) { this->values = values; }
 
     W64s operator ()(int a, int b) const {
       return (backwards) ? (values[b] - values[a]) : (values[a] - values[b]);

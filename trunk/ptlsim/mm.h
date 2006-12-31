@@ -35,6 +35,8 @@ void ptl_mm_init(byte* heap_start = null, byte* heap_end = null);
 size_t ptl_mm_getsize(void* p);
 void ptl_mm_dump(ostream& os);
 
+extern bool enable_mm_logging;
+
 #ifdef __x86_64__
 
 #define mmap_invalid(addr) (((W64)(addr) & 0xfffffffffffff000) == 0xfffffffffffff000)

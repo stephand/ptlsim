@@ -1269,7 +1269,7 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
 
   bool exiting = false;
 
-  while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
+  for (;;) {
     if unlikely (iterations >= config.start_log_at_iteration) {
       if unlikely (!logenable) logfile << "Start logging at level ", config.loglevel, " in cycle ", iterations, endl, flush;
       logenable = 1;

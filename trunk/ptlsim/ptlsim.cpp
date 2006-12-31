@@ -53,6 +53,7 @@ void PTLsimConfig::reset() {
   log_on_console = 0;
   log_ptlsim_boot = 0;
   log_buffer_size = 524288;
+  enable_mm_logging = 0;
 
   event_log_enabled = 0;
   event_log_ring_buffer_size = 32768;
@@ -74,6 +75,7 @@ void PTLsimConfig::reset() {
 #endif
 
   stop_at_user_insns = infinity;
+  stop_at_cycle = infinity;
   stop_at_iteration = infinity;
   stop_at_rip = INVALIDRIP;
   stop_at_user_insns_relative = infinity;
@@ -138,6 +140,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
   add(dump_state_now,               "dump-state-now",       "Dump the event log ring buffer and internal state of the active core");
   add(abort_at_end,                 "abort-at-end",         "Abort current simulation after next command (don't wait for next x86 boundary)");
+  add(enable_mm_logging,            "mm-logging",           "Log PTLsim memory manager subsystem requests (alloc, free) to log file");
 
   section("Event Ring Buffer Logging Control");
   add(event_log_enabled,            "ringbuf",              "Log all core events to the ring buffer for backwards-in-time debugging");
@@ -160,7 +163,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
 
   section("Trace Stop Point");
   add(stop_at_user_insns,           "stopinsns",            "Stop after executing <stopinsns> user instructions");
-  add(stop_at_iteration,            "stopcycle",            "Stop after <stop> cycles");
+  add(stop_at_cycle,                "stopcycle",            "Stop after <stop> cycles");
+  add(stop_at_iteration,            "stopiter",             "Stop after <stop> iterations (does not apply to cycle-accurate cores)");  
   add(stop_at_rip,                  "stoprip",              "Stop before rip <stoprip> is translated for the first time");
   add(stop_at_user_insns_relative,  "stopinsns-rel",        "Stop after executing <stopinsns-rel> user instructions relative to start of current run");
   add(insns_in_last_basic_block,    "bbinsns",              "In final basic block, only translate <bbinsns> user instructions");
@@ -365,6 +369,8 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
     current_bbcache_dump_filename = config.bbcache_dump_filename;
   }
 
+  enable_mm_logging = config.enable_mm_logging;
+
   if (first_time) {
     if (!config.quiet) {
 #ifndef PTLSIM_HYPERVISOR
@@ -404,6 +410,8 @@ bool PTLsimMachine::init(PTLsimConfig& config) { return false; }
 int PTLsimMachine::run(PTLsimConfig& config) { return 0; }
 void PTLsimMachine::update_stats(PTLsimStats& stats) { return; }
 void PTLsimMachine::dump_state(ostream& os) { return; }
+void PTLsimMachine::flush_tlb(Context& ctx) { return; }
+void PTLsimMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) { return; }
 
 void PTLsimMachine::addmachine(const char* name, PTLsimMachine* machine) {
   machinetable.add(name, machine);
@@ -446,6 +454,8 @@ void update_progress() {
     foreach (i, contextcount) {
       sb << ' ', (void*)contextof(i).commitarf[REG_rip];
     }
+
+    while (sb.size() < 160) sb << ' ';
 
     logfile << sb, endl, flush;
 #ifdef PTLSIM_HYPERVISOR
@@ -495,6 +505,9 @@ bool simulate(const char* machinename) {
   last_printed_status_at_ticks = 0;
   last_printed_status_at_user_insn = 0;
   last_printed_status_at_cycle = 0;
+
+  logfile << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
+  cerr << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
 
   current_machine = machine;
   machine->run(config);

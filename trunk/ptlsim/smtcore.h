@@ -50,7 +50,7 @@ namespace SMTModel {
   const int MAX_ISSUE_WIDTH = 4;
   
   // Largest size of any physical register file or the store queue:
-  const int MAX_PHYS_REG_FILE_SIZE = 256;
+  const int MAX_PHYS_REG_FILE_SIZE = 256; //128;
   const int PHYS_REG_FILE_SIZE = 128;
   const int PHYS_REG_NULL = 0;
   
@@ -412,8 +412,10 @@ namespace SMTModel {
     byte fu;
     byte consumer_count;
     PTEUpdate pteupdate;
-    Waddr origvirt;
+    Waddr origvirt; // original virtual address, with low bits
+    Waddr virtpage; // virtual page number actually accessed by the load or store
     byte entry_valid:1, load_store_second_phase:1, all_consumers_off_bypass:1, dest_renamed_before_writeback:1, no_branches_between_renamings:1, transient:1, lock_acquired:1, issued:1;
+    byte tlb_walk_level;
 
     int index() const { return idx; }
     void validate() { entry_valid = true; }
@@ -434,10 +436,12 @@ namespace SMTModel {
     int forward();
     int select_cluster();
     int issue();
-    void* addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
+    void* addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
     bool handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec);
     int issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate);
     int issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate);
+    int probecache(Waddr addr, LoadStoreQueueEntry* sfra);
+    void tlbwalk();
     int issuefence(LoadStoreQueueEntry& state);
     void release();
     W64 annul(bool keep_misspec_uop, bool return_first_annulled_rip = false);
@@ -779,11 +783,17 @@ namespace SMTModel {
     EVENT_LOAD_HIGH_ANNULLED,
     EVENT_LOAD_HIT,
     EVENT_LOAD_MISS,
+    EVENT_LOAD_TLB_MISS,
     EVENT_LOAD_LOCK_REPLAY,
     EVENT_LOAD_LOCK_OVERFLOW,
     EVENT_LOAD_LOCK_ACQUIRED,
     EVENT_LOAD_LFRQ_FULL,
     EVENT_LOAD_WAKEUP,
+    EVENT_TLBWALK_HIT,
+    EVENT_TLBWALK_MISS,
+    EVENT_TLBWALK_WAKEUP,
+    EVENT_TLBWALK_NO_LFRQ_MB,
+    EVENT_TLBWALK_COMPLETE,
     EVENT_FENCE_ISSUED,
     EVENT_ALIGNMENT_FIXUP,
     EVENT_ANNUL_NO_FUTURE_UOPS,
@@ -904,6 +914,7 @@ namespace SMTModel {
         loadstore.inherit_sfr_physreg = inherit_sfr->rob->physreg->index();
         loadstore.inherit_sfr_rip = inherit_sfr->rob->uop.rip;
       }
+      loadstore.tlb_walk_level = rob->tlb_walk_level;
       return this;
     }
 
@@ -959,6 +970,7 @@ namespace SMTModel {
         byte locking_vcpuid;
         W16 locking_rob;
         W8 threadid;
+        W8 tlb_walk_level;
       } loadstore;
       struct {
         W16 somidx;
@@ -1115,6 +1127,7 @@ namespace SMTModel {
     StateList rob_completed_list[MAX_CLUSTERS];          // Completed and result in transit for local and global forwarding
     StateList rob_ready_to_writeback_list[MAX_CLUSTERS]; // Completed; result ready to writeback in parallel across all cluster register files
     StateList rob_cache_miss_list;                       // Loads only: wait for cache miss to be serviced
+    StateList rob_tlb_miss_list;                         // TLB miss waiting to be serviced on one or more levels
     StateList rob_memory_fence_list;                     // mf uops only: wait for memory fence to reach head of LSQ before completing
     StateList rob_ready_to_commit_queue;                 // Ready to commit
 
@@ -1147,6 +1160,8 @@ namespace SMTModel {
 
     TransOpBuffer unaligned_ldst_buf;
     LoadStoreAliasPredictor lsap;
+    int loads_in_this_cycle;
+    W64 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
 
     W64 consecutive_commits_inside_spinlock;
 
@@ -1178,6 +1193,7 @@ namespace SMTModel {
     void frontend();
     void rename();
     bool fetch();
+    void tlbwalk();
 
     bool handle_barrier();
     bool handle_exception();
@@ -1334,8 +1350,6 @@ namespace SMTModel {
     int round_robin_reg_file_offset;
     W32 fu_avail;
     ReorderBufferEntry* robs_on_fu[FU_COUNT];
-    int loads_in_this_cycle;
-    W32 load_to_store_parallel_forwarding_buffer[LOAD_FU_COUNT];
     CacheSubsystem::CacheHierarchy caches;
     SMTCoreCacheCallbacks cache_callbacks;
 
@@ -1358,6 +1372,9 @@ namespace SMTModel {
     int writeback(int cluster);
     int commit();
 
+    // Callbacks
+    void flush_tlb(Context& ctx, int threadid, bool selective = false, Waddr virtaddr = 0);
+
     // Debugging
     void dump_smt_state(ostream& os);
     void print_smt_state(ostream& os);
@@ -1375,6 +1392,8 @@ namespace SMTModel {
     virtual int run(PTLsimConfig& config);
     virtual void dump_state(ostream& os);
     virtual void update_stats(PTLsimStats& stats);
+    virtual void flush_tlb(Context& ctx);
+    virtual void flush_tlb_virt(Context& ctx, Waddr virtaddr);
     void flush_all_pipelines();
   };
 
@@ -1624,6 +1643,7 @@ struct PerContextSMTStats { // rootnode:
           W64 sfr_data_and_data_to_store_not_ready;
           W64 interlocked;
           W64 fence;
+          W64 parallel_aliasing;
         } replay;
       } issue;
 
@@ -1641,8 +1661,6 @@ struct PerContextSMTStats { // rootnode:
       W64 size[4]; // label: sizeshift_names
 
       W64 datatype[DATATYPE_COUNT]; // label: datatype_names
-
-      W64 parallel_aliasing;
     } store;
 
     struct fence { // node: summable

@@ -170,6 +170,17 @@ struct TraceDecoder {
   bool is_sse;
   bool used_microcode_assist;
   bool some_insns_complex;
+  bool split_basic_block_at_locks_and_fences;
+  bool split_invalid_basic_blocks;
+
+  int outcome;
+
+  enum {
+    DECODE_OUTCOME_OK             = 0,
+    DECODE_OUTCOME_PAGE_FAULT     = 1,
+    DECODE_OUTCOME_INVALID_OPCODE = 2,
+    DECODE_OUTCOME_GP_FAULT       = 3,
+  };
 
   Level1PTE ptelo;
   Level1PTE ptehi;
@@ -190,7 +201,7 @@ struct TraceDecoder {
   void move_reg_or_mem(const DecodedOperand& rd, const DecodedOperand& ra, int force_rd = REG_zero);
   void signext_reg_or_mem(const DecodedOperand& rd, DecodedOperand& ra, int rasize, bool zeroext = false);
   void microcode_assist(int assistid, Waddr selfrip, Waddr nextrip);
-  void memory_fence_if_locked(int type);
+  bool memory_fence_if_locked(bool end_of_x86_insn = 0, int type = MF_TYPE_LFENCE|MF_TYPE_SFENCE);
 
   int fillbuf(Context& ctx, byte* insnbytes_, int insnbytes_bufsize_);
   inline W64 fetch(int n) { W64 r = lowbits(*((W64*)&insnbytes[byteoffset]), n*8); rip += n; byteoffset += n; return r; }
@@ -199,7 +210,7 @@ struct TraceDecoder {
   inline W32 fetch4() { W32 r = *((W32*)&insnbytes[byteoffset]); rip += 4; byteoffset += 4; return r; }
   inline W64 fetch8() { W64 r = *((W64*)&insnbytes[byteoffset]); rip += 8; byteoffset += 8; return r; }
 
-  void invalidate();
+  bool invalidate();
   bool decode_fast();
   bool decode_complex();
   bool decode_sse();
@@ -210,7 +221,10 @@ struct TraceDecoder {
   bool translate();
   void put(const TransOp& transop);
   void lastop();
-  bool cap();
+  void split(Waddr target);
+  void split_before() { split(ripstart); }
+  void split_after() { split(rip); }
+  bool first_insn_in_bb() { return (Waddr(ripstart) == Waddr(bb.rip)); }
 };
 
 static inline TraceDecoder* operator <<(TraceDecoder* dec, const TransOp& transop) {
@@ -226,12 +240,60 @@ static inline TraceDecoder& operator <<(TraceDecoder& dec, const TransOp& transo
 //
 // Generate a memory fence of the specified type.
 //
-inline void TraceDecoder::memory_fence_if_locked(int type = MF_TYPE_LFENCE|MF_TYPE_SFENCE) {
-  if likely (!(prefixes & PFX_LOCK)) return;
+inline bool TraceDecoder::memory_fence_if_locked(bool end_of_x86_insn, int type) {
+  if likely (!(prefixes & PFX_LOCK)) return false;
 
-  TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
-  mf.extshift = type;
-  this << mf;
+  if (split_basic_block_at_locks_and_fences) {
+    if (end_of_x86_insn) {
+      //
+      // Final mf that terminates the insn (always in its own BB): terminate the BB here.
+      //
+      TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+      mf.extshift = type;
+      this << mf;
+      bb.mfence = 1;
+      split_after();
+      return true;
+    } else {
+      //
+      // First uop in x86 insn
+      //
+      if (!first_insn_in_bb()) {
+        //
+        // This is not the first x86 insn in the BB, but it is the first uop in the insn.
+        // Split the existing BB at this point, so we get a sequence like this:
+        //
+        // insn1
+        // insn2
+        // (insn3):
+        //   mf
+        //   bru   insn3
+        //
+        split_before();
+        return true;
+      } else {
+        //
+        // This is the first insn in the BB and the first mf uop in that insn:
+        // just emit the mf and continue with the other uops in the insn
+        //
+        TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+        mf.extshift = type;
+        this << mf;
+        bb.mfence = 1;
+        return false; // continue emitting other uops
+      }
+    }
+  } else {
+    //
+    // Always emit fence intermingled with other insns
+    //
+    TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+    mf.extshift = type;
+    this << mf;
+  }
+
+  // never reached:
+  return false;
 }
 
 enum {
@@ -239,7 +301,7 @@ enum {
 };
 
 #define DECODE(form, decbuf, mode) invalid |= (!decbuf.form(*this, mode));
-#define CheckInvalid() { invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count); if (invalid) { invalidate(); return false; } }
+#define CheckInvalid() { invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count); if (invalid) { if (invalidate()) return false; break; } }
 #define MakeInvalid() { invalid |= true; CheckInvalid(); }
 
 enum {

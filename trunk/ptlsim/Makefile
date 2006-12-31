@@ -76,7 +76,7 @@ OOOOBJS += smtcore.o smtpipe.o smtexec.o
 endif
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
-COMMONINCLUDES = logic.h ptlhwdef.h decode.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h
+COMMONINCLUDES = logic.h ptlhwdef.h decode.h seqexec.h dcache.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h
 OOOINCLUDES = branchpred.h ooocore.h smtcore.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 

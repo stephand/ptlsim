@@ -1322,7 +1322,6 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = uop_impl_cvtf_s2d_lo; break;
   case OP_cvtf_s2d_hi:
     func = uop_impl_cvtf_s2d_hi; break;
-
   default:
     logfile << "Unknown uop opcode ", op, flush, " (", nameof(op), ")", endl, flush;
     assert(false);

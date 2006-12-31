@@ -14,6 +14,9 @@
 #include <mm.h>
 #include <datastore.h>
 
+bool enable_mm_logging = false;
+extern ostream logfile;
+
 //
 // Which pages are mapped to slab cache pages?
 //
@@ -841,7 +844,14 @@ void* ptl_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
 
   foreach (i, retry_count) {
     void* p = pagealloc.alloc(bytecount);
-    if likely (p) return p;
+    if likely (p) {
+      if unlikely (enable_mm_logging) {
+        if (bytecount <= 4096)
+          logfile << "ptl_alloc_private_page() => ", p, "; called from ", (void*)__builtin_return_address(0), endl;
+        else logfile << "ptl_alloc_private_pages(", bytecount, ") => ", p, "; called from ", (void*)__builtin_return_address(0), endl;
+      }
+      return p;
+    }
     logfile << "Before reclaim round ", i, ": largest free physical extent: ", pagealloc.largest_free_extent_bytes(), " bytes", endl;
     // The urgency -1 means "free everything possible at all costs":
     ptl_mm_reclaim(bytecount, ((i == (retry_count-2)) ? -1 : 0));
@@ -863,6 +873,12 @@ void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
 
 void ptl_free_private_pages(void* addr, Waddr bytecount) {
   assert(addr);
+  if unlikely (enable_mm_logging) {
+    if (bytecount <= 4096)
+      logfile << "ptl_free_private_page(", addr, ") called from ", (void*)__builtin_return_address(0), endl;
+    else logfile << "ptl_free_private_pages(", addr, ", ", bytecount, ") called from ", (void*)__builtin_return_address(0), endl;
+  }
+
   pagealloc.free(floorptr(addr, PAGE_SIZE), ceil(bytecount, PAGE_SIZE));
 }
 
@@ -949,9 +965,6 @@ void ptl_mm_init(byte* heap_start, byte* heap_end) {
 }
 
 static const int GEN_ALLOC_CHUNK_SIZE = 65*1024; // 64 KB (16 pages)
-
-bool enable_mm_logging = false;
-extern ostream logfile;
 
 void* ptl_mm_alloc(size_t bytes) {
   // General purpose malloc
@@ -1043,7 +1056,7 @@ void* ptl_mm_alloc_aligned(int alignbits) {
     p = slaballoc[slot].alloc();
   }
 
-  if unlikely (enable_mm_logging) logfile << "ptl_mm_alloc(", bytes, ") from slab ", slot, " => p ", p, " called from ", (void*)__builtin_return_address(0), endl;
+  if unlikely (enable_mm_logging) logfile << "ptl_mm_alloc_aligned(", bytes, ") from slab ", slot, " => p ", p, " called from ", (void*)__builtin_return_address(0), endl;
 
   assert(lowbits(Waddr(p), alignbits) == 0);
 

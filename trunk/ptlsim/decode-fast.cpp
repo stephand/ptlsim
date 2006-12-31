@@ -35,9 +35,9 @@ bool TraceDecoder::decode_fast() {
     int rcreg = ((subop == 2) | (subop == 3)) ? REG_cf : REG_zero;
 
     if (subop == 7) prefixes &= ~PFX_LOCK;
-    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
     alu_reg_or_mem(translated_opcode, rd, ra, FLAGS_DEFAULT_ALU, rcreg, (subop == 7));
-    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
     break;
   }
@@ -152,7 +152,7 @@ bool TraceDecoder::decode_fast() {
 
   case 0x70 ... 0x7f:
   case 0x180 ... 0x18f: {
-    // near conditional branches with 8-bit displacement:
+    // near conditional branches with 8-bit or 32-bit displacement:
     DECODE(iform, ra, (inrange(op, 0x180, 0x18f) ? v_mode : b_mode));
     CheckInvalid();
     if (!last_flags_update_was_atomic) 
@@ -164,8 +164,6 @@ bool TraceDecoder::decode_fast() {
     transop.ripseq = (Waddr)rip;
     bb.rip_taken = (Waddr)rip + ra.imm.imm;
     bb.rip_not_taken = (Waddr)rip;
-    // (branch id implied)
-
     this << transop;
     end_of_block = true;
     break;
@@ -190,9 +188,9 @@ bool TraceDecoder::decode_fast() {
     int rcreg = ((subop == 2) | (subop == 3)) ? REG_cf : REG_zero;
 
     if (subop == 7) prefixes &= ~PFX_LOCK;
-    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
     alu_reg_or_mem(translated_opcode, rd, ra, FLAGS_DEFAULT_ALU, rcreg, (subop == 7));
-    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
     break;
   }
@@ -589,6 +587,8 @@ bool TraceDecoder::decode_fast() {
     transop.riptaken = (Waddr)rip + (W64s)ra.imm.imm;
     transop.ripseq = (Waddr)rip + (W64s)ra.imm.imm;
     this << transop;
+    bb.rip_taken = (Waddr)rip + (W64s)ra.imm.imm;
+    bb.rip_not_taken = bb.rip_taken;
 
     end_of_block = true;
     break;
@@ -624,15 +624,15 @@ bool TraceDecoder::decode_fast() {
       break;
     case 2: { // not
       // As an exception to the rule, NOT does not generate any flags. Go figure.
-      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+      if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
       alu_reg_or_mem(OP_nor, rd, rd, 0, REG_zero);
-      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+      if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
       break;
     }
     case 3: { // neg r1 => sub r1 = 0, r1
-      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+      if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
       alu_reg_or_mem(OP_sub, rd, rd, FLAGS_DEFAULT_ALU, REG_zero, false, true);
-      if (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+      if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
       break;
     }
     default:
@@ -660,9 +660,9 @@ bool TraceDecoder::decode_fast() {
     ra.type = OPTYPE_IMM;
     ra.imm.imm = +1;
 
-    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
     alu_reg_or_mem((bit(modrm.reg, 0)) ? OP_sub : OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
-    if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+    if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
     break;
   }
@@ -678,9 +678,9 @@ bool TraceDecoder::decode_fast() {
       ra.type = OPTYPE_IMM;
       ra.imm.imm = +1;
 
-      if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+      if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
       alu_reg_or_mem((bit(modrm.reg, 0)) ? OP_sub : OP_add, rd, ra, SETFLAG_ZF|SETFLAG_OF, REG_zero);
-      if unlikely (rd.type == OPTYPE_MEM) memory_fence_if_locked();
+      if unlikely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
       break;
     }

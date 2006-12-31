@@ -586,7 +586,7 @@ struct FullyAssociativeTagsNbitOneHot {
 
   void invalidateslot(int index) {
     valid[index] = 0;
-    (*this)[index] = 0xff; // invalid marker
+    (*this)[index] = 0xffffffffffffffffULL; // invalid marker
   }
 
   void validateslot(int index) {
@@ -598,6 +598,23 @@ struct FullyAssociativeTagsNbitOneHot {
     if (index < 0) return 0;
     invalidateslot(index);
     return 1;
+  }
+
+  bitvec<size> masked_match(base_t targettag, base_t tagmask) {
+    bitvec<size> m;
+
+    foreach (i, size) {
+      base_t tag = tagsmirror[i];
+      m[i] = ((tag & tagmask) == targettag);
+    }
+
+    return m;
+  }
+
+  void masked_invalidate(const bitvec<size>& slotmask) {
+    foreach (i, size) {
+      if unlikely (slotmask[i]) invalidateslot(i);
+    }
   }
 
   void use(int way) {

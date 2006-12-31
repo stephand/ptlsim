@@ -438,7 +438,10 @@ void TraceDecoder::reset() {
   invalid = 0;
   some_insns_complex = 0;
   used_microcode_assist = 0;
-  end_of_block = false;
+  end_of_block = 0;
+  split_basic_block_at_locks_and_fences = 0;
+  split_invalid_basic_blocks = 0;
+  outcome = DECODE_OUTCOME_OK;
 }
 
 TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
@@ -468,7 +471,7 @@ TraceDecoder::TraceDecoder(Context& ctx, Waddr rip) {
   bb.rip.kernel = kernel;
   bb.rip.df = dirflag;
 
-  rip = rip;
+  this->rip = rip;
   ripstart = rip;
 }
 
@@ -1192,6 +1195,16 @@ void TraceDecoder::decode_prefixes() {
   }
 }
 
+void TraceDecoder::split(Waddr target) {
+  TransOp br(OP_bru, REG_rip, REG_zero, REG_zero, REG_zero, 3);
+  br.riptaken = target;
+  br.ripseq = target;
+  this << br;
+  bb.rip_taken = target;
+  bb.rip_not_taken = target;
+  end_of_block = 1;
+}
+
 void print_invalid_insns(int op, const byte* ripstart, const byte* rip, int valid_byte_count, const PageFaultErrorCode& pfec, Waddr faultaddr) {
   if (pfec) {
     if (logable(4)) logfile << "translate: page fault at iteration ", iterations, ", ", total_user_insns_committed, " commits: ",
@@ -1480,6 +1493,7 @@ void assist_exec_page_fault(Context& ctx) {
 #ifdef PTLSIM_HYPERVISOR
   Level1PTE pte = ctx.virt_to_pte(faultaddr);
   bool page_now_valid = (pte.p & (!pte.nx) & ((!ctx.kernel_mode) ? pte.us : 1));
+  if unlikely (!page_now_valid) ctx.flush_tlb_virt(faultaddr);
 #else
   bool page_now_valid = asp.fastcheck((byte*)faultaddr, asp.execmap);
 #endif
@@ -1504,11 +1518,13 @@ void assist_gp_fault(Context& ctx) {
   ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault, ctx.commitarf[REG_ar1]);
 }
 
-void TraceDecoder::invalidate() {
-  if ((rip - bb.rip) > valid_byte_count) {
+bool TraceDecoder::invalidate() {
+  if likely ((rip - bb.rip) > valid_byte_count) {
 #ifdef PTLSIM_HYPERVISOR
+    // NOTE: contextof(0) is for debugging purposes only
     Level1PTE pte = contextof(0).virt_to_pte(ripstart);
     mfn_t mfn = (pte.p) ? pte.mfn : RIPVirtPhys::INVALID;
+    if unlikely (!pte.p) contextof(0).flush_tlb_virt(ripstart);
 #else
     int mfn = 0;
 #endif
@@ -1518,18 +1534,51 @@ void TraceDecoder::invalidate() {
         " (next page ", (void*)(Waddr)ceil(ripstart, 4096), ")", endl;
     }
 
-    print_invalid_insns(op, (const byte*)ripstart, (const byte*)rip, valid_byte_count, pfec, faultaddr);
-    immediate(REG_ar1, 3, faultaddr);
-    immediate(REG_ar2, 3, pfec);
-    microcode_assist(ASSIST_EXEC_PAGE_FAULT, ripstart, faultaddr);
+    if likely (split_invalid_basic_blocks && (!first_insn_in_bb())) {
+      //
+      // Split BB before the first invalid instruction, such that the
+      // instruction in question is the first one in the next BB.
+      // Outside code is responsible for dispatching exceptions.
+      //
+      split_before();
+      return false;
+    } else {
+      outcome = DECODE_OUTCOME_PAGE_FAULT;
+      print_invalid_insns(op, (const byte*)ripstart, (const byte*)rip, valid_byte_count, pfec, faultaddr);
+      immediate(REG_ar1, 3, faultaddr);
+      immediate(REG_ar2, 3, pfec);
+      microcode_assist(ASSIST_EXEC_PAGE_FAULT, ripstart, faultaddr);
+    }
   } else {
+    // The instruction-specific decoder may have already set the outcome type
+    if (outcome == DECODE_OUTCOME_OK) outcome = DECODE_OUTCOME_INVALID_OPCODE;
+
     print_invalid_insns(op, (const byte*)ripstart, (const byte*)rip, valid_byte_count, 0, faultaddr);
-    microcode_assist(ASSIST_INVALID_OPCODE, ripstart, rip);
+
+    if likely (split_invalid_basic_blocks && (!first_insn_in_bb())) {
+      //
+      // Split BB before the first invalid instruction, such that the
+      // instruction in question is the first one in the next BB.
+      // Outside code is responsible for dispatching exceptions.
+      //
+      split_before();
+      return false;
+    } else {
+      switch (outcome) {
+      case DECODE_OUTCOME_INVALID_OPCODE:
+        microcode_assist(ASSIST_INVALID_OPCODE, ripstart, rip); break;
+      case DECODE_OUTCOME_GP_FAULT:
+        microcode_assist(ASSIST_GP_FAULT, ripstart, rip); break;
+      default:
+        logfile << "Unexpected decoder outcome: ", outcome, endl; break;
+      }
+    }
   }
   end_of_block = 1;
   user_insn_count++;
   bb.invalidblock = 1;
   lastop();
+  return true;
 }
 
 //

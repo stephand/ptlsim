@@ -145,6 +145,7 @@ void ThreadContext::init() {
   InitClusteredROBList(rob_completed_list, "completed", ROB_STATE_READY);
   InitClusteredROBList(rob_ready_to_writeback_list, "ready-to-write", ROB_STATE_READY);
   rob_cache_miss_list("cache-miss", rob_states, 0);
+  rob_tlb_miss_list("tlb-miss", rob_states, 0);
   rob_memory_fence_list("memory-fence", rob_states, 0);
   rob_ready_to_commit_queue("ready-to-commit", rob_states, ROB_STATE_READY);
 
@@ -348,6 +349,7 @@ bool SMTCore::runcycle() {
 
   foreach (i, MAX_THREADS_PER_CORE) {
     ThreadContext* thread = threads[i];
+
     if unlikely (!thread) {
       total_issueq_reserved_free += reserved_iq_entries;
     } else {
@@ -361,8 +363,9 @@ bool SMTCore::runcycle() {
   assert (total_issueq_count == issueq_all.count);
   assert((ISSUE_QUEUE_SIZE - issueq_all.count) == (issueq_all.shared_entries + total_issueq_reserved_free));
 
+  foreach (i, threadcount) threads[i]->loads_in_this_cycle = 0;
+
   fu_avail = bitmask(FU_COUNT);
-  loads_in_this_cycle = 0;
   caches.clock();
 
   //
@@ -380,6 +383,15 @@ bool SMTCore::runcycle() {
     commitrc[tid] = thread->commit();
     for_each_cluster(j) thread->writeback(j);
     for_each_cluster(j) thread->transfer(j);
+  }
+
+  //
+  // Clock the TLB miss page table walk state machine
+  // This may use up load ports, so do it before other
+  // loads can issue 
+  //
+  foreach (i, threadcount) {
+    threads[i]->tlbwalk();
   }
 
   //
@@ -534,7 +546,7 @@ bool SMTCore::runcycle() {
     ThreadContext* thread = threads[i];
     if unlikely (!thread->ctx.running) break;
 
-    if unlikely ((sim_cycle - thread->last_commit_at_cycle) > 1024) {
+    if unlikely ((sim_cycle - thread->last_commit_at_cycle) > 4096) {
       stringbuf sb;
       sb << "[vcpu ", thread->ctx.vcpuid, "] thread ", thread->threadid, ": WARNING: At cycle ",
         sim_cycle, ", ", total_user_insns_committed,  " user commits: no instructions have committed for ",
@@ -1355,28 +1367,40 @@ ostream& SMTCoreEvent::print(ostream& os) const {
     else os << "missed L1 (lfrqslot ", lfrqslot, ") [value would be 0x", hexstring(loadstore.sfr.data, 64), "]";
     break;
   }
-   case EVENT_LOAD_LOCK_REPLAY: {
-     os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " ldq ", lsq,
-       " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
-       (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
-       "replay because vcpuid ", loadstore.locking_vcpuid, " uop uuid ", loadstore.locking_uuid, " has lock";
-     break;
-   }
-   case EVENT_LOAD_LOCK_OVERFLOW: {
-     os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " ldq ", lsq,
-       " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
-       (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
-       "replay because locking required but no free interlock buffers", endl;
-     break;
-   }
-   case EVENT_LOAD_LOCK_ACQUIRED: {
-     os << "lk-acq", " rob ", intstring(rob, -3), " ldq ", lsq,
-       " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
-       (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
-       "lock acquired";
-     break;
-   }
-
+  case EVENT_LOAD_TLB_MISS: {
+    os << (loadstore.load_store_second_phase ? "ldtlb2" : "ldtlb ");  
+    os << " rob ", intstring(rob, -3), " ldq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ";
+    if (loadstore.inherit_sfr_used) {
+      os << "inherit from ", loadstore.inherit_sfr, " (uuid ", loadstore.inherit_sfr_uuid,
+        ", rob", loadstore.inherit_sfr_rob, ", lsq ", loadstore.inherit_sfr_lsq,
+        ", r", loadstore.inherit_sfr_physreg, "); ";
+    }
+    else os << "DTLB miss", " [value would be 0x", hexstring(loadstore.sfr.data, 64), "]";
+    break;
+  }
+  case EVENT_LOAD_LOCK_REPLAY: {
+    os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " ldq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "replay because vcpuid ", loadstore.locking_vcpuid, " uop uuid ", loadstore.locking_uuid, " has lock";
+    break;
+  }
+  case EVENT_LOAD_LOCK_OVERFLOW: {
+    os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " ldq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "replay because locking required but no free interlock buffers", endl;
+    break;
+  }
+  case EVENT_LOAD_LOCK_ACQUIRED: {
+    os << "lk-acq", " rob ", intstring(rob, -3), " ldq ", lsq,
+      " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
+      (void*)(Waddr)loadstore.virtaddr, " (phys ", (void*)(Waddr)(loadstore.sfr.physaddr << 3), "): ",
+      "lock acquired";
+    break;
+  }
   case EVENT_LOAD_LFRQ_FULL:
     os << "load   rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), ": LFRQ or miss buffer full; replaying"; break;
   case EVENT_LOAD_HIGH_ANNULLED: {
@@ -1387,7 +1411,32 @@ ostream& SMTCoreEvent::print(ostream& os) const {
     break;
   }
   case EVENT_LOAD_WAKEUP:
-    os << "ldwake rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), ": wakeup load via lfrq slot ", lfrqslot; break;
+    os << "ldwake rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), " wakeup load via lfrq slot ", lfrqslot; break;
+  case EVENT_TLBWALK_HIT: {
+    os << "wlkhit rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), " page table walk (level ",
+      loadstore.tlb_walk_level, "): hit for PTE at phys ", (void*)loadstore.virtaddr; break;
+    break;
+  }
+  case EVENT_TLBWALK_MISS: {
+    os << "wlkmis rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), " page table walk (level ",
+      loadstore.tlb_walk_level, "): miss for PTE at phys ", (void*)loadstore.virtaddr, ": lfrq ", lfrqslot; break;
+    break;
+  }
+  case EVENT_TLBWALK_WAKEUP: {
+    os << "wlkwak rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), " page table walk (level ",
+      loadstore.tlb_walk_level, "): wakeup from cache miss for phys ", (void*)loadstore.virtaddr, ": lfrq ", lfrqslot; break;
+    break;
+  }
+  case EVENT_TLBWALK_NO_LFRQ_MB: {
+    os << "wlknml rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), " page table walk (level ",
+      loadstore.tlb_walk_level, "): no LFRQ or MB for PTE at phys ", (void*)loadstore.virtaddr, ": lfrq ", lfrqslot; break;
+    break;
+  }
+  case EVENT_TLBWALK_COMPLETE: {
+    os << "wlkhit rob ", intstring(rob, -3), " ldq ", lsq, " r", intstring(physreg, -3), " page table walk (level ",
+      loadstore.tlb_walk_level, "): complete!"; break;
+    break;
+  }
   case EVENT_LOAD_EXCEPTION: {
     os << (loadstore.load_store_second_phase ? "load2 " : "load  "), " rob ", intstring(rob, -3), " stq ", lsq,
       " r", intstring(physreg, -3), " on ", padstring(FU[fu].name, -4), " @ ",
@@ -1715,6 +1764,45 @@ int SMTMachine::run(PTLsimConfig& config) {
   flush_all_pipelines();
 
   return exiting;
+}
+
+void SMTCore::flush_tlb(Context& ctx, int threadid, bool selective, Waddr virtaddr) {
+  ThreadContext& thread =* threads[threadid];
+  if (logable(5)) {
+    logfile << "[vcpu ", ctx.vcpuid, "] core ", coreid, ", thread ", threadid, ": Flush TLBs";
+    if (selective) logfile << " for virtaddr ", (void*)virtaddr, endl;
+    logfile << endl;
+    //logfile << "DTLB before: ", endl, caches.dtlb, endl;
+    //logfile << "ITLB before: ", endl, caches.itlb, endl;
+  }
+  int dn; int in;
+
+  if unlikely (selective) {
+    dn = caches.dtlb.flush_virt(virtaddr, threadid);
+    in = caches.itlb.flush_virt(virtaddr, threadid);
+  } else {
+    dn = caches.dtlb.flush_thread(threadid);
+    in = caches.itlb.flush_thread(threadid);
+  }
+  if (logable(5)) {
+    logfile << "Flushed ", dn, " DTLB slots and ", in, " ITLB slots", endl;
+    //logfile << "DTLB after: ", endl, caches.dtlb, endl;
+    //logfile << "ITLB after: ", endl, caches.itlb, endl;
+  }
+}
+
+void SMTMachine::flush_tlb(Context& ctx) {
+  // This assumes all VCPUs are mapped as threads in a single SMT core
+  int coreid = 0;
+  int threadid = ctx.vcpuid;
+  cores[coreid]->flush_tlb(ctx, threadid);
+}
+
+void SMTMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) {
+  // This assumes all VCPUs are mapped as threads in a single SMT core
+  int coreid = 0;
+  int threadid = ctx.vcpuid;
+  cores[coreid]->flush_tlb(ctx, threadid, true, virtaddr);
 }
 
 void SMTMachine::dump_state(ostream& os) {

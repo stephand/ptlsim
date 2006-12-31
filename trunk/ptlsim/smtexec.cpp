@@ -313,7 +313,7 @@ int ReorderBufferEntry::issue() {
   bool br = isbranch(uop.opcode);
 
   assert(operands[RA]->ready());
-  if likely (uop.rb != REG_imm) assert(rb.ready());
+  assert(rb.ready());
   if likely ((!st || (st && load_store_second_phase)) && (uop.rc != REG_imm)) assert(rc.ready());
   if likely (!st) assert(operands[RS]->ready());
 
@@ -349,13 +349,6 @@ int ReorderBufferEntry::issue() {
     per_context_smtcore_stats_update(threadid, issue.opclass[opclassof(uop.opcode)]++);
 
     if unlikely (ld|st) {
-#if 1
-      if(!lsq) {
-        logfile << "TH ", threadid, " ld/st without lsq? rob ", idx, " uop.uuid ", uop.uuid, endl;
-        this->print(logfile);
-      }
-      assert(lsq);
-#endif
       int completed = 0;
       if likely (ld) {
         completed = issueload(*lsq, origvirt, radata, rbdata, rcdata, pteupdate);
@@ -531,7 +524,7 @@ int ReorderBufferEntry::issue() {
 //
 // Address generation common to both loads and stores
 //
-void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul) {
+void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul) {
   Context& ctx = getthread().ctx;
 
   bool st = isstore(uop.opcode);
@@ -572,6 +565,9 @@ void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
   state.physaddr = addr >> 3;
   state.invalid = 0;
+
+  virtpage = addr;
+
   //
   // Notice that datavalid is not set until both the rc operand to
   // store is ready AND any inherited SFR data is ready to merge.
@@ -674,15 +670,15 @@ namespace SMTModel {
 bool ReorderBufferEntry::release_mem_lock(bool forced) {
   if likely (!lock_acquired) return false;
  
-  W64 lockaddr = lsq->physaddr << 3;
-  MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
+  W64 physaddr = lsq->physaddr << 3;
+  MemoryInterlockEntry* lock = interlocks.probe(physaddr);
   assert(lock);
  
   SMTCore& core = getcore();
   ThreadContext& thread = getthread();
  
   if unlikely (config.event_log_enabled) {
-    SMTCoreEvent* event = core.eventlog.add_load_store((forced) ? EVENT_STORE_LOCK_ANNULLED : EVENT_STORE_LOCK_RELEASED, this, null, lockaddr);
+    SMTCoreEvent* event = core.eventlog.add_load_store((forced) ? EVENT_STORE_LOCK_ANNULLED : EVENT_STORE_LOCK_RELEASED, this, null, physaddr);
     event->loadstore.locking_vcpuid = lock->vcpuid;
     event->loadstore.locking_uuid = lock->uuid;
     event->loadstore.locking_rob = lock->rob;
@@ -696,7 +692,7 @@ bool ReorderBufferEntry::release_mem_lock(bool forced) {
   // Just add to the release list; do not invalidate until the macro-op commits
   //
   assert(thread.queued_mem_lock_release_count < lengthof(thread.queued_mem_lock_release_list));
-  thread.queued_mem_lock_release_list[thread.queued_mem_lock_release_count++] = lockaddr;
+  thread.queued_mem_lock_release_list[thread.queued_mem_lock_release_count++] = physaddr;
 
   lock_acquired = 0;
   return true;
@@ -738,7 +734,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   PageFaultErrorCode pfec;
   bool annul;
   
-  void* mapped = addrgen(state, origaddr, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
+  void* mapped = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
   if unlikely (exception) {
     return (handle_common_load_store_exceptions(state, origaddr, addr, exception, pfec)) ? ISSUE_COMPLETED : ISSUE_MISSPECULATED;
@@ -910,14 +906,17 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
       //
       int i;
       int parallel_forwarding_match = 0;
-      foreach (i, core.loads_in_this_cycle) {
-        parallel_forwarding_match |= (core.load_to_store_parallel_forwarding_buffer[i] == state.physaddr);
+      foreach (i, thread.loads_in_this_cycle) {
+        bool match = (thread.load_to_store_parallel_forwarding_buffer[i] == state.physaddr);
+        parallel_forwarding_match |= match;
       }
 
       if unlikely (parallel_forwarding_match) {
         if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_STORE_PARALLEL_FORWARDING_MATCH, this, &ldbuf, addr);
-        per_context_smtcore_stats_update(threadid, dcache.store.parallel_aliasing++);
-        continue;
+        per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.parallel_aliasing++);
+
+        replay();
+        return ISSUE_NEEDS_REPLAY;
       }
 
       state.invalid = 1;
@@ -950,8 +949,8 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   //
   if unlikely ((contextcount > 1) && (!annul)) {
     //    assert(0);
-    W64 lockaddr = state.physaddr << 3;
-    MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
+    W64 physaddr = state.physaddr << 3;
+    MemoryInterlockEntry* lock = interlocks.probe(physaddr);
 
     //
     // All store instructions check if a lock is held by another thread,
@@ -1060,8 +1059,8 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   int exception = 0;
   PageFaultErrorCode pfec;
   bool annul;
-  
-  void* mapped = addrgen(state, origaddr, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
+
+  void* mapped = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
   if unlikely (exception) {
     return (handle_common_load_store_exceptions(state, origaddr, addr, exception, pfec)) ? ISSUE_COMPLETED : ISSUE_MISSPECULATED;
@@ -1072,7 +1071,8 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   per_context_smtcore_stats_update(threadid, dcache.load.type.internal += uop.internal);
   per_context_smtcore_stats_update(threadid, dcache.load.size[sizeshift]++);
 
-  state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
+  W64 physaddr = (annul) ? 0xffffffffffffffffULL : mapped_virt_to_phys(mapped);
+  state.physaddr = physaddr >> 3;
 
   //
   // For simulation purposes only, load the data immediately
@@ -1216,8 +1216,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   // system doesn't work across multiple threads on the same core.
   //
   if unlikely ((contextcount > 1) && (!annul)) {
-    W64 lockaddr = state.physaddr << 3;
-    MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
+    MemoryInterlockEntry* lock = interlocks.probe(physaddr);
 
     //
     // All load instructions check if a lock is held by another thread,
@@ -1251,7 +1250,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
     // Issuing more than one ld.acq on the same block is not allowed:
     if (lock) {
-      logfile << "ERROR: thread ", thread.ctx.vcpuid, " uuid ", uop.uuid, " over physaddr ", (void*)lockaddr, ": lock was already acquired by vcpuid ", lock->vcpuid, " uuid ", lock->uuid, " rob ", lock->rob, endl;
+      logfile << "ERROR: thread ", thread.ctx.vcpuid, " uuid ", uop.uuid, " over physaddr ", (void*)physaddr, ": lock was already acquired by vcpuid ", lock->vcpuid, " uuid ", lock->uuid, " rob ", lock->rob, endl;
       assert(false);
     }
  
@@ -1270,7 +1269,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
       // these conditions represent an error in the microcode.
       //
 
-      lock = interlocks.select_and_lock(lockaddr);
+      lock = interlocks.select_and_lock(physaddr);
  
       if unlikely (!lock) {
         //
@@ -1366,18 +1365,59 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   state.data = data;
   state.invalid = 0;
   state.bytemask = 0xff;
-  bool L1hit = (config.perfect_cache) ? 1 : core.caches.probe_cache_and_sfr(addr, sfra, sizeshift);
+  tlb_walk_level = 0;
+
+  assert(thread.loads_in_this_cycle < LOAD_FU_COUNT);
+  thread.load_to_store_parallel_forwarding_buffer[thread.loads_in_this_cycle++] = state.physaddr;
+
+#ifdef USE_TLB
+  if unlikely (!core.caches.dtlb.probe(addr, threadid)) {
+    //
+    // TLB miss: 
+    //
+    if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_LOAD_TLB_MISS, this, sfra, addr);
+    cycles_left = 0;
+    tlb_walk_level = thread.ctx.page_table_level_count();
+    changestate(thread.rob_tlb_miss_list);
+    per_context_dcache_stats_update(threadid, load.dtlb.misses++);
+    
+    return ISSUE_COMPLETED;
+  }
+
+  per_context_dcache_stats_update(threadid, load.dtlb.hits++);
+#endif
+
+  return probecache(addr, sfra);
+}
+
+//
+// Probe the cache and initiate a miss if required
+//
+int ReorderBufferEntry::probecache(Waddr addr, LoadStoreQueueEntry* sfra) {
+  SMTCore& core = getcore();
+  ThreadContext& thread = getthread();
+  SMTCoreEvent* event;
+  int sizeshift = uop.size;
+  int aligntype = uop.cond;
+  bool signext = (uop.opcode == OP_ldx);
+
+  LoadStoreQueueEntry& state = *lsq;
+  W64 physaddr = state.physaddr << 3;
+
+  bool L1hit = (config.perfect_cache) ? 1 : core.caches.probe_cache_and_sfr(physaddr, sfra, sizeshift);
 
   if likely (L1hit) {    
     cycles_left = LOADLAT;
 
     if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_HIT, this, sfra, addr);
-
-    assert(core.loads_in_this_cycle < LOAD_FU_COUNT);
-    core.load_to_store_parallel_forwarding_buffer[core.loads_in_this_cycle++] = floor(addr, 8);
     
     load_store_second_phase = 1;
     state.datavalid = 1;
+    physreg->flags &= ~FLAG_WAIT;
+    physreg->complete();
+    changestate(thread.rob_issued_list[cluster]);
+    lfrqslot = -1;
+    forward_cycle = 0;
 
     per_context_smtcore_stats_update(threadid, dcache.load.issue.complete++);
     per_context_dcache_stats_update(threadid, load.hit.L1++);
@@ -1394,25 +1434,80 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   lsi.rob = index();
   lsi.sizeshift = sizeshift;
   lsi.aligntype = aligntype;
-  lsi.sfrused = (sfra != null);
+  lsi.sfrused = 0;
   lsi.internal = uop.internal;
   lsi.signext = signext;
 
-  //
-  // NOTE: this state is not really used anywhere since load misses
-  // will fill directly into the physical register instead.
-  //
-  IssueState tempstate;
-
-  lfrqslot = core.caches.issueload_slowpath(tempstate, addr, origaddr, data, *sfra, lsi);
+  SFR dummysfr;
+  setzero(dummysfr);
+  lfrqslot = core.caches.issueload_slowpath(physaddr, dummysfr, lsi);
   assert(lfrqslot >= 0);
 
   if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_LOAD_MISS, this, sfra, addr);
 
-  assert(core.loads_in_this_cycle < LOAD_FU_COUNT);
-  core.load_to_store_parallel_forwarding_buffer[core.loads_in_this_cycle++] = floor(addr, 8);
-
   return ISSUE_COMPLETED;
+}
+
+//
+// Hardware page table walk state machine:
+// One execution per page table tree level (4 levels)
+//
+void ReorderBufferEntry::tlbwalk() {
+  SMTCore& core = getcore();
+  ThreadContext& thread = getthread();
+  SMTCoreEvent* event;
+  W64 virtaddr = virtpage;
+
+  if unlikely (!tlb_walk_level) {
+    // End of walk sequence: try to probe cache
+    if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_COMPLETE, this, null, virtaddr);
+    core.caches.dtlb.insert(virtaddr, threadid);
+    probecache(virtaddr, null);
+    return;
+  }
+
+  W64 pteaddr = thread.ctx.virt_to_pte_phys_addr(virtaddr, tlb_walk_level - 1);
+  bool L1hit = (config.perfect_cache) ? 1 : core.caches.probe_cache_and_sfr(pteaddr, null, 3);
+
+  if likely (L1hit) {
+    //
+    // The PTE was in the cache: directly proceed to the next level
+    //
+    if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_HIT, this, null, pteaddr);
+    per_context_dcache_stats_update(threadid, load.tlbwalk.L1_dcache_hit++);
+
+    tlb_walk_level--;
+    return;
+  }
+
+  cycles_left = 0;
+  changestate(thread.rob_cache_miss_list);
+
+  LoadStoreInfo lsi = 0;
+  lsi.threadid = thread.threadid;
+  lsi.rob = index();
+
+  SFR dummysfr;
+  setzero(dummysfr);
+  lfrqslot = core.caches.issueload_slowpath(pteaddr, dummysfr, lsi);
+  // No LFRQ or MB slots? Try again on next cycle
+  if (lfrqslot < 0) {
+    if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_NO_LFRQ_MB, this, null, pteaddr);
+    per_context_dcache_stats_update(threadid, load.tlbwalk.no_lfrq_mb++);
+    return;
+  }
+
+  if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_MISS, this, null, pteaddr);
+  per_context_dcache_stats_update(threadid, load.tlbwalk.L1_dcache_miss++);
+}
+
+void ThreadContext::tlbwalk() {
+  time_this_scope(ctfrontend);
+
+  ReorderBufferEntry* rob;
+  foreach_list_mutable(rob_tlb_miss_list, rob, entry, nextentry) {
+   rob->tlbwalk();
+  }
 }
 
 //
@@ -1508,18 +1603,26 @@ void SMTCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
 }
 
 void ReorderBufferEntry::loadwakeup() {
-  if unlikely (config.event_log_enabled) getcore().eventlog.add_load_store(EVENT_LOAD_WAKEUP, this);
+  if (tlb_walk_level) {
+    // Wake up from TLB walk wait and move to next level
+    if unlikely (config.event_log_enabled) getcore().eventlog.add_load_store(EVENT_TLBWALK_WAKEUP, this);
+    lfrqslot = -1;
+    changestate(getthread().rob_tlb_miss_list);
+  } else {
+    // Actually wake up the load
+    if unlikely (config.event_log_enabled) getcore().eventlog.add_load_store(EVENT_LOAD_WAKEUP, this);
 
-  physreg->flags &= ~FLAG_WAIT;
-  physreg->complete();
-
-  lsq->datavalid = 1;
-
-  changestate(getthread().rob_completed_list[cluster]);
-  cycles_left = 0;
-  lfrqslot = -1;
-  forward_cycle = 0;
-  fu = 0;
+    physreg->flags &= ~FLAG_WAIT;
+    physreg->complete();
+    
+    lsq->datavalid = 1;
+    
+    changestate(getthread().rob_completed_list[cluster]);
+    cycles_left = 0;
+    lfrqslot = -1;
+    forward_cycle = 0;
+    fu = 0;
+  }
 }
 
 void ReorderBufferEntry::fencewakeup() {

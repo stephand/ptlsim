@@ -790,12 +790,29 @@ SegmentDescriptor Context::get_gdt_entry(W16 idx) {
 }
 
 void Context::flush_tlb() {
-  // Also clear out the TLB mini-cache:
+  if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb() called from ", __builtin_return_address(0), endl;
+
   foreach (i, lengthof(cached_pte_virt)) {
     cached_pte_virt[i] = 0xffffffffffffffffULL;
     cached_pte[i] = 0;
   }
+
+  PTLsimMachine* machine = PTLsimMachine::getcurrent();
+  if likely (machine) machine->flush_tlb(*this);
 }
+
+void Context::flush_tlb_virt(Waddr virtaddr) {
+  if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb(", (void*)virtaddr, ") called from ", __builtin_return_address(0), endl;
+
+  int slot = lowbits(virtaddr >> 12, log2(PTE_CACHE_SIZE));
+  if (cached_pte_virt[slot] == floor(virtaddr, PAGE_SIZE)) {
+    cached_pte_virt[slot] = 0xffffffffffffffffULL;
+    cached_pte[slot] = 0;
+  }
+  
+  PTLsimMachine* machine = PTLsimMachine::getcurrent();
+  if likely (machine) machine->flush_tlb_virt(*this, virtaddr);
+}  
 
 int Context::write_segreg(unsigned int segid, W16 selector) {
   assert(segid < SEGID_COUNT);
@@ -1386,6 +1403,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   }
 
   // if (debug) logfile << "  Returning rc ", rc, endl, flush;
+  if (debug) logfile.flush();
 
   return rc;
 }
@@ -1681,6 +1699,7 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
   if likely (exception == EXCEPTION_x86_page_fault) {
     cr2 = virtaddr;
     sshinfo.vcpu_info[vcpuid].arch.cr2 = virtaddr;
+    flush_tlb_virt(virtaddr);
   }
 
   // Avoid recursion on FPU state lazy save/restore (equivalent to clts)
@@ -2159,7 +2178,9 @@ bool check_for_async_sim_break() {
     return true;
   }
 
-  if unlikely ((iterations >= config.stop_at_iteration) || (total_user_insns_committed >= config.stop_at_user_insns)) {
+  if unlikely ((sim_cycle >= config.stop_at_cycle) |
+               (iterations >= config.stop_at_iteration) |
+               (total_user_insns_committed >= config.stop_at_user_insns)) {
     logfile << "Stopping simulation loop at specified limits (", iterations, " iterations, ", total_user_insns_committed, " commits)", endl;
     return true;
   }

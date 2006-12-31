@@ -174,9 +174,6 @@ enum {
   EXCEPTION_PageFaultOnRead,
   EXCEPTION_PageFaultOnWrite,
   EXCEPTION_PageFaultOnExec,
-  EXCEPTION_LSATFull,
-  EXCEPTION_SFRMismatch,
-  EXCEPTION_StoreLoadForwarding,
   EXCEPTION_StoreStoreAliasing,
   EXCEPTION_LoadStoreAliasing,
   EXCEPTION_CheckFailed,
@@ -827,7 +824,6 @@ struct ContextBase {
   Level1PTE cached_pte[PTE_CACHE_SIZE];
 #endif
 
-
   inline void reset() {
     memset(&commitarf, 0, sizeof(commitarf));
     exception = 0;
@@ -892,12 +888,8 @@ struct Context: public ContextBase {
 
   // Flush the context mini-TLB and propagate flush to any core-specific TLBs
   void flush_tlb();
+  void flush_tlb_virt(Waddr virtaddr);
 
-  void flush_tlb_virt(Waddr virtaddr) {
-    // Currently we just flush the entire TLB:
-    flush_tlb();
-  }
-  
   void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) {
     return page_table_acc_dirty_update(rawvirt, cr3 >> 12, update);
   }
@@ -907,6 +899,9 @@ struct Context: public ContextBase {
   bool check_events() const;
   bool event_upcall();
   bool change_runstate(int newstate);
+
+  int page_table_level_count() const { return 4; }
+  W64 virt_to_pte_phys_addr(Waddr virtaddr, int level);
 #else
   void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) { }
   void update_shadow_segment_descriptors();
@@ -1368,7 +1363,7 @@ struct BasicBlockBase {
   byte memcount;
   byte storecount;
   byte type:4, repblock:1, invalidblock:1, call:1, ret:1;
-  byte marked:1;
+  byte marked:1, mfence:1;
   W64 usedregs;
   uopimpl_func_t* synthops;
   int refcount;

@@ -1050,8 +1050,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   // NOTE: this state is not really used anywhere since load misses
   // will fill directly into the physical register instead.
   //
-  IssueState tempstate;
-  lfrqslot = core.caches.issueload_slowpath(tempstate, addr, origaddr, data, *sfra, lsi);
+  lfrqslot = core.caches.issueload_slowpath(addr, *sfra, lsi);
 
   if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_LOAD_MISS, this, sfra, addr);
 

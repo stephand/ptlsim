@@ -1861,6 +1861,13 @@ void init_signal_callback() {
 }
 
 bool check_for_async_sim_break() {
+  if unlikely ((sim_cycle >= config.stop_at_cycle) |
+               (iterations >= config.stop_at_iteration) |
+               (total_user_insns_committed >= config.stop_at_user_insns)) {
+    logfile << "Stopping simulation loop at specified limits (", iterations, " iterations, ", total_user_insns_committed, " commits)", endl;
+    return true;
+  }
+
   return false;
 }
 

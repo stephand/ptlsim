@@ -40,6 +40,8 @@ struct PTLsimMachine {
   virtual int run(PTLsimConfig& config);  
   virtual void update_stats(PTLsimStats& stats);
   virtual void dump_state(ostream& os);
+  virtual void flush_tlb(Context& ctx);
+  virtual void flush_tlb_virt(Context& ctx, Waddr virtaddr);
   static void addmachine(const char* name, PTLsimMachine* machine);
   static PTLsimMachine* getmachine(const char* name);
   static PTLsimMachine* getcurrent();
@@ -91,24 +93,6 @@ bool simulate(const char* machinename);
 int inject_events();
 bool check_for_async_sim_break();
 void update_progress();
-
-//
-// Sequential core
-//
-int execute_sequential(Context& ctx);
-
-enum {
-  SEQEXEC_OK = 0,
-  SEQEXEC_EARLY_EXIT,
-  SEQEXEC_SMC,
-  SEQEXEC_CHECK,
-  SEQEXEC_UNALIGNED,
-  SEQEXEC_EXCEPTION,
-  SEQEXEC_INVALIDRIP,
-  SEQEXEC_SKIPBLOCK,
-  SEQEXEC_BARRIER,
-  SEQEXEC_INTERRUPT,
-};
 
 extern "C" void switch_to_sim();
 
@@ -165,6 +149,7 @@ struct PTLsimConfig {
   bool log_on_console;
   bool log_ptlsim_boot;
   W64 log_buffer_size;
+  bool enable_mm_logging;
 
   // Event Logging
   bool event_log_enabled;
@@ -189,6 +174,7 @@ struct PTLsimConfig {
 
   // Stopping Point
   W64 stop_at_user_insns;
+  W64 stop_at_cycle;
   W64 stop_at_iteration;
   W64 stop_at_rip;
   W64 insns_in_last_basic_block;

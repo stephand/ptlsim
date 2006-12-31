@@ -419,12 +419,12 @@ ostream& CacheLineWithValidMask<linesize>::print(ostream& os, W64 tag) const {
   return os;
 }
 
-int CacheHierarchy::issueload_slowpath(IssueState& state, W64 addr, W64 origaddr, W64 data, SFR& sfra, LoadStoreInfo lsi) {
+int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi) {
   static const bool DEBUG = 0;
 
   starttimer(load_slowpath_timer);
 
-  L1CacheLine* L1line = L1.probe(addr);
+  L1CacheLine* L1line = L1.probe(physaddr);
 
   //
   // Loads and stores that also miss the L2 Stores that
@@ -437,13 +437,13 @@ int CacheHierarchy::issueload_slowpath(IssueState& state, W64 addr, W64 origaddr
   //
 
   if (DEBUG) {
-    logfile << "issue_load_slowpath: L1line for ", (void*)(Waddr)addr, " = ", L1line, " validmask ";
+    logfile << "issue_load_slowpath: L1line for ", (void*)(Waddr)physaddr, " = ", L1line, " validmask ";
     if (L1line) logfile << L1line->valid; else logfile << "(none)";
     logfile << endl;
   }
 
   if likely (!L1line) {
-    //L1line = L1.select(addr);
+    //L1line = L1.select(physaddr);
     stats.dcache.load.transfer.L2_to_L1_full++;
   } else {
     stats.dcache.load.transfer.L2_to_L1_partial++;
@@ -451,14 +451,14 @@ int CacheHierarchy::issueload_slowpath(IssueState& state, W64 addr, W64 origaddr
 
   int L2hit = 0;
     
-  L2CacheLine* L2line = L2.probe(addr);
+  L2CacheLine* L2line = L2.probe(physaddr);
 
   if likely (L2line) {
     //
     // We had at least a partial L2 hit, but is the requested data actually mapped into the line?
     //
     bitvec<L2_LINE_SIZE> sframask, reqmask;
-    prep_L2_sframask_and_reqmask((lsi.sfrused) ? &sfra : null, addr, lsi.sizeshift, sframask, reqmask);
+    prep_L2_sframask_and_reqmask((lsi.sfrused) ? &sfra : null, physaddr, lsi.sizeshift, sframask, reqmask);
     L2hit = (lsi.sfrused) ? ((reqmask & (sframask | L2line->valid)) == reqmask) : ((reqmask & L2line->valid) == reqmask);
 #ifdef ISSUE_LOAD_STORE_DEBUG
     logfile << "L2hit = ", L2hit, endl, "  cachemask ", L2line->valid, endl,
@@ -467,17 +467,17 @@ int CacheHierarchy::issueload_slowpath(IssueState& state, W64 addr, W64 origaddr
   }
 
 #ifdef CACHE_ALWAYS_HITS
-  L1line = L1.select(addr);
-  L1line->tag = L1.tagof(addr);
+  L1line = L1.select(physaddr);
+  L1line->tag = L1.tagof(physaddr);
   L1line->valid.setall();
-  L2line->tag = L2.tagof(addr);
+  L2line->tag = L2.tagof(physaddr);
   L2line->valid.setall();
   L2hit = 1;
 #endif
 
 #ifdef L2_ALWAYS_HITS
-  L2line = L2.select(addr);
-  L2line->tag = L2.tagof(addr);
+  L2line = L2.select(physaddr);
+  L2line->tag = L2.tagof(physaddr);
   L2line->valid.setall();
   L2line->lru = sim_cycle;
   L2hit = 1;
@@ -494,20 +494,16 @@ int CacheHierarchy::issueload_slowpath(IssueState& state, W64 addr, W64 origaddr
   // them in.
   //
 
-  LoadFillReq req(addr, lsi.sfrused ? sfra.data : 0, lsi.sfrused ? sfra.bytemask : 0, lsi);
+  LoadFillReq req(physaddr, lsi.sfrused ? sfra.data : 0, lsi.sfrused ? sfra.bytemask : 0, lsi);
 
   int lfrqslot = missbuf.initiate_miss(req, L2hit, lsi.rob);
 
   if unlikely (lfrqslot < 0) {
     if (DEBUG) logfile << "iteration ", iterations, ": LFRQ or MB has no free entries for L2->L1: forcing LFRQFull exception", endl;
-    state.ldreg.flags = FLAG_INV;
-    state.ldreg.rddata = EXCEPTION_LFRQFull;
     stoptimer(load_slowpath_timer);
     return -1;
   }
 
-  state.ldreg.flags = FLAG_WAIT;
-  state.ldreg.rddata = data;
   stoptimer(load_slowpath_timer);
 
   return lfrqslot;

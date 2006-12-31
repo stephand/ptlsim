@@ -1873,7 +1873,7 @@ int ReorderBufferEntry::commit() {
   }
 
   if unlikely (pteupdate) {
-    ctx.update_pte_acc_dirty(origvirt, pteupdate);
+    ctx.update_pte_acc_dirty(virtpage, pteupdate);
   }
 
   //

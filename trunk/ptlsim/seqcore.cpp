@@ -7,6 +7,7 @@
 
 #include <globals.h>
 #include <ptlsim.h>
+#include <seqcore.h>
 #include <branchpred.h>
 #include <dcache.h>
 #include <datastore.h>
@@ -44,6 +45,19 @@ static const byte archreg_remap_table[TRANSREG_COUNT] = {
 
   // Notice how these (REG_zf, REG_cf, REG_of) are all mapped to REG_flags in an in-order processor:
   REG_flags,  REG_flags,  REG_flags,  REG_imm,  REG_mem,  REG_temp8,  REG_temp9,  REG_temp10,
+};
+
+const char* seqexec_result_names[SEQEXEC_RESULT_COUNT] = {
+  "ok",
+  "early-exit",
+  "smc",
+  "check",
+  "unaligned",
+  "exception",
+  "invalidrip",
+  "skipblock",
+  "barrier",
+  "interrupt",
 };
 
 struct SequentialCore {
@@ -940,10 +954,8 @@ struct SequentialMachine: public PTLsimMachine {
 
     bool exiting = false;
 
-    while ((iterations < config.stop_at_iteration) & (total_user_insns_committed < config.stop_at_user_insns)) {
-      if unlikely (iterations >= config.start_log_at_iteration) {
-        logenable = 1;
-      }
+    for (;;) {
+      if unlikely (iterations >= config.start_log_at_iteration) logenable = 1;
 
       update_progress();
       inject_events();
