@@ -19,12 +19,13 @@ struct PTLstatsConfig {
   stringbuf mode_collect_average;
   stringbuf mode_table;
   stringbuf mode_slice;
+  stringbuf mode_slice_graph;
 
   stringbuf table_row_names;
   stringbuf table_col_names;
   stringbuf table_row_col_pattern;
   stringbuf table_type_name;
-  W64 table_use_percents;
+  bool use_percents;
   
   stringbuf graph_title;
   double graph_width;
@@ -32,11 +33,12 @@ struct PTLstatsConfig {
   double graph_clip_percentile;
   W64 graph_logscale;
   double graph_logk;
+  bool graph_stacked;
 
   stringbuf snapshot;
   stringbuf subtract_branch;
 
-  W64 show_sum_of_subtrees_only;
+  bool show_sum_of_subtrees_only;
   
   W64 maxdepth;
   
@@ -46,13 +48,13 @@ struct PTLstatsConfig {
   W64 percent_digits;
   
   double histogram_thresh;
-  W64 cumulative_histogram;
+  bool cumulative_histogram;
   bool show_stars_in_histogram;
   
   bool percent_of_toplevel;
   bool slice_cumulative;
   
-  W64 invert_gains;
+  bool invert_gains;
 
   bool print_datastore_info;
   bool print_template;
@@ -69,12 +71,13 @@ void PTLstatsConfig::reset() {
   mode_collect_average.reset();
   mode_table.reset();
   mode_slice.reset();
+  mode_slice_graph.reset();
 
   table_row_names.reset();
   table_col_names.reset();
   table_row_col_pattern = "%row/%col.stats";
   table_type_name = "text";
-  table_use_percents = false;
+  use_percents = false;
 
   graph_title.reset();
   graph_width = 300.0;
@@ -82,6 +85,7 @@ void PTLstatsConfig::reset() {
   graph_clip_percentile = 95.0;
   graph_logscale = 0;
   graph_logk = 100.;
+  graph_stacked = 0;
 
   snapshot = "final";
   subtract_branch.reset();
@@ -122,15 +126,16 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(mode_bargraph,                    "bargraph",                  "Bargraph of one node across multiple data stores");
   add(mode_table,                       "table",                     "Table of one node across multiple data stores");
   add(mode_slice,                       "slice",                     "Slice of every snapshot, in list format");
+  add(mode_slice_graph,                 "slice-graph",               "Slice of every snapshot, in line graph format");
 
-  section("Table or Bar Graph");
+  section("Table or Graph");
   add(table_row_names,                  "rows",                      "Row names (comma separated)");
   add(table_col_names,                  "cols",                      "Column names (comma separated)");
   add(table_row_col_pattern,            "table-pattern",             "Pattern to convert row (%row) and column (%col) names into stats filename");
   add(table_type_name,                  "tabletype",                 "Table type (text, latex, html)");
   add(table_scale_rel_to_col,           "scale-relative-to-col",     "Scale all other table columns relative to specified column");
-  add(table_use_percents,               "table-percents",            "Show percents (as in tree) rather than absolute values");
   add(table_mark_highest_col,           "table-mark-highest-col",    "Mark highest column in each row");
+  add(use_percents,                     "use-percents",              "Show percents (as in tree) rather than absolute values");
   add(invert_gains,                     "invert-gains",              "Invert sense of gains vs losses (i.e. 1 / x)");
 
   section("Statistics Range");
@@ -148,6 +153,7 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(graph_title,                      "title",                     "Graph Title");
   add(graph_width,                      "width",                     "Width in SVG pixels");
   add(graph_height,                     "height",                    "Width in SVG pixels");
+  add(graph_stacked,                    "graph-stacked",             "Graph with solid stacks (e.g. out of total of 100%) instead of lines");
 
   section("Histogram Options");
   add(graph_clip_percentile,            "percentile",                "Clip percentile");
@@ -291,14 +297,23 @@ public:
     *os << "\" d=\"M ", (x1 + xoffs), ",", (y1 + yoffs), " L ", (x2 + xoffs), ",", (y2 + yoffs), "\" />", endl;
   }
 
-  void startpath(float x, float y) {
-    *os << "<path id=\"path", idcounter++, "\" style=\"";
+  void startpath(float x, float y, const char* name = null) {
+    *os << "<path id=\"";
+    if (name)
+      *os << name;
+    else *os << "path", idcounter;
+    *os << "\" style=\"";
     printstyle(*os);
     *os << "\" d=\"M ", (x + xoffs), ",", (y + yoffs);
+    idcounter++;
   }
 
   void nextpoint(float x, float y) {
     *os << " L ", (x + xoffs), ",", (y + yoffs);
+  }
+
+  void closepath() {
+    *os << " z ", endl;
   }
 
   void endpath() {
@@ -323,6 +338,20 @@ static inline double invlogscale(double x) {
 }
 
 const RGBA graph_background(225, 207, 255);
+
+struct LineAttributes {
+  bool enabled;
+  bool stacked;
+  RGBAColor stroke;
+  float width;
+  float dashoffset;
+  float dashon;
+  float dashoff;
+  bool filled;
+  RGBAColor fill;
+};
+
+const LineAttributes black_linetype = {1, 0, {0,   0,   0, 255}, 0.10, 0.00, 0.00, 0.00, 0, {0,   0,   0,   255}};
 
 void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int count, const char* title = null, double imagewidth = 300.0, double imageheight = 100.0) {
   double leftpad = 10.0;
@@ -420,35 +449,8 @@ void create_svg_of_histogram_percent_bargraph(ostream& os, W64s* histogram, int 
   svg.exitlayer();
 }
 
-struct TimeLapseFieldsBase {
-  W64 start;
-  W64 length;
-  double values[];
-};
-
-//
-// NOTE: this is for example purposes only; add additional fields as needed
-//
-struct TimeLapseFields: public TimeLapseFieldsBase {
-  double cache_hit_rate;                          // L1 cache hit rate in percent
-};
-
-static const int fieldcount = (sizeof(TimeLapseFields) - sizeof(TimeLapseFieldsBase)) / sizeof(double);
-
-struct LineAttributes {
-  bool enabled;
-  bool stacked;
-  RGBAColor stroke;
-  float width;
-  float dashoffset;
-  float dashon;
-  float dashoff;
-  bool filled;
-  RGBAColor fill;
-};
-
-void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcount, double** ypoints, int ycount, 
-                                         double imagewidth, double imageheight, const LineAttributes* linetype, const RGBA& background) {
+void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcount, double** ypoints, int ycount, char** ynames,
+                                         double imagewidth, double imageheight, const LineAttributes* linetype, const RGBA& background, bool stacked) {
   double leftpad = 10.0;
   double toppad = 5.0;
   double rightpad = 4.0;
@@ -483,26 +485,43 @@ void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcoun
 
   double* stackbase = new double[xcount];
   foreach (i, xcount) stackbase[i] = 0;
-
-  foreach (j, ycount) {
-    const LineAttributes& line = linetype[j];
+  /*
+  foreach (x, xcount) {
+    cout << "[", x, "]";
+    foreach (y, ycount) {
+      cout << ' ', ypoints[y][x];
+    }
+    cout << endl;
+  }
+  */
+  foreach (col, ycount) {
+    const LineAttributes& line = (linetype) ? linetype[col] : black_linetype;
 
     if (!line.enabled)
       continue;
-    if (!line.stacked)
+    if (!stacked)
       continue;
-  
-    foreach (i, xcount) {
-      ypoints[j][i] += stackbase[i];
-      stackbase[i] = ypoints[j][i];
+
+    foreach (sample, xcount) {
+      ypoints[col][sample] += stackbase[sample];
+      stackbase[sample] = ypoints[col][sample];
     }
   }
-
+  /*
+  foreach (x, xcount) {
+    cout << "[", x, "]";
+    foreach (y, ycount) {
+      cout << ' ', ypoints[y][x];
+    }
+    cout << endl;
+  }
+  */
   delete[] stackbase;
 
+  /*
   for (int layer = 1; layer >= 0; layer--) {
     for (int j = ycount-1; j >= 0; j--) {
-      const LineAttributes& line = linetype[j];
+      const LineAttributes& line = (linetype) ? linetype[j] : black_linetype;
       svg.strokewidth = line.width;
       svg.stroke = line.stroke;
       svg.setdash(line.dashoffset, line.dashon, line.dashoff);
@@ -512,7 +531,7 @@ void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcoun
       if (!line.enabled)
         continue;
 
-      if (line.stacked != layer)
+      if (stacked != layer)
         continue;
 
       foreach (i, xcount) {
@@ -521,13 +540,63 @@ void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcoun
         double y = imageheight - (yy * yscale);
         if (i == 0) x = 0; else if (i == xcount-1) x = imagewidth;
         y = clipto(y, 0.0, imageheight - 1);
-        if (i == 0) { if (line.filled) svg.startpath(0, imageheight); else svg.startpath(x, y); }
+        if (i == 0) {
+          char* pathname = null;
+          stringbuf sb;
+          if (ynames) {
+            sb << "graph_", ynames[j];
+            pathname = sb;
+          }
+          if (line.filled)
+            svg.startpath(0, imageheight, pathname);
+          else svg.startpath(x, y, pathname);
+        }
         svg.nextpoint(x, y);
       }
 
       if (line.filled) svg.nextpoint(imagewidth, imageheight);
       svg.endpath();
     }
+  }
+  */
+
+  for (int col = ycount-1; col >= 0; col--) {
+    const LineAttributes& line = (linetype) ? linetype[col] : black_linetype;
+    svg.strokewidth = line.width;
+    svg.stroke = line.stroke;
+    svg.setdash(line.dashoffset, line.dashon, line.dashoff);
+    svg.filled = line.filled;
+    svg.fill = line.fill;
+    
+    if (!line.enabled)
+      continue;
+    
+    foreach (sample, xcount) {
+      double yy = ypoints[col][sample];
+      double xp = xpoints[sample] * xscale;
+      double yp = imageheight - (yy * yscale);
+      if (sample == 0) xp = 0; else if (sample == xcount-1) xp = imagewidth;
+      yp = clipto(yp, 0.0, imageheight - 1);
+      if (sample == 0) {
+        char* pathname = null;
+        stringbuf sb;
+        if (ynames) {
+          sb << "graph_", ynames[col];
+          pathname = sb;
+        }
+        if (stacked)
+          svg.startpath(0, imageheight, pathname);
+        else svg.startpath(xp, yp, pathname);
+      }
+      svg.nextpoint(xp, yp);
+    }
+    
+    if (stacked) {
+      svg.nextpoint(imagewidth, imageheight);
+      svg.nextpoint(0, imageheight);
+      svg.closepath();
+    }
+    svg.endpath();
   }
 
   svg.filled = 1;
@@ -570,102 +639,23 @@ void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcoun
   svg.exitlayer();
 }
 
-void create_time_lapse_graph(ostream& os, DataStoreNode& root, const LineAttributes* linetype = null, const RGBA& background = RGBA(225, 207, 255), bool print_table_not_svg = false) {
-  dynarray<TimeLapseFields> timelapse;
-
-  int snapshotid = 1;
-  for (;;) {
-    stringbuf sb;
-
-    sb.reset();
-    sb << snapshotid-1;
-    DataStoreNode& prev = root(sb);
-  
-    sb.reset();
-    sb << snapshotid;
-
-    DataStoreNode* nodeptr = root.search(sb);
-    if (!nodeptr)
-      break;
-
-    DataStoreNode& node = root(sb);
-
-    DataStoreNode& diff = *(node - prev);
-
-    TimeLapseFields fields;
-
-    int n = 0;
-
-    fields.start = prev("ptlsim")("cycles");
-    fields.length = diff("ptlsim")("cycles");
-
-
-    {
-      DataStoreNode& dcache = diff("dcache");
-
-      {
-        DataStoreNode& load = dcache("load");
-        DataStoreNode& hit = load("hit");
-
-        W64 L1 = hit("L1");
-        W64 L2 = hit("L2");
-        W64 L3 = hit("L3");
-        W64 mem = hit("mem");
-        W64 total = (L1 + L2 + L3 + mem);
-
-        fields.cache_hit_rate = percent(L1, total);
-      }
-    }
-
-    timelapse.push(fields);
-
-    snapshotid++;
-
-    delete &diff;
-  }
-
-  int n = timelapse.length;
-
-  if (print_table_not_svg) {
-    os << "Printing ", fieldcount, " fields:", endl;
-    foreach (i, n) {
-      const TimeLapseFieldsBase& fields = timelapse[i];
-      os << "  ", intstring(i, 4), " @ ", intstring((W64)math::round((double)fields.start / 1000000.), 10), "M:";
-      
-      foreach (j, fieldcount) {
-        os << " ", floatstring(fields.values[j], 5, 1);
-      }
-      os << endl;
-    }
-    return;
-  }
-
-  double* xpoints = new double[timelapse.length];
-  double** ypoints = new double*[fieldcount];
-
-  foreach (j, fieldcount) {
-    ypoints[j] = new double[timelapse.length];
-    foreach (i, timelapse.length) {
-      const TimeLapseFieldsBase& snapshot = timelapse[i];
-      xpoints[i] = math::round((double)(snapshot.start + snapshot.length) / 1000000.);
-      ypoints[j][i] = snapshot.values[j];
-    }
-  }
-
-  create_svg_of_percentage_line_graph(os, xpoints, timelapse.length, ypoints, fieldcount, 100.0, 50.0, linetype, background);
-
-  foreach (j, fieldcount) {
-    delete[] ypoints[j];
-  }
-
-  delete[] xpoints;
-}
-
 #define NOLINE {0, 0, {0, 0, 0, 0}, 0.00, 0.00, 0.00, 0.00, 0, {0, 0, 0, 0}}
 
-static const LineAttributes linetype_allfields[fieldcount] = {
-  {1, 0, {0,   255, 255, 255}, 0.10, 0.00, 0.00, 0.00, 0, {0,   0,   0,   0  }}, // L1 cache hit rate in percent
+/*
+
+struct LineAttributes {
+  bool enabled;
+  bool stacked;
+  RGBAColor stroke;
+  float width;
+  float dashoffset;
+  float dashon;
+  float dashoff;
+  bool filled;
+  RGBAColor fill;
 };
+
+*/
 
 void printbanner() {
   cerr << "//  ", endl;
@@ -695,41 +685,26 @@ DataStoreNode* collect_into_supernode(int argc, char** argv, char* path, const c
     // Can't have slashes in tree pathnames
     int filenamelen = strlen(filename);
     foreach (i, filenamelen) { if (filename[i] == '/') filename[i] = ':'; }
-    
-    if (!(endbase = reader.get(deltaend))) {
-      cerr << "ptlstats: Error: cannot find ending snapshot '", deltaend, "'", endl;
+
+    DataStoreNode* dsbase = (deltastart) ? reader.getdelta(deltaend, deltastart) : reader.get(deltaend);
+
+    if (!dsbase) {
+      cerr << "ptlstats: Error: cannot find ending snapshot '", deltaend, "' or starting snapshot '", deltastart, "'", endl;
       reader.close();
       return null;
     }
 
-    if (!(end = endbase->searchpath(path))) {
-      cerr << "ptlstats: Error: cannot find ending subtree '", path, "'", endl;
-      delete endbase;
+    DataStoreNode* ds = null;
+
+    if (!(ds = dsbase->searchpath(path))) {
+      cerr << "ptlstats: Error: cannot find subtree '", path, "'", endl;
+      delete dsbase;
       reader.close();
       return null;
     }
 
-    if (deltastart) {
-      if (!(startbase = reader.get(deltastart))) {
-        cerr << "ptlstats: Error: cannot find starting snapshot '", deltastart, "'", endl;
-        delete endbase;
-        reader.close();
-        return null;
-      }
-
-      if (!(start = startbase->searchpath(path))) {
-        cerr << "ptlstats: Error: cannot find starting subtree '", path, "'", endl;
-        delete startbase;
-        delete endbase;
-        reader.close();
-        return null;
-      }
-
-      *end -= *start;
-    }
-
-    end->rename(filename);
-    supernode->add(end);
+    ds->rename(filename);
+    supernode->add(ds);
   }
 
   return supernode;
@@ -1262,28 +1237,41 @@ int main(int argc, char* argv[]) {
     create_grouped_bargraph(cout, config.mode_bargraph, config.table_row_names, config.table_col_names,
                             config.table_row_col_pattern, config.table_scale_rel_to_col, config.graph_title,
                             config.graph_width, config.graph_height);
-  } else if (config.mode_slice.set()) {
+  } else if (config.mode_slice.set() || config.mode_slice_graph.set()) {
+    bool graphing = config.mode_slice_graph.set();
+
     if (!reader.open(filename)) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;
       return 2;
     }
 
     dynarray<char*> colnames;
-    colnames.tokenize(config.mode_slice, ",");
+    colnames.tokenize((graphing) ? config.mode_slice_graph : config.mode_slice, ",");
 
-    cout << padstring("Snapshot", 16);
-    foreach (i, colnames.length) {
-      cout << ' ', padstring(colnames[i], 16);
+    if (!graphing) {
+      cout << padstring("Snapshot", 16);
+      foreach (i, colnames.length) {
+        cout << ' ', padstring(colnames[i], 16);
+      }
+      cout << endl;
     }
-    cout << endl;
 
-    W64* previous = new W64[colnames.length];
-    foreach (i, colnames.length) previous[i] = 0;
+    double* xpoints = new double[reader.header.record_count];
+    double** ypoints = new double*[colnames.length];
+
+    foreach (col, colnames.length) {
+      ypoints[col] = new double[reader.header.record_count];
+    }
+
+    W64 basecycle = 0;
 
     foreach (i, reader.header.record_count) {
-      DataStoreNode* dsroot = reader.get(i);
+      bool do_subtract = ((!config.slice_cumulative) && (i > 0));
+      DataStoreNode* dsroot = (do_subtract) ? reader.getdelta(i, i-1) : reader.get(i);
 
-      cout << intstring(i, 16);
+      if (!graphing) cout << intstring(i, 16);
+
+      xpoints[i] = i;
 
       foreach (col, colnames.length) {
         DataStoreNode* ds = dsroot->searchpath(colnames[col]);
@@ -1299,17 +1287,38 @@ int main(int argc, char* argv[]) {
         }
         
         W64 rawvalue = W64(*ds);
-        W64 value = (config.slice_cumulative) ? rawvalue : (rawvalue - previous[col]);
-        cout << ' ', intstring(value, 16);
-        previous[col] = rawvalue;
+        double value = rawvalue;
+        if (config.use_percents) value = (ds->percent_of_parent() * 100);
+        if (isnan(value)) value = 0;
+        ypoints[col][i] = value;
+
+        if (graphing) {
+          // graph it
+        } else {
+          if (config.use_percents)
+            cout << ' ', floatstring(value, 16, 1);
+          else cout << ' ', intstring(rawvalue, 16);
+        }
       }
 
-      cout << endl;
-      delete dsroot;  
+      if (!graphing) cout << endl;
+
+      DataStoreNode* dscycle = dsroot->searchpath("summary.cycles");
+      assert(dscycle);
+      basecycle += W64(*dscycle);
+      delete dsroot;
     }
 
-    delete[] previous;
+    if (graphing) {
+      create_svg_of_percentage_line_graph(cout, xpoints, reader.header.record_count, ypoints, colnames.length, colnames,
+                                          config.graph_width, config.graph_height, null, graph_background, config.graph_stacked);
+    }
 
+    foreach (j, colnames.length) {
+      delete[] ypoints[j];
+    }
+
+    delete[] xpoints;
   } else {
     if (!reader.open(filename)) {
       cerr << "ptlstats: Cannot open '", filename, "'", endl, endl;

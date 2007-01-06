@@ -39,25 +39,26 @@ namespace CacheSubsystem {
   //#define CACHE_ALWAYS_HITS
   //#define L2_ALWAYS_HITS
   
-  // 16 KB L1 at 2 cycles
+  // 64 KB L1 at 3 cycles
   const int L1_LINE_SIZE = 64;
-  const int L1_SET_COUNT = 64;
-  const int L1_WAY_COUNT = 4;
-  // #define ENFORCE_L1_DCACHE_BANK_CONFLICTS
+  const int L1_SET_COUNT = 512;
+  const int L1_WAY_COUNT = 2;
+
+#define ENFORCE_L1_DCACHE_BANK_CONFLICTS
   const int L1_DCACHE_BANKS = 8; // 8 banks x 8 bytes/bank = 64 bytes/line
 
-  // 32 KB L1I
+  // 64 KB L1I
   const int L1I_LINE_SIZE = 64;
-  const int L1I_SET_COUNT = 128;
-  const int L1I_WAY_COUNT = 4;
+  const int L1I_SET_COUNT = 512;
+  const int L1I_WAY_COUNT = 2;
 
-  // 256 KB L2 at 6 cycles
+  // 1024 KB L2 at 8 cycles (11 total cycles)
   const int L2_LINE_SIZE = 64;
-  const int L2_SET_COUNT = 512; // 256 KB
-  const int L2_WAY_COUNT = 8;
-  const int L2_LATENCY   = 6; // don't include the extra wakeup cycle (waiting->ready state transition) in the LFRQ
+  const int L2_SET_COUNT = 1024;
+  const int L2_WAY_COUNT = 16;
+  const int L2_LATENCY   = 8; // don't include the extra wakeup cycle (waiting->ready state transition) in the LFRQ
 
-#define ENABLE_L3_CACHE
+  //#define ENABLE_L3_CACHE
 #ifdef ENABLE_L3_CACHE
   // 2 MB L3 cache (4096 sets, 16 ways) with 64-byte lines, latency 16 cycles
   const int L3_SET_COUNT = 1024;
@@ -65,12 +66,13 @@ namespace CacheSubsystem {
   const int L3_LINE_SIZE = 128;
   const int L3_LATENCY   = 12;
 #endif
+
   // Load Fill Request Queue (maximum number of missed loads)
-  const int LFRQ_SIZE = 63;
+  const int LFRQ_SIZE = 32;
 
   // Allow up to 16 outstanding lines in the L2 awaiting service:
   const int MISSBUF_COUNT = 16;
-  const int MAIN_MEM_LATENCY = 140;
+  const int MAIN_MEM_LATENCY = 100; // above and beyond L1 + L2 latency
 
   // TLBs
 #define USE_TLB
@@ -277,19 +279,15 @@ namespace CacheSubsystem {
     DCACHE_L2_LINE_DEADTIME_INTERVAL, DCACHE_L2_LINE_DEADTIME_SLOTS, 
     DCACHE_L2_LINE_HITCOUNT_INTERVAL, DCACHE_L2_LINE_HITCOUNT_SLOTS> L2StatsCollectorBase;
 
-#ifdef ENABLE_L3_CACHE
   typedef HistogramAssociativeArrayStatisticsCollector<3, L3CacheLine,
     DCACHE_L3_LINE_LIFETIME_INTERVAL, DCACHE_L3_LINE_LIFETIME_SLOTS, 
     DCACHE_L3_LINE_DEADTIME_INTERVAL, DCACHE_L3_LINE_DEADTIME_SLOTS, 
     DCACHE_L3_LINE_HITCOUNT_INTERVAL, DCACHE_L3_LINE_HITCOUNT_SLOTS> L3StatsCollectorBase;
-#endif
 
   struct L1StatsCollector: public L1StatsCollectorBase { };
   struct L1IStatsCollector: public L1IStatsCollectorBase { };
   struct L2StatsCollector: public L2StatsCollectorBase { };
-#ifdef ENABLE_L3_CACHE
   struct L3StatsCollector: public L3StatsCollectorBase { };
-#endif
 
 #else
   typedef NullAssociativeArrayStatisticsCollector<W64, L1CacheLine> L1StatsCollector;

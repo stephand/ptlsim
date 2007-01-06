@@ -195,6 +195,8 @@ struct PTLsimConfig {
   bool mask_interrupts;
   W64 console_mfn;
   bool pause;
+  stringbuf perfctr_name;
+  bool force_native;
 #endif
 
   // Out of order core features

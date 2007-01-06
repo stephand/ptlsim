@@ -88,6 +88,35 @@ typedef unsigned long pte_t;
 #include <ptlhwdef.h>
 #include <config.h>
 
+union CPUVendorID {
+  char text[13];
+  W32 data[3];
+};
+
+enum {
+  CPU_TYPE_UNKNOWN = 0,
+  CPU_TYPE_AMD_K8 = 1,
+  CPU_TYPE_INTEL_CORE2 = 2,
+  CPU_TYPE_INTEL_PENTIUM4 = 3,
+  CPU_TYPE_COUNT = 4
+};
+
+extern int cpu_type;
+int get_cpu_type();
+const char* get_cpu_type_name(int cputype);
+
+struct PerfEvtSelMSR {
+  W32 event:8, unitmask:8, user:1, kernel:1, edge:1, pinctl:1, interrupt:1, dummy0:1, enabled:1, threshold_lt_or_eq:1, events_per_cycle_threshold:8;
+  RawDataAccessors(PerfEvtSelMSR, W32);
+};
+
+static inline W64 rdpmc(W32 op) {
+  W32 eax;
+  W32 edx;
+	asm volatile("rdpmc" : "=a" (eax), "=d" (edx) : "c" (op));
+  return (W64(edx) << 32) + W64(eax);
+}
+
 static inline W64 pages_to_kb(W64 pages) { return (pages * 4096) / 1024; }
 
 enum {
@@ -157,6 +186,23 @@ enum {
   PTLSIM_HOST_SWITCH_TO_SIM,
 
   //
+  // Configure CPU performance counters in a model-specific
+  // manner (both Intel and AMD CPUs use the same PerfEvtSel
+  // register formats, but the events are obviously different.
+  //
+  PTLSIM_HOST_SETUP_PERFCTRS,
+
+  //
+  // Clear or overwrite the performance counter values.
+  //
+  PTLSIM_HOST_WRITE_PERFCTRS,
+
+  //
+  // Flush all processor caches (for accurate timing measurements)
+  //
+  PTLSIM_HOST_FLUSH_CACHE,
+
+  //
   // Terminate PTLsim and PTLmon, removing it
   // from the address space, and kill the domain.
   //
@@ -197,6 +243,11 @@ struct PTLsimHostCall {
     struct {
       W64 uuid_limit;
     } flush_upcall_queue;
+    struct {
+      W64 value;
+      W32 index;
+      W32 cpu;
+    } perfctr;
     struct {
       bool pause;
     } switch_to_native;
@@ -270,6 +321,7 @@ struct PTLsimMonitorInfo {
   byte context_spinlock;
   byte abort_request;
   W64  vcpu_ctx_initialized;
+  W64  phys_cpu_affinity;
 };
 
 W64 inject_upcall(const char* buf, size_t count, bool flush = false);
@@ -375,6 +427,7 @@ static inline Context& contextof(int vcpu) {
 //
 // Utility functions
 //
+W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false, bool ignorerc = false);
 void print_regs(ostream& os, const W64* regs);
 void print_stack(ostream& os, Waddr sp);
 int shutdown(int reason);
@@ -597,6 +650,7 @@ void virtualize_time_for_native_mode();
 void time_and_virq_resume();
 void update_time();
 int inject_events();
+void reset_mode_switch_delta_cycles_and_insns(W64& delta_cycles, W64& delta_insns);
 
 //
 // Event channel and timer related hypercalls
@@ -605,6 +659,14 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
 W64 handle_set_timer_op_hypercall(Context& ctx, W64 arg1, bool debug);
 W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool debug);
 W64 handle_sched_op_hypercall(Context& ctx, W64 op, void* arg, bool debug);
+
+//
+// Performance counters
+//
+bool perfctrs_init();
+void perfctrs_start();
+void perfctrs_stop();
+void perfctrs_dump(ostream& os);
 
 //
 // Subset of system calls available under PTLsim/Xen:

@@ -192,8 +192,6 @@ static const int MAX_BB_PER_PAGE = 4096;
 
 static const int MAX_TRANSOPS_PER_USER_INSN = 16;
 
-#define LOADLAT 2 // Load unit latency, assuming fast bypass
-
 extern const char* exception_names[EXCEPTION_COUNT];
 
 static inline const char* exception_name(W64 exception) {
@@ -931,27 +929,6 @@ enum {
 };
 
 //
-// Functional Units
-//
-#define FU_LDU0       (1 << 0)
-#define FU_STU0       (1 << 1)
-#define FU_LDU1       (1 << 2)
-#define FU_STU1       (1 << 3)
-#define FU_ALU0       (1 << 4)
-#define FU_FPU0       (1 << 5)
-#define FU_ALU1       (1 << 6)
-#define FU_FPU1       (1 << 7)
-#define FU_COUNT      8
-
-#define LOAD_FU_COUNT 2
-
-struct FunctionalUnit {
-  const char* name;
-};
-
-extern struct FunctionalUnit FU[FU_COUNT];
-
-//
 // Operation Classes
 // 
 // NOTE: Even if a given opcode is not USESFLAGS, we still check all flags for FLAG_INV and FLAG_WAIT in the prescan:
@@ -1132,11 +1109,8 @@ enum {
 struct OpcodeInfo {
   const char* name;
   W32 opclass;
-  W8  latency;
-  W8  flagops;
-  W16 fu;
+  W16 flagops;
 };
-
 
 extern const OpcodeInfo opinfo[OP_MAX_OPCODE];
 

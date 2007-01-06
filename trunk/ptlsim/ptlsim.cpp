@@ -43,7 +43,11 @@ void PTLsimConfig::reset() {
   simswitch = 0;
 #endif
 
+#ifdef PTLSIM_HYPERVISOR
+  core_name = "smt";
+#else
   core_name = "ooo";
+#endif
 
   quiet = 0;
   log_filename = "ptlsim.log";
@@ -94,6 +98,8 @@ void PTLsimConfig::reset() {
   mask_interrupts = 0;
   console_mfn = 0;
   pause = 0;
+  perfctr_name.reset();
+  force_native = 0;
 #endif
 
   perfect_cache = 0;
@@ -185,6 +191,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(mask_interrupts,              "maskints",             "Mask all interrupts (required for guaranteed deterministic behavior)");
   add(console_mfn,                  "console-mfn",          "Track the specified Xen console MFN");
   add(pause,                        "pause",                "Pause domain after using -native");
+  add(perfctr_name,                 "perfctr",              "Performance counter generic name for hardware profiling during native mode");
+  add(force_native,                 "force-native",         "Force native mode: ignore attempts to switch to simulation");
 #endif
 
   section("Out of Order Core (ooocore)");

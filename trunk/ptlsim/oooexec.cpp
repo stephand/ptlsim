@@ -207,7 +207,7 @@ int ReorderBufferEntry::issue() {
   OutOfOrderCore& core = getcore();
   OutOfOrderCoreEvent* event = null;
 
-  W32 executable_on_fu = opinfo[uop.opcode].fu & clusters[cluster].fu_mask & core.fu_avail;
+  W32 executable_on_fu = fuinfo[uop.opcode].fu & clusters[cluster].fu_mask & core.fu_avail;
 
   // Are any FUs available in this cycle?
   if unlikely (!executable_on_fu) {
@@ -242,7 +242,7 @@ int ReorderBufferEntry::issue() {
   fu = lsbindex(executable_on_fu);
   clearbit(core.fu_avail, fu);
   core.robs_on_fu[fu] = this;
-  cycles_left = opinfo[uop.opcode].latency;
+  cycles_left = fuinfo[uop.opcode].latency;
 
   changestate(core.rob_issued_list[cluster]);
 

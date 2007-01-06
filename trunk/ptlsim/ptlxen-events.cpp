@@ -628,6 +628,40 @@ bool Context::change_runstate(int newstate) {
   runstate.state_entry_time = current_time_nsec;
   runstate.state = newstate;
 
+  W64 delta_cycles, delta_insns;
+  reset_mode_switch_delta_cycles_and_insns(delta_cycles, delta_insns);
+
+  if (newstate == RUNSTATE_running) {
+    //
+    // Change from blocked -> running
+    //
+    assert(!running);
+
+    stats.external.cycles_in_mode.idle += delta_cycles;
+    stats.external.insns_in_mode.idle += delta_insns;
+
+    if (logable(2)) {
+      logfile << "[vcpu ", vcpuid, "] Wakeup at ", sim_cycle, " cycles, ", total_user_insns_committed, " insns",
+        " (previous mode idle: delta ", delta_cycles, " cycles, ", delta_insns, " insns)", endl;
+    }
+  } else {
+    //
+    // Change from running -> blocked
+    // Block or yield requires a hypercall or HLT: those only work in kernel mode
+    //
+    assert(newstate == RUNSTATE_blocked);
+    assert(kernel_mode);
+    assert(use64);
+
+    if (logable(2)) {
+      logfile << "[vcpu ", vcpuid, "] Idle at ", sim_cycle, " cycles, ", total_user_insns_committed, " insns",
+        " (previous mode ", "kernel64", ": delta ", delta_cycles, " cycles, ", delta_insns, " insns)", endl;
+    }
+    
+    stats.external.cycles_in_mode.kernel64 += delta_cycles;
+    stats.external.insns_in_mode.kernel64 += delta_insns;
+  }
+
   running = (newstate == RUNSTATE_running);
 
   if likely (user_runstate) {

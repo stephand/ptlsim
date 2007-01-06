@@ -1,7 +1,8 @@
 // -*- c++ -*-
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// SMT Core Simulator Configuration
+// SMT Core Simulator Configuration for
+// AMD K8 (Athlon 64 / Opteron / Turion)
 //
 // Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
 // Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
@@ -60,52 +61,49 @@ namespace SMTModel {
   //
   // Uop to functional unit mappings
   //
-  static const int FU_COUNT = 8;
-  static const int LOADLAT = 2;
+  static const int FU_COUNT = 9;
+  static const int LOADLAT = 3;
 
   enum {
-    FU_LDU0       = (1 << 0),
-    FU_STU0       = (1 << 1),
-    FU_LDU1       = (1 << 2),
-    FU_STU1       = (1 << 3),
-    FU_ALU0       = (1 << 4),
-    FU_FPU0       = (1 << 5),
-    FU_ALU1       = (1 << 6),
-    FU_FPU1       = (1 << 7),
+    FU_ALU1       = (1 << 0),
+    FU_ALUC       = (1 << 1),
+    FU_ALU2       = (1 << 2),
+    FU_LSU1       = (1 << 3),
+    FU_ALU3       = (1 << 4),
+    FU_LSU2       = (1 << 5),
+    FU_FADD       = (1 << 6),
+    FU_FMUL       = (1 << 7),
+    FU_FCVT       = (1 << 8),
   };
 
   static const int LOAD_FU_COUNT = 2;
 
   const char* fu_names[FU_COUNT] = {
-    "ldu0",
-    "stu0",
-    "ldu1",
-    "stu1",
-    "alu0",
-    "fpu0",
     "alu1",
-    "fpu1",
+    "aluc",
+    "alu2",
+    "lsu1",
+    "alu3",
+    "lsu2",
+    "fadd",
+    "fmul",
+    "fcvt",
   };
 
   //
   // Opcodes and properties
   //
-#define ALU0 FU_ALU0
 #define ALU1 FU_ALU1
-#define STU0 FU_STU0
-#define STU1 FU_STU1
-#define LDU0 FU_LDU0
-#define LDU1 FU_LDU1
-#define FPU0 FU_FPU0
-#define FPU1 FU_FPU1
+#define ALU2 FU_ALU2
+#define ALU3 FU_ALU3
+#define ALUC FU_ALUC
+#define LSU1 FU_LSU1
+#define LSU2 FU_LSU2
+#define FADD FU_FADD
+#define FMUL FU_FMUL
+#define FCVT FU_FCVT
 #define A 1 // ALU latency, assuming fast bypass
 #define L LOADLAT
-
-#define ANYALU ALU0|ALU1
-#define ANYLDU LDU0|LDU1
-#define ANYSTU STU0|STU1
-#define ANYFPU FPU0|FPU1
-#define ANYINT ANYALU|ANYSTU|ANYLDU
 
   struct FunctionalUnitInfo {
     byte opcode;   // Must match definition in ptlhwdef.h and ptlhwdef.cpp! 
@@ -119,130 +117,130 @@ namespace SMTModel {
   //
   const FunctionalUnitInfo fuinfo[OP_MAX_OPCODE] = {
     // name, latency, fumask
-    {OP_nop,            A, ANYINT|ANYFPU},
-    {OP_mov,            A, ANYINT|ANYFPU},
+    {OP_nop,            1, ALU1|ALU2|ALU3|ALUC|LSU1|LSU2|FADD|FMUL|FCVT},
+    {OP_mov,            1, ALU1|ALU2|ALU3|FADD|FMUL},
     // Logical
-    {OP_and,            A, ANYINT|ANYFPU},
-    {OP_andnot,         A, ANYINT|ANYFPU},
-    {OP_xor,            A, ANYINT|ANYFPU},
-    {OP_or,             A, ANYINT|ANYFPU},
-    {OP_nand,           A, ANYINT|ANYFPU},
-    {OP_ornot,          A, ANYINT|ANYFPU},
-    {OP_eqv,            A, ANYINT|ANYFPU},
-    {OP_nor,            A, ANYINT|ANYFPU},
+    {OP_and,            1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_andnot,         1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_xor,            1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_or,             1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_nand,           1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_ornot,          1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_eqv,            1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_nor,            1, ALU1|ALU2|ALU3|FADD|FMUL},
     // Mask, insert or extract bytes
-    {OP_maskb,          A, ANYINT},
+    {OP_maskb,          A, ALU1|ALU2|ALU3},
     // Add and subtract
-    {OP_add,            A, ANYINT},
-    {OP_sub,            A, ANYINT},
-    {OP_adda,           A, ANYINT},
-    {OP_suba,           A, ANYINT},
-    {OP_addm,           A, ANYINT},
-    {OP_subm,           A, ANYINT},
+    {OP_add,            1, ALU1|ALU2|ALU3},
+    {OP_sub,            1, ALU1|ALU2|ALU3},
+    {OP_adda,           1, ALU1|ALU2|ALU3},
+    {OP_suba,           1, ALU1|ALU2|ALU3},
+    {OP_addm,           1, ALU1|ALU2|ALU3},
+    {OP_subm,           1, ALU1|ALU2|ALU3},
     // Condition code logical ops
-    {OP_andcc,          A, ANYINT},
-    {OP_orcc,           A, ANYINT},
-    {OP_xorcc,          A, ANYINT},
-    {OP_ornotcc,        A, ANYINT},
+    {OP_andcc,          1, ALUC},
+    {OP_orcc,           1, ALUC},
+    {OP_xorcc,          1, ALUC},
+    {OP_ornotcc,        1, ALUC},
     // Condition code movement and merging
-    {OP_movccr,         A, ANYINT},
-    {OP_movrcc,         A, ANYINT},
-    {OP_collcc,         A, ANYINT},
+    {OP_movccr,         1, ALUC},
+    {OP_movrcc,         1, ALUC},
+    {OP_collcc,         1, ALUC},
     // Simple shifting (restricted to small immediate 1..8)
-    {OP_shls,           A, ANYINT},
-    {OP_shrs,           A, ANYINT},
-    {OP_bswap,          A, ANYINT},
-    {OP_sars,           A, ANYINT},
+    {OP_shls,           1, ALU1|ALU2|ALU3},
+    {OP_shrs,           1, ALU1|ALU2|ALU3},
+    {OP_bswap,          1, ALU1|ALU2|ALU3},
+    {OP_sars,           1, ALU1|ALU2|ALU3},
     // Bit testing
-    {OP_bt,             A, ANYALU},
-    {OP_bts,            A, ANYALU},
-    {OP_btr,            A, ANYALU},
-    {OP_btc,            A, ANYALU},
+    {OP_bt,             1, ALU1|ALU2|ALU3},
+    {OP_bts,            1, ALU1|ALU2|ALU3},
+    {OP_btr,            1, ALU1|ALU2|ALU3},
+    {OP_btc,            1, ALU1|ALU2|ALU3},
     // Set and select
-    {OP_set,            A, ANYINT},
-    {OP_set_sub,        A, ANYINT},
-    {OP_set_and,        A, ANYINT},
-    {OP_sel,            A, ANYINT},
+    {OP_set,            1, ALU1|ALU2|ALU3},
+    {OP_set_sub,        1, ALU1|ALU2|ALU3},
+    {OP_set_and,        1, ALU1|ALU2|ALU3},
+    {OP_sel,            1, ALU1|ALU2|ALU3},
     // Branches
-    {OP_br,             A, ANYINT},
-    {OP_br_sub,         A, ANYINT},
-    {OP_br_and,         A, ANYINT},
-    {OP_jmp,            A, ANYINT},
-    {OP_bru,            A, ANYINT},
-    {OP_jmpp,           A, ANYALU|ANYLDU},
-    {OP_brp,            A, ANYALU|ANYLDU},
+    {OP_br,             1, ALU1|ALU2|ALU3},
+    {OP_br_sub,         1, ALU1|ALU2|ALU3},
+    {OP_br_and,         1, ALU1|ALU2|ALU3},
+    {OP_jmp,            1, ALU1|ALU2|ALU3},
+    {OP_bru,            1, ALU1|ALU2|ALU3},
+    {OP_jmpp,           1, ALUC},
+    {OP_brp,            1, ALUC},
     // Checks
-    {OP_chk,            A, ANYINT},
-    {OP_chk_sub,        A, ANYINT},
-    {OP_chk_and,        A, ANYINT},
+    {OP_chk,            1, ALU1|ALU2|ALU3},
+    {OP_chk_sub,        1, ALU1|ALU2|ALU3},
+    {OP_chk_and,        1, ALU1|ALU2|ALU3},
     // Loads and stores
-    {OP_ld,             L, ANYLDU},
-    {OP_ldx,            L, ANYLDU},
-    {OP_ld_pre,         1, ANYLDU},
-    {OP_st,             1, ANYSTU},
-    {OP_mf,             1, STU0  },
+    {OP_ld,             3, LSU1|LSU2},
+    {OP_ldx,            3, LSU1|LSU2},
+    {OP_ld_pre,         1, LSU1     },
+    {OP_st,             1, LSU1|LSU2},
+    {OP_mf,             1, LSU1     },
     // Shifts, rotates and complex masking
-    {OP_shl,            A, ANYALU},
-    {OP_shr,            A, ANYALU},
-    {OP_mask,           A, ANYALU},
-    {OP_sar,            A, ANYALU},
-    {OP_rotl,           A, ANYALU},  
-    {OP_rotr,           A, ANYALU},   
-    {OP_rotcl,          A, ANYALU},
-    {OP_rotcr,          A, ANYALU},  
+    {OP_shl,            1, ALU1|ALU2|ALU3},
+    {OP_shr,            1, ALU1|ALU2|ALU3},
+    {OP_mask,           1, ALU1|ALU2|ALU3},
+    {OP_sar,            1, ALU1|ALU2|ALU3},
+    {OP_rotl,           1, ALU1|ALU2|ALU3},  
+    {OP_rotr,           1, ALU1|ALU2|ALU3},   
+    {OP_rotcl,          1, ALU1|ALU2|ALU3},
+    {OP_rotcr,          1, ALU1|ALU2|ALU3},  
     // Multiplication
-    {OP_mull,           4, ANYFPU},
-    {OP_mulh,           4, ANYFPU},
-    {OP_mulhu,          4, ANYFPU},
+    {OP_mull,           4, ALUC},
+    {OP_mulh,           4, ALUC},
+    {OP_mulhu,          4, ALUC},
     // Bit scans
-    {OP_ctz,            3, ANYFPU},
-    {OP_clz,            3, ANYFPU},
-    {OP_ctpop,          3, ANYFPU},  
-    {OP_permb,          4, ANYFPU},
+    {OP_ctz,            4, ALUC},
+    {OP_clz,            4, ALUC},
+    {OP_ctpop,          4, ALUC},  
+    {OP_permb,          2, ALUC|FCVT},
     // Floating point
     // uop.size bits have following meaning:
     // 00 = single precision, scalar (preserve high 32 bits of ra)
     // 01 = single precision, packed (two 32-bit floats)
     // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
-    {OP_addf,           6, ANYFPU},
-    {OP_subf,           6, ANYFPU},
-    {OP_mulf,           6, ANYFPU},
-    {OP_maddf,          6, ANYFPU},
-    {OP_msubf,          6, ANYFPU},
-    {OP_divf,           6, ANYFPU},
-    {OP_sqrtf,          6, ANYFPU},
-    {OP_rcpf,           6, ANYFPU},
-    {OP_rsqrtf,         6, ANYFPU},
-    {OP_minf,           4, ANYFPU},
-    {OP_maxf,           4, ANYFPU},
-    {OP_cmpf,           4, ANYFPU},
+    {OP_addf,           4, FADD},
+    {OP_subf,           4, FADD},
+    {OP_mulf,           5, FMUL},
+    {OP_maddf,          5, FMUL},
+    {OP_msubf,          5, FMUL},
+    {OP_divf,          16, FMUL},
+    {OP_sqrtf,         19, FMUL},
+    {OP_rcpf,           4, FMUL},
+    {OP_rsqrtf,         4, FMUL},
+    {OP_minf,           3, FADD},
+    {OP_maxf,           3, FADD},
+    {OP_cmpf,           3, FADD},
     // For fcmpcc, uop.size bits have following meaning:
     // 00 = single precision ordered compare
     // 01 = single precision unordered compare
     // 10 = double precision ordered compare
     // 11 = double precision unordered compare
-    {OP_cmpccf,         4, ANYFPU},
+    {OP_cmpccf,         4, FADD},
     // and/andn/or/xor are done using integer uops
-    {OP_permf,          3, ANYFPU}, // shuffles
+    {OP_permf,          2, FADD|FCVT}, // shuffles
     // For these conversions, uop.size bits select truncation mode:
     // x0 = normal IEEE-style rounding
     // x1 = truncate to zero
-    {OP_cvtf_i2s_ins,   6, ANYFPU},
-    {OP_cvtf_i2s_p,     6, ANYFPU},
-    {OP_cvtf_i2d_lo,    6, ANYFPU},
-    {OP_cvtf_i2d_hi,    6, ANYFPU},
-    {OP_cvtf_q2s_ins,   6, ANYFPU},
-    {OP_cvtf_q2d,       6, ANYFPU},
-    {OP_cvtf_s2i,       6, ANYFPU},
-    {OP_cvtf_s2q,       6, ANYFPU},
-    {OP_cvtf_s2i_p,     6, ANYFPU},
-    {OP_cvtf_d2i,       6, ANYFPU},
-    {OP_cvtf_d2q,       6, ANYFPU},
-    {OP_cvtf_d2i_p,     6, ANYFPU},
-    {OP_cvtf_d2s_ins,   6, ANYFPU},
-    {OP_cvtf_d2s_p,     6, ANYFPU},
-    {OP_cvtf_s2d_lo,    6, ANYFPU},
-    {OP_cvtf_s2d_hi,    6, ANYFPU},
+    {OP_cvtf_i2s_ins,   9, FCVT},
+    {OP_cvtf_i2s_p,     9, FCVT},
+    {OP_cvtf_i2d_lo,    9, FCVT},
+    {OP_cvtf_i2d_hi,    9, FCVT},
+    {OP_cvtf_q2s_ins,   9, FCVT},
+    {OP_cvtf_q2d,       9, FCVT},
+    {OP_cvtf_s2i,       6, FCVT},
+    {OP_cvtf_s2q,       6, FCVT},
+    {OP_cvtf_s2i_p,     6, FCVT},
+    {OP_cvtf_d2i,       6, FCVT},
+    {OP_cvtf_d2q,       6, FCVT},
+    {OP_cvtf_d2i_p,     6, FCVT},
+    {OP_cvtf_d2s_ins,   4, FCVT},
+    {OP_cvtf_d2s_p,     4, FCVT},
+    {OP_cvtf_s2d_lo,    4, FCVT},
+    {OP_cvtf_s2d_hi,    4, FCVT},
   };
 
 #undef A
@@ -269,10 +267,10 @@ namespace SMTModel {
   // Global limits
   //
   
-  const int MAX_ISSUE_WIDTH = 4;
-  
+  const int MAX_ISSUE_WIDTH = 6;
+
   // Largest size of any physical register file or the store queue:
-  const int MAX_PHYS_REG_FILE_SIZE = 256;
+  const int MAX_PHYS_REG_FILE_SIZE = 128;
   const int PHYS_REG_FILE_SIZE = 128;
   const int PHYS_REG_NULL = 0;
   
@@ -285,10 +283,10 @@ namespace SMTModel {
   //
 #define BIG_ROB
 
-  const int ROB_SIZE = 128;
+  const int ROB_SIZE = 72;
   
   // Maximum number of branches in the pipeline at any given time
-  const int MAX_BRANCHES_IN_FLIGHT = 16;
+  const int MAX_BRANCHES_IN_FLIGHT = 24;
 
   // Set this to combine the integer and FP phys reg files:
   // #define UNIFIED_INT_FP_PHYS_REG_FILE
@@ -304,35 +302,35 @@ namespace SMTModel {
   //
   // Load and Store Queues
   //
-  const int LDQ_SIZE = 48;
-  const int STQ_SIZE = 32;
+  const int LDQ_SIZE = 44;
+  const int STQ_SIZE = 44;
 
   //
   // Fetch
   //
-  const int FETCH_QUEUE_SIZE = 32;
-  const int FETCH_WIDTH = 4;
+  const int FETCH_QUEUE_SIZE = 36;
+  const int FETCH_WIDTH = 3;
 
   //
   // Frontend (Rename and Decode)
   //
-  const int FRONTEND_WIDTH = 4;
-  const int FRONTEND_STAGES = 5;
+  const int FRONTEND_WIDTH = 3;
+  const int FRONTEND_STAGES = 7;
 
   //
   // Dispatch
   //
-  const int DISPATCH_WIDTH = 4;
+  const int DISPATCH_WIDTH = 3;
 
   //
   // Writeback
   //
-  const int WRITEBACK_WIDTH = 4;
+  const int WRITEBACK_WIDTH = 3;
 
   //
   // Commit
   //
-  const int COMMIT_WIDTH = 4;
+  const int COMMIT_WIDTH = 3;
 
   //
   // Clustering, Issue Queues and Bypass Network
@@ -342,19 +340,10 @@ namespace SMTModel {
 #define MULTI_IQ
 
 #ifdef ENABLE_SMT
-  //
-  // Multiple issue queues are currently only supported in
-  // the non-SMT configuration, due to ambiguities in the
-  // ICOUNT SMT heuristic when multiple queues are active.
-  //
-#undef MULTI_IQ
+#error AMD K8 microarchitecture does not support SMT
 #endif
 
-#ifdef MULTI_IQ
   const int MAX_CLUSTERS = 4;
-#else
-  const int MAX_CLUSTERS = 1;
-#endif
 
   enum { PHYSREG_NONE, PHYSREG_FREE, PHYSREG_WAITING, PHYSREG_BYPASS, PHYSREG_WRITTEN, PHYSREG_ARCH, PHYSREG_PENDINGFREE, MAX_PHYSREG_STATE };
   static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
@@ -712,10 +701,10 @@ namespace SMTModel {
   //
   // Load/Store Queue
   //
-#define LSQ_SIZE (LDQ_SIZE + STQ_SIZE)
+#define LSQ_SIZE 44 // K8 uses a unified LSQ
 
   // Define this to allow speculative issue of loads before unresolved stores
-#define SMT_ENABLE_LOAD_HOISTING
+  // #define SMT_ENABLE_LOAD_HOISTING // (K8 does not support this)
 
   struct LoadStoreQueueEntry: public SFR {
     ReorderBufferEntry* rob;
@@ -1315,16 +1304,11 @@ namespace SMTModel {
     ROB_STATE_PRE_READY_TO_DISPATCH = (1 << 2)
   };
 
-#ifdef MULTI_IQ
 #define InitClusteredROBList(name, description, flags) \
   name[0](description "-int0", rob_states, flags); \
   name[1](description "-int1", rob_states, flags); \
   name[2](description "-ld", rob_states, flags); \
   name[3](description "-fp", rob_states, flags)
-#else
-#define InitClusteredROBList(name, description, flags) \
-  name[0](description "-all", rob_states, flags);
-#endif
 
   static const int ISSUE_QUEUE_SIZE = 16;
 
@@ -1482,51 +1466,39 @@ namespace SMTModel {
     // Issue Queues (one per cluster)
     //
     int reserved_iq_entries;
-#define declare_issueq_templates template struct IssueQueue<ISSUE_QUEUE_SIZE>
-#ifdef MULTI_IQ
-    IssueQueue<ISSUE_QUEUE_SIZE> issueq_int0;
-    IssueQueue<ISSUE_QUEUE_SIZE> issueq_int1;
-    IssueQueue<ISSUE_QUEUE_SIZE> issueq_ld;
-    IssueQueue<ISSUE_QUEUE_SIZE> issueq_fp;
+#define declare_issueq_templates \
+    template struct IssueQueue<8>; \
+    template struct IssueQueue<36>
 
-    // Instantiate any issueq sizes used above:
+    IssueQueue<8> issueq_int1;
+    IssueQueue<8> issueq_int2;
+    IssueQueue<8> issueq_int3;
+    IssueQueue<36> issueq_fp;
 
-
-#define foreach_issueq(expr) { SMTCore& core = getcore(); core.issueq_int0.expr; core.issueq_int1.expr; core.issueq_ld.expr; core.issueq_fp.expr; }
+#define foreach_issueq(expr) { SMTCore& core = getcore(); core.issueq_int1.expr; core.issueq_int2.expr; core.issueq_int3.expr; core.issueq_fp.expr; }
   
     void sched_get_all_issueq_free_slots(int* a) {
-      a[0] = issueq_int0.remaining();
-      a[1] = issueq_int1.remaining();
-      a[2] = issueq_ld.remaining();
+      a[0] = issueq_int1.remaining();
+      a[1] = issueq_int2.remaining();
+      a[2] = issueq_int3.remaining();
       a[3] = issueq_fp.remaining();
     }
 
 #define issueq_operation_on_cluster_with_result(core, cluster, rc, expr) \
   switch (cluster) { \
-  case 0: rc = core.issueq_int0.expr; break; \
-  case 1: rc = core.issueq_int1.expr; break; \
-  case 2: rc = core.issueq_ld.expr; break; \
+  case 0: rc = core.issueq_int1.expr; break; \
+  case 1: rc = core.issueq_int2.expr; break; \
+  case 2: rc = core.issueq_int3.expr; break; \
   case 3: rc = core.issueq_fp.expr; break; \
   }
 
 #define per_cluster_stats_update(prefix, cluster, expr) \
   switch (cluster) { \
-  case 0: prefix.int0 expr; break; \
-  case 1: prefix.int1 expr; break; \
-  case 2: prefix.ld expr; break; \
+  case 0: prefix.int1 expr; break; \
+  case 1: prefix.int2 expr; break; \
+  case 2: prefix.int3 expr; break; \
   case 3: prefix.fp expr; break; \
   }
-
-#else
-    IssueQueue<ISSUE_QUEUE_SIZE> issueq_all;
-#define foreach_issueq(expr) { getcore().issueq_all.expr; }
-    void sched_get_all_issueq_free_slots(int* a) {
-      a[0] = issueq_all.remaining();
-    }
-#define issueq_operation_on_cluster_with_result(core, cluster, rc, expr) rc = core.issueq_all.expr;
-#define per_cluster_stats_update(prefix, cluster, expr) prefix.all expr;
-
-#endif
 
 #define per_physregfile_stats_update(prefix, rfid, expr) \
   switch (rfid) { \
@@ -1653,37 +1625,29 @@ namespace SMTModel {
   // latency between them, but both clusters can access the load pseudo-cluster with
   // no extra cycle. The floating point cluster is two cycles from everything else.
   //
-#ifdef MULTI_IQ
+
   const Cluster clusters[MAX_CLUSTERS] = {
-    {"int0",  2, (FU_ALU0|FU_STU0)},
-    {"int1",  2, (FU_ALU1|FU_STU1)},
-    {"ld",    2, (FU_LDU0|FU_LDU1)},
-    {"fp",    2, (FU_FPU0|FU_FPU1)},
+    {"int1",  2, (FU_ALU1|FU_ALUC)},
+    {"int2",  2, (FU_ALU2|FU_LSU1)},
+    {"int3",  2, (FU_ALU3|FU_LSU2)},
+    {"fp",    3, (FU_FADD|FU_FMUL|FU_FCVT)},
   };
 
   const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
-    // I0 I1 LD FP <-to
-    {0, 1, 0, 2}, // from I0
-    {1, 0, 0, 2}, // from I1
-    {0, 0, 0, 2}, // from LD
+    // I0 I1 I2 FP <-to
+    {0, 0, 0, 2}, // from I0
+    {0, 0, 0, 2}, // from I1
+    {0, 0, 0, 2}, // from I2
     {2, 2, 2, 0}, // from FP
   };
 
   const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
-    // I0 I1 LD FP <-to
-    {2, 2, 1, 1}, // from I0
-    {2, 2, 1, 1}, // from I1
-    {1, 1, 2, 2}, // from LD
+    // I1 I2 I3 FP <-to
+    {2, 2, 2, 1}, // from I1
+    {2, 2, 2, 1}, // from I2
+    {2, 2, 2, 2}, // from I3
     {1, 1, 1, 2}, // from FP
   };
-
-#else // single issueq
-  const Cluster clusters[MAX_CLUSTERS] = {
-    {"all",  4, (FU_ALU0|FU_ALU1|FU_STU0|FU_STU1|FU_LDU0|FU_LDU1|FU_FPU0|FU_FPU1)},
-   };
-  const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {{0}};
-  const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {{64}};
-#endif // multi_issueq
 
 #endif // DECLARE_STRUCTURES
 
@@ -1694,11 +1658,7 @@ namespace SMTModel {
   // data store template; these must be in sync with the
   // corresponding definitions elsewhere.
   //
-#ifdef MULTI_IQ
-  static const char* cluster_names[MAX_CLUSTERS] = {"int0", "int1", "ld", "fp"};
-#else
-  static const char* cluster_names[MAX_CLUSTERS] = {"all"};
-#endif
+  static const char* cluster_names[MAX_CLUSTERS] = {"int1", "int2", "int3", "fp"};
 
   static const char* phys_reg_file_names[PHYS_REG_FILE_COUNT] = {"int", "fp", "st", "br"};
 };
@@ -1933,27 +1893,19 @@ struct SMTCoreStats { // rootnode:
       W64 br[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
     } source;
     struct width {
-#ifdef MULTI_IQ
-      W64 int0[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
       W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 ld[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int2[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int3[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
       W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-#else
-      W64 all[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-#endif
     } width;
   } issue;
 
   struct writeback {
     struct width {
-#ifdef MULTI_IQ
-      W64 int0[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
       W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 ld[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int2[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int3[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
       W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-#else
-      W64 all[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-#endif
     } width;
   } writeback;
 

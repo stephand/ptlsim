@@ -49,8 +49,14 @@ void IssueQueue<size, operandcount>::reset(int coreid) {
 
 template <int size, int operandcount>
 void IssueQueue<size, operandcount>::reset(int coreid, int threadid) {
-  this->coreid = coreid;
   SMTCore& core = getcore();
+
+  if unlikely (core.threadcount == 1) {
+    reset(coreid);
+    return;
+  }
+#ifndef MULTI_IQ
+  this->coreid = coreid;
 
   foreach (i, size) {
     if likely (valid[i]) { 
@@ -68,6 +74,7 @@ void IssueQueue<size, operandcount>::reset(int coreid, int threadid) {
       }
     }
   }
+#endif
 }
 
 template <int size, int operandcount>
@@ -263,7 +270,7 @@ int ReorderBufferEntry::issue() {
   ThreadContext& thread = getthread();
   SMTCoreEvent* event = null;
 
-  W32 executable_on_fu = opinfo[uop.opcode].fu & clusters[cluster].fu_mask & core.fu_avail;
+  W32 executable_on_fu = fuinfo[uop.opcode].fu & clusters[cluster].fu_mask & core.fu_avail;
 
   // Are any FUs available in this cycle?
   if unlikely (!executable_on_fu) {
@@ -298,7 +305,7 @@ int ReorderBufferEntry::issue() {
   fu = lsbindex(executable_on_fu);
   clearbit(core.fu_avail, fu);
   core.robs_on_fu[fu] = this;
-  cycles_left = opinfo[uop.opcode].latency;
+  cycles_left = fuinfo[uop.opcode].latency;
   changestate(thread.rob_issued_list[cluster]);
 
   IssueState state;
@@ -1085,8 +1092,12 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
   LoadStoreQueueEntry* sfra = null;
 
+#ifdef SMT_ENABLE_LOAD_HOISTING
   bool load_is_known_to_alias_with_store = (lsap(uop.rip) >= 0);
-
+#else
+  // For processors that cannot speculatively issue loads before unresolved stores:
+  bool load_is_known_to_alias_with_store = 1;
+#endif
   //
   // Search the store queue for the most recent store to the same address.
   //
@@ -1191,6 +1202,26 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     return ISSUE_NEEDS_REPLAY;
   }
 
+#ifdef ENFORCE_L1_DCACHE_BANK_CONFLICTS
+  foreach (i, thread.loads_in_this_cycle) {
+    W64 prevaddr = thread.load_to_store_parallel_forwarding_buffer[i];
+    //
+    // Replay any loads that collide on the same bank.
+    //
+    // Two or more loads from the exact same 8-byte chunk are still
+    // allowed since the chunk has been loaded anyway, so we might
+    // as well use it.
+    //
+    if unlikely ((prevaddr != state.physaddr) && (lowbits(prevaddr, log2(CacheSubsystem::L1_DCACHE_BANKS)) == lowbits(state.physaddr, log2(CacheSubsystem::L1_DCACHE_BANKS)))) {
+      if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_BANK_CONFLICT, this, null, addr);
+      per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.bank_conflict++);
+
+      replay();
+      load_store_second_phase = 1;
+      return ISSUE_NEEDS_REPLAY;
+    }
+  }
+#endif
   //
   // Guarantee that we have at least one LFRQ entry reserved for us.
   // Technically this is only needed later, but it simplifies the
@@ -1769,9 +1800,12 @@ void ReorderBufferEntry::release() {
   ThreadContext& thread = getthread();
   SMTCore& core = thread.core;
 
-  if (thread.issueq_count > core.reserved_iq_entries){
-    issueq_operation_on_cluster(core, cluster, free_shared_entry());
+  if unlikely (core.threadcount > 1) {
+    if (thread.issueq_count > core.reserved_iq_entries) {
+      issueq_operation_on_cluster(core, cluster, free_shared_entry());
+    }
   }
+
   thread.issueq_count--;
 
   iqslot = -1;
@@ -1934,9 +1968,11 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     //    issueq_operation_on_cluster(core, annulrob.cluster, annuluop(annulrob.get_tag()));
     bool rc;
     issueq_operation_on_cluster_with_result(core, annulrob.cluster, rc, annuluop(annulrob.get_tag()));  
-    if(rc){
-      if (thread.issueq_count > core.reserved_iq_entries){
-        issueq_operation_on_cluster(core, cluster, free_shared_entry());
+    if (rc) {
+      if unlikely (core.threadcount > 1) {
+        if (thread.issueq_count > core.reserved_iq_entries) {
+          issueq_operation_on_cluster(core, cluster, free_shared_entry());
+        }
       }
       thread.issueq_count--;
     }
@@ -2098,9 +2134,11 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
   if unlikely (cluster >= 0) {
     bool found = 0;
     issueq_operation_on_cluster_with_result(getcore(), cluster, found, annuluop(get_tag()));
-    if(found){
-      if (thread.issueq_count > core.reserved_iq_entries){
-        issueq_operation_on_cluster(core, cluster, free_shared_entry());
+    if (found) {
+      if unlikely (core.threadcount > 1) {
+        if (thread.issueq_count > core.reserved_iq_entries) {
+          issueq_operation_on_cluster(core, cluster, free_shared_entry());
+        }
       }
       thread.issueq_count--;
     }

@@ -235,8 +235,8 @@ int HYPERVISOR_callback_op(int cmd, void *arg) {
   return _hypercall2(int, callback_op, cmd, arg);
 }
 
-int HYPERVISOR_xenoprof_op(int op, unsigned long arg1, unsigned long arg2) {
-  return _hypercall3(int, xenoprof_op, op, arg1, arg2);
+int HYPERVISOR_xenoprof_op(int op, void *arg) {
+	return _hypercall2(int, xenoprof_op, op, arg);
 }
 
 int HYPERVISOR_event_channel_op(int cmd, void *arg) {
@@ -276,7 +276,7 @@ int current_vcpuid() {
 W64 hostreq_calls = 0;
 W64 hostreq_spins = 0;
 
-W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false, bool ignorerc = false) {
+W64s synchronous_host_call(const PTLsimHostCall& call, bool spin, bool ignorerc) {
   stringbuf sb;
   int rc;
   hostreq_calls++;
@@ -372,7 +372,10 @@ int switch_to_native(bool pause = false) {
   call.op = PTLSIM_HOST_SWITCH_TO_NATIVE;
   call.ready = 0;
   call.switch_to_native.pause = pause;
+
+  perfctrs_start();
   int rc = synchronous_host_call(call, true);
+  perfctrs_stop();
 
   HYPERVISOR_vm_assist(VMASST_CMD_disable, VMASST_TYPE_writable_pagetables);
 
@@ -758,6 +761,25 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
   asm("ud2a");
 
   abort();
+}
+
+//
+// Tracking of cycles and instructions in each mode
+//
+
+W64 cycles_at_last_mode_switch = 0;
+W64 insns_at_last_mode_switch = 0;
+
+void reset_mode_switch_delta_cycles_and_insns(W64& delta_cycles, W64& delta_insns) {
+  delta_cycles = (sim_cycle - cycles_at_last_mode_switch);
+  delta_insns = (total_user_insns_committed - insns_at_last_mode_switch);
+  cycles_at_last_mode_switch = sim_cycle;
+  insns_at_last_mode_switch = total_user_insns_committed;
+}
+
+void update_pre_run_stats() {
+  cycles_at_last_mode_switch = sim_cycle;
+  insns_at_last_mode_switch = total_user_insns_committed;
 }
 
 //
@@ -1461,9 +1483,15 @@ void handle_xen_hypercall_assist(Context& ctx) {
     iret_context iretctx;
     if (ctx.copy_from_user(&iretctx, ctx.commitarf[REG_rsp], sizeof(iretctx)) != sizeof(iretctx)) { abort(); }
 
-    if (logable(2)) logfile << "IRET from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ", (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", iretctx, " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl, flush;
+    if (logable(2)) {
+      logfile << "[vcpu ", ctx.vcpuid, "] IRET from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ",
+        (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", iretctx, " (", sim_cycle, " cycles, ",
+        total_user_insns_committed, " commits)", endl, flush;
+    }
 
-    if likely ((iretctx.cs & 3) == 3) {
+    bool return_to_user_mode = ((iretctx.cs & 3) == 3);
+
+    if likely (return_to_user_mode) {
       // Returning to user mode: toggle_guest_mode(v)
       assert(ctx.kernel_mode);
       iretctx.rflags = (iretctx.rflags & ~FLAG_IOPL) | (0x3 << 12);
@@ -1504,6 +1532,22 @@ void handle_xen_hypercall_assist(Context& ctx) {
 
     ctx.commitarf[REG_rax] = iretctx.rax;
 
+    if likely (return_to_user_mode) {
+      W64 delta_cycles, delta_insns;
+      W64 prev_cycles_at_last_mode_switch = cycles_at_last_mode_switch;
+      W64 prev_insns_at_last_mode_switch = insns_at_last_mode_switch;
+      reset_mode_switch_delta_cycles_and_insns(delta_cycles, delta_insns);
+
+      if (logable(2)) {
+        logfile << "[vcpu ", ctx.vcpuid, "] Switch to ", (ctx.use64 ? "user64" : "user32"), " mode at ",
+          sim_cycle, " cycles, ", total_user_insns_committed, " insns", " (previous mode ", "kernel64",
+          ": abs ", prev_cycles_at_last_mode_switch, " cycles, ", prev_insns_at_last_mode_switch, " insns; ",
+          "delta ", delta_cycles, " cycles, ", delta_insns, " insns)", endl;
+      }
+
+      stats.external.cycles_in_mode.kernel64 += delta_cycles;
+      stats.external.insns_in_mode.kernel64 += delta_insns;
+    }
   } else {
     int rc = handle_xen_hypercall(ctx, hypercallid, arg1, arg2, arg3, arg4, arg5, arg6);
     ctx.commitarf[REG_rax] = rc;
@@ -1559,7 +1603,29 @@ static inline bool push_on_kernel_stack(Context& ctx, Waddr& p, Waddr data) {
 // everywhere a stack frame word is pushed.
 //
 bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
-  // Save old regs
+  if likely (!kernel_mode) {
+    //
+    // Switch from user mode to kernel mode
+    //
+    W64 delta_cycles, delta_insns;
+    W64 prev_cycles_at_last_mode_switch = cycles_at_last_mode_switch;
+    W64 prev_insns_at_last_mode_switch = insns_at_last_mode_switch;
+    reset_mode_switch_delta_cycles_and_insns(delta_cycles, delta_insns);
+
+    if (logable(2)) {
+      logfile << "[vcpu ", vcpuid, "] Switch to kernel64 mode at ", sim_cycle, " cycles, ", total_user_insns_committed, " insns",
+        " (previous mode ", (use64 ? "user64" : "user32"), ": abs ", prev_cycles_at_last_mode_switch, " cycles, ",
+        prev_insns_at_last_mode_switch, " insns; ", "delta ", delta_cycles, " cycles, ", delta_insns, " insns)", endl;
+    }
+
+    if likely (use64) {
+      stats.external.cycles_in_mode.user64 += delta_cycles;
+      stats.external.insns_in_mode.user64 += delta_insns;
+    } else {
+      stats.external.cycles_in_mode.user32 += delta_cycles;
+      stats.external.insns_in_mode.user32 += delta_insns;
+    }
+  }
 
   // If in kernel context already, push new frame at existing rsp:
   Waddr frame = (kernel_mode) ? commitarf[REG_rsp] : kernel_sp;
@@ -1803,6 +1869,8 @@ void collect_sysinfo(PTLsimStats& stats) {
 
 void wait_for_secondary_vcpus();
 
+int cpu_type = CPU_TYPE_UNKNOWN;
+
 //
 // Bring up PTLsim subsystems on the bare hardware,
 // using only Xen hypercalls until we can establish
@@ -1873,6 +1941,11 @@ void ptlsim_init() {
   // Make page at base of stack read-only (guard against overflows):
   //
   make_ptl_page_writable((byte*)bootinfo.stack_top - bootinfo.stack_size, 0);
+
+  //
+  // Determine CPU type
+  //
+  cpu_type = get_cpu_type();
 
   //
   // Enable upcalls
@@ -2059,7 +2132,6 @@ void resume_from_native() {
   sti();
 
   inject_ptlsim_into_toplevel(get_cr3_mfn());
-  // switch_page_table(contextof(0).cr3 >> 12);
 
   //
   // Flush the basic block cache, since code pages could
@@ -2101,7 +2173,17 @@ void print_sysinfo(ostream& os) {
   os << "  PTLsim is running across ", contextcount, " VCPUs:", endl;
 
   const vcpu_time_info_t& timeinfo = shinfo.vcpu_info[0].time;
+  os << "  Physical CPU type: ", get_cpu_type_name(cpu_type), endl;
   os << "  VCPU 0 core frequency: ", (get_core_freq_hz(timeinfo) / 1000000), " MHz", endl;
+  os << "  Physical CPU affinity for all VCPUs:";
+  if (bootinfo.phys_cpu_affinity == bitmask(32)) {
+    os << " all", endl;
+  } else {
+    foreach (i, 64) {
+      if (bit(bootinfo.phys_cpu_affinity, i)) os << ' ', i;
+    }
+    os << endl;
+  }
 
   os << "Memory Layout:", endl;
   print_meminfo_line(os, "System:",          bootinfo.total_machine_pages);
@@ -2300,6 +2382,7 @@ int main(int argc, char** argv) {
     if (!time_init_done) {
       time_init_done = 1;
       time_and_virq_resume();
+      perfctrs_init();
     }
 
     bool run = xchg(config.run, false);
@@ -2317,7 +2400,14 @@ int main(int argc, char** argv) {
       if (logfile) logfile << sb;
     }
 
+    if unlikely (config.force_native && run) {
+      logfile << "Warning: -force-native in effect, so ignoring request to do simulation run", endl, flush;
+      run = 0;
+      native = 1;
+    }
+
     if (run) {
+      update_pre_run_stats();
       update_time();
       bootinfo.abort_request = 0;
       simulate(config.core_name);
@@ -2355,6 +2445,7 @@ int main(int argc, char** argv) {
       //
       // Reinitialize anything that could have changed while we were out of the loop.
       //
+      perfctrs_dump(logfile);
       resume_from_native();
       time_init_done = 0;
 

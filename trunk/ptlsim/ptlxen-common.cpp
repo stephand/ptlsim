@@ -330,3 +330,43 @@ ostream& operator <<(ostream& os, const shared_info& si) {
 
   return os;
 }
+
+int get_cpu_type() {
+  int cpu_type = CPU_TYPE_UNKNOWN;
+
+  W32 max_cpuid_funcs;
+  CPUVendorID vendor;
+  memset(&vendor, 0, sizeof(vendor));
+  cpuid(0, max_cpuid_funcs, vendor.data[0], vendor.data[2], vendor.data[1]);
+
+  if (strequal(vendor.text, "AuthenticAMD")) {
+    // All 64-bit capable AMD CPUs are K8's - we wouldn't be running if not
+    cpu_type = CPU_TYPE_AMD_K8;
+  } else if (strequal(vendor.text, "GenuineIntel")) {
+    // Currently only late-model P4's and Core 2 are 64-bit capable:
+    W32 modelinfo, miscinfo, features, ecx;
+    cpuid(1, modelinfo, miscinfo, ecx, features);
+    switch (bits(modelinfo, 8, 4)) {
+    case 0x6:
+      cpu_type = CPU_TYPE_INTEL_CORE2; break;
+    case 0xf:
+      cpu_type = CPU_TYPE_INTEL_PENTIUM4; break;
+    default:
+      cpu_type = CPU_TYPE_UNKNOWN; break;
+    }
+  }
+
+  return cpu_type;
+}
+
+const char* get_cpu_type_name(int cputype) {
+  static const char* names[CPU_TYPE_COUNT] = {
+    "Unknown",
+    "AMD K8 (Opteron, Athlon 64, Turion)",
+    "Intel Core 2",
+    "Intel Pentium 4 EM64T"
+  };
+
+  if unlikely (!inrange(cputype, 0, CPU_TYPE_COUNT-1)) return "Unknown";
+  return names[cputype];
+}

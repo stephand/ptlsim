@@ -25,16 +25,222 @@
 #endif
 
 namespace OutOfOrderModel {
+  //
+  // Operand formats
+  //
   static const int MAX_OPERANDS = 4;
   static const int RA = 0;
   static const int RB = 1;
   static const int RC = 2;
   static const int RS = 3;
-  
+
   //
-  // NOTE: This file only specifies the configuration for the out of order core;
-  // the uops and functional units are declared in ptlhwdef.h and ptlhwdef.cpp
+  // Uop to functional unit mappings
   //
+  static const int FU_COUNT = 8;
+  static const int LOADLAT = 2;
+
+  enum {
+    FU_LDU0       = (1 << 0),
+    FU_STU0       = (1 << 1),
+    FU_LDU1       = (1 << 2),
+    FU_STU1       = (1 << 3),
+    FU_ALU0       = (1 << 4),
+    FU_FPU0       = (1 << 5),
+    FU_ALU1       = (1 << 6),
+    FU_FPU1       = (1 << 7),
+  };
+
+  static const int LOAD_FU_COUNT = 2;
+
+  const char* fu_names[FU_COUNT] = {
+    "ldu0",
+    "stu0",
+    "ldu1",
+    "stu1",
+    "alu0",
+    "fpu0",
+    "alu1",
+    "fpu1",
+  };
+
+  //
+  // Opcodes and properties
+  //
+#define ALU0 FU_ALU0
+#define ALU1 FU_ALU1
+#define STU0 FU_STU0
+#define STU1 FU_STU1
+#define LDU0 FU_LDU0
+#define LDU1 FU_LDU1
+#define FPU0 FU_FPU0
+#define FPU1 FU_FPU1
+#define A 1 // ALU latency, assuming fast bypass
+#define L LOADLAT
+
+#define ANYALU ALU0|ALU1
+#define ANYLDU LDU0|LDU1
+#define ANYSTU STU0|STU1
+#define ANYFPU FPU0|FPU1
+#define ANYINT ANYALU|ANYSTU|ANYLDU
+
+  struct FunctionalUnitInfo {
+    byte opcode;   // Must match definition in ptlhwdef.h and ptlhwdef.cpp! 
+    byte latency;  // Latency in cycles, assuming ideal bypass
+    W16  fu;       // Map of functional units on which this uop can issue
+  };
+
+  //
+  // WARNING: This table MUST be kept in sync with the table
+  // in ptlhwdef.cpp and the uop enum in ptlhwdef.h!
+  //
+  const FunctionalUnitInfo fuinfo[OP_MAX_OPCODE] = {
+    // name, latency, fumask
+    {OP_nop,            A, ANYINT|ANYFPU},
+    {OP_mov,            A, ANYINT|ANYFPU},
+    // Logical
+    {OP_and,            A, ANYINT|ANYFPU},
+    {OP_andnot,         A, ANYINT|ANYFPU},
+    {OP_xor,            A, ANYINT|ANYFPU},
+    {OP_or,             A, ANYINT|ANYFPU},
+    {OP_nand,           A, ANYINT|ANYFPU},
+    {OP_ornot,          A, ANYINT|ANYFPU},
+    {OP_eqv,            A, ANYINT|ANYFPU},
+    {OP_nor,            A, ANYINT|ANYFPU},
+    // Mask, insert or extract bytes
+    {OP_maskb,          A, ANYINT},
+    // Add and subtract
+    {OP_add,            A, ANYINT},
+    {OP_sub,            A, ANYINT},
+    {OP_adda,           A, ANYINT},
+    {OP_suba,           A, ANYINT},
+    {OP_addm,           A, ANYINT},
+    {OP_subm,           A, ANYINT},
+    // Condition code logical ops
+    {OP_andcc,          A, ANYINT},
+    {OP_orcc,           A, ANYINT},
+    {OP_xorcc,          A, ANYINT},
+    {OP_ornotcc,        A, ANYINT},
+    // Condition code movement and merging
+    {OP_movccr,         A, ANYINT},
+    {OP_movrcc,         A, ANYINT},
+    {OP_collcc,         A, ANYINT},
+    // Simple shifting (restricted to small immediate 1..8)
+    {OP_shls,           A, ANYINT},
+    {OP_shrs,           A, ANYINT},
+    {OP_bswap,          A, ANYINT},
+    {OP_sars,           A, ANYINT},
+    // Bit testing
+    {OP_bt,             A, ANYALU},
+    {OP_bts,            A, ANYALU},
+    {OP_btr,            A, ANYALU},
+    {OP_btc,            A, ANYALU},
+    // Set and select
+    {OP_set,            A, ANYINT},
+    {OP_set_sub,        A, ANYINT},
+    {OP_set_and,        A, ANYINT},
+    {OP_sel,            A, ANYINT},
+    // Branches
+    {OP_br,             A, ANYINT},
+    {OP_br_sub,         A, ANYINT},
+    {OP_br_and,         A, ANYINT},
+    {OP_jmp,            A, ANYINT},
+    {OP_bru,            A, ANYINT},
+    {OP_jmpp,           A, ANYALU|ANYLDU},
+    {OP_brp,            A, ANYALU|ANYLDU},
+    // Checks
+    {OP_chk,            A, ANYINT},
+    {OP_chk_sub,        A, ANYINT},
+    {OP_chk_and,        A, ANYINT},
+    // Loads and stores
+    {OP_ld,             L, ANYLDU},
+    {OP_ldx,            L, ANYLDU},
+    {OP_ld_pre,         1, ANYLDU},
+    {OP_st,             1, ANYSTU},
+    {OP_mf,             1, STU0  },
+    // Shifts, rotates and complex masking
+    {OP_shl,            A, ANYALU},
+    {OP_shr,            A, ANYALU},
+    {OP_mask,           A, ANYALU},
+    {OP_sar,            A, ANYALU},
+    {OP_rotl,           A, ANYALU},  
+    {OP_rotr,           A, ANYALU},   
+    {OP_rotcl,          A, ANYALU},
+    {OP_rotcr,          A, ANYALU},  
+    // Multiplication
+    {OP_mull,           4, ANYFPU},
+    {OP_mulh,           4, ANYFPU},
+    {OP_mulhu,          4, ANYFPU},
+    // Bit scans
+    {OP_ctz,            3, ANYFPU},
+    {OP_clz,            3, ANYFPU},
+    {OP_ctpop,          3, ANYFPU},  
+    {OP_permb,          4, ANYFPU},
+    // Floating point
+    // uop.size bits have following meaning:
+    // 00 = single precision, scalar (preserve high 32 bits of ra)
+    // 01 = single precision, packed (two 32-bit floats)
+    // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
+    {OP_addf,           6, ANYFPU},
+    {OP_subf,           6, ANYFPU},
+    {OP_mulf,           6, ANYFPU},
+    {OP_maddf,          6, ANYFPU},
+    {OP_msubf,          6, ANYFPU},
+    {OP_divf,           6, ANYFPU},
+    {OP_sqrtf,          6, ANYFPU},
+    {OP_rcpf,           6, ANYFPU},
+    {OP_rsqrtf,         6, ANYFPU},
+    {OP_minf,           4, ANYFPU},
+    {OP_maxf,           4, ANYFPU},
+    {OP_cmpf,           4, ANYFPU},
+    // For fcmpcc, uop.size bits have following meaning:
+    // 00 = single precision ordered compare
+    // 01 = single precision unordered compare
+    // 10 = double precision ordered compare
+    // 11 = double precision unordered compare
+    {OP_cmpccf,         4, ANYFPU},
+    // and/andn/or/xor are done using integer uops
+    {OP_permf,          3, ANYFPU}, // shuffles
+    // For these conversions, uop.size bits select truncation mode:
+    // x0 = normal IEEE-style rounding
+    // x1 = truncate to zero
+    {OP_cvtf_i2s_ins,   6, ANYFPU},
+    {OP_cvtf_i2s_p,     6, ANYFPU},
+    {OP_cvtf_i2d_lo,    6, ANYFPU},
+    {OP_cvtf_i2d_hi,    6, ANYFPU},
+    {OP_cvtf_q2s_ins,   6, ANYFPU},
+    {OP_cvtf_q2d,       6, ANYFPU},
+    {OP_cvtf_s2i,       6, ANYFPU},
+    {OP_cvtf_s2q,       6, ANYFPU},
+    {OP_cvtf_s2i_p,     6, ANYFPU},
+    {OP_cvtf_d2i,       6, ANYFPU},
+    {OP_cvtf_d2q,       6, ANYFPU},
+    {OP_cvtf_d2i_p,     6, ANYFPU},
+    {OP_cvtf_d2s_ins,   6, ANYFPU},
+    {OP_cvtf_d2s_p,     6, ANYFPU},
+    {OP_cvtf_s2d_lo,    6, ANYFPU},
+    {OP_cvtf_s2d_hi,    6, ANYFPU},
+  };
+
+#undef A
+#undef L
+#undef F
+
+#undef ALU0
+#undef ALU1
+#undef STU0
+#undef STU1
+#undef LDU0
+#undef LDU1
+#undef FPU0
+#undef FPU1
+#undef L
+
+#undef ANYALU
+#undef ANYLDU
+#undef ANYSTU
+#undef ANYFPU
+#undef ANYINT
   
   //
   // Global limits

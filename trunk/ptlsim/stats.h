@@ -42,6 +42,16 @@
 //
 static const int MAX_SIMULATED_VCPUS = 4;
 
+struct EventsInMode { // rootnode: summable
+  W64 user64;
+  W64 user32;
+  W64 kernel64;
+  W64 kernel32;
+  W64 legacy16;
+  W64 microcode;
+  W64 idle;
+};
+
 struct PTLsimStats { // rootnode:
   W64 snapshot_uuid;
   char snapshot_name[64];
@@ -143,6 +153,11 @@ struct PTLsimStats { // rootnode:
   struct external {
     W64 assists[ASSIST_COUNT]; // label: assist_names
     W64 traps[256]; // label: x86_exception_names
+#ifdef PTLSIM_HYPERVISOR
+    EventsInMode cycles_in_mode;
+    EventsInMode insns_in_mode;
+    EventsInMode uops_in_mode;
+#endif
   } external;
 };
 

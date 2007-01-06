@@ -261,7 +261,7 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
     if unlikely (icache) per_context_dcache_stats_update(mb.threadid, fetch.hit.L2++); else per_context_dcache_stats_update(mb.threadid, load.hit.L2++);
     return idx;
   }
-
+#ifdef ENABLE_L3_CACHE
   bool L3hit = hierarchy.L3.probe(addr);
   if likely (L3hit) {
     if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", idx, ": enter state deliver to L2 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
@@ -274,6 +274,12 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
   if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", idx, ": enter state deliver to L3 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
   mb.state = STATE_DELIVER_TO_L3;
   mb.cycles = MAIN_MEM_LATENCY;
+#else
+  // L3 cache disabled
+  if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", idx, ": enter state deliver to L2 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
+  mb.state = STATE_DELIVER_TO_L2;
+  mb.cycles = MAIN_MEM_LATENCY;
+#endif
 
   if unlikely (icache) per_context_dcache_stats_update(mb.threadid, fetch.hit.mem++); else per_context_dcache_stats_update(mb.threadid, load.hit.mem++);
 
@@ -314,6 +320,7 @@ void MissBuffer<SIZE>::clock() {
     switch (mb.state) {
     case STATE_IDLE:
       break;
+#ifdef ENABLE_L3_CACHE
     case STATE_DELIVER_TO_L3: {
       if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L3 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
       mb.cycles--;
@@ -325,6 +332,7 @@ void MissBuffer<SIZE>::clock() {
       }
       break;
     }
+#endif
     case STATE_DELIVER_TO_L2: {
       if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", i, ": deliver ", (void*)(Waddr)mb.addr, " to L2 (", mb.cycles, " cycles left) (iter ", iterations, ")", endl;
       mb.cycles--;
@@ -637,7 +645,9 @@ void CacheHierarchy::clock() {
     L1.clearstats();
     L1I.clearstats();
     L2.clearstats();
+#ifdef ENABLE_L3_CACHE
     L3.clearstats();
+#endif
     logfile << "Clearing cache statistics to prevent wraparound...", endl, flush;
   }
 
@@ -658,7 +668,9 @@ void CacheHierarchy::complete(int threadid) {
 void CacheHierarchy::reset() {
   lfrq.reset();
   missbuf.reset();
+#ifdef ENABLE_L3_CACHE
   L3.reset();
+#endif
   L2.reset();
   L1.reset();
   L1I.reset();

@@ -20,6 +20,7 @@ typedef W16 domid_t;
 #include <xen-types.h>
 #include <xen/linux/privcmd.h>
 #include <xen/linux/evtchn.h>
+#include <xen/platform.h>
 
 #define PTLSIM_IN_PTLMON
 #include <ptlxen.h>
@@ -113,6 +114,47 @@ static int xc_evtchn_unmask(int xc, int localport) {
   evtchn_unmask_t req;
   req.port = localport;
   int rc = do_evtchn_op(xc, EVTCHNOP_unmask, &req, sizeof(req));
+  return rc;
+}
+
+static int do_msr_op(int xc, int cmd, int cpu, W32 index, W64& value) {
+  int rc = -1;
+  privcmd_hypercall_t hypercall;
+  xen_platform_op_t op;
+  op.cmd = cmd;
+  op.interface_version = XENPF_INTERFACE_VERSION;
+  op.u.msr.cpu = cpu;
+  op.u.msr.index = index;
+  op.u.msr.value = value;
+
+  hypercall.op     = __HYPERVISOR_platform_op;
+  hypercall.arg[0] = W64(&op);
+  
+  if (mlock(&op, sizeof(op))) goto out;
+
+  rc = do_xen_hypercall(xc, &hypercall);
+#if 0
+  cerr << "do_msr_op(", cmd, ", ", cpu, ", ", (void*)index, ", value ", (void*)value, "): "
+    "hypercall rc ", rc, ", msr rc ", op.u.msr.rc, ", new value ", (void*)op.u.msr.value, endl, flush;
+#endif
+
+  value = op.u.msr.value;
+
+  if (!rc) rc = op.u.msr.rc;
+
+  munlock(&op, sizeof(op));
+  out:
+  return rc;
+}
+
+static W64 rdmsr(int xc, int cpu, W32 index) {
+  W64 value = 0;
+  int rc = do_msr_op(xc, XENPF_rdmsr, cpu, index, value);
+  return value;
+}
+
+static int wrmsr(int xc, int cpu, W32 index, W64 value) {
+  int rc = do_msr_op(xc, XENPF_wrmsr, cpu, index, value);
   return rc;
 }
 
@@ -310,6 +352,9 @@ struct XenController {
   W64 xen_hypervisor_start_va;
   int page_table_levels;
   Context* ctx;
+  W64 phys_cpu_affinity;
+
+  int cpu_type;
 
   XenController() { reset(); }
 
@@ -319,6 +364,7 @@ struct XenController {
     bootinfo = null;
     ctx = null;
     next_upcall_uuid = 1;
+    cpu_type = CPU_TYPE_UNKNOWN;
   }
 
   void* map_pages(mfn_t* mfns, size_t count, int prot = PROT_READ, void* base = null, int flags = 0) {
@@ -584,6 +630,7 @@ struct XenController {
     bootinfo->ptl_pagedir_mfn_count = ptl_pagedir_mfn_count;
     bootinfo->shared_info_mfn = info.shared_info_frame;
     bootinfo->total_machine_pages = total_machine_pages;
+    bootinfo->phys_cpu_affinity = phys_cpu_affinity;
 
     alloc_pages(Level1PTE, ptl_level1, ptl_level1_pfn, ptl_pagedir_mfn_count);
 
@@ -921,6 +968,7 @@ struct XenController {
     int rc;
 
     reset();
+    cpu_type = get_cpu_type();
 
     this->domain = domain;
     xc = xc_interface_open();
@@ -964,12 +1012,21 @@ struct XenController {
       return false;
     }
 
+    xen_sysctl_t sysinfo;
+    sysinfo.cmd = XEN_SYSCTL_physinfo;
+    sysinfo.interface_version = XEN_SYSCTL_INTERFACE_VERSION;
+    assert(xc_sysctl(xc, &sysinfo) == 0);
+
     if (DEBUG) {
       cerr << "Xen Information:", endl;
       cerr << "  Running on Xen version ", xen_caps, endl;
       cerr << "  Total machine physical pages: ", total_machine_pages, " (", ((total_machine_pages * PAGE_SIZE) / 1024), " KB host physical memory)", endl;
       cerr << "  Xen is mapped at virtual address ", (void*)(Waddr)xen_hypervisor_start_va, endl;
       cerr << "  Page table has ", page_table_levels, " levels", endl;
+      cerr << "  Machine has ", sysinfo.u.physinfo.nr_nodes, " nodes, ", sysinfo.u.physinfo.sockets_per_node, " sockets/node, ", 
+        sysinfo.u.physinfo.cores_per_socket, " cores/socket, ", sysinfo.u.physinfo.threads_per_core, " threads/core", endl;
+      cerr << "  Core frequency: ", (sysinfo.u.physinfo.cpu_khz / 1000), " MHz", endl;
+      cerr << "  Core type: ", get_cpu_type_name(cpu_type), endl;
     }
 
     //
@@ -990,6 +1047,14 @@ struct XenController {
       cerr << "PTLsim error: cannot access domain ", domain, " (error ", rc, ")", endl,
         "Please make sure the specified domain is running.", endl, endl;
       return false;
+    }
+
+    phys_cpu_affinity = 0;
+    foreach (i, vcpu_count) {
+      uint64_t map = 0;
+      int rc = xc_vcpu_getaffinity(xc, domain, i, &map);
+      if (DEBUG) cerr << "  VCPU ", i, " has affinity map ", bitstring(map, 64, true), endl;
+      phys_cpu_affinity |= map;
     }
 
     if (DEBUG) cerr << "PTLsim has connected to domain ", domain, ":", endl;
@@ -1283,8 +1348,8 @@ struct XenController {
     bootinfo->hostreq.ready = 0;
 
     // cerr << "process_event: hostreq op ", bootinfo->hostreq.op, ", syscall_id ", bootinfo->hostreq.syscall.syscallid, endl, flush;
-    
-    switch (bootinfo->hostreq.op) {
+
+    switch (op) {
     case PTLSIM_HOST_SYSCALL: {
       W64 syscall = bootinfo->hostreq.syscall.syscallid;
       W64 arg1 = bootinfo->hostreq.syscall.arg1;
@@ -1388,6 +1453,78 @@ struct XenController {
       bootinfo->hostreq.rc = flush_upcall_queue(bootinfo->hostreq.flush_upcall_queue.uuid_limit);
       break;
     }
+    case PTLSIM_HOST_SETUP_PERFCTRS:
+    case PTLSIM_HOST_WRITE_PERFCTRS: {
+      if (cpu_type == CPU_TYPE_UNKNOWN) {
+        bootinfo->hostreq.rc = -ENOSYS;
+        break;
+      }
+
+      W32 cpu = bootinfo->hostreq.perfctr.cpu;
+      W32 index = bootinfo->hostreq.perfctr.index;
+      W64 value = bootinfo->hostreq.perfctr.value;
+
+      W32 setup_msr_base;
+      W32 readout_msr_base;
+      W32 counter_count;
+
+      switch (cpu_type) {
+      case CPU_TYPE_AMD_K8:
+        setup_msr_base = 0xc0010000;
+        readout_msr_base = 0xc0010004;
+        counter_count = 4;
+        break;
+      case CPU_TYPE_INTEL_CORE2:
+      case CPU_TYPE_INTEL_PENTIUM4:
+        setup_msr_base = 0x186;
+        readout_msr_base = 0xc1;
+        counter_count = 2;
+        break;
+      default:
+        // Not supported
+        assert(false);
+      }
+
+      if (index >= counter_count) {
+        cerr << "ptlmon: perfctr request: counter ", index, " is greater than this processor's limit of ", counter_count, endl, flush;
+        bootinfo->hostreq.rc = -E2BIG;
+        break;
+      }
+
+      if ((cpu >= 64) | (!bit(phys_cpu_affinity, cpu))) {
+        cerr << "ptlmon: perfctr request: cpu ", cpu, " is not in this domain's affinity set", endl, flush;
+        bootinfo->hostreq.rc = -E2BIG;
+        break;
+      }
+      // Hypervisor will check if physical processor <cpu> is valid and online
+
+      if (op == PTLSIM_HOST_SETUP_PERFCTRS) {
+        // Make sure the guest can't turn on dangerous things like pin toggling or overflow interrupts
+        static const W64 perfctr_safe_mask = ~((1ULL << 21) | (1ULL << 20) | (1ULL << 19));
+        value &= perfctr_safe_mask;
+        bootinfo->hostreq.rc = wrmsr(xc, cpu, setup_msr_base + index, value);
+        // cerr << "ptlmon: setup_perfctrs: cpu ", cpu, ", counter ", index, " (msr ", (void*)(setup_msr_base + index), "), value ", (void*)value, " => rc ", bootinfo->hostreq.rc, endl, flush;
+      } else {
+        assert(op == PTLSIM_HOST_WRITE_PERFCTRS);
+        bootinfo->hostreq.rc = wrmsr(xc, cpu, readout_msr_base + index, value);
+        // cerr << "ptlmon: write_perfctrs: cpu ", cpu, ", counter ", index, " (msr ", (void*)(setup_msr_base + index), "), value ", value, " => rc ", bootinfo->hostreq.rc, endl, flush;
+      }
+      break;
+    };
+    PTLSIM_HOST_FLUSH_CACHE: {
+      // Only dom0 is allowed to do cache flush
+      mmuext_op_t fc;
+      int ok = 0;
+      fc.cmd = MMUEXT_FLUSH_CACHE;
+      fc.arg1.linear_addr = 0;
+      fc.arg2.vcpuid = 0;
+      
+      int rc = xc_mmuext_op(xc, &fc, 1, domain);
+      assert(rc == 0);
+      assert(ok == 1);
+
+      break;
+    };
     default:
       bootinfo->hostreq.rc = (W64)-ENOSYS;
     };

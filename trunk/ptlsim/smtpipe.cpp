@@ -391,18 +391,27 @@ bool ThreadContext::fetch() {
       break;
     }
 
-    if ((issueq_count + fetchcount) >= core.reserved_iq_entries) {
-      bool empty = false;
-      issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
-      if (empty) {
-        // no shared entries left, stop fetching
-        break;
+#ifndef MULTI_IQ
+    if unlikely (core.threadcount > 1) {
+      if ((issueq_count + fetchcount) >= core.reserved_iq_entries) {
+        bool empty = false;
+        issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
+        //
+        //++MTY FIXME starvation occurs when only one thread is in running state:
+        // we should re-balance reserved pool depending on number of running threads,
+        // not total number of threads!
+        //
+        if (empty) {
+          // no shared entries left, stop fetching
+          break;
+        } else {
+          // found a shared entry: continue fetching
+        }
       } else {
-        // found a shared entry: continue fetching
-      }
-    } else {
-      // still have reserved entries left, continue fetching
-    } 
+        // still have reserved entries left, continue fetching
+      } 
+    }
+#endif
 
     if unlikely ((fetchrip.rip == config.start_log_at_rip) && (fetchrip.rip != 0xffffffffffffffffULL)) {
       config.start_log_at_iteration = 0;
@@ -1189,29 +1198,37 @@ int ThreadContext::dispatch() {
         event = core.eventlog.add(EVENT_DISPATCH_NO_CLUSTER, rob);
         foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
       }
+#if 0
 #ifdef MULTI_IQ
       continue; // try the next uop to avoid deadlock on re-dispatches
 #else
       break;
 #endif
+#endif
+      break;
     }
 
-    // check if we can use this cluster:
-    if (issueq_count >= core.reserved_iq_entries) {
-      bool empty = false;
-      issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
-      if(empty) {
-        // no shared entries left, stop dispatch
-        break;
+#ifndef MULTI_IQ
+    if unlikely (core.threadcount > 1) {
+      // check if we can use this cluster:
+      if (issueq_count >= core.reserved_iq_entries) {
+        bool empty = false;
+        issueq_operation_on_cluster_with_result(core, cluster, empty, shared_empty());
+        if (empty) {
+          // no shared entries left, stop dispatch
+          break;
+        } else {
+          // one or more shared entries left, continue dispatch
+          issueq_operation_on_cluster(core, cluster, alloc_reserved_entry());
+        }
       } else {
-        // one or more shared entries left, continue dispatch
-        issueq_operation_on_cluster(core, cluster, alloc_resered_entry());
-      }
-    } else {
-      // still have reserved entries left, continue dispatch
-    } 
+        // still have reserved entries left, continue dispatch
+      } 
+    }
+#endif
 
     int operands_still_needed = rob->find_sources();
+
     if likely (operands_still_needed) {
       rob->changestate(rob_dispatched_list[rob->cluster]);
     } else {
