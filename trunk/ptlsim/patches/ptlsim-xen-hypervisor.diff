@@ -388,7 +388,6 @@ diff -r f0ba459065d3 xen/arch/x86/time.c
           this_cpu(cpu_time).local_tsc_stamp )
          __update_vcpu_system_time(v);
  }
-@@ -912,6 +923,142 @@
 diff -r f0ba459065d3 xen/arch/x86/traps.c
 --- a/xen/arch/x86/traps.c	Fri Nov 17 02:47:28 2006
 +++ b/xen/arch/x86/traps.c	Sun Jan  7 00:12:24 2007
