@@ -1,32 +1,48 @@
-diff -r c4f3f719d997 tools/python/xen/xend/XendCheckpoint.py
---- a/tools/python/xen/xend/XendCheckpoint.py	Sat Sep 23 13:54:58 2006
-+++ b/tools/python/xen/xend/XendCheckpoint.py	Sun Oct  8 01:20:36 2006
-@@ -111,7 +111,9 @@
+diff -r f0ba459065d3 tools/python/xen/xend/XendCheckpoint.py
+--- a/tools/python/xen/xend/XendCheckpoint.py	Fri Nov 17 02:47:28 2006
++++ b/tools/python/xen/xend/XendCheckpoint.py	Sun Jan  7 00:59:54 2007
+@@ -108,7 +108,7 @@
          raise Exception, exn
  
  
--def restore(xd, fd):
-+def restore(xd, fd, paused):
-+    log.info("XendCheckpoint.restore(fd %d, %d)", fd, paused);
-+    
+-def restore(xd, fd, dominfo = None):
++def restore(xd, fd, dominfo = None, paused = 0):
      signature = read_exact(fd, len(SIGNATURE),
          "not a valid guest state file: signature read")
      if signature != SIGNATURE:
-@@ -163,7 +165,9 @@
+@@ -164,7 +164,8 @@
  
-         #Block until src closes connection
-         os.read(fd, 1)
+         os.read(fd, 1)           # Wait for source to close connection
+         dominfo.waitForDevices() # Wait for backends to set up
 -        dominfo.unpause()
-+
 +        if paused == 0:
 +            dominfo.unpause()
          
          dominfo.completeRestore(handler.store_mfn, handler.console_mfn)
          
-diff -r c4f3f719d997 tools/python/xen/xend/XendDomain.py
---- a/tools/python/xen/xend/XendDomain.py	Sat Sep 23 13:54:58 2006
-+++ b/tools/python/xen/xend/XendDomain.py	Sun Oct  8 01:20:36 2006
-@@ -240,7 +240,7 @@
+diff -r f0ba459065d3 tools/python/xen/xend/XendConfig.py
+--- a/tools/python/xen/xend/XendConfig.py	Fri Nov 17 02:47:28 2006
++++ b/tools/python/xen/xend/XendConfig.py	Sun Jan  7 00:59:54 2007
+@@ -154,6 +154,7 @@
+     ('bootloader_args', str),
+     ('features', str),
+     ('localtime', int),
++    ('paused_at_startup', int),
+ ]
+ ROUNDTRIPPING_CONFIG_ENTRIES += VM_CONFIG_ENTRIES
+ 
+@@ -207,6 +208,7 @@
+     ('security',     lambda info: []),
+     ('on_xend_start', lambda info: 'ignore'),    
+     ('on_xend_stop', lambda info: 'ignore'),
++    ('paused_at_startup', lambda info: 0),            
+ 
+     ('cpus',         lambda info: []),
+     ('cpu_cap',      lambda info: 0),
+diff -r f0ba459065d3 tools/python/xen/xend/XendDomain.py
+--- a/tools/python/xen/xend/XendDomain.py	Fri Nov 17 02:47:28 2006
++++ b/tools/python/xen/xend/XendDomain.py	Sun Jan  7 00:59:54 2007
+@@ -915,7 +915,7 @@
          # !!!
          raise XendError("Unsupported")
  
@@ -34,8 +50,8 @@ diff -r c4f3f719d997 tools/python/xen/xend/XendDomain.py
 +    def domain_restore(self, src, paused):
          """Restore a domain from file.
  
-         @param src:      source file
-@@ -249,18 +249,18 @@
+         @param src: filename of checkpoint file to restore from
+@@ -927,14 +927,14 @@
          try:
              fd = os.open(src, os.O_RDONLY)
              try:
@@ -49,7 +65,11 @@ diff -r c4f3f719d997 tools/python/xen/xend/XendDomain.py
  
 -    def domain_restore_fd(self, fd):
 +    def domain_restore_fd(self, fd, paused):
-         """Restore a domain from the given file descriptor."""
+         """Restore a domain from the given file descriptor.
+ 
+         @param fd: file descriptor of the checkpoint file
+@@ -944,7 +944,7 @@
+         """
  
          try:
 -            return XendCheckpoint.restore(self, fd)
@@ -57,9 +77,38 @@ diff -r c4f3f719d997 tools/python/xen/xend/XendDomain.py
          except:
              # I don't really want to log this exception here, but the error
              # handling in the relocation-socket handling code (relocate.py) is
-diff -r c4f3f719d997 tools/python/xen/xend/server/XMLRPCServer.py
---- a/tools/python/xen/xend/server/XMLRPCServer.py	Sat Sep 23 13:54:58 2006
-+++ b/tools/python/xen/xend/server/XMLRPCServer.py	Sun Oct  8 01:20:36 2006
+@@ -961,6 +961,7 @@
+         @raise XendError: Failed to unpause
+         @raise XendInvalidDomain: Domain is not valid        
+         """
++        
+         try:
+             dominfo = self.domain_lookup_nr(domid)
+             if not dominfo:
+diff -r f0ba459065d3 tools/python/xen/xend/XendDomainInfo.py
+--- a/tools/python/xen/xend/XendDomainInfo.py	Fri Nov 17 02:47:28 2006
++++ b/tools/python/xen/xend/XendDomainInfo.py	Sun Jan  7 00:59:54 2007
+@@ -89,6 +89,7 @@
+     ('bootloader_args', str),
+     ('features',        str),
+     ('localtime',       int),
++    ('paused_at_startup', int),
+     ]
+ 
+ ROUNDTRIPPING_CONFIG_ENTRIES += VM_CONFIG_PARAMS
+@@ -439,7 +440,8 @@
+                 self._storeDomDetails()
+                 self._registerWatches()
+                 self.refreshShutdown()
+-                self.unpause()
++                if not self.info['paused_at_startup']:
++                    self.unpause()
+ 
+                 # save running configuration if XendDomains believe domain is
+                 # persistent
+diff -r f0ba459065d3 tools/python/xen/xend/server/XMLRPCServer.py
+--- a/tools/python/xen/xend/server/XMLRPCServer.py	Fri Nov 17 02:47:28 2006
++++ b/tools/python/xen/xend/server/XMLRPCServer.py	Sun Jan  7 00:59:54 2007
 @@ -64,8 +64,8 @@
      info = XendDomain.instance().domain_create(config)
      return fixup_sxpr(info.sxpr())
@@ -71,10 +120,22 @@ diff -r c4f3f719d997 tools/python/xen/xend/server/XMLRPCServer.py
      return fixup_sxpr(info.sxpr())
  
  def get_log():
-diff -r c4f3f719d997 tools/python/xen/xm/main.py
---- a/tools/python/xen/xm/main.py	Sat Sep 23 13:54:58 2006
-+++ b/tools/python/xen/xm/main.py	Sun Oct  8 01:20:36 2006
-@@ -83,7 +83,7 @@
+diff -r f0ba459065d3 tools/python/xen/xm/create.py
+--- a/tools/python/xen/xm/create.py	Fri Nov 17 02:47:28 2006
++++ b/tools/python/xen/xm/create.py	Sun Jan  7 00:59:54 2007
+@@ -721,6 +721,8 @@
+         config.append(['backend', ['tpmif']])
+     if vals.localtime:
+         config.append(['localtime', vals.localtime])
++
++    config.append(['paused_at_startup', vals.paused])
+ 
+     config_image = configure_image(vals)
+     if vals.bootloader:
+diff -r f0ba459065d3 tools/python/xen/xm/main.py
+--- a/tools/python/xen/xm/main.py	Fri Nov 17 02:47:28 2006
++++ b/tools/python/xen/xm/main.py	Sun Jan  7 00:59:54 2007
+@@ -84,7 +84,7 @@
                       'Migrate a domain to another machine.'),
      'pause'       : ('<Domain>', 'Pause execution of a domain.'),
      'reboot'      : ('<Domain> [-wa]', 'Reboot a domain.'),
@@ -83,7 +144,7 @@ diff -r c4f3f719d997 tools/python/xen/xm/main.py
                       'Restore a domain from a saved state.'),
      'save'        : ('<Domain> <CheckpointFile>',
                       'Save a domain state to restore later.'),
-@@ -451,15 +451,21 @@
+@@ -480,15 +480,21 @@
      server.xend.domain.save(domid, savefile)
      
  def xm_restore(args):
