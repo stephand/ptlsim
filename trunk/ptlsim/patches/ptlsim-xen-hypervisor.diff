@@ -1,12 +1,25 @@
-diff -r c4f3f719d997 xen/arch/x86/domain.c
---- a/xen/arch/x86/domain.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/domain.c	Mon Oct 16 01:16:25 2006
-@@ -394,6 +394,35 @@
+diff -r f0ba459065d3 xen/arch/x86/cpu/common.c
+--- a/xen/arch/x86/cpu/common.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/cpu/common.c	Sun Jan  7 00:12:24 2007
+@@ -560,6 +560,9 @@
+ 	if (cpu_has_vme || cpu_has_tsc || cpu_has_de)
+ 		clear_in_cr4(X86_CR4_VME|X86_CR4_PVI|X86_CR4_TSD|X86_CR4_DE);
+ 
++  /* Allow userspace to read performance counters */
++  set_in_cr4(X86_CR4_PCE);
++
+ 	*(unsigned short *)(&gdt_load[0]) = LAST_RESERVED_GDT_BYTE;
+ 	*(unsigned long  *)(&gdt_load[2]) = GDT_VIRT_START(current);
+ 	__asm__ __volatile__ ( "lgdt %0" : "=m" (gdt_load) );
+diff -r f0ba459065d3 xen/arch/x86/domain.c
+--- a/xen/arch/x86/domain.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/domain.c	Sun Jan  7 00:12:24 2007
+@@ -421,6 +421,35 @@
          break;
      }
  
 +    case VCPUOP_get_registered_runstate_memory_area: {
-+        unsigned long runstate_virtaddr = (unsigned long)v->runstate_guest;
++        unsigned long runstate_virtaddr = (unsigned long)v->runstate_guest.p;
 +        if (copy_to_guest(arg, &runstate_virtaddr, 1))
 +            rc = -EFAULT;
 +        break;
@@ -37,24 +50,24 @@ diff -r c4f3f719d997 xen/arch/x86/domain.c
      default:
          rc = -ENOSYS;
          break;
-@@ -686,6 +715,13 @@
-     cpu_set(cpu, n->vcpu_dirty_cpumask);
+@@ -688,6 +717,13 @@
  
      write_ptbase(n);
-+
+ 
 +    /* Set up TSC virtualization */
 +    if (unlikely((!(n->tsc_timestamp_bias)) ^ (!(p->tsc_timestamp_bias)))) {
 +        if (n->tsc_timestamp_bias)
 +            set_in_cr4(X86_CR4_TSD);
 +        else clear_in_cr4(X86_CR4_TSD);
 +    }
- 
++
      if ( p->vcpu_id != n->vcpu_id )
      {
-diff -r c4f3f719d997 xen/arch/x86/domctl.c
---- a/xen/arch/x86/domctl.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/domctl.c	Mon Oct 16 01:16:25 2006
-@@ -345,6 +345,38 @@
+         char gdt_load[10];
+diff -r f0ba459065d3 xen/arch/x86/domctl.c
+--- a/xen/arch/x86/domctl.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/domctl.c	Sun Jan  7 00:12:24 2007
+@@ -316,6 +316,38 @@
      c->vm_assist = v->domain->vm_assist;
  }
  
@@ -63,7 +76,7 @@ diff -r c4f3f719d997 xen/arch/x86/domctl.c
 +    c->guest_table = v->arch.guest_table.pfn;
 +    c->guest_table_user = v->arch.guest_table_user.pfn;
 +    c->cr3 = v->arch.cr3;
-+    c->iobmp = v->arch.iobmp;
++    c->iobmp = v->arch.iobmp.p;
 +    c->iobmp_limit = v->arch.iobmp_limit;
 +    c->iopl = v->arch.iopl;
 +}
@@ -93,10 +106,10 @@ diff -r c4f3f719d997 xen/arch/x86/domctl.c
  /*
   * Local variables:
   * mode: C
-diff -r c4f3f719d997 xen/arch/x86/mm.c
---- a/xen/arch/x86/mm.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/mm.c	Mon Oct 16 01:16:25 2006
-@@ -1718,9 +1718,8 @@
+diff -r f0ba459065d3 xen/arch/x86/mm.c
+--- a/xen/arch/x86/mm.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/mm.c	Sun Jan  7 00:12:24 2007
+@@ -1709,9 +1709,8 @@
  }
  
  
@@ -108,7 +121,7 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
      struct domain *d = v->domain;
      int okay;
      unsigned long old_base_mfn;
-@@ -1740,6 +1739,11 @@
+@@ -1731,6 +1730,11 @@
      else
      {
          okay = get_page_and_type_from_pagenr(mfn, PGT_root_page_table, d);
@@ -120,7 +133,7 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
          if ( unlikely(!okay) )
          {
              /* Switch to idle pagetable: this VCPU has no active p.t. now. */
-@@ -1747,7 +1751,7 @@
+@@ -1738,7 +1742,7 @@
              old_base_mfn = pagetable_get_pfn(v->arch.guest_table);
              v->arch.guest_table = pagetable_null();
              update_cr3(v);
@@ -129,7 +142,7 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
              if ( old_base_mfn != 0 )
                  put_page_and_type(mfn_to_page(old_base_mfn));
  
-@@ -1756,9 +1760,16 @@
+@@ -1747,9 +1751,16 @@
              if ( !okay )
              {
                  /* Failure here is unrecoverable: the VCPU has no pagetable! */
@@ -149,7 +162,7 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
                  this_cpu(percpu_mm_info).deferred_ops = 0;
                  return 0;
              }
-@@ -1772,7 +1783,7 @@
+@@ -1763,7 +1774,7 @@
      v->arch.guest_table = pagetable_from_pfn(mfn);
      update_cr3(v); /* update shadow_table and cr3 fields of vcpu struct */
  
@@ -158,7 +171,7 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
  
      if ( likely(old_base_mfn != 0) )
      {
-@@ -1783,6 +1794,26 @@
+@@ -1774,6 +1785,26 @@
      }
  
      return 1;
@@ -185,7 +198,7 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
  }
  
  static void process_deferred_ops(void)
-@@ -2123,6 +2154,106 @@
+@@ -2132,6 +2163,106 @@
              break;
          }
  
@@ -291,11 +304,59 @@ diff -r c4f3f719d997 xen/arch/x86/mm.c
 +
          default:
              MEM_LOG("Invalid extended pt command 0x%x", op.cmd);
-             okay = 0;
-diff -r c4f3f719d997 xen/arch/x86/setup.c
---- a/xen/arch/x86/setup.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/setup.c	Mon Oct 16 01:16:25 2006
-@@ -656,7 +656,7 @@
+             rc = -ENOSYS;
+diff -r f0ba459065d3 xen/arch/x86/platform_hypercall.c
+--- a/xen/arch/x86/platform_hypercall.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/platform_hypercall.c	Sun Jan  7 00:12:24 2007
+@@ -22,6 +22,23 @@
+ #include <public/platform.h>
+ #include <asm/mtrr.h>
+ #include "cpu/mtrr/mtrr.h"
++
++static void wrmsr_on_specific_cpu(void *arg)
++{
++    xenpf_msr_t* msr = (xenpf_msr_t*)arg;
++    uint32_t* v = (uint32_t*)&msr->value;
++
++    if (smp_processor_id() == msr->cpu)
++        msr->rc = wrmsr_safe(msr->index, v[0], v[1]);
++}
++
++static void rdmsr_on_specific_cpu(void *arg)
++{
++    xenpf_msr_t* msr = (xenpf_msr_t*)arg;
++    uint32_t* v = (uint32_t*)&msr->value;
++    if (smp_processor_id() == msr->cpu)
++        msr->rc = rdmsr_safe(msr->index, v[0], v[1]);
++}
+ 
+ long do_platform_op(XEN_GUEST_HANDLE(xen_platform_op_t) u_xenpf_op)
+ {
+@@ -138,6 +155,20 @@
+     }
+     break;
+ 
++    case XENPF_rdmsr:
++    {
++        on_each_cpu(rdmsr_on_specific_cpu, &op->u.msr, 1, 1);
++        ret = copy_to_guest(u_xenpf_op, op, 1) ? -EFAULT : 0;
++    }
++    break;
++
++    case XENPF_wrmsr:
++    {
++        on_each_cpu(wrmsr_on_specific_cpu, &op->u.msr, 1, 1);
++        ret = copy_to_guest(u_xenpf_op, op, 1) ? -EFAULT : 0;
++    }
++    break;
++
+     default:
+         ret = -ENOSYS;
+         break;
+diff -r f0ba459065d3 xen/arch/x86/setup.c
+--- a/xen/arch/x86/setup.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/setup.c	Sun Jan  7 00:12:24 2007
+@@ -735,7 +735,7 @@
  
  #elif defined(CONFIG_X86_64)
  
@@ -304,10 +365,10 @@ diff -r c4f3f719d997 xen/arch/x86/setup.c
      if ( hvm_enabled )
      {
          p += sprintf(p, "hvm-%d.%d-x86_32 ", major, minor);
-diff -r c4f3f719d997 xen/arch/x86/time.c
---- a/xen/arch/x86/time.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/time.c	Mon Oct 16 01:16:25 2006
-@@ -680,8 +680,8 @@
+diff -r f0ba459065d3 xen/arch/x86/time.c
+--- a/xen/arch/x86/time.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/time.c	Sun Jan  7 00:12:24 2007
+@@ -680,8 +691,8 @@
  
      version_update_begin(&u->version);
  
@@ -318,7 +379,7 @@ diff -r c4f3f719d997 xen/arch/x86/time.c
      u->tsc_to_system_mul = t->tsc_scale.mul_frac;
      u->tsc_shift         = (s8)t->tsc_scale.shift;
  
-@@ -690,7 +690,7 @@
+@@ -690,7 +701,7 @@
  
  void update_vcpu_system_time(struct vcpu *v)
  {
@@ -327,10 +388,11 @@ diff -r c4f3f719d997 xen/arch/x86/time.c
           this_cpu(cpu_time).local_tsc_stamp )
          __update_vcpu_system_time(v);
  }
-diff -r c4f3f719d997 xen/arch/x86/traps.c
---- a/xen/arch/x86/traps.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/arch/x86/traps.c	Mon Oct 16 01:16:25 2006
-@@ -605,6 +605,58 @@
+@@ -912,6 +923,142 @@
+diff -r f0ba459065d3 xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/traps.c	Sun Jan  7 00:12:24 2007
+@@ -618,6 +618,58 @@
      return EXCRET_fault_fixed;
  }
  
@@ -388,8 +450,8 @@ diff -r c4f3f719d997 xen/arch/x86/traps.c
 +
  asmlinkage int do_invalid_op(struct cpu_user_regs *regs)
  {
-     struct vcpu *v = current;
-@@ -632,6 +684,9 @@
+     int rc;
+@@ -641,6 +693,9 @@
      }
  
      if ( (rc = emulate_forced_invalid_op(regs)) != 0 )
@@ -398,11 +460,11 @@ diff -r c4f3f719d997 xen/arch/x86/traps.c
 +    if ( (rc = handle_breakout_op(regs)) != 0 )
          return rc;
  
-     ti = &current->arch.guest_context.trap_ctxt[TRAP_invalid_op];
-@@ -1237,12 +1292,26 @@
-         goto fail;
-     }
+     return do_guest_trap(TRAP_invalid_op, regs, 0);
+@@ -1281,12 +1341,26 @@
+     goto fail;
  
+  twobyte_opcode:
 +    opcode = insn_fetch(u8, 1, cs, eip);
 +
 +    switch ( opcode )
@@ -418,7 +480,7 @@ diff -r c4f3f719d997 xen/arch/x86/traps.c
 +    }
 +    }
 +
-     /* Remaining instructions only emulated from guest kernel. */
+     /* Two-byte opcodes only emulated from guest kernel. */
      if ( !guest_kernel_mode(v, regs) )
          goto fail;
  
@@ -427,23 +489,23 @@ diff -r c4f3f719d997 xen/arch/x86/traps.c
      switch ( opcode )
      {
      case 0x06: /* CLTS */
-@@ -1331,11 +1400,7 @@
+@@ -1378,11 +1452,7 @@
              break;
  
          case 4:
 -            if ( *reg != (read_cr4() & ~(X86_CR4_PGE|X86_CR4_PSE)) )
 -            {
--                DPRINTK("Attempt to change CR4 flags.\n");
+-                gdprintk(XENLOG_WARNING, "Attempt to change CR4 flags.\n");
 -                goto fail;
 -            }
 +            /* Ignore attempts to write CR4 */
              break;
  
          default:
-diff -r c4f3f719d997 xen/common/domain.c
---- a/xen/common/domain.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/common/domain.c	Mon Oct 16 01:16:25 2006
-@@ -551,6 +551,33 @@
+diff -r f0ba459065d3 xen/common/domain.c
+--- a/xen/common/domain.c	Fri Nov 17 02:47:28 2006
++++ b/xen/common/domain.c	Sun Jan  7 00:12:24 2007
+@@ -535,6 +535,33 @@
          break;
      }
  
@@ -477,10 +539,10 @@ diff -r c4f3f719d997 xen/common/domain.c
      default:
          rc = arch_do_vcpu_op(cmd, v, arg);
          break;
-diff -r c4f3f719d997 xen/common/domctl.c
---- a/xen/common/domctl.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/common/domctl.c	Mon Oct 16 01:16:25 2006
-@@ -165,6 +165,123 @@
+diff -r f0ba459065d3 xen/common/domctl.c
+--- a/xen/common/domctl.c	Fri Nov 17 02:47:28 2006
++++ b/xen/common/domctl.c	Sun Jan  7 00:12:24 2007
+@@ -169,6 +169,123 @@
      return cpu;
  }
  
@@ -549,7 +611,7 @@ diff -r c4f3f719d997 xen/common/domctl.c
 +            oldext.tsc_timestamp_bias = v->tsc_timestamp_bias;
 +            oldext.system_time_bias = v->system_time_bias;
 +            memcpy(&oldext.virq_to_evtchn, v->virq_to_evtchn, sizeof(oldext.virq_to_evtchn));
-+            oldext.runstate_guest = v->runstate_guest;
++            oldext.runstate_guest = v->runstate_guest.p;
 +            oldext.nmi_addr = v->nmi_addr;
 +            oldext.timer_expires = v->timer.expires;
 +            oldext.timer_killed = v->timer.killed;
@@ -604,7 +666,7 @@ diff -r c4f3f719d997 xen/common/domctl.c
  long do_domctl(XEN_GUEST_HANDLE(xen_domctl_t) u_domctl)
  {
      long ret = 0;
-@@ -637,6 +754,18 @@
+@@ -643,6 +760,18 @@
              put_domain(d);
              ret = 0;
          }
@@ -623,10 +685,10 @@ diff -r c4f3f719d997 xen/common/domctl.c
      }
      break;
  
-diff -r c4f3f719d997 xen/common/grant_table.c
---- a/xen/common/grant_table.c	Sat Sep 23 13:54:58 2006
-+++ b/xen/common/grant_table.c	Mon Oct 16 01:16:25 2006
-@@ -834,7 +834,7 @@
+diff -r f0ba459065d3 xen/common/grant_table.c
+--- a/xen/common/grant_table.c	Fri Nov 17 02:47:28 2006
++++ b/xen/common/grant_table.c	Sun Jan  7 00:12:24 2007
+@@ -844,7 +844,7 @@
      struct gnttab_copy *op)
  {
      struct domain *sd = NULL, *dd = NULL;
@@ -635,9 +697,9 @@ diff -r c4f3f719d997 xen/common/grant_table.c
      char *sp, *dp;
      s16 rc = GNTST_okay;
      int have_d_grant = 0, have_s_grant = 0, have_s_ref = 0;
-diff -r c4f3f719d997 xen/include/asm-x86/mm.h
---- a/xen/include/asm-x86/mm.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/asm-x86/mm.h	Mon Oct 16 01:16:25 2006
+diff -r f0ba459065d3 xen/include/asm-x86/mm.h
+--- a/xen/include/asm-x86/mm.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/asm-x86/mm.h	Sun Jan  7 00:12:24 2007
 @@ -7,6 +7,7 @@
  #include <xen/list.h>
  #include <asm/io.h>
@@ -646,16 +708,7 @@ diff -r c4f3f719d997 xen/include/asm-x86/mm.h
  
  /*
   * Per-page-frame information.
-@@ -214,7 +215,7 @@
-              unlikely(d != _domain) )                /* Wrong owner? */
-         {
-             if ( !_shadow_mode_refcounts(domain) )
--                DPRINTK("Error pfn %lx: rd=%p, od=%p, caf=%08x, taf=%" 
-+                DPRINTK("Error pfn %lu: rd=%p, od=%p, caf=%08x, taf=%" 
-                         PRtype_info "\n",
-                         page_to_mfn(page), domain, unpickle_domptr(d),
-                         x, page->u.inuse.type_info);
-@@ -371,7 +372,12 @@
+@@ -343,7 +344,12 @@
  
  #endif
  
@@ -669,22 +722,21 @@ diff -r c4f3f719d997 xen/include/asm-x86/mm.h
  void make_cr3(struct vcpu *v, unsigned long mfn);
  
  void propagate_page_fault(unsigned long addr, u16 error_code);
-diff -r c4f3f719d997 xen/include/public/domctl.h
---- a/xen/include/public/domctl.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/public/domctl.h	Mon Oct 16 01:16:25 2006
-@@ -15,6 +15,7 @@
+diff -r f0ba459065d3 xen/include/public/domctl.h
+--- a/xen/include/public/domctl.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/domctl.h	Sun Jan  7 00:12:24 2007
+@@ -33,6 +33,7 @@
  #endif
  
  #include "xen.h"
 +#include "vcpu.h"
  
- #define XEN_DOMCTL_INTERFACE_VERSION 0x00000003
+ #define XEN_DOMCTL_INTERFACE_VERSION 0x00000004
  
-@@ -347,6 +348,61 @@
- };
+@@ -385,6 +386,61 @@
  typedef struct xen_domctl_settimeoffset xen_domctl_settimeoffset_t;
  DEFINE_XEN_GUEST_HANDLE(xen_domctl_settimeoffset_t);
-+
+ 
 +/* PTLsim specific */
 +
 +/*
@@ -739,10 +791,11 @@ diff -r c4f3f719d997 xen/include/public/domctl.h
 +};
 +typedef struct xen_domctl_contextswap xen_domctl_contextswap_t;
 +DEFINE_XEN_GUEST_HANDLE(xen_domctl_contextswap_t);
- 
++
  struct xen_domctl {
      uint32_t cmd;
-@@ -373,7 +429,9 @@
+     uint32_t interface_version; /* XEN_DOMCTL_INTERFACE_VERSION */
+@@ -410,7 +466,9 @@
          struct xen_domctl_hypercall_init    hypercall_init;
          struct xen_domctl_arch_setup        arch_setup;
          struct xen_domctl_settimeoffset     settimeoffset;
@@ -753,10 +806,42 @@ diff -r c4f3f719d997 xen/include/public/domctl.h
      } u;
  };
  typedef struct xen_domctl xen_domctl_t;
-diff -r c4f3f719d997 xen/include/public/vcpu.h
---- a/xen/include/public/vcpu.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/public/vcpu.h	Mon Oct 16 01:16:25 2006
-@@ -108,6 +108,35 @@
+diff -r f0ba459065d3 xen/include/public/platform.h
+--- a/xen/include/public/platform.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/platform.h	Sun Jan  7 00:12:24 2007
+@@ -114,6 +114,20 @@
+ typedef struct xenpf_platform_quirk xenpf_platform_quirk_t;
+ DEFINE_XEN_GUEST_HANDLE(xenpf_platform_quirk_t);
+ 
++#define XENPF_rdmsr               40
++#define XENPF_wrmsr               41
++struct xenpf_msr {
++    /* IN variables */
++    uint32_t cpu;
++    uint32_t index;
++    /* IN/OUT variables */
++    uint64_t value;
++    /* OUT variables */
++    uint32_t rc;
++};
++typedef struct xenpf_msr xenpf_msr_t;
++DEFINE_XEN_GUEST_HANDLE(xenpf_msr_t);
++
+ struct xen_platform_op {
+     uint32_t cmd;
+     uint32_t interface_version; /* XENPF_INTERFACE_VERSION */
+@@ -124,6 +138,7 @@
+         struct xenpf_read_memtype      read_memtype;
+         struct xenpf_microcode_update  microcode;
+         struct xenpf_platform_quirk    platform_quirk;
++        struct xenpf_msr               msr;
+         uint8_t                        pad[128];
+     } u;
+ };
+diff -r f0ba459065d3 xen/include/public/vcpu.h
+--- a/xen/include/public/vcpu.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/vcpu.h	Sun Jan  7 00:12:24 2007
+@@ -129,6 +129,35 @@
  };
  typedef struct vcpu_register_runstate_memory_area vcpu_register_runstate_memory_area_t;
  
@@ -792,10 +877,10 @@ diff -r c4f3f719d997 xen/include/public/vcpu.h
  #endif /* __XEN_PUBLIC_VCPU_H__ */
  
  /*
-diff -r c4f3f719d997 xen/include/public/xen.h
---- a/xen/include/public/xen.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/public/xen.h	Mon Oct 16 01:16:25 2006
-@@ -215,20 +215,55 @@
+diff -r f0ba459065d3 xen/include/public/xen.h
+--- a/xen/include/public/xen.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/xen.h	Sun Jan  7 00:12:24 2007
+@@ -233,20 +233,55 @@
  #define MMUEXT_SET_LDT          13
  #define MMUEXT_NEW_USER_BASEPTR 15
  
@@ -819,9 +904,9 @@ diff -r c4f3f719d997 xen/include/public/xen.h
 +        uint32_t total_count;
 +    } out;
 +};
-+
++ 
 +typedef union page_type page_type_t;
-+
++ 
 +#define PAGE_TYPE_NONE           0 /* no special uses of this page */
 +#define PAGE_TYPE_L1             1 /* using this page as an L1 page table? */
 +#define PAGE_TYPE_L2             2 /* using this page as an L2 page table? */
@@ -831,7 +916,7 @@ diff -r c4f3f719d997 xen/include/public/xen.h
 +#define PAGE_TYPE_LDT            6 /* using this page in an LDT? */
 +#define PAGE_TYPE_WRITABLE       7 /* has writable mappings of this page? */
 +#define PAGE_TYPE_INVALID_MFN  254 /* MFN is invalid */
-+#define PAGE_TYPE_INACCESSIBLE 255 /* not accessible to this domain */
++#define PAGE_TYPE_INACCESSIBLE 255 /* not accessible to this domain */ 
 +
  struct mmuext_op {
      unsigned int cmd;
@@ -847,15 +932,15 @@ diff -r c4f3f719d997 xen/include/public/xen.h
 +        /* SET_LDT, QUERY_PAGES */
          unsigned int nr_ents;
          /* TLB_FLUSH_MULTI, INVLPG_MULTI */
-         void *vcpumask;
+         XEN_GUEST_HANDLE_00030205(void) vcpumask;
 +        /* GET_KERNEL_BASEPTR, GET_USER_BASEPTR */
 +        unsigned int vcpuid;
      } arg2;
  };
  typedef struct mmuext_op mmuext_op_t;
-diff -r c4f3f719d997 xen/include/xen/sched.h
---- a/xen/include/xen/sched.h	Sat Sep 23 13:54:58 2006
-+++ b/xen/include/xen/sched.h	Mon Oct 16 01:16:25 2006
+diff -r f0ba459065d3 xen/include/xen/sched.h
+--- a/xen/include/xen/sched.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/xen/sched.h	Sun Jan  7 00:12:24 2007
 @@ -91,6 +91,12 @@
  
      /* Bitmask of CPUs which are holding onto this VCPU's state. */
