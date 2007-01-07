@@ -2004,8 +2004,8 @@ bool TraceDecoder::decode_complex() {
       is_sse = 1;
 
       ra.type = OPTYPE_REG;
-      ra.reg.reg = 0; // get the requested mxcsr into sr2
-      move_reg_or_mem(ra, rd, REG_ar1);
+      ra.reg.reg = 0; // get the requested mxcsr into ar1
+      operand_load(REG_ar1, ra);
       //
       // LDMXCSR needs to flush the pipeline since future FP instructions will
       // depend on its value and can't be issued out of order w.r.t the mxcsr.
