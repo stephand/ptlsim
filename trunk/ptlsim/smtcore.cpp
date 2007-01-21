@@ -916,10 +916,11 @@ bool ThreadContext::handle_barrier() {
   core_to_external_state();
   flush_pipeline();
 
-  assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
+  int assistid = ctx.commitarf[REG_rip];
+  assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
   
   if (logable(4)) {
-    logfile << "[vcpu ", ctx.vcpuid, "] Barrier (", (void*)assist, " ", assist_name(assist), " called from ",
+    logfile << "[vcpu ", ctx.vcpuid, "] Barrier (#", assistid, " -> ", (void*)assist, " ", assist_name(assist), " called from ",
       (RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx)), "; return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
       ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
   }
@@ -1107,7 +1108,7 @@ ostream& SMTModel::operator <<(ostream& os, const PhysicalRegisterOperandInfo& o
 bool EventLog::init(size_t bufsize) {
   reset();
   size_t bytes = bufsize * sizeof(SMTCoreEvent);
-  start = (SMTCoreEvent*)ptl_alloc_private_pages(bytes);
+  start = (SMTCoreEvent*)ptl_mm_alloc_private_pages(bytes);
   if unlikely (!start) return false;
   end = start + bufsize;
   tail = start;
@@ -1120,7 +1121,7 @@ void EventLog::reset() {
   if (!start) return;
 
   size_t bytes = (end - start) * sizeof(SMTCoreEvent);
-  ptl_free_private_pages(start, bytes);
+  ptl_mm_free_private_pages(start, bytes);
   start = null;
   end = null;
   tail = null;

@@ -57,7 +57,10 @@ void PTLsimConfig::reset() {
   log_on_console = 0;
   log_ptlsim_boot = 0;
   log_buffer_size = 524288;
-  enable_mm_logging = 0;
+  mm_logfile.reset();
+  mm_log_buffer_size = 16384;
+  enable_inline_mm_logging = 0;
+  enable_mm_validate = 0;
 
   event_log_enabled = 0;
   event_log_ring_buffer_size = 32768;
@@ -146,7 +149,10 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(log_buffer_size,              "logbufsize",           "Size of PTLsim logfile buffer (not related to -ringbuf)");
   add(dump_state_now,               "dump-state-now",       "Dump the event log ring buffer and internal state of the active core");
   add(abort_at_end,                 "abort-at-end",         "Abort current simulation after next command (don't wait for next x86 boundary)");
-  add(enable_mm_logging,            "mm-logging",           "Log PTLsim memory manager subsystem requests (alloc, free) to log file");
+  add(mm_logfile,                   "mm-logfile",           "Log PTLsim memory manager requests (alloc, free) to this file (use with ptlmmlog)");
+  add(mm_log_buffer_size,           "mm-logbuf-size",       "Size of PTLsim memory manager log buffer (in events, not bytes)");
+  add(enable_inline_mm_logging,     "mm-log-inline",        "Print every memory manager request in the main log file");
+  add(enable_mm_validate,           "mm-validate",          "Validate every memory manager request against internal structures (slow)");
 
   section("Event Ring Buffer Logging Control");
   add(event_log_enabled,            "ringbuf",              "Log all core events to the ring buffer for backwards-in-time debugging");
@@ -377,7 +383,8 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
     current_bbcache_dump_filename = config.bbcache_dump_filename;
   }
 
-  enable_mm_logging = config.enable_mm_logging;
+  ptl_mm_set_logging(config.mm_logfile.set() ? (char*)(config.mm_logfile) : null, config.mm_log_buffer_size, config.enable_inline_mm_logging);
+  ptl_mm_set_validate(config.enable_mm_validate);
 
   if (first_time) {
     if (!config.quiet) {
@@ -550,6 +557,7 @@ void shutdown_subsystems() {
   //
   shutdown_uops();
   shutdown_decode();
+  ptl_mm_flush_logging();
 }
 
 #endif // CONFIG_ONLY

@@ -464,6 +464,8 @@ void BasicBlock::reset() {
   hashlink.reset();
   mfnlo_loc.reset();
   mfnhi_loc.reset();
+  rip_taken = 0;
+  rip_not_taken = 0;
   refcount = 0;
   repblock = 0;
   invalidblock = 0;
@@ -484,6 +486,8 @@ void BasicBlock::reset() {
   lastused = 0;
   marked = 0;
   mfence = 0;
+  x87 = 0;
+  sse = 0;
 }
 
 void BasicBlock::reset(const RIPVirtPhys& rip) {

@@ -149,7 +149,10 @@ struct PTLsimConfig {
   bool log_on_console;
   bool log_ptlsim_boot;
   W64 log_buffer_size;
-  bool enable_mm_logging;
+  stringbuf mm_logfile;
+  W64 mm_log_buffer_size;
+  bool enable_inline_mm_logging;
+  bool enable_mm_validate;
 
   // Event Logging
   bool event_log_enabled;

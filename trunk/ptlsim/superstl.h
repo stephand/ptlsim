@@ -358,6 +358,24 @@ namespace superstl {
 
   DeclareStringBufToStream(hexstring);
 
+  struct bytestring {
+    const byte* bytes;
+    int n;
+    int splitat;
+
+    bytestring() { }
+
+    bytestring(const byte* bytes, int n, int splitat = 16) {
+      this->bytes = bytes;
+      this->n = n;
+      this->splitat = splitat;
+    }
+  };
+  
+  stringbuf& operator <<(stringbuf& os, const bytestring& bs);
+
+  DeclareStringBufToStream(bytestring);
+
   struct bytemaskstring {
     const byte* bytes;
     W64 mask;
@@ -1370,7 +1388,12 @@ namespace superstl {
     }
 
     void maskop(size_t count) {
-      w[wordof(count)] &= bitmask(bitof(count));
+      T m =
+        (!count) ? 0 :
+        (count % BITS_PER_WORD) ? ((T(1) << bitof(count)) - T(1)) :
+        T(-1);
+
+      w[wordof(count)] &= m;
 
       for (size_t i = wordof(count)+1; i < N; i++) {
         w[i] = 0;
@@ -1522,7 +1545,14 @@ namespace superstl {
     size_t msbop() const { return __builtin_clzl(w); }
     size_t lsbop(size_t notfound) const { return (w) ? __builtin_ctzl(w) : notfound; }
     size_t msbop(size_t notfound) const { return (w) ? __builtin_clzl(w) : notfound; }
-    void maskop(size_t count) { w &= bitmask(bitof(count)); }
+    void maskop(size_t count) {
+      T m =
+        (!count) ? 0 :
+        (count < BITS_PER_WORD) ? ((T(1) << bitof(count)) - T(1)) :
+        T(-1);
+
+      w &= m;
+    }
 
     void insertop(size_t i, size_t n, T v) {
       T m = (bitmask(n) << bitof(i));
@@ -2534,19 +2564,33 @@ namespace superstl {
   //
   template <typename T>
   struct DefaultComparator {
-    W64s operator ()(const T& a, const T& b) const {
-      return a - b;
+    int operator ()(const T& a, const T& b) const {
+      int r = (a < b) ? -1 : +1;
+      if (a == b) r = 0;
+      return r;
     }
   };
 
   template <typename T, bool backwards = 0>
   struct SortPrecomputedIndexListComparator {
-    const T* values;
+    const T* v;
 
-    SortPrecomputedIndexListComparator(const T* values) { this->values = values; }
+    SortPrecomputedIndexListComparator(const T* values): v(values) { }
 
-    W64s operator ()(int a, int b) const {
-      return (backwards) ? (values[b] - values[a]) : (values[a] - values[b]);
+    int operator ()(unsigned long a, unsigned long b) const {
+      //
+      // This strange construction helps the compiler do better peephole
+      // optimization tricks using conditional moves when using integers.
+      //
+      if (backwards) {
+        int r = (v[a] > v[b]) ? -1 : +1;
+        if (v[a] == v[b]) r = 0;
+        return r;
+      } else {
+        int r = (v[a] < v[b]) ? -1 : +1;
+        if (v[a] == v[b]) r = 0;
+        return r;
+      }
     }
   };
 
@@ -2773,6 +2817,13 @@ namespace superstl {
         barrier();
       }
     }
+  };
+
+  template <typename T>
+  struct ScopedLock {
+    T& lock;
+    ScopedLock(T& lock_): lock(lock_) { lock.acquire(); }
+    ~ScopedLock() { lock.release(); }
   };
 
 } // namespace superstl

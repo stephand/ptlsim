@@ -544,14 +544,15 @@ bool OutOfOrderCore::handle_barrier() {
   core_to_external_state();
   flush_pipeline();
 
-  assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
+  int assistid = ctx.commitarf[REG_rip];
+  assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
   
   if (logable(4)) {
-    logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ",
+    logfile << "[vcpu ", ctx.vcpuid, "] Barrier (#", assistid, " -> ", (void*)assist, " ", assist_name(assist), " called from ",
       (RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx)), "; return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
       ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
   }
-  
+
   if (logable(6)) logfile << "Calling assist function at ", (void*)assist, "...", endl, flush; 
   
   update_assist_stats(assist);
@@ -736,7 +737,7 @@ ostream& OutOfOrderModel::operator <<(ostream& os, const PhysicalRegisterOperand
 bool EventLog::init(size_t bufsize) {
   reset();
   size_t bytes = bufsize * sizeof(OutOfOrderCoreEvent);
-  start = (OutOfOrderCoreEvent*)ptl_alloc_private_pages(bytes);
+  start = (OutOfOrderCoreEvent*)ptl_mm_alloc_private_pages(bytes);
   if unlikely (!start) return false;
   end = start + bufsize;
   tail = start;
@@ -749,7 +750,7 @@ void EventLog::reset() {
   if (!start) return;
 
   size_t bytes = (end - start) * sizeof(OutOfOrderCoreEvent);
-  ptl_free_private_pages(start, bytes);
+  ptl_mm_free_private_pages(start, bytes);
   start = null;
   end = null;
   tail = null;

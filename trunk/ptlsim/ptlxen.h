@@ -531,8 +531,29 @@ static inline int update_ptl_pte(T& dest, const T& src) {
   return update_phys_pte((Waddr)ptl_virt_to_phys(&dest), src);
 }
 
+static inline Level1PTE& get_ptl_pte(void* virt) {
+  return bootinfo.ptl_pagedir[ptl_virt_to_pfn(virt)];
+}
+
+//
+// Update whatever PTE is currently mapping the specified
+// virtual address in PTLsim space.
+//
+// Unlike update_phys_pte and update_ptl_pte, this actually
+// flushes the TLB entry. Always use this when updating
+// PTLsim space address mappings!
+//
+int update_ptl_virt(void* ptr, const Level1PTE& pte);
+int invalidate_ptl_virt(void* ptr);
+int flush_tlb();
+int flush_cache();
+
 int pin_page_table_page(void* virt, int level);
-int make_ptl_page_writable(void* virt, bool writable);
+
+static inline int make_ptl_page_writable(void* virt, bool writable) {
+  return update_ptl_virt(virt, get_ptl_pte(virt).W(writable));
+}
+
 
 int query_pages(page_type_t* pt, int count);
 page_type_t query_page(mfn_t mfn);

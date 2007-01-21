@@ -203,13 +203,6 @@ int perfctrs_write_perfctr(int cpu, int index, W64 value) {
   return synchronous_host_call(call);
 }
 
-int flush_cache() {
-  PTLsimHostCall call;
-  call.op = PTLSIM_HOST_FLUSH_CACHE;
-  call.ready = 0;
-  return synchronous_host_call(call);
-}
-
 PerfEvtSelMSR setup_perfevtsel(int event, int unitmask) {
   PerfEvtSelMSR sel = 0;
   sel.event = event;

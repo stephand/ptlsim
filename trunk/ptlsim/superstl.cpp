@@ -321,6 +321,18 @@ namespace superstl {
     return os;
   }
   
+  stringbuf& operator <<(stringbuf& os, const bytestring& bs) {
+    foreach (i, bs.n) {
+      os << hexstring(bs.bytes[i], 8);
+      if (((i % bs.splitat) == (bs.splitat-1)) && (i != bs.n-1)) 
+        os << endl; 
+      else if (i != bs.n-1)
+        os << " ";
+    }
+
+    return os;
+  }
+
   stringbuf& operator <<(stringbuf& os, const bytemaskstring& bs) {
     foreach (i, bs.n) {
       if (bit(bs.mask, i))

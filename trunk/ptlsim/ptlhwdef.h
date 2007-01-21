@@ -185,7 +185,7 @@ enum {
   EXCEPTION_COUNT
 };
 
-static const int MAX_BB_BYTES = 128;
+static const int MAX_BB_BYTES = 63;
 static const int MAX_BB_X86_INSNS = 63;
 static const int MAX_BB_UOPS = 63;
 static const int MAX_BB_PER_PAGE = 4096;
@@ -1316,9 +1316,10 @@ typedef shortptr<BasicBlock> BasicBlockPtr;
 struct BasicBlockChunkList: public ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK> {
   selflistlink hashlink;
   W64 mfn;
+  int refcount;
 
-  BasicBlockChunkList(): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { }
-  BasicBlockChunkList(W64 mfn): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { this->mfn = mfn; }
+  BasicBlockChunkList(): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { refcount = 0; }
+  BasicBlockChunkList(W64 mfn): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { this->mfn = mfn; refcount = 0; }
 };
 
 enum { BB_TYPE_COND, BB_TYPE_UNCOND, BB_TYPE_INDIR, BB_TYPE_ASSIST };
@@ -1337,7 +1338,7 @@ struct BasicBlockBase {
   byte memcount;
   byte storecount;
   byte type:4, repblock:1, invalidblock:1, call:1, ret:1;
-  byte marked:1, mfence:1;
+  byte marked:1, mfence:1, x87:1, sse:1;
   W64 usedregs;
   uopimpl_func_t* synthops;
   int refcount;

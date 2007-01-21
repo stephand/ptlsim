@@ -65,6 +65,42 @@ int update_phys_pte(Waddr dest, const T& src) {
   return HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
 }
 
+template int update_phys_pte(Waddr dest, const Level1PTE& src);
+template int update_phys_pte(Waddr dest, const Level2PTE& src);
+template int update_phys_pte(Waddr dest, const Level3PTE& src);
+template int update_phys_pte(Waddr dest, const Level4PTE& src);
+
+int update_ptl_virt(void* ptr, const Level1PTE& pte) {
+  return HYPERVISOR_update_va_mapping(Waddr(ptr), pte, UVMF_INVLPG);
+}
+
+int invalidate_ptl_virt(void* ptr) {
+  mmuext_op op;
+  op.cmd = MMUEXT_INVLPG_LOCAL;
+  op.arg1.linear_addr = Waddr(ptr);
+  op.arg2.nr_ents = 1;
+
+  int success_count = 0;
+  return HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF);
+}
+
+int flush_tlb() {
+  mmuext_op op;
+  op.cmd = MMUEXT_TLB_FLUSH_LOCAL;
+  op.arg1.linear_addr = 0;
+  op.arg2.nr_ents = 0;
+
+  int success_count = 0;
+  return HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF);
+}
+
+int flush_cache() {
+  PTLsimHostCall call;
+  call.op = PTLSIM_HOST_FLUSH_CACHE;
+  call.ready = 0;
+  return synchronous_host_call(call);
+}
+
 int pin_page_table_page(void* virt, int level) {
   return 0;
   assert(inrange(level, 0, 4));
@@ -83,16 +119,6 @@ int pin_page_table_page(void* virt, int level) {
 
   int success_count = 0;
   return HYPERVISOR_mmuext_op(&op, 1, &success_count, DOMID_SELF);
-}
-
-int make_ptl_page_writable(void* virt, bool writable) {
-  pfn_t pfn = ptl_virt_to_pfn(virt);
-  if unlikely (pfn == INVALID_MFN) return -1;
-
-  Level1PTE& pte = bootinfo.ptl_pagedir[pfn];
-  Level1PTE temppte = pte;
-  temppte.rw = writable;
-  return update_ptl_pte(pte, temppte);
 }
 
 int query_pages(page_type_t* pt, int count) {
@@ -160,12 +186,12 @@ void build_physmap_page_tables() {
   if (DEBUG) cerr << "Building physical page map for ", bootinfo.total_machine_pages, " pages (",
     (pages_to_kb(bootinfo.total_machine_pages) / 1024), " MB)", " of memory:", endl, flush;
 
-  zeropage = ptl_alloc_private_page();
-  ptl_zero_private_page(zeropage);
+  zeropage = ptl_mm_alloc_private_page();
+  ptl_mm_zero_private_page(zeropage);
 
   Waddr physmap_level1_page_count = ceil(bootinfo.total_machine_pages, PTES_PER_PAGE) / PTES_PER_PAGE;
 
-  phys_pagedir = (Level1PTE*)ptl_alloc_private_pages(physmap_level1_page_count * PAGE_SIZE);
+  phys_pagedir = (Level1PTE*)ptl_mm_alloc_private_pages(physmap_level1_page_count * PAGE_SIZE);
   memset(phys_pagedir, 0, physmap_level1_page_count * PAGE_SIZE);
 
   if (DEBUG) cerr << "  L1 page table at virt ", (void*)phys_pagedir, " (", bootinfo.total_machine_pages, " entries, ",
@@ -175,7 +201,7 @@ void build_physmap_page_tables() {
   // Construct L2 page tables, pointing to fill-on-demand L1 tables:
   //
   Waddr physmap_level2_page_count = ceil(physmap_level1_page_count, PTES_PER_PAGE) / PTES_PER_PAGE;
-  phys_level2_pagedir = (Level2PTE*)ptl_alloc_private_pages(physmap_level2_page_count * PAGE_SIZE);
+  phys_level2_pagedir = (Level2PTE*)ptl_mm_alloc_private_pages(physmap_level2_page_count * PAGE_SIZE);
 
   if (DEBUG) cerr << "  L2 page table at virt ", (void*)phys_level2_pagedir, " (", physmap_level1_page_count, " entries, ",
     physmap_level2_page_count, " pages, ", (physmap_level1_page_count * sizeof(Level1PTE)), " bytes)", endl, flush;
@@ -209,8 +235,8 @@ void build_physmap_page_tables() {
   // on the page.
   //
   assert(physmap_level2_page_count < PTES_PER_PAGE);
-  phys_level3_pagedir = (Level3PTE*)ptl_alloc_private_page();
-  ptl_zero_private_page(phys_level3_pagedir);
+  phys_level3_pagedir = (Level3PTE*)ptl_mm_alloc_private_page();
+  ptl_mm_zero_private_page(phys_level3_pagedir);
 
   if (DEBUG) cerr << "  L3 page table at mfn ", phys_level3_pagedir_mfn, ", virt ", (void*)phys_level3_pagedir, " (", physmap_level2_page_count, " entries, ",
     1, " pages, ", (physmap_level2_page_count * sizeof(Level1PTE)), " bytes)", endl, flush;
@@ -313,9 +339,9 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
     //
     Level1PTE* l1page = floorptr(&l1pte, PAGE_SIZE);
     assert(make_ptl_page_writable(l1page, 1) == 0);
-    ptl_zero_private_page(l1page);
+    ptl_mm_zero_private_page(l1page);
     assert(make_ptl_page_writable(l1page, 0) == 0);
-        
+
     assert(update_ptl_pte(l2pte, l2pte.P(1)) == 0);
         
     if (logable(4) | force_page_fault_logging) {
@@ -397,9 +423,12 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
 }
 
 void unmap_phys_page(mfn_t mfn) {
+  update_ptl_virt(phys_to_mapped_virt(mfn << 12), Level1PTE(0));
+  /*
   Level1PTE& pte = phys_pagedir[mfn];
   if unlikely (!pte.p) return;
   assert(update_ptl_pte(pte, Level1PTE(0)) == 0);
+  */
 }
 
 //
@@ -567,7 +596,7 @@ void find_all_mappings_of_mfn(mfn_t mfn) {
   unmap_address_space();
 
   int pagetype_bytes_allocated = bootinfo.total_machine_pages * sizeof(page_type_t);
-  page_type_t* pagetypes = (page_type_t*)ptl_alloc_private_pages(pagetype_bytes_allocated);
+  page_type_t* pagetypes = (page_type_t*)ptl_mm_alloc_private_pages(pagetype_bytes_allocated);
   assert(pagetypes);
 
   foreach (i, bootinfo.total_machine_pages) {
@@ -596,7 +625,7 @@ void find_all_mappings_of_mfn(mfn_t mfn) {
     }
   }
 
-  ptl_free_private_pages(pagetypes, pagetype_bytes_allocated);
+  ptl_mm_free_private_pages(pagetypes, pagetype_bytes_allocated);
 
   force_readonly_physmap = 0;
   unmap_address_space();
@@ -976,7 +1005,7 @@ bool is_mfn_ptpage(mfn_t mfn) {
     // Try to promote to writable:
     //
 
-    if likely (update_ptl_pte(pte, pte.W(1)) == 0) {
+    if likely (update_ptl_virt(phys_to_mapped_virt(mfn << 12), pte.W(1)) == 0) {
       if (logable(2)) {
         logfile << "[PTLsim Writeback Handler: promoted read-only L1 PTE for guest mfn ",
           mfn, " to writable (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;

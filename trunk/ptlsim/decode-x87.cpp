@@ -352,8 +352,9 @@ void check_warned_about_x87() {
 //
 // Access the fpstack structure in the current context (REG_ctx register)
 //
-#define x87_load_stack(target, offset) { TransOp ldp(OP_ld, target, REG_fpstack, offset, REG_zero, 3); ldp.internal = 1; this << ldp; }
-#define x87_store_stack(offset, data) { TransOp stp(OP_st, REG_mem, REG_fpstack, offset, data, 3); stp.internal = 1; this << stp; \
+#define x87_load_stack(target, offset) { this << TransOp(OP_add, REG_temp6, REG_fpstack, offset, REG_zero, 3); TransOp ldp(OP_ld, target, REG_temp6, REG_imm, REG_zero, 3, 0); ldp.internal = 1; this << ldp; }
+#define x87_store_stack(offset, data) { this << TransOp(OP_add, REG_temp6, REG_fpstack, offset, REG_zero, 3); \
+      TransOp stp(OP_st, REG_mem, REG_temp6, REG_imm, data, 3, 0); stp.internal = 1; this << stp; \
       this << TransOp(OP_bts, REG_fptags, REG_fptags, offset, REG_zero, 3); }
 #define x87_pop_stack() { this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3); \
   this << TransOp(OP_addm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); }

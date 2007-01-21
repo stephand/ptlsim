@@ -1970,6 +1970,7 @@ char* strndup(const char *s, size_t n) {
 extern ostream logfile;
 
 extern "C" void abort() {
+  cerr << "Aborted by caller ", __builtin_return_address(0), endl, flush;
   cout.flush();
   cerr.flush();
   if (logfile) logfile.close();

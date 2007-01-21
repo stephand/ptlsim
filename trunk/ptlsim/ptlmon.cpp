@@ -1596,18 +1596,6 @@ struct XenController {
 
     xc_domain_unpause(xc, domain);
 
-    if (ptlsim_hostcall_port >= 0) {
-      evtchn_close arg;
-      arg.port = ptlsim_hostcall_port;
-      int rc = do_evtchn_op(xc, EVTCHNOP_close, &arg, sizeof(arg));
-    }
-
-    if (ptlsim_upcall_port >= 0) {
-      evtchn_close arg;
-      arg.port = ptlsim_upcall_port;
-      int rc = do_evtchn_op(xc, EVTCHNOP_close, &arg, sizeof(arg));
-    }
-
     domain = -1;
 
     if (xc >= 0) assert(xc_interface_close(xc) == 0);

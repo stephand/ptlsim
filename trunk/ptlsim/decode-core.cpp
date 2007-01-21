@@ -519,6 +519,8 @@ void TraceDecoder::lastop() {
       }
       bb.call = ((transop.extshift & BRANCH_HINT_PUSH_RAS) != 0);
       bb.ret = ((transop.extshift & BRANCH_HINT_POP_RAS) != 0);
+      bb.rip_taken = transop.riptaken;
+      bb.rip_not_taken = transop.ripseq;
     }
 
     transop.unaligned = 0;
@@ -526,6 +528,8 @@ void TraceDecoder::lastop() {
     transop.bbindex = bb.count;
     transop.is_x87 = is_x87;
     transop.is_sse = is_sse;
+    bb.x87 |= is_x87;
+    bb.sse |= is_sse;
     bb.transops[bb.count++] = transop;
     if (ld|st) bb.memcount++;
     if (st) bb.storecount++;
@@ -1169,7 +1173,7 @@ void TraceDecoder::microcode_assist(int assistid, Waddr selfrip, Waddr nextrip) 
   if (!last_flags_update_was_atomic) 
     this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
   TransOp transop(OP_brp, REG_rip, REG_zero, REG_zero, REG_zero, 3);
-  transop.riptaken = transop.ripseq = (Waddr)assistid_to_func[assistid];
+  transop.riptaken = transop.ripseq = (Waddr)assistid;
   this << transop;
 }
 
@@ -1427,10 +1431,14 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
     if (DEBUG) logfile << "Scanning ", bbpages.count, " code pages:", endl;
     while (page = iter.next()) {
       if (page->empty()) {
-        if (DEBUG) logfile << "  mfn ", page->mfn, " has no entries; freeing", endl;
-        bbpages.remove(page);
-        delete page;
-        pages_freed++;
+        if (!page->refcount) {
+          if (DEBUG) logfile << "  mfn ", page->mfn, " has no entries; freeing", endl;
+          bbpages.remove(page);
+          delete page;
+          pages_freed++;
+        } else {
+          if (DEBUG) logfile << "  mfn ", page->mfn, " still has refs to it: cannot free it yet", endl;
+        }
       }
     }
 
@@ -1540,6 +1548,8 @@ bool TraceDecoder::invalidate() {
       // instruction in question is the first one in the next BB.
       // Outside code is responsible for dispatching exceptions.
       //
+      invalid = 0;
+      rip = ripstart;
       split_before();
       return false;
     } else {
@@ -1561,6 +1571,8 @@ bool TraceDecoder::invalidate() {
       // instruction in question is the first one in the next BB.
       // Outside code is responsible for dispatching exceptions.
       //
+      invalid = 0;
+      rip = ripstart;
       split_before();
       return false;
     } else {
@@ -1721,6 +1733,7 @@ bool TraceDecoder::translate() {
     // Block did not end with a branch: do we have more room for another x86 insn?
     if (((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN))
         || ((rip - bb.rip) >= (insnbytes_bufsize-15))
+        || ((rip - bb.rip) >= valid_byte_count)
         || (user_insn_count >= MAX_BB_X86_INSNS)) {
       if (logable(5)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
       // bb.rip_taken and bb.rip_not_taken were already filled out for the last instruction.
@@ -1823,11 +1836,20 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   pagelist = bbpages.get(bb->rip.mfnlo);
   if (!pagelist) {
     pagelist = new BasicBlockChunkList(bb->rip.mfnlo);
+    pagelist->refcount++;
     bbpages.add(pagelist);
     stats.decoder.pagecache.inserts++;
     stats.decoder.pagecache.count = bbpages.count;
+    pagelist->refcount--;
   }
+  pagelist->refcount++;
 
+  //
+  // WARNING: in extreme low memory situations, if this needs memory
+  // (to add a new chunk to the list), the list itself may get freed
+  // since it technically does not have any MFNs on it yet. We need
+  // to somehow lock it with a refcount to prevent this.
+  //
   pagelist->add(bb, bb->mfnlo_loc);
   if (logable(5) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to low page list ", pagelist, ": loc ", bb->mfnlo_loc.chunk, ":", bb->mfnlo_loc.index, endl;
 
@@ -1835,16 +1857,22 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
 
   if (page_crossing) {
     //smc_cleardirty(bb->rip.mfnhi);
-    pagelist = bbpages.get(bb->rip.mfnhi);
-    if (!pagelist) {
-      pagelist = new BasicBlockChunkList(bb->rip.mfnhi);
-      bbpages.add(pagelist);
+    BasicBlockChunkList* pagelisthi = bbpages.get(bb->rip.mfnhi);
+    if (!pagelisthi) {
+      pagelisthi = new BasicBlockChunkList(bb->rip.mfnhi);
+      pagelisthi->refcount++;
+      bbpages.add(pagelisthi);
       stats.decoder.pagecache.inserts++;
       stats.decoder.pagecache.count = bbpages.count;
+      pagelisthi->refcount--;
     }
-    pagelist->add(bb, bb->mfnhi_loc);
-    if (logable(5) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelist, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
+    pagelisthi->refcount++;
+    pagelisthi->add(bb, bb->mfnhi_loc);
+    if (logable(5) | log_code_page_ops) logfile << "Add bb ", bb, " (", bb->rip, ", ", bb->bytes, " bytes) to high page list ", pagelisthi, ": loc ", bb->mfnhi_loc.chunk, ":", bb->mfnhi_loc.index, endl;
+    pagelisthi->refcount--;
   }
+
+  pagelist->refcount--;
 
   if (logable(5)) {
     logfile << "=====================================================================", endl;

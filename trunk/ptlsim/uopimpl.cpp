@@ -804,8 +804,8 @@ void uop_impl_brp(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rb
 template <int ptlopcode, int evaltype>
 inline void uop_impl_chk(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   bool passed = evaluate_cond<evaltype>(raflags, rbflags);
-  state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
-  state.reg.addr = rc;
+  state.reg.rddata = (passed) ? 0 : rc;
+  state.reg.addr = 0;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_chk, 0);
 }
@@ -815,8 +815,8 @@ inline void uop_impl_chk_sub(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
   sub_flag_gen_op<T> func;
   int flags = func(ra, rb);
   bool passed = evaluate_cond<evaltype>(flags, flags);
-  state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
-  state.reg.addr = rc;
+  state.reg.rddata = (passed) ? 0 : rc;
+  state.reg.addr = 0;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype);
 }
@@ -826,8 +826,8 @@ inline void uop_impl_chk_and(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
   and_flag_gen_op<T> func;
   int flags = func(ra, rb);
   bool passed = evaluate_cond<evaltype>(flags, flags);
-  state.reg.rddata = (passed) ? 0 : EXCEPTION_SkipBlock;
-  state.reg.addr = rc;
+  state.reg.rddata = (passed) ? 0 : rc;
+  state.reg.addr = 0;
   state.reg.rdflags = (passed) ? 0 : FLAG_INV;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype);
 }

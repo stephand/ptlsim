@@ -231,7 +231,7 @@ byte& AddressSpace::pageid_to_map_byte(spat_t top, Waddr pageid) {
   W64 chunkid = pageid >> log2(SPAT_PAGES_PER_CHUNK);
 
   if (!top[chunkid]) {
-    top[chunkid] = (SPATChunk*)ptl_alloc_private_pages(SPAT_BYTES_PER_CHUNK);
+    top[chunkid] = (SPATChunk*)ptl_mm_alloc_private_pages(SPAT_BYTES_PER_CHUNK);
   }
   SPATChunk& chunk = *top[chunkid];
   W64 byteid = bits(pageid, 3, log2(SPAT_BYTES_PER_CHUNK));
@@ -268,22 +268,22 @@ AddressSpace::~AddressSpace() { }
 
 AddressSpace::spat_t AddressSpace::allocmap() {
 #ifdef __x86_64__
-  return (spat_t)ptl_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+  return (spat_t)ptl_mm_alloc_private_pages(SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
 #else 
-  return (spat_t)ptl_alloc_private_pages(SPAT_BYTES);
+  return (spat_t)ptl_mm_alloc_private_pages(SPAT_BYTES);
 #endif
 }
 void AddressSpace::freemap(AddressSpace::spat_t top) {
 #ifdef __x86_64__
   if (top) {
     foreach (i, SPAT_TOPLEVEL_CHUNKS) {
-      if (top[i]) ptl_free_private_pages(top[i], SPAT_BYTES_PER_CHUNK);
+      if (top[i]) ptl_mm_free_private_pages(top[i], SPAT_BYTES_PER_CHUNK);
     }
-    ptl_free_private_pages(top, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
+    ptl_mm_free_private_pages(top, SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*));
   }
 #else
   if (top) {
-    ptl_free_private_pages(top, SPAT_BYTES);
+    ptl_mm_free_private_pages(top, SPAT_BYTES);
   }
 #endif
 }
@@ -493,7 +493,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
   // Atomically capture process memory: otherwise we may allocate our own memory while reading /proc/self/maps 
 #define MAX_PROC_MAPS_SIZE 16*1024*1024
 
-  char* mapdata = (char*)ptl_alloc_private_pages(MAX_PROC_MAPS_SIZE);
+  char* mapdata = (char*)ptl_mm_alloc_private_pages(MAX_PROC_MAPS_SIZE);
   int mapsize = 0;
 
   int fd = sys_open("/proc/self/maps", O_RDONLY, 0);
@@ -597,7 +597,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
     line++;
   }
 
-  ptl_free_private_pages(mapdata, MAX_PROC_MAPS_SIZE);
+  ptl_mm_free_private_pages(mapdata, MAX_PROC_MAPS_SIZE);
   sys_close(fd);
   return map - startmap;
 }
@@ -632,7 +632,7 @@ void AddressSpace::resync_with_process_maps() {
 
   asp.reset();
 
-  MemoryMapExtent* mapstart = (MemoryMapExtent*)ptl_alloc_private_pages(MAX_MAPS_PER_PROCESS * sizeof(MemoryMapExtent));
+  MemoryMapExtent* mapstart = (MemoryMapExtent*)ptl_mm_alloc_private_pages(MAX_MAPS_PER_PROCESS * sizeof(MemoryMapExtent));
   int n = mqueryall(mapstart, MAX_MAPS_PER_PROCESS);
   Waddr stackbase = 0;
 
@@ -652,7 +652,7 @@ void AddressSpace::resync_with_process_maps() {
     map++;
   }
 
-  ptl_free_private_pages(mapstart, MAX_MAPS_PER_PROCESS * sizeof(MemoryMapExtent));
+  ptl_mm_free_private_pages(mapstart, MAX_MAPS_PER_PROCESS * sizeof(MemoryMapExtent));
 
   // Find current brk value kernel thinks we are using:
   brk = sys_brk(null);
@@ -2162,7 +2162,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   ThreadState* tls = &basetls;
   tls->self = tls;
   // Give PTLsim itself 64 MB for the .text, .data and .bss sections:
-  void* stack = ptl_alloc_private_pages(SIM_THREAD_STACK_SIZE, PROT_READ|PROT_WRITE, PTL_IMAGE_BASE + 64*1024*1024);
+  void* stack = ptl_mm_alloc_private_pages(SIM_THREAD_STACK_SIZE, PROT_READ|PROT_WRITE, PTL_IMAGE_BASE + 64*1024*1024);
   assert(mmap_valid(stack));
   tls->stack = (byte*)stack + SIM_THREAD_STACK_SIZE;
   setup_sim_thunk_page();

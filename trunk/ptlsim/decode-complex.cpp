@@ -425,6 +425,11 @@ void assist_fxrstor(Context& ctx) {
 
   ctx.fxrstor(state);
 
+  // We can't have exceptions going on inside PTLsim: virtualize this feature in uopimpl code
+  // Everything else will be used by real SSE insns inside uopimpls. 
+  W32 mxcsr = ctx.mxcsr | MXCSR_EXCEPTION_DISABLE_MASK;
+  x86_set_mxcsr(mxcsr);
+
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
@@ -1054,9 +1059,8 @@ bool TraceDecoder::decode_complex() {
     } else {
       // This is the very first x86 insn in the block, so translate it as a loop!
       if (rep) {
-        TransOp chk(OP_chk_sub, REG_temp0, REG_rcx, REG_zero, REG_imm, addrsizeshift, 0, (Waddr)rip);
+        TransOp chk(OP_chk_sub, REG_temp0, REG_rcx, REG_zero, REG_imm, addrsizeshift, 0, EXCEPTION_SkipBlock);
         chk.cond = COND_ne; // make sure rcx is not equal to zero
-        chk.chktype = EXCEPTION_SkipBlock; // type of exception to raise
         this << chk;
         bb.repblock = 1;
       }

@@ -179,8 +179,8 @@ int HYPERVISOR_update_va_mapping(unsigned long va, pte_t new_val, unsigned long 
   return _hypercall3(int, update_va_mapping, va, new_val, flags);
 }
 
-long HYPERVISOR_set_timer_op(u64 timeout) {
-  return _hypercall1(long, set_timer_op, timeout);
+long HYPERVISOR_set_timer_op(u64 abs_nsecs) {
+  return _hypercall1(long, set_timer_op, abs_nsecs);
 }
 
 // HYPERVISOR_event_channel_op_compat
@@ -255,6 +255,24 @@ int xen_sched_yield() {
 	return HYPERVISOR_sched_op(SCHEDOP_yield, NULL);
 }
 
+int xen_sched_timer(u64 nsecs) {
+  nsecs += shinfo.vcpu_info[0].time.system_time;
+  HYPERVISOR_set_timer_op(nsecs);
+  return 0;
+}
+
+int xen_sched_poll(int port, u64 nsecs) {
+  evtchn_port_t ports[1];
+  ports[0] = port;
+
+  sched_poll_t op;
+  op.ports.p = ports;
+  op.nr_ports = 1;
+  op.timeout = shinfo.vcpu_info[0].time.system_time + nsecs;
+
+  return HYPERVISOR_sched_op(SCHEDOP_poll, &op);
+}
+
 int xen_shutdown_domain(int reason) {
   sched_shutdown_t shutdown;
   shutdown.reason = reason;
@@ -303,8 +321,15 @@ W64s synchronous_host_call(const PTLsimHostCall& call, bool spin, bool ignorerc)
   // this, we specify spin = true for these calls.
   //
 
+  barrier();
+
   while (!bootinfo.hostreq.ready) {
-    if unlikely (!spin) { hostreq_spins++; xen_sched_block(); }
+    if unlikely (!spin) {
+      hostreq_spins++;
+      xen_sched_block();
+      //xen_sched_timer(10000000); // 1/100 sec = 10000000 nsec
+      //xen_sched_poll(bootinfo.hostcall_port, 10000000);
+    }
     barrier();
   }
 
@@ -662,7 +687,7 @@ void print_stack(ostream& os, Waddr sp) {
   W64* p = (W64*)sp;
 
   os << "Stack trace back from ", (void*)sp, ":", endl, flush;
-  foreach (i, 64) {
+  foreach (i, 256) {
     if ((i % 8) == 0) os << "  ", &p[i], ":";
     os << " ", hexstring(p[i], 64);
     if ((i % 8) == 7) os << endl;
@@ -740,9 +765,16 @@ static trap_info_t trap_table[] = {
   {  0, 0, 0,              0                                   }
 };
 
+bool lowlevel_init_done = 0;
+
 asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   stringbuf sb;
   sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+
+  if (!lowlevel_init_done) {
+    sys_write(2, sb, strlen(sb));
+    asm("mov %[ra],%%rax; ud2a;" : : [ra] "r" (__builtin_return_address(0)));
+  }
 
   cerr << sb, flush;
 
@@ -754,6 +786,7 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
   }
 
   // Make sure the ring buffer is flushed too:
+  ptl_mm_flush_logging();
   cerr.flush();
   cout.flush();
 
@@ -1856,8 +1889,6 @@ static inline void ptlsim_init_fail(W64 marker) {
 
 extern Waddr xen_m2p_map_end;
 
-extern bool enable_mm_logging;
-
 void collect_sysinfo(PTLsimStats& stats) {
   collect_common_sysinfo(stats);
 
@@ -1883,11 +1914,6 @@ void ptlsim_init() {
   // Capture initial timing information
   //
   capture_initial_timestamps();
-
-  //
-  // Initialize the page pools and memory management
-  //
-  ptl_mm_init(bootinfo.heap_start, bootinfo.heap_end);
 
   //
   // We need this to clear the TS bit in CR0: otherwise any
@@ -1938,16 +1964,6 @@ void ptlsim_init() {
   if (rc < 0) ptlsim_init_fail(8);
 
   //
-  // Make page at base of stack read-only (guard against overflows):
-  //
-  make_ptl_page_writable((byte*)bootinfo.stack_top - bootinfo.stack_size, 0);
-
-  //
-  // Determine CPU type
-  //
-  cpu_type = get_cpu_type();
-
-  //
   // Enable upcalls
   //
   clear_evtchn(bootinfo.hostcall_port);
@@ -1963,6 +1979,21 @@ void ptlsim_init() {
   sti();
 
   //
+  // Make page at base of stack read-only (guard against overflows):
+  //
+  make_ptl_page_writable((byte*)bootinfo.stack_top - bootinfo.stack_size, 0);
+
+  //
+  // Determine CPU type
+  //
+  cpu_type = get_cpu_type();
+
+  //
+  // Initialize the page pools and memory management
+  //
+  ptl_mm_init(bootinfo.heap_start, bootinfo.heap_end);
+
+  //
   // From this point forward, we can make hostcalls to PTLmon
   //
 
@@ -1970,6 +2001,7 @@ void ptlsim_init() {
   // Call all C++ constructors
   //
   call_global_constuctors();
+  lowlevel_init_done = 1;
 
   //
   // Set up the bitmap of which MFNs belong to PTLsim itself
@@ -1978,7 +2010,7 @@ void ptlsim_init() {
 
   xen_m2p_map_end = HYPERVISOR_VIRT_START + (bootinfo.total_machine_pages * sizeof(Waddr));
 
-  ptlsim_mfn_bitmap = (infinite_bitvec_t*)ptl_alloc_private_pages(bytes_required);
+  ptlsim_mfn_bitmap = (infinite_bitvec_t*)ptl_mm_alloc_private_pages(bytes_required);
   memset(ptlsim_mfn_bitmap, 0, bytes_required);
 
   foreach (i, bootinfo.mfn_count) {
@@ -1990,7 +2022,7 @@ void ptlsim_init() {
   //
   // Copy GDT template page from hypervisor
   //
-  gdt_page = ptl_alloc_private_page();
+  gdt_page = ptl_mm_alloc_private_page();
   gdt_mfn = ptl_virt_to_mfn(gdt_page);
 
   mmuext_op_t mmuextop;  
@@ -2139,7 +2171,6 @@ void resume_from_native() {
   // of knowing about this.
   //
   bbcache.flush();
-
   //
   // Initialize the non-trivial parts of the VCPU contexts.
   // This must go AFTER physical memory is accessible since
@@ -2295,7 +2326,7 @@ void assist_ptlcall(Context& ctx) {
   case PTLCALL_ENQUEUE: {
     unsigned int count = arg2;
 
-    char* buf = (char*)ptl_alloc_private_page();
+    char* buf = (char*)ptl_mm_alloc_private_page();
     assert(buf);
 
     foreach (i, count) {
@@ -2321,7 +2352,7 @@ void assist_ptlcall(Context& ctx) {
       arg1 += sizeof(PTLsimCommandDescriptor);
     }
 
-    ptl_free_private_page(buf);
+    ptl_mm_free_private_page(buf);
 
     rc = 0;
     break;
@@ -2366,9 +2397,9 @@ void process_native_upcall() {
 // Toplevel PTLsim/X function: called by ptlsim_preinit_entry
 // in lowlevel-64bit-xen.S.
 //
+
 int main(int argc, char** argv) {
   ptlsim_init();
-
   print_banner(cerr, stats);
 
   bool time_init_done = 0;

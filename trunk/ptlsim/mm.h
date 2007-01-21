@@ -11,31 +11,48 @@
 
 #include <globals.h>
 
-void* ptl_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
-void* ptl_alloc_private_32bit_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
-void ptl_free_private_pages(void* addr, Waddr bytecount);
-void ptl_zero_private_pages(void* base, Waddr bytecount);
+void* ptl_mm_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
+void* ptl_mm_alloc_private_32bit_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0);
+void ptl_mm_free_private_pages(void* addr, Waddr bytecount);
+void ptl_mm_zero_private_pages(void* base, Waddr bytecount);
 
-void* ptl_alloc_private_page();
-void* ptl_alloc_private_32bit_page();
-void ptl_free_private_page(void* addr);
-void ptl_zero_private_page(void* addr);
+void* ptl_mm_alloc_private_page();
+void* ptl_mm_alloc_private_32bit_page();
+void ptl_mm_free_private_page(void* addr);
+void ptl_mm_zero_private_page(void* addr);
 
 void* ptl_mm_alloc(size_t bytes);
 void* ptl_mm_alloc_aligned(int alignbits);
+void* ptl_mm_try_alloc(size_t bytes);
 void ptl_mm_free(void* p);
+
+template <typename T>
+static inline T* ptl_mm_alloc_private_pages_for_objects(int count) {
+  T* p = (T*)ptl_mm_alloc_private_pages(count * sizeof(T));
+  return p;
+}
+
+template <typename T>
+static inline T* ptl_mm_alloc_and_zero_private_pages_for_objects(int count) {
+  T* p = ptl_mm_alloc_private_pages_for_objects<T>(count);
+  ptl_mm_zero_private_pages(p, count * sizeof(T));
+  return p;
+}
 
 typedef void (*mm_reclaim_handler_t)(size_t bytes, int urgency);
 bool ptl_mm_register_reclaim_handler(mm_reclaim_handler_t handler);
 void ptl_mm_reclaim(size_t bytes = 0, int urgency = 0);
+void ptl_mm_cleanup();
 
 class DataStoreNode;
 DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root);
 void ptl_mm_init(byte* heap_start = null, byte* heap_end = null);
 size_t ptl_mm_getsize(void* p);
 void ptl_mm_dump(ostream& os);
-
-extern bool enable_mm_logging;
+void ptl_mm_validate();
+void ptl_mm_set_logging(const char* mm_log_filename, int mm_log_buffer_size, bool enable_inline_mm_logging);
+void ptl_mm_set_validate(bool enable_mm_validate);
+void ptl_mm_flush_logging();
 
 #ifdef __x86_64__
 

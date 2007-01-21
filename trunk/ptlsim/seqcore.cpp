@@ -430,10 +430,12 @@ struct SequentialCore {
 
   bool handle_barrier() {
     core_to_external_state();
-    assist_func_t assist = (assist_func_t)(Waddr)ctx.commitarf[REG_rip];
 
+    int assistid = ctx.commitarf[REG_rip];
+    assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
+    
     if (logable(4)) {
-      logfile << "Barrier (", (void*)assist, " ", assist_name(assist), " called from ",
+      logfile << "[vcpu ", ctx.vcpuid, "] Barrier (#", assistid, " -> ", (void*)assist, " ", assist_name(assist), " called from ",
         (RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx)), "; return to ", (void*)(Waddr)ctx.commitarf[REG_nextrip],
         ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
     }
@@ -1013,9 +1015,24 @@ struct SequentialMachine: public PTLsimMachine {
 
     core.external_to_core_state();
     Waddr rip = ctx.commitarf[REG_rip];
-    BasicBlock* bb = core.fetch_or_translate_basic_block(rip);
-    int result = core.execute(bb, limits<W64>::max);
+    // BasicBlock* bb = core.fetch_or_translate_basic_block(rip);
+
+    TraceDecoder trans(ctx, rip);
+    trans.split_basic_block_at_locks_and_fences = 1;
+    trans.split_invalid_basic_blocks = 1;
+
+    byte byte_buffer[MAX_BB_BYTES];
+    int valid_byte_count = trans.fillbuf(ctx, byte_buffer, lengthof(byte_buffer));
+    assert(valid_byte_count <= lengthof(byte_buffer));
+
+    for (;;) {
+      if (!trans.translate()) break;
+    }
+
+    int result = core.execute(&trans.bb, limits<W64>::max);
     core.core_to_external_state();
+
+    if (trans.bb.synthops) delete[] trans.bb.synthops;
 
     return result;
   }

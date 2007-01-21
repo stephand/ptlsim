@@ -190,7 +190,7 @@ ptlsim_preinit_entry:
   add   %rsp,(8*64)
 
   # Transfer evtchn_upcall_mask = ~saved_rflags.IF
-  test  word ptr [%rsp + 2*8],(1 << 9)
+  test  word ptr [%rsp + 4*8],(1 << 9)
   mov   %rcx,(PTLSIM_SHINFO_PAGE_VIRT_BASE + offsetof_evtchn_upcall_mask)
   setz  byte ptr [%rcx]
 
