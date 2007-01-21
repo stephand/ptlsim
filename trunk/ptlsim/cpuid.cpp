@@ -100,8 +100,6 @@ int main(int argc, char* argv[]) {
   W32 eax, ebx, ecx, edx;
   W32 maxfuncs;
 
-  testsort();
-
   {
     cout << "Function 0:", endl;
     CPUVendorID vendor;
