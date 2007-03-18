@@ -24,6 +24,7 @@
 #include <branchpred.h>
 #undef STATS_ONLY
 
+
 //
 // This file is run through dstbuild to auto-generate
 // the code to instantiate a DataStoreNodeTemplate tree.
@@ -149,6 +150,7 @@ struct PTLsimStats { // rootnode:
 #endif
 
   DataCacheStats dcache;
+
 
   struct external {
     W64 assists[ASSIST_COUNT]; // label: assist_names

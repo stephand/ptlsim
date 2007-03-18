@@ -23,23 +23,10 @@ const char* opclass_names[OPCLASS_COUNT] = {
 //
 // Micro-operation (uop) definitions
 //
-#define makeccbits(b0, b1, b2) ((b0 << 0) + (b1 << 1) + (b2 << 2))
-#define ccA   makeccbits(1, 0, 0)
-#define ccB   makeccbits(0, 1, 0)
-#define ccAB  makeccbits(1, 1, 0)
-#define ccABC makeccbits(1, 1, 1)
-#define ccC   makeccbits(0, 0, 1)
-
-#define makeopbits(b3, b4, b5) ((b3 << 3) + (b4 << 4) + (b5 << 5))
-
-#define opA   makeopbits(1, 0, 0)
-#define opAB  makeopbits(1, 1, 0)
-#define opABC makeopbits(1, 1, 1)
-#define opB   makeopbits(0, 1, 0)
 
 const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // name, opclass, latency, fu
-  {"nop",            OPCLASS_LOGIC,         0          },
+  {"nop",            OPCLASS_LOGIC,         opNOSIZE   },
   {"mov",            OPCLASS_LOGIC,         opAB       }, // move or merge
   // Logical
   {"and",            OPCLASS_LOGIC,         opAB       },
@@ -51,7 +38,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"eqv",            OPCLASS_LOGIC,         opAB       },
   {"nor",            OPCLASS_LOGIC,         opAB       },
   // Mask, insert or extract bytes
-  {"maskb",          OPCLASS_SIMPLE_SHIFT,  opAB       }, // mask rd = ra,rb,[ds,ms,mc], bytes only
+  {"maskb",          OPCLASS_SIMPLE_SHIFT,  opABC      }, // mask rd = ra,rb,[ds,ms,mc], bytes only; rcimm (8 bits, but really 18 bits)
   // Add and subtract
   {"add",            OPCLASS_ADDSUB,        opABC|ccC  }, // ra + rb
   {"sub",            OPCLASS_ADDSUB,        opABC|ccC  }, // ra - rb
@@ -60,14 +47,14 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"addm",           OPCLASS_ADDSUB,        opABC      }, // lowbits(ra + rb, m)
   {"subm",           OPCLASS_ADDSUB,        opABC      }, // lowbits(ra - rb, m)
   // Condition code logical ops
-  {"andcc",          OPCLASS_FLAGS,         opAB|ccAB  },
-  {"orcc",           OPCLASS_FLAGS,         opAB|ccAB  },
-  {"xorcc",          OPCLASS_FLAGS,         opAB|ccAB  },
-  {"ornotcc",        OPCLASS_FLAGS,         opAB|ccAB  },
+  {"andcc",          OPCLASS_FLAGS,         opAB|ccAB|opNOSIZE},
+  {"orcc",           OPCLASS_FLAGS,         opAB|ccAB|opNOSIZE},
+  {"xorcc",          OPCLASS_FLAGS,         opAB|ccAB|opNOSIZE},
+  {"ornotcc",        OPCLASS_FLAGS,         opAB|ccAB|opNOSIZE},
   // Condition code movement and merging
-  {"movccr",         OPCLASS_FLAGS,         opB|ccB    },
-  {"movrcc",         OPCLASS_FLAGS,         opB        },
-  {"collcc",         OPCLASS_FLAGS,         opABC|ccABC},
+  {"movccr",         OPCLASS_FLAGS,         opB|ccB|opNOSIZE},
+  {"movrcc",         OPCLASS_FLAGS,         opB|opNOSIZE},
+  {"collcc",         OPCLASS_FLAGS,         opABC|ccABC|opNOSIZE},
   // Simple shifting (restricted to small immediate 1..8)
   {"shls",           OPCLASS_SIMPLE_SHIFT,  opAB       }, // rb imm limited to 0-8
   {"shrs",           OPCLASS_SIMPLE_SHIFT,  opAB       }, // rb imm limited to 0-8
@@ -84,27 +71,27 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"set.and",        OPCLASS_SELECT,        opABC      },
   {"sel",            OPCLASS_SELECT,        opABC|ccABC}, // rd = falsereg,truereg,condreg
   // Branches
-  {"br",             OPCLASS_COND_BRANCH,   opAB|ccAB}, // branch
-  {"br.sub",         OPCLASS_COND_BRANCH,   opAB     }, // compare and branch ("cmp" form: subtract)
-  {"br.and",         OPCLASS_COND_BRANCH,   opAB     }, // compare and branch ("test" form: and)
-  {"jmp",            OPCLASS_INDIR_BRANCH,  opA      }, // indirect user branch
-  {"bru",            OPCLASS_UNCOND_BRANCH, 0        }, // unconditional branch (branch cap)
-  {"jmpp",           OPCLASS_INDIR_BRANCH|OPCLASS_BARRIER,  opA}, // indirect branch within PTL
-  {"brp",            OPCLASS_UNCOND_BRANCH|OPCLASS_BARRIER, 0}, // unconditional branch (PTL only)
+  {"br",             OPCLASS_COND_BRANCH,   opAB|ccAB|opNOSIZE}, // branch (rcimm: 32 to 53-bit target info)
+  {"br.sub",         OPCLASS_COND_BRANCH,   opAB     }, // compare and branch ("cmp" form: subtract) (rcimm: 32 to 53-bit target info)
+  {"br.and",         OPCLASS_COND_BRANCH,   opAB     }, // compare and branch ("test" form: and) (rcimm: 32 to 53-bit target info)
+  {"jmp",            OPCLASS_INDIR_BRANCH,  opA      }, // indirect user branch (rcimm: 32 to 53-bit target info)
+  {"bru",            OPCLASS_UNCOND_BRANCH, opNOSIZE }, // unconditional branch (rcimm: 32 to 53-bit target info)
+  {"jmpp",           OPCLASS_INDIR_BRANCH|OPCLASS_BARRIER,  opA}, // indirect branch within PTL (rcimm: 32 to 53-bit target info)
+  {"brp",            OPCLASS_UNCOND_BRANCH|OPCLASS_BARRIER, opNOSIZE}, // unconditional branch (PTL only) (rcimm: 32 to 53-bit target info)
   // Checks
-  {"chk",            OPCLASS_CHECK,         opAB|ccAB}, // check condition and rollback if false (uses cond codes); rcimm is exception type
-  {"chk.sub",        OPCLASS_CHECK,         opAB     }, // check ("cmp" form: subtract)
-  {"chk.and",        OPCLASS_CHECK,         opAB     }, // check ("test" form: and)
+  {"chk",            OPCLASS_CHECK,         opABC|ccAB|opNOSIZE}, // check condition and rollback if false (uses cond codes); (rcimm: 8-bit exception type)
+  {"chk.sub",        OPCLASS_CHECK,         opABC     }, // check ("cmp" form: subtract)
+  {"chk.and",        OPCLASS_CHECK,         opABC     }, // check ("test" form: and)
   // Loads and stores
   {"ld",             OPCLASS_LOAD,          opABC    }, // load zero extended
   {"ldx",            OPCLASS_LOAD,          opABC    }, // load sign extended
   {"ld.pre",         OPCLASS_PREFETCH,      opAB     }, // prefetch
   {"st",             OPCLASS_STORE,         opABC    }, // store
-  {"mf",             OPCLASS_FENCE,         0        }, // memory fence (extshift holds type: 01 = st, 10 = ld, 11 = ld.st)
+  {"mf",             OPCLASS_FENCE,         opNOSIZE }, // memory fence (extshift holds type: 01 = st, 10 = ld, 11 = ld.st)
   // Shifts, rotates and complex masking
   {"shl",            OPCLASS_SHIFTROT,      opABC|ccC},
   {"shr",            OPCLASS_SHIFTROT,      opABC|ccC},
-  {"mask",           OPCLASS_SHIFTROT,      opAB     }, // mask rd = ra,rb,[ds,ms,mc]
+  {"mask",           OPCLASS_SHIFTROT,      opAB     }, // mask rd = ra,rb,[ds,ms,mc]: (rcimm: 18 bits)
   {"sar",            OPCLASS_SHIFTROT,      opABC|ccC},
   {"rotl",           OPCLASS_SHIFTROT,      opABC|ccC},  
   {"rotr",           OPCLASS_SHIFTROT,      opABC|ccC},   
@@ -181,7 +168,7 @@ const char* exception_names[EXCEPTION_COUNT] = {
   "CacheLocked",
   "LFRQFull",
   "Float",
-  "FloatNotAvail"
+  "FloatNotAvail",
 };
 
 const char* x86_exception_names[256] = {
@@ -247,7 +234,7 @@ const char* arch_reg_names[TRANSREG_COUNT] = {
   "xmml8", "xmmh8", "xmml9", "xmmh9", "xmml10", "xmmh10", "xmml11", "xmmh11",
   "xmml12", "xmmh12", "xmml13", "xmmh13", "xmml14", "xmmh14", "xmml15", "xmmh15",
   // x87 FP/MMX
-  "fptos", "fpsw", "fptags", "fpstack", "tr4", "tr5", "tr6", "ctx",
+  "fptos", "fpsw", "fptags", "fpstack", "tr4", "tr5", "trace", "ctx",
   // Special
   "rip", "flags", "iflags", "selfrip","nextrip", "ar1", "ar2", "zero",
   // The following are ONLY used during the translation and renaming process:
@@ -385,7 +372,7 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   stringbuf sbname;
 
   sbname << nameof(op.opcode);
-  sbname << (fp ? fptype_names[op.size] : size_names[op.size]);
+  if (!(opinfo[op.opcode].flagops & opNOSIZE)) sbname << (fp ? fptype_names[op.size] : size_names[op.size]);
 
   if (isclass(op.opcode, OPCLASS_USECOND)) sbname << ".", cond_code_names[op.cond];
 
@@ -402,9 +389,11 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   if ((ld|st) && (op.cachelevel > 0)) sbname << ".L", (char)('1' + op.cachelevel);
   if ((ld|st) && (op.locked)) sbname << ((ld) ? ".acq" : ".rel");
   if (op.internal) sbname << ".p";
-  if (op.eom) sbname << ".";
+  if (op.eom) sbname << ".", (op.any_flags_in_insn ? "+" : "-");
 
   sb << padstring((char*)sbname, -12), " ", arch_reg_names[op.rd];
+  if ((op.rd < ARCHREG_COUNT) & (!op.final_arch_in_insn)) sb << ".t";
+
   sb << " = ";
   if (ld|st) sb << "[";
   sb << arch_reg_names[op.ra];
@@ -430,7 +419,8 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
     for (int i = 0; i < SETFLAG_COUNT; i++) {
       if (bit(op.setflags, i)) sb << setflag_names[i];
     }
-    sb << "] ";
+    sb << "]";
+    if (!op.final_flags_in_insn) sb << "/temp";
   }
 
   if (isbranch(op.opcode)) sb << " [taken ", (void*)(Waddr)op.riptaken, ", seq ", (void*)(Waddr)op.ripseq, "]";
@@ -451,8 +441,12 @@ ostream& RIPVirtPhysBase::print(ostream& os) const {
   os << (use64 ? " 64b" : " 32b");
   os << (kernel ? " krn" : "");
   os << (df ? " df" : "");
-  os << " mfn ", mfnlo;
-  if (mfnlo != mfnhi) os << "|", mfnhi;
+  os << " mfn ";
+  if (mfnlo != INVALID) os << mfnlo; else os << "inv";
+  if (mfnlo != mfnhi) {
+    os << "|";
+    if (mfnhi != INVALID) os << mfnhi; else os << "inv";
+  }
   os << "]";
 #else
   os << (void*)(Waddr)rip;
@@ -550,6 +544,8 @@ ostream& operator <<(ostream& os, const BasicBlock& bb) {
   os << "Basic block terminates with taken rip ", (void*)(Waddr)bb.rip_taken, ", not taken rip ", (void*)(Waddr)bb.rip_not_taken, endl;
   return os;
 }
+
+const char* bb_type_names[BB_TYPE_COUNT] = {"br", "bru", "jmp", "brp"};
 
 char* regname(int r) {
   static stringbuf temp;

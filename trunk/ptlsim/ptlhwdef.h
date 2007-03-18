@@ -25,7 +25,7 @@
 #define FLAG_PF    0x004     // (1 << 2)
 #define FLAG_WAIT  0x008     // (1 << 3)
 #define FLAG_AF    0x010     // (1 << 4)
-#define FLAG_BRMIS 0x020     // (1 << 5)
+#define FLAG_BR_TK 0x020     // (1 << 5)
 #define FLAG_ZF    0x040     // (1 << 6)
 #define FLAG_SF    0x080     // (1 << 7)
 #define FLAG_OF    0x800     // (1 << 11)
@@ -115,7 +115,7 @@
 #define REG_fpstack 51
 #define REG_tr4     52
 #define REG_tr5     53
-#define REG_tr6     54
+#define REG_trace   54
 #define REG_ctx     55
 #define REG_rip     56
 #define REG_flags   57
@@ -185,7 +185,7 @@ enum {
   EXCEPTION_COUNT
 };
 
-static const int MAX_BB_BYTES = 63;
+static const int MAX_BB_BYTES = 127;
 static const int MAX_BB_X86_INSNS = 63;
 static const int MAX_BB_UOPS = 63;
 static const int MAX_BB_PER_PAGE = 4096;
@@ -823,7 +823,12 @@ struct ContextBase {
 #endif
 
   inline void reset() {
-    memset(&commitarf, 0, sizeof(commitarf));
+    setzero(commitarf);
+#ifdef PTLSIM_HYPERVISOR
+    setzero(cached_pte_virt);
+    setzero(cached_pte);
+#endif
+
     exception = 0;
   }
 };
@@ -884,9 +889,13 @@ struct Context: public ContextBase {
     // return page_table_walk(rawvirt, cr3 >> 12); // do not use mini-TLB
   }
 
+  W64 virt_to_pte_phys_addr(Waddr virtaddr, int level = 0);
+
+  int virt_to_pte_span(Level1PTE* ptes, W64 virtaddr, int pagecount);
+
   // Flush the context mini-TLB and propagate flush to any core-specific TLBs
-  void flush_tlb();
-  void flush_tlb_virt(Waddr virtaddr);
+  void flush_tlb(bool propagate_flush_to_model = true);
+  void flush_tlb_virt(Waddr virtaddr, bool propagate_flush_to_model = true);
 
   void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) {
     return page_table_acc_dirty_update(rawvirt, cr3 >> 12, update);
@@ -899,7 +908,6 @@ struct Context: public ContextBase {
   bool change_runstate(int newstate);
 
   int page_table_level_count() const { return 4; }
-  W64 virt_to_pte_phys_addr(Waddr virtaddr, int level);
 #else
   void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) { }
   void update_shadow_segment_descriptors();
@@ -1112,6 +1120,27 @@ struct OpcodeInfo {
   W16 flagops;
 };
 
+//
+// flagops field encodings:
+//
+#define makeccbits(b0, b1, b2) ((b0 << 0) + (b1 << 1) + (b2 << 2))
+#define ccA   makeccbits(1, 0, 0)
+#define ccB   makeccbits(0, 1, 0)
+#define ccAB  makeccbits(1, 1, 0)
+#define ccABC makeccbits(1, 1, 1)
+#define ccC   makeccbits(0, 0, 1)
+
+#define makeopbits(b3, b4, b5) ((b3 << 3) + (b4 << 4) + (b5 << 5))
+
+#define opA   makeopbits(1, 0, 0)
+#define opAB  makeopbits(1, 1, 0)
+#define opABC makeopbits(1, 1, 1)
+#define opB   makeopbits(0, 1, 0)
+#define opC   makeopbits(0, 0, 1)
+
+// Size field is not used
+#define opNOSIZE (1 << 6)
+
 extern const OpcodeInfo opinfo[OP_MAX_OPCODE];
 
 inline bool isclass(int opcode, W32 opclass) { return ((opinfo[opcode].opclass & opclass) != 0); }
@@ -1225,7 +1254,7 @@ struct TransOpBase {
   // Opcode:
   byte opcode;
   // Size shift, extshift
-  byte size:2, extshift:2;
+  byte size:2, extshift:2, unaligned:1;
   // Condition codes (for loads/stores, cond = alignment)
   byte cond:4, setflags:3, nouserflags:1;
   // Loads and stores:
@@ -1236,8 +1265,8 @@ struct TransOpBase {
   byte rd, ra, rb, rc;
   // Index in basic block
   byte bbindex;
-  // Misc info
-  byte unaligned:1, chktype:7;
+  // Misc info (terminal writer of targets in this insn, etc)
+  byte final_insn_in_bb:1, final_arch_in_insn:1, final_flags_in_insn:1, any_flags_in_insn:1, pad:4;
   // Immediates
   W64s rbimm;
   W64s rcimm;
@@ -1253,31 +1282,16 @@ struct TransOp: public TransOpBase {
   }
 
   void init(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0, int memid = 0)  {
+    setzero(*this);
     this->opcode = opcode;
     this->rd = rd; 
     this->ra = ra;
     this->rb = rb;
     this->rc = rc;
     this->size = size;
-    this->cond = 0;
     this->rbimm = rbimm;
     this->rcimm = rcimm;
-    this->eom = 0;
-    this->som = 0;
     this->setflags = setflags;
-    this->riptaken = 0;
-    this->ripseq = 0;
-    this->bytes = 0;
-    this->locked = 0;
-    this->internal = 0;
-    this->nouserflags = 0;
-    this->extshift = 0;
-    this->cachelevel = 0;
-    this->datatype = 0;
-    this->unaligned = 0;
-    this->is_sse = 0;
-    this->is_x87 = 0;
-    this->bbindex = 0;
   }
 };
 
@@ -1322,7 +1336,8 @@ struct BasicBlockChunkList: public ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK> {
   BasicBlockChunkList(W64 mfn): ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK>() { this->mfn = mfn; refcount = 0; }
 };
 
-enum { BB_TYPE_COND, BB_TYPE_UNCOND, BB_TYPE_INDIR, BB_TYPE_ASSIST };
+enum { BB_TYPE_COND, BB_TYPE_UNCOND, BB_TYPE_INDIR, BB_TYPE_ASSIST, BB_TYPE_COUNT };
+extern const char* bb_type_names[BB_TYPE_COUNT];
 
 struct BasicBlockBase {
   RIPVirtPhys rip;

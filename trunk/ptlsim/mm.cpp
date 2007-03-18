@@ -1168,7 +1168,7 @@ void* ptl_mm_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
       ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, __builtin_return_address(0), p, bytecount);
       return p;
     }
-    logfile << "Before reclaim round ", i, ": largest free physical extent: ", pagealloc.largest_free_extent_bytes(), " bytes", endl;
+    logfile << "Before reclaim round ", i, ": largest free physical extent: ", pagealloc.largest_free_extent_bytes(), " bytes vs ", bytecount, " required bytes", endl;
     ptl_mm_dump_free_bytes(logfile);
     // The urgency -1 means "free everything possible at all costs":
     ptl_mm_reclaim(bytecount, ((i == (retry_count-2)) ? -1 : 0));

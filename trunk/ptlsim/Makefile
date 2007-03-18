@@ -160,7 +160,7 @@ endif
 ifdef __x86_64__
 ifdef PTLSIM_HYPERVISOR
 ptlsim: ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o ptlmon.lds Makefile
-	$(CC) $(CFLAGS) ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -Wl,-T,ptlmon.lds -static -o ptlsim
+	$(CC) $(CFLAGS) ptlmon.o ptlxen.bin.o usage.o $(BASEOBJS) $(STDOBJS) ptlxen-common.o ptlhwdef.o -lxenctrl -lxenguest -lstdc++ -lpthread -Wl,-T,ptlmon.lds -static -o ptlsim
 else
 ptlsim: $(OBJFILES) Makefile ptlsim.lds
 	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`

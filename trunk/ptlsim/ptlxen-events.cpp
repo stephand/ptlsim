@@ -29,7 +29,7 @@ void force_evtchn_callback() {
 }
 
 void unmask_evtchn(int port) {
-  vcpu_info_t& vcpu_info = shinfo.vcpu_info[0];
+  struct vcpu_info& vcpu_info = shinfo.vcpu_info[0];
 
   shinfo_evtchn_mask[port].atomicclear();
   
@@ -50,7 +50,7 @@ void cli() {
 
 void sti() {
 	barrier();
-  vcpu_info_t& vcpu = shinfo.vcpu_info[0];
+  struct vcpu_info& vcpu = shinfo.vcpu_info[0];
 	vcpu.evtchn_upcall_mask = 0;
 	barrier(); // unmask then check (avoid races)
 	if (vcpu.evtchn_upcall_pending) {
@@ -72,7 +72,7 @@ void handle_event(int port, int vcpu) {
     // Upcall: check at next iteration of main loop
   } else {
     // some user port: copy to virtualized shared info page and notify simulation loop
-    if (!always_mask_port[port]) {
+    if likely (!always_mask_port[port]) {
       if likely (!config.mask_interrupts) shadow_evtchn_set_pending(port);
     }
   }
@@ -82,7 +82,7 @@ void handle_event(int port, int vcpu) {
 
 asmlinkage void xen_event_callback(W64* regs) {
   int vcpu = current_vcpuid();
-  vcpu_info_t& vcpu_info = shinfo.vcpu_info[vcpu];
+  struct vcpu_info& vcpu_info = shinfo.vcpu_info[vcpu];
   W64  l1, l2;
   unsigned int l1i, l2i, port;
 
@@ -369,6 +369,35 @@ void capture_initial_timestamps() {
   }
 }
 
+int real_timer_port[MAX_VIRT_CPUS];
+
+//
+// Early event initialization
+//
+void events_init() {
+  foreach (i, MAX_VIRT_CPUS) real_timer_port[i] = -1;
+
+  foreach (vcpu, contextcount) {
+    Context& ctx = contextof(vcpu);
+
+    foreach (virq, NR_VIRQS) {
+      int port = ctx.virq_to_port[virq];
+      if (!port) continue;
+      assert(inrange(port, 0, 4095));
+      port_to_vcpu_cache[port] = vcpu;
+      if (virq == VIRQ_TIMER) {
+        //
+        // Let timer interrupts through, to let us do periodic events
+        // However, we do not pass this on to the target domain.
+        //
+        unmask_evtchn(port);
+        always_mask_port[port] = 1;
+        real_timer_port[ctx.vcpuid] = port;
+      }
+    }
+  }
+}
+
 //
 // Reconstruct VIRQ bindings based on ctx.virq_to_port as captured
 // by the hypervisor when we context swapped into PTLsim.
@@ -386,8 +415,13 @@ void reconstruct_virq_to_port_mappings() {
       logfile << "  vcpu ", vcpu, ": virq ", virq, " -> port ", port, endl;
       if (virq == VIRQ_TIMER) {
         logfile << "  - Timer virq: mask and generate internally", endl;
-        mask_evtchn(port);
+        //
+        // Let timer interrupts through, to let us do periodic events
+        // However, we do not pass this on to the target domain.
+        //
+        unmask_evtchn(port);
         always_mask_port[port] = 1;
+        real_timer_port[ctx.vcpuid] = port;
       }
     }
   }
@@ -497,6 +531,16 @@ void time_and_virq_resume() {
     evtchn_status_t status = evtchn_get_status(port);
     if (status.status == EVTCHNSTAT_closed) continue;
     logfile << "  Port ", intstring(port, 4), ": ", status, endl;
+  }
+
+  if (config.mask_interrupts) {
+    logfile << "Deterministic event masking enabled: clearing all non-internal IRQs", endl;
+    foreach (i, contextcount) {
+      struct vcpu_info& vcpu_info = sshinfo.vcpu_info[0];
+      vcpu_info.evtchn_upcall_pending = 0;
+      vcpu_info.evtchn_pending_sel = 0;
+    }
+    setzero(sshinfo.evtchn_pending);
   }
 
   if (logable(1)) {
@@ -798,8 +842,9 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
       // PTLsim generates its own timer interrupts
       if (req.virq == VIRQ_TIMER) {
         if (debug) logfile << "Assigned timer VIRQ ", req.virq, " on VCPU ", req.vcpu, " to port ", req.port, endl;
-        mask_evtchn(req.port);
+        unmask_evtchn(req.port); // PTLsim will not pass it on, but it still uses the timer virq internally
         always_mask_port[req.port] = 1;
+        real_timer_port[ctx.vcpuid] = req.port;
       }
     }
     putreq(evtchn_bind_virq);

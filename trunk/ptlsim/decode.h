@@ -53,7 +53,7 @@ static const int PFX_count     = 13;
 
 extern const char* prefix_names[PFX_count];
 
-#define FLAGS_DEFAULT_ALU SETFLAG_ZF|SETFLAG_CF|SETFLAG_OF
+#define FLAGS_DEFAULT_ALU (SETFLAG_ZF|SETFLAG_CF|SETFLAG_OF)
 
 enum {
   // 64-bit
@@ -141,6 +141,14 @@ static inline ostream& operator <<(ostream& os, const DecodedOperand& decop) {
   return decop.print(os);
 }
 
+enum {
+  DECODE_OUTCOME_OK                 = 0,
+  DECODE_OUTCOME_ENTRY_PAGE_FAULT   = 1,
+  DECODE_OUTCOME_OVERLAP_PAGE_FAULT = 2,
+  DECODE_OUTCOME_INVALID_OPCODE     = 3,
+  DECODE_OUTCOME_GP_FAULT           = 4,
+};
+
 struct TraceDecoder {
   BasicBlock bb;
   TransOp transbuf[MAX_TRANSOPS_PER_USER_INSN];
@@ -172,25 +180,21 @@ struct TraceDecoder {
   bool some_insns_complex;
   bool split_basic_block_at_locks_and_fences;
   bool split_invalid_basic_blocks;
+  bool no_partial_flag_updates_per_insn;
 
   int outcome;
-
-  enum {
-    DECODE_OUTCOME_OK             = 0,
-    DECODE_OUTCOME_PAGE_FAULT     = 1,
-    DECODE_OUTCOME_INVALID_OPCODE = 2,
-    DECODE_OUTCOME_GP_FAULT       = 3,
-  };
 
   Level1PTE ptelo;
   Level1PTE ptehi;
 
   TraceDecoder(const RIPVirtPhys& rvp);
   TraceDecoder(Context& ctx, Waddr rip);
+  TraceDecoder(Waddr rip, bool use64, bool kernel, bool df);
 
   void reset();
   void decode_prefixes();
   void immediate(int rdreg, int sizeshift, W64s imm, bool issigned = true);
+  void abs_code_addr_immediate(int rdreg, int sizeshift, W64 imm);
   int bias_by_segreg(int basereg);
   void address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype = DATATYPE_INT, int cachelevel = 0, bool force_seg_bias = false);
   void operand_load(int destreg, const DecodedOperand& memref, int loadop = OP_ld, int datatype = 0, int cachelevel = 0);
@@ -204,6 +208,9 @@ struct TraceDecoder {
   bool memory_fence_if_locked(bool end_of_x86_insn = 0, int type = MF_TYPE_LFENCE|MF_TYPE_SFENCE);
 
   int fillbuf(Context& ctx, byte* insnbytes_, int insnbytes_bufsize_);
+#ifdef PTLSIM_HYPERVISOR
+  int fillbuf_phys_prechecked(byte* insnbytes_, int insnbytes_bufsize_, Level1PTE ptelo, Level1PTE ptehi);
+#endif
   inline W64 fetch(int n) { W64 r = lowbits(*((W64*)&insnbytes[byteoffset]), n*8); rip += n; byteoffset += n; return r; }
   inline byte fetch1() { byte r = *((byte*)&insnbytes[byteoffset]); rip += 1; byteoffset += 1; return r; }
   inline W16 fetch2() { W16 r = *((W16*)&insnbytes[byteoffset]); rip += 2; byteoffset += 2; return r; }

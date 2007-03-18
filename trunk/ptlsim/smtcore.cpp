@@ -32,13 +32,6 @@
 
 using namespace SMTModel;
 
-static void force_logging_enabled() {
-  logenable = 1;
-  config.start_log_at_iteration = 0;
-  config.loglevel = 99;
-  config.flush_event_log_every_cycle = 1;
-}
-
 namespace SMTModel {
   byte uop_executable_on_cluster[OP_MAX_OPCODE];
   W32 forward_at_cycle_lut[MAX_CLUSTERS][MAX_FORWARDING_LATENCY+1];

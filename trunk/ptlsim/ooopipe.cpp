@@ -487,6 +487,7 @@ bool OutOfOrderCore::fetch() {
         fetchrip = predrip;
         fetchrip.update(ctx);
         if (taken) {
+          fetchcount++;
           stats.ooocore.fetch.stop.branch_taken++;
           break;
         }
@@ -1487,7 +1488,8 @@ int ReorderBufferEntry::commit() {
   // store to overwrite its own instruction bytes, but this update only
   // becomes visible after the store has committed.
   //
-  if unlikely (smc_isdirty(uop.rip.mfnlo) | (smc_isdirty(uop.rip.mfnhi))) {
+  bool page_crossing = ((lowbits(uop.rip.rip, 12) + (uop.bytes-1)) >> 12);
+  if unlikely (smc_isdirty(uop.rip.mfnlo) | (page_crossing && smc_isdirty(uop.rip.mfnhi))) {
     if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_SMC_DETECTED, this);
 
     //

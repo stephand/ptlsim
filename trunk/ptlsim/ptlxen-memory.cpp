@@ -344,7 +344,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
 
     assert(update_ptl_pte(l2pte, l2pte.P(1)) == 0);
         
-    if (logable(4) | force_page_fault_logging) {
+    if (logable(9) | force_page_fault_logging) {
       logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ",
         (void*)faultaddr, ": added L2 PTE slot ", level2_slot_index, " (L1 mfn ",
         l2pte.mfn, ") to PTLsim physmap; toplevel cr3 mfn ", get_cr3_mfn(), endl;
@@ -403,7 +403,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
       assert(rc == 0);
       return 3;
     } else {
-      if unlikely (logable(4) | force_page_fault_logging) {
+      if unlikely (logable(9) | force_page_fault_logging) {
         logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip, "] ", 
           (void*)faultaddr, ": added read-only L1 PTE for guest mfn ", mfn,
           " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
@@ -411,7 +411,7 @@ int map_phys_page(mfn_t mfn, Waddr rip) {
       return 2;
     }
   } else {
-    if unlikely (logable(4) | force_page_fault_logging) {
+    if unlikely (logable(9) | force_page_fault_logging) {
       logfile << "[PTLsim Page Fault Handler from rip ", (void*)rip,
         "] ", (void*)faultaddr, ": added L1 PTE for guest mfn ", mfn, 
         ", toplevel cr3 mfn ", get_cr3_mfn(), " (", sim_cycle, " cycles, ", total_user_insns_committed, " commits)", endl;
@@ -567,7 +567,7 @@ asmlinkage void do_page_fault(W64* regs) {
     }
 
     logfile.flush();
-    assert(0);
+    logfile.close();
     shutdown(SHUTDOWN_crash);
     asm("ud2a");
   }
@@ -884,11 +884,13 @@ Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG) {
 // Walk the page table, but return the physical address of the PTE itself
 // that maps the specified virtual address
 //
-Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn, int level) {
+Waddr Context::virt_to_pte_phys_addr(W64 rawvirt, int level) {
   static const bool DEBUG = 0;
+
+  W64 toplevel_mfn = cr3 >> 12;
   VirtAddr virt(rawvirt);
 
-  if (unlikely((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end))) return 0;
+  if unlikely ((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end)) return 0;
 
   Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
   if (DEBUG) logfile << "  level4 @ ", &level4, " (mfn ", ((((Waddr)&level4) & 0xffffffff) >> 12), ", entry ", virt.lm.level4, ")", endl, flush;
@@ -913,8 +915,30 @@ Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn, int level) {
   return ((Waddr)&level1) - PHYS_VIRT_BASE;
 }
 
-W64 Context::virt_to_pte_phys_addr(Waddr virtaddr, int level) {
-  return ::virt_to_pte_phys_addr(virtaddr, (cr3 >> 12), level);
+int Context::virt_to_pte_span(Level1PTE* destptes, W64 virtaddr, int pagecount) {
+  W64 vpn = lowbits(virtaddr, 48) >> 12;
+
+  //++MTY TODO This is for long mode and PAE page tables only!
+  int crosses_level2_slots = (lowbits(vpn, 9) + (pagecount-1)) >> 9;
+
+  if unlikely (crosses_level2_slots || (pagecount >= 512)) {
+    // Slow path: crosses page table pages
+    foreach (i, pagecount) {
+      destptes[i] = virt_to_pte(virtaddr + (i*4096));
+    }
+  } else {
+    // Fast path: everything is on the same page table page
+    Waddr ptes_phys_base = floor(virt_to_pte_phys_addr(virtaddr), 4096);
+
+    Level1PTE* ptes = (Level1PTE*)phys_to_mapped_virt(ptes_phys_base);
+    int slot = lowbits(vpn, 9);
+
+    foreach (i, pagecount) {
+      destptes[i] = ptes[slot + i];
+    }
+  }
+
+  return pagecount;
 }
 
 //
@@ -1082,7 +1106,7 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
     if unlikely (store && (!page_not_present) && (!page_kernel_only) &&
                  page_read_only && is_mfn_mainmem(pte.mfn) && is_mfn_ptpage(pte.mfn)) {
       if (logable(5)) {
-        logfile << "Page is a page table page: special semantics", endl;
+        logfile << "Page ", pte.mfn, " is a page table page: special semantics", endl;
       }
       //
       // This is a page table page and is technically mapped read only,
@@ -1163,6 +1187,29 @@ int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErro
   memcpy((byte*)target + n, pte_to_mapped_virt(source + n, ptehi), bytes - n);
   n = bytes;
   return n;
+}
+
+int copy_from_user_phys_prechecked(void* target, Waddr source, int bytes, Level1PTE ptelo, Level1PTE ptehi, Waddr& faultaddr) {
+  if unlikely (!ptelo.p) {
+    faultaddr = source;
+    return 0;
+  }
+
+  int n = min(4096 - lowbits(source, 12), (Waddr)bytes);
+  memcpy(target, phys_to_mapped_virt((ptelo.mfn << 12) + lowbits(source, 12)), n);
+
+  // All the bytes were on the first page
+  if likely (n == bytes) return n;
+
+  // Go on to second page, if present
+  source += n;
+  if unlikely (!ptehi.p) {
+    faultaddr = source;
+    return n;
+  }
+
+  memcpy((byte*)target + n, phys_to_mapped_virt(ptehi.mfn << 12), bytes - n);
+  return bytes;
 }
 
 int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
@@ -1331,7 +1378,7 @@ W64 handle_mmu_update_hypercall(Context& ctx, mmu_update_t* reqp, W64 count, int
 }
 
 W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W64 flags, bool debug) {
-  Waddr ptephys = virt_to_pte_phys_addr(va, ctx.cr3 >> 12);
+  Waddr ptephys = ctx.virt_to_pte_phys_addr(va);
   if (!ptephys) {
     if (debug) logfile << "update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12), ": cannot resolve PTE address", endl, flush;
     ctx.flush_tlb_virt(va);
@@ -1520,7 +1567,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       const Level1PTE* pinptes = (Level1PTE*)phys_to_mapped_virt(mfn << 12);
       Level1PTE pte0 = pinptes[0];
 
-      if (debug) logfile << "mmuext_op: map/unmap mfn ", mfn, " (pin/unpin operation ", req.cmd, ")", endl, flush;
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: map/unmap mfn ", mfn, " (pin/unpin operation ", req.cmd, ")", endl, flush;
 
       if (req.cmd != MMUEXT_UNPIN_TABLE) {
         // Unmapping only required when pinning, not unpinning
@@ -1538,7 +1585,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     case MMUEXT_NEW_BASEPTR: {
-      if (debug) logfile << "mmuext_op: new kernel baseptr is mfn ",
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: new kernel baseptr is mfn ",
                    req.arg1.mfn, " on vcpu ", ctx.vcpuid, ")", endl, flush;
       unmap_phys_page(req.arg1.mfn);
       ctx.kernel_ptbase_mfn = req.arg1.mfn;
@@ -1552,7 +1599,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
     case MMUEXT_TLB_FLUSH_LOCAL:
     case MMUEXT_INVLPG_LOCAL: {
       bool single = (req.cmd == MMUEXT_INVLPG_LOCAL);
-      if (debug) logfile << "mmuext_op: ", (single ? "invlpg" : "flush"), " local (vcpu ", ctx.vcpuid, ") @ ",
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: ", (single ? "invlpg" : "flush"), " local (vcpu ", ctx.vcpuid, ") @ ",
                    (void*)(Waddr)req.arg1.linear_addr, endl, flush;
       if (single)
         ctx.flush_tlb_virt(req.arg1.linear_addr);
@@ -1567,7 +1614,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       int n = ctx.copy_from_user(&vcpumask, *(Waddr*)&req.arg2.vcpumask, sizeof(vcpumask));
       if (n != sizeof(vcpumask)) { rc = -EFAULT; break; }
       bool single = (req.cmd == MMUEXT_INVLPG_MULTI);
-      if (debug) logfile << "mmuext_op: ", (single ? "invlpg" : "flush"), " multi (mask ", 
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: ", (single ? "invlpg" : "flush"), " multi (mask ", 
                    bitstring(vcpumask, contextcount), " @ ", (void*)(Waddr)req.arg1.linear_addr, ")", endl, flush;
       if (single) {
         foreach (i, contextcount) {
@@ -1585,7 +1632,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
     case MMUEXT_TLB_FLUSH_ALL:
     case MMUEXT_INVLPG_ALL: {
       bool single = (req.cmd == MMUEXT_INVLPG_ALL);
-      if (debug) logfile << "mmuext_op: ", (single ? "invlpg" : "flush"), " all @ ",
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: ", (single ? "invlpg" : "flush"), " all @ ",
                    (void*)(Waddr)req.arg1.linear_addr, endl, flush;
       if (single) {
         foreach (i, contextcount) contextof(i).flush_tlb_virt(req.arg1.linear_addr);
@@ -1597,7 +1644,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     case MMUEXT_FLUSH_CACHE: {
-      if (debug) logfile << "mmuext_op: flush_cache on vcpu ", ctx.vcpuid, endl, flush;
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: flush_cache on vcpu ", ctx.vcpuid, endl, flush;
       total_updates++;
       rc = 0;
       break;
@@ -1606,7 +1653,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       ctx.ldtvirt = req.arg1.linear_addr;
       ctx.ldtsize = req.arg2.nr_ents;
 
-      if (debug) logfile << "mmuext_op: set_ldt to virt ", (void*)(Waddr)ctx.ldtvirt, " with ",
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: set_ldt to virt ", (void*)(Waddr)ctx.ldtvirt, " with ",
                    ctx.ldtsize, " entries on vcpu ", ctx.vcpuid, endl, flush;
 
       total_updates++;
@@ -1614,7 +1661,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     case MMUEXT_NEW_USER_BASEPTR: { // (x86-64 only)
-      if (debug) logfile << "mmuext_op: new user baseptr is mfn ",
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: new user baseptr is mfn ",
                    req.arg1.mfn, " on vcpu ", ctx.vcpuid, ")", endl, flush;
       ctx.user_ptbase_mfn = req.arg1.mfn;
       //
@@ -1631,7 +1678,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       break;
     }
     default:
-      if (debug) logfile << "mmuext_op: unknown op ", req.cmd, endl, flush;
+      if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: unknown op ", req.cmd, endl, flush;
       rc = -EINVAL;
       abort();
       break;

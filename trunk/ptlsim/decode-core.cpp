@@ -158,7 +158,7 @@ void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
   ag.unaligned = 0;
   ag.rd = REG_temp9;
   ag.rc = REG_zero;
-  buf.synthops[idx] = get_synthcode_for_uop(OP_add, 3, 0, 0, 0, 0, 0, 0, 0);
+  buf.synthops[idx] = get_synthcode_for_uop(OP_add, 3, 0, 0, 0, 0, 0);
 
   idx = buf.put();
   TransOp& lo = buf.uops[idx];
@@ -335,7 +335,7 @@ static const byte twobyte_has_modrm[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
   /* 00 */ 1,1,1,1,_,_,_,_,_,_,_,_,_,1,_,1, /* 0f */
-  /* 10 */ 1,1,1,1,1,1,1,1,1,_,_,_,_,_,_,_, /* 1f */
+  /* 10 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 1f */
   /* 20 */ 1,1,1,1,1,_,1,_,1,1,1,1,1,1,1,1, /* 2f */
   /* 30 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 3f */
   /* 40 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 4f */
@@ -434,13 +434,19 @@ void TraceDecoder::reset() {
   rex = 0;
   modrm = 0;
   user_insn_count = 0;
-  last_flags_update_was_atomic = 1;
+  //
+  // if last_flags_update_was_atomic is initialized to zero,
+  // it guarantees at least one uop in the BB updates all
+  // the flags (possibly with a collcc uop).
+  //
+  last_flags_update_was_atomic = 0;
   invalid = 0;
   some_insns_complex = 0;
   used_microcode_assist = 0;
   end_of_block = 0;
   split_basic_block_at_locks_and_fences = 0;
   split_invalid_basic_blocks = 0;
+  no_partial_flag_updates_per_insn = 0;
   outcome = DECODE_OUTCOME_OK;
 }
 
@@ -452,6 +458,21 @@ TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
   use64 = rvp.use64;
   kernel = rvp.kernel;
   dirflag = rvp.df;
+}
+
+TraceDecoder::TraceDecoder(Waddr rip, bool use64, bool kernel, bool df) {
+  reset();
+  bb.reset();
+  setzero(bb.rip);
+  bb.rip.rip = rip;
+  bb.rip.use64 = use64;
+  bb.rip.kernel = kernel;
+  bb.rip.df = df;
+  this->rip = rip;
+  this->ripstart = rip;
+  this->use64 = use64;
+  this->kernel = kernel;
+  this->dirflag = df;
 }
 
 TraceDecoder::TraceDecoder(Context& ctx, Waddr rip) {
@@ -497,7 +518,28 @@ void TraceDecoder::lastop() {
 
   TransOp& first = transbuf[0];
   TransOp& last = transbuf[transbufcount-1];
+  bool contains_branch = isbranch(last.opcode);
   last.eom = 1;
+
+  W8s final_archreg_writer[ARCHREG_COUNT];
+  memset(final_archreg_writer, 0xff, sizeof(final_archreg_writer));
+  W8s final_flags_writer = -1;
+
+  byte flag_sets_set = 0;
+  foreach (i, transbufcount) {
+    TransOp& transop = transbuf[i];
+    if likely (transop.rd < ARCHREG_COUNT) final_archreg_writer[transop.rd] = i;
+    bool sets_all_flags = ((transop.setflags == 7) && (!transop.nouserflags));
+    if unlikely (sets_all_flags) final_flags_writer = i;
+    if likely (!transop.nouserflags) flag_sets_set |= transop.setflags;
+  }
+
+  if unlikely (no_partial_flag_updates_per_insn) {
+    if unlikely ((flag_sets_set != 0) && (flag_sets_set != (SETFLAG_ZF|SETFLAG_CF|SETFLAG_OF))) {
+      logfile << "Invalid partial flag sets at rip ", (void*)ripstart, " (flag sets ", flag_sets_set, ")", endl;
+      assert(false);
+    }
+  }
 
   foreach (i, transbufcount) {
     TransOp& transop = transbuf[i];
@@ -528,8 +570,14 @@ void TraceDecoder::lastop() {
     transop.bbindex = bb.count;
     transop.is_x87 = is_x87;
     transop.is_sse = is_sse;
+    transop.final_insn_in_bb = contains_branch;
+    transop.final_arch_in_insn = (transop.rd < ARCHREG_COUNT) && (final_archreg_writer[transop.rd] == i);
+    transop.final_flags_in_insn = (final_flags_writer == i);
+    transop.any_flags_in_insn = (flag_sets_set != 0);
+
     bb.x87 |= is_x87;
     bb.sse |= is_sse;
+
     bb.transops[bb.count++] = transop;
     if (ld|st) bb.memcount++;
     if (st) bb.storecount++;
@@ -793,6 +841,10 @@ void TraceDecoder::immediate(int rdreg, int sizeshift, W64s imm, bool issigned) 
   this << TransOp(OP_mov, rdreg, REG_zero, REG_imm, REG_zero, 3, imm);
 }
 
+void TraceDecoder::abs_code_addr_immediate(int rdreg, int sizeshift, W64 imm) {
+  this << TransOp(OP_add, rdreg, REG_trace, REG_imm, REG_zero, sizeshift, signext64(imm, 48));
+}
+
 int TraceDecoder::bias_by_segreg(int basereg) {
   if (prefixes & (PFX_CS|PFX_DS|PFX_ES|PFX_FS|PFX_GS|PFX_SS)) {
     int segid = 
@@ -856,7 +908,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
 
   bool imm_is_not_encodable =
     (lowbits(memref.mem.offset, memref.mem.size) != 0) |
-    (!inrange(memref.mem.offset >> memref.mem.size, (W64s)(-1LL << (imm_bits-1)), (W64s)(1LL << (imm_bits-1))-1));
+    (!fits_in_signed_nbit(memref.mem.offset >> memref.mem.size, imm_bits));
 
   W64s offset = memref.mem.offset;
 
@@ -870,7 +922,8 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
 
     int tempreg = (memop) ? REG_temp8 : destreg;
 
-    this << TransOp(OP_add, tempreg, basereg, REG_imm, REG_zero, 3, (Waddr)rip + offset);
+    abs_code_addr_immediate(REG_temp8, 3, Waddr(rip) + offset);
+    this << TransOp(OP_add, tempreg, REG_temp8, basereg, REG_zero, 3);
 
     if (memop) {
       TransOp ldst(opcode, destreg, tempreg, REG_imm, srcreg, memref.mem.size, 0);
@@ -1048,6 +1101,10 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
     this << TransOp(opcode, REG_temp0, (isnegop) ? REG_zero : REG_temp0, REG_temp0, rcreg, sizeshift, 0, 0, setflags);
     if (!flagsonly) result_store(REG_temp0, REG_temp3, rd);
   }
+
+  if unlikely (no_partial_flag_updates_per_insn && (setflags != (SETFLAG_ZF|SETFLAG_CF|SETFLAG_OF))) {
+    this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+  }
 }
 
 void TraceDecoder::move_reg_or_mem(const DecodedOperand& rd, const DecodedOperand& ra, int force_rd) {
@@ -1154,10 +1211,11 @@ void TraceDecoder::signext_reg_or_mem(const DecodedOperand& rd, DecodedOperand& 
     ra.mem.size = rasize;
 
     if (rdsize >= 2) {
+      bool signext_to_32bit = (rdsize == 2) & (!zeroext);
       // zero extend 32-bit to 64-bit or just load as 64-bit:
-      operand_load(rdreg, ra, (zeroext) ? OP_ld : OP_ldx);
+      operand_load((signext_to_32bit) ? REG_temp8 : rdreg, ra, (zeroext) ? OP_ld : OP_ldx);
       // sign extend and then zero high 32 bits (old way was ldxz uop):
-      if ((rdsize == 2) && (!zeroext)) this << TransOp(OP_mov, rdreg, REG_zero, rdreg, REG_zero, 2);
+      if (signext_to_32bit) this << TransOp(OP_mov, rdreg, REG_zero, REG_temp8, REG_zero, 2);
     } else {
       // need to merge 8-bit or 16-bit data:
       operand_load(REG_temp0, ra, (zeroext) ? OP_ld : OP_ldx);
@@ -1168,8 +1226,8 @@ void TraceDecoder::signext_reg_or_mem(const DecodedOperand& rd, DecodedOperand& 
 
 void TraceDecoder::microcode_assist(int assistid, Waddr selfrip, Waddr nextrip) {
   used_microcode_assist = 1;
-  immediate(REG_selfrip, 3, (Waddr)selfrip);
-  immediate(REG_nextrip, 3, (Waddr)nextrip);
+  abs_code_addr_immediate(REG_selfrip, 3, (Waddr)selfrip);
+  abs_code_addr_immediate(REG_nextrip, 3, (Waddr)nextrip);
   if (!last_flags_update_was_atomic) 
     this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
   TransOp transop(OP_brp, REG_rip, REG_zero, REG_zero, REG_zero, 3);
@@ -1505,7 +1563,7 @@ void assist_exec_page_fault(Context& ctx) {
 #else
   bool page_now_valid = asp.fastcheck((byte*)faultaddr, asp.execmap);
 #endif
-  if (page_now_valid) {
+  if unlikely (page_now_valid) {
     if (logable(3)) {
       logfile << "Spurious PageFaultOnExec detected at fault rip ",
         (void*)(Waddr)ctx.commitarf[REG_selfrip], " with faultaddr ",
@@ -1553,9 +1611,9 @@ bool TraceDecoder::invalidate() {
       split_before();
       return false;
     } else {
-      outcome = DECODE_OUTCOME_PAGE_FAULT;
+      outcome = (faultaddr == bb.rip.rip) ? DECODE_OUTCOME_ENTRY_PAGE_FAULT : DECODE_OUTCOME_OVERLAP_PAGE_FAULT;
       print_invalid_insns(op, (const byte*)ripstart, (const byte*)rip, valid_byte_count, pfec, faultaddr);
-      immediate(REG_ar1, 3, faultaddr);
+      abs_code_addr_immediate(REG_ar1, 3, faultaddr);
       immediate(REG_ar2, 3, pfec);
       microcode_assist(ASSIST_EXEC_PAGE_FAULT, ripstart, faultaddr);
     }
@@ -1578,9 +1636,12 @@ bool TraceDecoder::invalidate() {
     } else {
       switch (outcome) {
       case DECODE_OUTCOME_INVALID_OPCODE:
-        microcode_assist(ASSIST_INVALID_OPCODE, ripstart, rip); break;
+        microcode_assist(ASSIST_INVALID_OPCODE, ripstart, rip);
+        break;
       case DECODE_OUTCOME_GP_FAULT:
-        microcode_assist(ASSIST_GP_FAULT, ripstart, rip); break;
+        pfec = 0;
+        microcode_assist(ASSIST_GP_FAULT, ripstart, rip);
+        break;
       default:
         logfile << "Unexpected decoder outcome: ", outcome, endl; break;
       }
@@ -1615,6 +1676,21 @@ int TraceDecoder::fillbuf(Context& ctx, byte* insnbytes, int insnbytes_bufsize) 
   valid_byte_count = ctx.copy_from_user(insnbytes, bb.rip, insnbytes_bufsize, pfec, faultaddr, true, ptelo, ptehi);
   return valid_byte_count;
 }
+
+#ifdef PTLSIM_HYPERVISOR
+int TraceDecoder::fillbuf_phys_prechecked(byte* insnbytes, int insnbytes_bufsize, Level1PTE ptelo, Level1PTE ptehi) {
+  this->insnbytes = insnbytes;
+  this->insnbytes_bufsize = insnbytes_bufsize;
+  byteoffset = 0;
+  faultaddr = 0;
+  pfec = 0;
+  invalid = 0;
+  this->ptelo = ptelo;
+  this->ptehi = ptehi;
+  valid_byte_count = copy_from_user_phys_prechecked(insnbytes, bb.rip, insnbytes_bufsize, ptelo, ptehi, faultaddr);
+  return valid_byte_count;
+}
+#endif
 
 //
 // Decode and translate one x86 instruction
@@ -1737,8 +1813,10 @@ bool TraceDecoder::translate() {
         || (user_insn_count >= MAX_BB_X86_INSNS)) {
       if (logable(5)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
       // bb.rip_taken and bb.rip_not_taken were already filled out for the last instruction.
-      if (!last_flags_update_was_atomic)
+      if unlikely (!last_flags_update_was_atomic) {
+        if (logable(5)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " had non-atomic flags update: adding collcc", endl;
         this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+      }
       TransOp transop(OP_bru, REG_rip, REG_zero, REG_zero, REG_zero, 3);
       transop.riptaken = (Waddr)rip;
       transop.ripseq = (Waddr)rip;

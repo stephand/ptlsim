@@ -50,7 +50,7 @@ bool TraceDecoder::decode_fast() {
     CheckInvalid();
 
     this << TransOp(bit(op, 3) ? OP_sub : OP_add, r, r, REG_imm, REG_zero, sizeshift, +1, 0, SETFLAG_ZF|SETFLAG_OF); // save old rdreg
-    break;
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     break;
   }
 
@@ -232,6 +232,7 @@ bool TraceDecoder::decode_fast() {
 
   case 0x8f: {
     // pop Ev: pop to reg or memory
+    //++MTY TODO: this is very rare: move to slowpath decoder
     DECODE(eform, rd, v_mode);
     CheckInvalid();
 
@@ -308,14 +309,17 @@ bool TraceDecoder::decode_fast() {
 
   case 0x9e: { // sahf: %flags[7:0] = %ah
     // extract value from %ah
+    //++MTY TODO: this is very rare: move to slowpath decoder
     CheckInvalid();
     this << TransOp(OP_maskb, REG_temp0, REG_zero, REG_rax, REG_imm, 3, 0, MaskControlInfo(0, 8, 8));
     // only low 8 bits affected (OF not included)
     this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_temp0, REG_zero, 3, 0, 0, SETFLAG_ZF|SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     break;
   }
 
   case 0x9f: { // lahf: %ah = %flags[7:0]
+    //++MTY TODO: this is very rare: move to slowpath decoder
     CheckInvalid();
     this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     this << TransOp(OP_maskb, REG_rax, REG_rax, REG_temp0, REG_imm, 3, 0, MaskControlInfo(56, 8, 56));
@@ -469,7 +473,9 @@ bool TraceDecoder::decode_fast() {
 
     // Generate the flag collect uop here:
     if (ra.type == OPTYPE_REG) {
-      this << TransOp(OP_collcc, REG_temp5, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+      TransOp collcc(OP_collcc, REG_temp5, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+      collcc.nouserflags = 1;
+      this << collcc;
     }
     int rcreg = (ra.type == OPTYPE_REG) ? REG_temp5 : (translated_opcode == OP_rotcl || translated_opcode == OP_rotcr) ? REG_cf : REG_zero;
 
@@ -569,13 +575,10 @@ bool TraceDecoder::decode_fast() {
     DECODE(iform, ra, (op == 0xeb) ? b_mode : v_mode);
     CheckInvalid();
 
-    bb.rip_taken = (Waddr)rip + (W64s)ra.imm.imm;
-    bb.rip_not_taken = bb.rip_taken;
-
     int sizeshift = (use64) ? 3 : 2;
 
     if (iscall) {
-      immediate(REG_temp0, 3, (Waddr)rip);
+      abs_code_addr_immediate(REG_temp0, 3, (Waddr)rip);
       this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp0, sizeshift, -(1 << sizeshift));
       this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, (1 << sizeshift));
     }
@@ -596,9 +599,11 @@ bool TraceDecoder::decode_fast() {
 
   case 0xf5: {
     // cmc
+    //++MTY TODO: this is very rare: move to slowpath decoder
     // TransOp(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0)
     CheckInvalid();
     this << TransOp(OP_xorcc, REG_temp0, REG_cf, REG_imm, REG_zero, 3, FLAG_CF, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     break;
   }
 
@@ -642,13 +647,17 @@ bool TraceDecoder::decode_fast() {
   }
 
   case 0xf8: { // clc
+    //++MTY TODO: this is very rare: move to slowpath decoder
     CheckInvalid();
     this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_imm, REG_zero, 3, 0, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     break;
   }
   case 0xf9: { // stc
+    //++MTY TODO: this is very rare: move to slowpath decoder
     CheckInvalid();
     this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_imm, REG_zero, 3, FLAG_CF, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     break;
   }
 
@@ -704,7 +713,7 @@ bool TraceDecoder::decode_fast() {
         // there is no way to encode a 32-bit jump address in x86-64 mode:
         if (use64 && (rashift == 2)) rashift = 3;
         if (iscall) {
-          immediate(REG_temp6, 3, (Waddr)rip);
+          abs_code_addr_immediate(REG_temp6, 3, (Waddr)rip);
           this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp6, sizeshift, -(1 << sizeshift));
           this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, 1 << sizeshift);
         }
@@ -718,7 +727,7 @@ bool TraceDecoder::decode_fast() {
         prefixes &= ~PFX_LOCK;
         operand_load(REG_temp0, ra);
         if (iscall) {
-          immediate(REG_temp6, 3, (Waddr)rip);
+          abs_code_addr_immediate(REG_temp6, 3, (Waddr)rip);
           this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, REG_temp6, sizeshift, -(1 << sizeshift));
           this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, 1 << sizeshift);
         }
@@ -858,6 +867,7 @@ bool TraceDecoder::decode_fast() {
     
     // bt has no output - just flags:
     this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     break;
   }
 
@@ -879,6 +889,7 @@ bool TraceDecoder::decode_fast() {
 
     // bt has no output - just flags:
     this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, REG_imm, REG_zero, 3, ra.imm.imm, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     break;
   }
 
@@ -894,7 +905,16 @@ bool TraceDecoder::decode_fast() {
     break;
   }
 
+  case 0x119 ... 0x11f: {
+    // Special form of NOP with ModRM form (used for padding)
+    DECODE(eform, ra, v_mode);
+    CheckInvalid();
+    this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
+    break;
+  }
+
   case 0x10d: {
+    //++MTY TODO: very rare: move this to slowpath decoder
     // prefetchw [eform] (NOTE: this is an AMD-only insn from K6 onwards)
     DECODE(eform, ra, b_mode);
     CheckInvalid();

@@ -46,17 +46,19 @@ typedef unsigned long pte_t;
 #define virt_is_inside_ptlsim(x) ((((W64)(x)) >> PML4_SHIFT) == (PTLSIM_VIRT_BASE >> PML4_SHIFT))
 #define virt_is_inside_physmap(x) ((((W64)(x)) >> PML4_SHIFT) == (PHYS_VIRT_BASE >> PML4_SHIFT))
 
-#define PTLSIM_BOOT_PAGE_PFN 0
-#define PTLSIM_BOOT_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_BOOT_PAGE_PFN * 4096))
-#define PTLSIM_BOOT_PAGE_PADDING 2048 // bytes of pre-padding (where ELF header goes)
+#define PTLSIM_NULL_PAGE_PFN 0
+#define PTLSIM_NULL_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_NULL_PAGE_PFN * 4096))
 
-#define PTLSIM_HYPERCALL_PAGE_PFN 1
+#define PTLSIM_BOOT_PAGE_PFN 16
+#define PTLSIM_BOOT_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_BOOT_PAGE_PFN * 4096))
+
+#define PTLSIM_HYPERCALL_PAGE_PFN 17
 #define PTLSIM_HYPERCALL_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_HYPERCALL_PAGE_PFN * 4096))
 
-#define PTLSIM_SHINFO_PAGE_PFN 2
+#define PTLSIM_SHINFO_PAGE_PFN 18
 #define PTLSIM_SHINFO_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_SHINFO_PAGE_PFN * 4096))
 
-#define PTLSIM_SHADOW_SHINFO_PAGE_PFN 3
+#define PTLSIM_SHADOW_SHINFO_PAGE_PFN 19
 #define PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_SHADOW_SHINFO_PAGE_PFN * 4096))
 
 //
@@ -65,13 +67,20 @@ typedef unsigned long pte_t;
 // utility functions use this facility. PTLsim may need to copy data
 // from this buffer to its final destination inside the domain.
 //
-#define PTLSIM_XFER_PAGE_PFN 4
+#define PTLSIM_XFER_PAGE_PFN 20
 #define PTLSIM_XFER_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_XFER_PAGE_PFN * 4096))
+
+//
+// Log page (for early boot logging)
+//
+#define PTLSIM_LOGBUF_PAGE_PFN 21
+#define PTLSIM_LOGBUF_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_LOGBUF_PAGE_PFN * 4096))
+#define PTLSIM_LOGBUF_SIZE 4096
 
 // Maximum VCPUs per domain allowed by Xen:
 #define MAX_CONTEXTS 32 // up to 32 VCPUs per domain
 
-#define PTLSIM_CTX_PAGE_PFN 5
+#define PTLSIM_CTX_PAGE_PFN 22
 #define PTLSIM_CTX_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_CTX_PAGE_PFN * 4096))
 #define PTLSIM_CTX_PAGE_COUNT MAX_CONTEXTS
 
@@ -81,8 +90,6 @@ typedef unsigned long pte_t;
 
 #define PTES_PER_PAGE (PAGE_SIZE / sizeof(pte_t))
 
-#define PTLSIM_STUB_MAGIC 0x4b4f6d69734c5450ULL // "PTLsimOK"
-#define PTLSIM_BOOT_PAGE_MAGIC 0x50426d69734c5450ULL // "PTLsimBP"
 #define MAX_RESERVED_PAGES 131072 // on 64-bit platforms, this is 512 MB
 
 #include <ptlhwdef.h>
@@ -213,6 +220,7 @@ enum {
 struct PTLsimHostCall {
   W32 op;
   W32 ready;
+  // padding
   W64 rc;
   union {
     struct {
@@ -287,8 +295,8 @@ enum {
 };
 
 struct PTLsimMonitorInfo {
-  byte padding[PTLSIM_BOOT_PAGE_PADDING];
-
+  Spinlock hostreq_spinlock;
+  PTLsimHostCall hostreq;
   W64 mfn_count;
   W64 avail_mfn_count;
   W64 total_machine_pages;
@@ -296,13 +304,12 @@ struct PTLsimMonitorInfo {
   Level2PTE* ptl_pagedir_map;
   Level3PTE* ptl_level3_map;
   Level4PTE* toplevel_page_table;
-  shared_info_t* shared_info;
+  struct shared_info* shared_info;
   W64 ptl_pagedir_mfn_count;
   mfn_t ptl_pagedir_map_mfn;
   mfn_t ptl_level3_mfn;
   mfn_t toplevel_page_table_mfn;
   mfn_t shared_info_mfn;
-  PTLsimHostCall hostreq;
   W16 hostcall_port;
   W16 monitor_hostcall_port;
   W16 upcall_port;
@@ -322,6 +329,8 @@ struct PTLsimMonitorInfo {
   byte abort_request;
   W64  vcpu_ctx_initialized;
   W64  phys_cpu_affinity;
+  W32 logbuf_tail;
+  Spinlock logbuf_spinlock;
 };
 
 W64 inject_upcall(const char* buf, size_t count, bool flush = false);
@@ -334,7 +343,7 @@ ostream& print_page_table(ostream& os, Level1PTE* ptes, W64 baseaddr);
 
 static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_BASE; }
 #define bootinfo (*((PTLsimMonitorInfo*)getbootinfo()))
-#define shinfo (*((shared_info_t*)(Waddr)PTLSIM_SHINFO_PAGE_VIRT_BASE))
+#define shinfo (*((struct shared_info*)(Waddr)PTLSIM_SHINFO_PAGE_VIRT_BASE))
 
 #define xferpage ((char*)(PTLSIM_XFER_PAGE_VIRT_BASE))
 
@@ -342,7 +351,7 @@ static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_B
 #define shinfo_evtchn_mask (*((bitvec<4096>*)&shinfo.evtchn_mask))
 #define shinfo_evtchn_pending_sel(vcpuid) (*((bitvec<64>*)&shinfo.vcpu_info[vcpuid].evtchn_pending_sel))
 
-#define sshinfo (*((shared_info_t*)PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE))
+#define sshinfo (*((struct shared_info*)PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE))
 #define sshinfo_evtchn_pending (*((bitvec<4096>*)&sshinfo.evtchn_pending))
 #define sshinfo_evtchn_mask (*((bitvec<4096>*)&sshinfo.evtchn_mask))
 #define sshinfo_evtchn_pending_sel(vcpuid) (*((bitvec<64>*)&sshinfo.vcpu_info[vcpuid].evtchn_pending_sel))
@@ -587,7 +596,6 @@ ostream& print_page_table_with_types(ostream& os, Level1PTE* ptes);
 // Page Table Walks
 //
 
-Waddr virt_to_pte_phys_addr(W64 rawvirt, W64 toplevel_mfn, int level = 0);
 Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG);
 Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);
@@ -596,6 +604,13 @@ void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate&
 // Loads and Stores
 //
 W64 storemask(Waddr physaddr, W64 data, byte bytemask);
+
+int copy_from_user_phys_prechecked(void* target, Waddr source, int bytes, Level1PTE ptelo, Level1PTE ptehi, Waddr& faultaddr);
+
+static inline int copy_from_user_phys_prechecked(void* target, Waddr source, int bytes, Level1PTE ptelo, Level1PTE ptehi) {
+  Waddr dummy;
+  return copy_from_user_phys_prechecked(target, source, bytes, ptelo, ptehi, dummy);
+}
 
 //
 // Self modifying code support
@@ -644,6 +659,8 @@ void clear_evtchn(int port);
 void cli();
 void sti();
 asmlinkage void xen_event_callback(W64* regs);
+extern int real_timer_port[MAX_VIRT_CPUS];
+void events_init();
 
 //
 // Shadow Event Channels
@@ -655,8 +672,7 @@ int shadow_evtchn_unmask(unsigned int port);
 // Check the specified VCPU for pending events.
 //
 inline bool Context::check_events() const {
-  const vcpu_info_t& vcpuinfo = sshinfo.vcpu_info[vcpuid];
-
+  const struct vcpu_info& vcpuinfo = sshinfo.vcpu_info[vcpuid];
   return ((!vcpuinfo.evtchn_upcall_mask) && vcpuinfo.evtchn_upcall_pending);
 }
 
@@ -727,6 +743,8 @@ extern int assist_requested_break;
 extern stringbuf assist_requested_break_command;
 
 extern W64 ptlsim_hypercall_histogram[64];
+
+void early_boot_log(const void* data, int length);
 
 #endif // PTLSIM_IN_PTLMON
 

@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Interface to uop implementations
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2007 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -460,7 +460,7 @@ make_exp_shiftop_64bit(rotcr, (abort(), rd)); // not supported in 32-bit mode be
 template <int ptlopcode, typename T, int ZEROEXT, int SIGNEXT>
 void exp_op_mask(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   static const int sizeshift = log2(sizeof(T));
-  W64 shmask = bitmask(3 + sizeshift);
+  W64 shmask = bitmask(6); //bitmask(3 + sizeshift);
   shmask = shmask | (shmask << 6) | (shmask << 12);
   rc &= shmask;
 
@@ -712,11 +712,11 @@ inline void uop_impl_condbranch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 r
   W64 ripseq = state.brreg.ripseq;
   bool taken = evaluate_cond<evaltype>(raflags, rbflags);
   state.reg.rddata = (taken) ? riptaken : ripseq;
-  state.reg.rdflags = (taken) ? 0 : FLAG_BRMIS;
+  state.reg.rdflags = (taken) ? FLAG_BR_TK : 0;
 
   if (excepting & (!taken)) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
-    state.reg.rdflags = (FLAG_INV | FLAG_BRMIS);
+    state.reg.rdflags |= FLAG_INV;
   }
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype, excepting, riptaken, ripseq);
 }
@@ -743,11 +743,11 @@ inline void uop_impl_alu_and_condbranch(IssueState& state, W64 ra, W64 rb, W64 r
   int flags = func(ra, rb);
   bool taken = evaluate_cond<evaltype>(flags, flags);
   state.reg.rddata = (taken) ? riptaken : ripseq;
-  state.reg.rdflags = flags | (taken ? 0 : FLAG_BRMIS);
+  state.reg.rdflags = flags | (taken ? FLAG_BR_TK : 0);
 
   if (excepting & (!taken)) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
-    state.reg.rdflags = (FLAG_INV | FLAG_BRMIS);
+    state.reg.rdflags |= FLAG_INV;
   }
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, ptlopcode, log2(sizeof(T)), evaltype, excepting, riptaken, ripseq);
 }
@@ -767,7 +767,7 @@ void uop_impl_jmp(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rb
   W64 riptaken = state.brreg.riptaken;
   bool taken = (riptaken == ra);
   state.reg.rddata = ra;
-  state.reg.rdflags = (taken) ? 0 : FLAG_BRMIS;
+  state.reg.rdflags = (taken) ? FLAG_BR_TK : 0;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_jmp, 0, 0, 0, riptaken, riptaken);
 }
 
@@ -775,11 +775,11 @@ void uop_impl_jmp_ex(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
   W64 riptaken = state.brreg.riptaken;
   bool taken = (riptaken == ra);
   state.reg.rddata = ra;
-  state.reg.rdflags = 0;
+  state.reg.rdflags = (taken) ? FLAG_BR_TK : 0;
 
   if (!taken) {
     state.reg.rddata = EXCEPTION_BranchMispredict;
-    state.reg.rdflags = (FLAG_INV | FLAG_BRMIS);
+    state.reg.rdflags |= FLAG_INV;
   }
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_jmp, 0, 0, 1, riptaken, riptaken);
 }
@@ -787,14 +787,14 @@ void uop_impl_jmp_ex(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16
 void uop_impl_bru(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   W64 riptaken = state.brreg.riptaken;
   state.reg.rddata = riptaken;
-  state.reg.rdflags = 0;
+  state.reg.rdflags = FLAG_BR_TK;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_bru, 0, 0, 0, riptaken, riptaken);
 }
 
 void uop_impl_brp(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
   W64 riptaken = state.brreg.riptaken;
   state.reg.rddata = state.brreg.riptaken;
-  state.reg.rdflags = 0;
+  state.reg.rdflags = FLAG_BR_TK;
   capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_brp, 0, 0, 0, riptaken, riptaken);
 }
 
@@ -835,20 +835,6 @@ inline void uop_impl_chk_and(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
 make_condop_all_conds_any(OP_chk, make_condop, [1], chk, uop_impl_chk);
 make_condop_all_conds_all_sizes(chk_sub, uop_impl_chk_sub);
 make_condop_all_conds_all_sizes(chk_and, uop_impl_chk_and);
-
-template <int level>
-inline void uop_impl_prefetch(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
-  //++MTY FIXME for PTLSIM_HYPERVISOR: needs to do virt->phys translation first!
-  // initiate_prefetch(ra + rb, level);
-  state.reg.rddata = 0;
-  state.reg.rdflags = 0;
-  capture_uop_context(state, ra, rb, rc, raflags, rbflags, rcflags, OP_ld_pre, 0, 0, level);
-}
-
-//
-// Prefetches
-//
-uopimpl_func_t implmap_ld_pre[4] = {&uop_impl_prefetch<0>, &uop_impl_prefetch<1>, &uop_impl_prefetch<2>, &uop_impl_prefetch<3>};
 
 //
 // Floating Point
@@ -1125,7 +1111,7 @@ make_fp_convop_allrounds(cvtf_s2i_p, cvtps2dq, cvttps2dq);
 make_fp_convop_allrounds(cvtf_d2i_p, cvtpd2dq, cvttpd2dq);
 make_fp_convop_allrounds(cvtf_d2s_p, cvtpd2ps, cvtpd2ps);
 
-uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal) {
+uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, bool except, bool internal) {
   uopimpl_func_t func = null;
 
   switch (op) {
@@ -1184,14 +1170,12 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
   case OP_chk_and:
     func = implmap_chk_and[cond][size]; break;
 
-  case OP_ld_pre:
-    func = implmap_ld_pre[cachelevel]; break;
-
     //
-    // Loads and stores are handled specially in the out-of-order core:
+    // Loads and stores are handled specially in the core model:
     //
   case OP_ld:
   case OP_ldx:
+  case OP_ld_pre:
   case OP_st:
   case OP_mf:
     func = uop_impl_nop; break;
@@ -1333,10 +1317,7 @@ void synth_uops_for_bb(BasicBlock& bb) {
   bb.synthops = new uopimpl_func_t[bb.count];
   foreach (i, bb.count) {
     const TransOp& transop = bb.transops[i];
-    int sfra = 0;
-    bool except = 0;
-
-    uopimpl_func_t func = get_synthcode_for_uop(transop.opcode, transop.size, transop.setflags, transop.cond, transop.extshift, sfra, transop.cachelevel, except, transop.internal);
+    uopimpl_func_t func = get_synthcode_for_uop(transop.opcode, transop.size, transop.setflags, transop.cond, transop.extshift, 0, transop.internal);
     bb.synthops[i] = func;
   }
 }

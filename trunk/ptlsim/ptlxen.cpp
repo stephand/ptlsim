@@ -288,6 +288,31 @@ int current_vcpuid() {
   return vcpuid;
 }
 
+W64 early_boot_log_seqid = 0;
+
+void early_boot_log(const void* data, int length) {
+  const char* p = (const char*)data;
+  char* log_buffer_base = (char*)(PTLSIM_VIRT_BASE + (PTLSIM_LOGBUF_PAGE_PFN * PAGE_SIZE));
+
+  bootinfo.logbuf_spinlock.acquire();
+
+  early_boot_log_seqid++;
+  stringbuf sb; sb.reset(); sb << early_boot_log_seqid, ": ";
+  int n = strlen((char*)sb);
+
+  foreach (i, n) {
+    log_buffer_base[bootinfo.logbuf_tail] = ((char*)(sb))[i];
+    bootinfo.logbuf_tail = (bootinfo.logbuf_tail + 1) % PTLSIM_LOGBUF_SIZE;
+  }
+
+  foreach (i, length) {
+    log_buffer_base[bootinfo.logbuf_tail] = p[i];
+    bootinfo.logbuf_tail = (bootinfo.logbuf_tail + 1) % PTLSIM_LOGBUF_SIZE;
+  }
+
+  bootinfo.logbuf_spinlock.release();
+}
+
 //
 // Host calls to PTLmon
 //
@@ -295,15 +320,17 @@ W64 hostreq_calls = 0;
 W64 hostreq_spins = 0;
 
 W64s synchronous_host_call(const PTLsimHostCall& call, bool spin, bool ignorerc) {
+  int vcpuid = current_vcpuid();
   stringbuf sb;
   int rc;
   hostreq_calls++;
 
-  void* p = &bootinfo.hostreq;
   memcpy(&bootinfo.hostreq, &call, sizeof(PTLsimHostCall));
   bootinfo.hostreq.ready = 0;
 
   unmask_evtchn(bootinfo.hostcall_port);
+  if likely (real_timer_port[vcpuid] >= 0) unmask_evtchn(real_timer_port[vcpuid]);
+  sti();
 
   evtchn_send_t sendop;
   sendop.port = bootinfo.hostcall_port;
@@ -324,11 +351,10 @@ W64s synchronous_host_call(const PTLsimHostCall& call, bool spin, bool ignorerc)
   barrier();
 
   while (!bootinfo.hostreq.ready) {
+    barrier();
     if unlikely (!spin) {
       hostreq_spins++;
       xen_sched_block();
-      //xen_sched_timer(10000000); // 1/100 sec = 10000000 nsec
-      //xen_sched_poll(bootinfo.hostcall_port, 10000000);
     }
     barrier();
   }
@@ -397,6 +423,9 @@ int switch_to_native(bool pause = false) {
   call.op = PTLSIM_HOST_SWITCH_TO_NATIVE;
   call.ready = 0;
   call.switch_to_native.pause = pause;
+
+  flush_cache();
+  flush_tlb();
 
   perfctrs_start();
   int rc = synchronous_host_call(call, true);
@@ -844,7 +873,7 @@ SegmentDescriptor Context::get_gdt_entry(W16 idx) {
   return *(const SegmentDescriptor*)phys_to_mapped_virt((mfn << 12) + (lowbits(idx, 9) * 8));
 }
 
-void Context::flush_tlb() {
+void Context::flush_tlb(bool propagate_flush_to_model) {
   if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb() called from ", __builtin_return_address(0), endl;
 
   foreach (i, lengthof(cached_pte_virt)) {
@@ -852,11 +881,13 @@ void Context::flush_tlb() {
     cached_pte[i] = 0;
   }
 
+  if unlikely (!propagate_flush_to_model) return;
+
   PTLsimMachine* machine = PTLsimMachine::getcurrent();
   if likely (machine) machine->flush_tlb(*this);
 }
 
-void Context::flush_tlb_virt(Waddr virtaddr) {
+void Context::flush_tlb_virt(Waddr virtaddr, bool propagate_flush_to_model) {
   if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb(", (void*)virtaddr, ") called from ", __builtin_return_address(0), endl;
 
   int slot = lowbits(virtaddr >> 12, log2(PTE_CACHE_SIZE));
@@ -864,6 +895,8 @@ void Context::flush_tlb_virt(Waddr virtaddr) {
     cached_pte_virt[slot] = 0xffffffffffffffffULL;
     cached_pte[slot] = 0;
   }
+
+  if unlikely (!propagate_flush_to_model) return;
   
   PTLsimMachine* machine = PTLsimMachine::getcurrent();
   if likely (machine) machine->flush_tlb_virt(*this, virtaddr);
@@ -1772,6 +1805,8 @@ bool Context::create_bounce_frame(W16 target_cs, Waddr target_rip, int action) {
 // NOTE: exception is one of EXCEPTION_x86_xxx, NOT an internal PTL exception number
 //
 void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virtaddr) {
+  // force_logging_enabled();
+
   assert(exception < lengthof(idt));
 
   stats.external.traps[exception]++;
@@ -1786,7 +1821,7 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
     } else {
       logfile << "0x", hexstring(errorcode, 32);
     }
-    logfile << " (", total_user_insns_committed, " user commits, ", sim_cycle, " cycles)", endl, flush;
+    logfile << " (", total_user_insns_committed, " user commits, ", sim_cycle, " cycles, ", iterations, " iterations)", endl, flush;
   }
 
   x86_exception = exception;
@@ -1814,6 +1849,9 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
   if (uses_errcode) flags = flags | TBF_EXCEPTION_ERRCODE;
 
   assert(create_bounce_frame((tt.cs << 3) | 3, signext64(tt.rip, 48), flags));
+
+  // PTLsimMachine::getcurrent()->dump_state(logfile);
+  // assert(false);
 }
 
 void handle_syscall_assist(Context& ctx) {
@@ -1827,6 +1865,23 @@ void handle_syscall_assist(Context& ctx) {
       (void*)ctx.commitarf[REG_r10], ", ",
       (void*)ctx.commitarf[REG_r8], ", ",
       (void*)ctx.commitarf[REG_r9], ")", endl;
+  }
+
+  //
+  // Print useful information about system calls as they are made.
+  // This only works when the guest OS is Linux and the program is 64 bit.
+  //
+  if (ctx.use64) {
+    switch (ctx.commitarf[REG_rax]) {
+    case __NR_execve: {
+      char filename[256];
+      int n = ctx.copy_from_user(filename, ctx.commitarf[REG_rdi], sizeof(filename)-1);
+      assert(inrange(n, 0, int(sizeof(filename)-1)));
+      filename[n] = 0;
+      logfile << "syscall: execve('", filename, "', ...)", endl;
+      break;
+    }
+    }
   }
 
   int action = (ctx.syscall_disables_events) ? TBF_INTERRUPT : 0;
@@ -1979,6 +2034,13 @@ void ptlsim_init() {
   sti();
 
   //
+  // Make all pages below the boot page inaccessible, so we can trap null pointers
+  //
+  foreach (i, PTLSIM_BOOT_PAGE_PFN) {
+    update_ptl_virt((void*)(PTLSIM_VIRT_BASE + (i * PAGE_SIZE)), 0);
+  }
+
+  //
   // Make page at base of stack read-only (guard against overflows):
   //
   make_ptl_page_writable((byte*)bootinfo.stack_top - bootinfo.stack_size, 0);
@@ -1996,6 +2058,7 @@ void ptlsim_init() {
   //
   // From this point forward, we can make hostcalls to PTLmon
   //
+  events_init();
 
   //
   // Call all C++ constructors
@@ -2242,6 +2305,7 @@ W64 handle_upcall(PTLsimConfig& config, bool blocking = true) {
 
   int rc;
   logfile << "PTLsim: waiting for request (", (blocking ? "blocking" : "non-blocking"), ")...", endl, flush;
+  cerr << "Waiting for request...", endl, flush;
 
   W64 requuid = accept_upcall(reqstr, sizeof(reqstr), blocking);
   if (!requuid) return 0;
@@ -2401,6 +2465,7 @@ void process_native_upcall() {
 int main(int argc, char** argv) {
   ptlsim_init();
   print_banner(cerr, stats);
+  assert(sizeof(PTLsimMonitorInfo) <= PAGE_SIZE);
 
   bool time_init_done = 0;
   bool skip_dequeue_upcall = 0;

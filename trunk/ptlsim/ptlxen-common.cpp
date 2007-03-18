@@ -135,6 +135,7 @@ void Context::saveto(vcpu_guest_context& ctx) {
   ctx.user_regs.r15 = commitarf[REG_r15];
 
   ctx.user_regs.rip = commitarf[REG_rip];
+
   ctx.user_regs.eflags = 
     (commitarf[REG_flags] & (FLAG_ZAPS|FLAG_CF|FLAG_OF)) |
     (internal_eflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
@@ -305,7 +306,7 @@ const char* PageFrameType::names[] = {"normal", "L1", "L2", "L3", "L4", "(5)", "
 ostream& operator <<(ostream& os, const shared_info& si) {
   os << "Xen Shared Info:", endl;
   foreach (i, MAX_VIRT_CPUS) {
-    vcpu_info_t vcpu = si.vcpu_info[i];
+    const struct vcpu_info& vcpu = si.vcpu_info[i];
     // Is it initialized or valid yet?
     if (!vcpu.time.tsc_timestamp) continue;
     os << "  VCPU ", i, ":", endl;

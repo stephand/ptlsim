@@ -68,6 +68,8 @@ void PTLsimConfig::reset() {
   log_backwards_from_trigger_rip = INVALIDRIP;
   dump_state_now = 0;
   abort_at_end = 0;
+  log_trigger_virt_addr_start = 0;
+  log_trigger_virt_addr_end = 0;
 
   stats_filename.reset();
   snapshot_cycles = infinity;
@@ -104,6 +106,8 @@ void PTLsimConfig::reset() {
   perfctr_name.reset();
   force_native = 0;
 #endif
+
+  continuous_validation = 0;
 
   perfect_cache = 0;
 
@@ -159,6 +163,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(event_log_ring_buffer_size,   "ringbuf-size",         "Core event log ring buffer size: only save last <ringbuf> entries");
   add(flush_event_log_every_cycle,  "flush-events",         "Flush event log ring buffer to logfile after every cycle");
   add(log_backwards_from_trigger_rip,"ringbuf-trigger-rip", "Print event ring buffer when first uop in this rip is committed");
+  add(log_trigger_virt_addr_start,   "ringbuf-trigger-virt-start", "Print event ring buffer when any virtual address in this range is touched");
+  add(log_trigger_virt_addr_end,     "ringbuf-trigger-virt-end",   "Print event ring buffer when any virtual address in this range is touched");
 
   section("Statistics Database");
   add(stats_filename,               "stats",                "Statistics data store hierarchy root");
@@ -201,6 +207,9 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(force_native,                 "force-native",         "Force native mode: ignore attempts to switch to simulation");
 #endif
 
+  section("Validation");
+  add(continuous_validation,        "validate",             "Continuous validation: validate against known-good sequential model");
+
   section("Out of Order Core (ooocore)");
   add(perfect_cache,                "perfect-cache",        "Perfect cache performance: all loads and stores hit in L1");
 
@@ -236,7 +245,7 @@ void print_banner(ostream& os, const PTLsimStats& stats, int argc, char** argv) 
 #else
   os << "//  PTLsim: Cycle Accurate x86 Simulator (32-bit version)", endl;
 #endif
-  os << "//  Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>", endl;
+  os << "//  Copyright 1999-2007 Matt T. Yourst <yourst@yourst.com>", endl;
   os << "// ", endl;
   os << "//  Revision ", stringify(SVNREV), " (", stringify(SVNDATE), ")", endl;
   os << "//  Built ", __DATE__, " ", __TIME__, " on ", stringify(BUILDHOST), " using gcc-", 
@@ -299,6 +308,13 @@ void backup_and_reopen_logfile() {
     sys_rename(config.log_filename, oldname);
     logfile.open(config.log_filename);
   }
+}
+
+void force_logging_enabled() {
+  logenable = 1;
+  config.start_log_at_iteration = 0;
+  config.loglevel = 99;
+  config.flush_event_log_every_cycle = 1;
 }
 
 extern byte _binary_ptlsim_dst_start;
@@ -381,6 +397,10 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
     bbcache_dump_file.open(config.bbcache_dump_filename);
     current_bbcache_dump_filename = config.bbcache_dump_filename;
+  }
+
+  if (config.log_trigger_virt_addr_start && (!config.log_trigger_virt_addr_end)) {
+    config.log_trigger_virt_addr_end = config.log_trigger_virt_addr_start;
   }
 
   ptl_mm_set_logging(config.mm_logfile.set() ? (char*)(config.mm_logfile) : null, config.mm_log_buffer_size, config.enable_inline_mm_logging);
@@ -516,18 +536,19 @@ bool simulate(const char* machinename) {
   cerr << "Stopping after ", config.stop_at_user_insns, " commits", endl, flush;
 
   // Update stats every half second:
-  ticks_per_update = seconds_to_ticks(0.5);
+  ticks_per_update = seconds_to_ticks(0.2);
+  //ticks_per_update = seconds_to_ticks(0.1);
   last_printed_status_at_ticks = 0;
   last_printed_status_at_user_insn = 0;
   last_printed_status_at_cycle = 0;
-
-  logfile << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
-  cerr << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
 
   current_machine = machine;
   machine->run(config);
   machine->update_stats(stats);
   current_machine = null;
+
+  logfile << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
+  cerr << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
 
   if (config.dumpcode_filename.set()) {
     byte insnbuf[256];

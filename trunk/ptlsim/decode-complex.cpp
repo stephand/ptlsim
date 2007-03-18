@@ -1486,6 +1486,7 @@ bool TraceDecoder::decode_complex() {
         this << TransOp(highop, REG_rdx, REG_rax, REG_temp0, REG_zero, size, 0, 0, SETFLAG_CF|SETFLAG_OF);
         this << TransOp(OP_mull, REG_rax, REG_rax, REG_temp0, REG_zero, size);
       }
+      if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
       break;
     }
     default:
@@ -1689,6 +1690,7 @@ bool TraceDecoder::decode_complex() {
 
       // bt has no output - just flags:
       this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, rareg, REG_zero, 3, 0, 0, SETFLAG_CF);
+      if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
       break;
     } else {
       if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
@@ -1705,6 +1707,7 @@ bool TraceDecoder::decode_complex() {
       this << TransOp(OP_add, REG_temp2, REG_temp1, REG_temp2, REG_zero, 3, 3); // add offset
       TransOp ldop(OP_ld, REG_temp0, REG_temp2, REG_imm, REG_zero, 0, 0); ldop.locked = locked; this << ldop;
       this << TransOp(opcode, REG_temp0, REG_temp0, rareg, REG_zero, 0, 0, 0, SETFLAG_CF);
+      if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
 
       if (opcode != OP_bt) {
         TransOp stop(OP_st, REG_mem, REG_temp2, REG_imm, REG_temp0, 0, 0); stop.locked = locked; this << stop;
@@ -1733,6 +1736,7 @@ bool TraceDecoder::decode_complex() {
 
       // bt has no output - just flags:
       this << TransOp(opcode, (opcode == OP_bt) ? REG_temp0 : rdreg, rdreg, REG_imm, REG_zero, 3, ra.imm.imm, 0, SETFLAG_CF);
+      if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
       break;
     } else {
       if (opcode == OP_bt) prefixes &= ~PFX_LOCK;
@@ -1745,6 +1749,7 @@ bool TraceDecoder::decode_complex() {
 
       TransOp ldop(OP_ld, REG_temp0, REG_temp1, REG_imm, REG_zero, 0, ra.imm.imm >> 3); ldop.locked = locked; this << ldop;
       this << TransOp(opcode, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, lowbits(ra.imm.imm, 3), 0, SETFLAG_CF);
+      if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
 
       if (opcode != OP_bt) {
         TransOp stop(OP_st, REG_mem, REG_temp1, REG_imm, REG_temp0, 0, ra.imm.imm >> 3); stop.locked = locked; this << stop;
@@ -2062,7 +2067,7 @@ bool TraceDecoder::decode_complex() {
     // syscall or hypercall
     // Saves return address into %rcx and jumps to MSR_LSTAR
     CheckInvalid();
-    immediate(REG_rcx, 3, (Waddr)rip);
+    abs_code_addr_immediate(REG_rcx, 3, (Waddr)rip);
     microcode_assist((kernel) ? ASSIST_HYPERCALL : ASSIST_SYSCALL, ripstart, rip);
     end_of_block = 1;
     break;
@@ -2091,6 +2096,7 @@ bool TraceDecoder::decode_complex() {
 #endif
     this << TransOp(OP_mov, REG_rax, REG_zero, REG_rdx, REG_zero, 2);
     this << TransOp(OP_shr, REG_rdx, REG_rdx, REG_imm, REG_zero, 3, 32);
+
     break;
   }
 

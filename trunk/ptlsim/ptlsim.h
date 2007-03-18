@@ -107,7 +107,7 @@ struct AddrPair {
 
 void init_uops();
 void shutdown_uops();
-uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, int sfra, int cachelevel, bool except, bool internal);
+uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, bool except, bool internal);
 uopimpl_func_t get_synthcode_for_cond_branch(int opcode, int cond, int size, bool except);
 void synth_uops_for_bb(BasicBlock& bb);
 struct PTLsimStats;
@@ -162,6 +162,9 @@ struct PTLsimConfig {
   bool dump_state_now;
   bool abort_at_end;
 
+  W64 log_trigger_virt_addr_start;
+  W64 log_trigger_virt_addr_end;
+
   // Statistics Database
   stringbuf stats_filename;
   W64 snapshot_cycles;
@@ -202,6 +205,8 @@ struct PTLsimConfig {
   bool force_native;
 #endif
 
+  bool continuous_validation;
+
   // Out of order core features
   bool perfect_cache;
 
@@ -227,5 +232,6 @@ ostream& operator <<(ostream& os, const PTLsimConfig& config);
 
 extern bool logenable;
 #define logable(level) (unlikely (logenable && (config.loglevel >= level)))
+void force_logging_enabled();
 
 #endif // _PTLSIM_H_

@@ -2000,6 +2000,123 @@ namespace superstl {
 #undef __builtin_ctzl
 #undef __builtin_clzl
 
+  // Supports up to 262144 slots (64*64*64)
+  template <int N = 262144>
+  struct BitmapAllocator3Level {
+    typedef bitvec<64> bitmap_t;
+
+    bitmap_t level3[1];
+    bitmap_t level2[N / 4096];
+    bitmap_t level1[N / 64];
+    int highest_count;
+
+    void reset(size_t sizelimit = N) {
+      assert(sizelimit >= 4096);
+      assert(sizelimit <= 262144);
+      // size must be a multiple of 64*64 = 4096
+      assert(lowbits(sizelimit, 12) == 0);
+      size_t highbits = sizelimit >> 12;
+      level3[0] = (bitmap_t()++) % highbits;
+      foreach (i, lengthof(level2)) { level2[i]++; }
+      foreach (i, lengthof(level1)) { level1[i]++; }
+      highest_count = 0;
+    }
+
+    int update_highest_count() {
+      highest_count = 0;
+
+      for (int i = lengthof(level1)-1; i >= 0; i--) {
+        bitmap_t v = ~level1[i];
+        if unlikely (v) {
+          highest_count = (i * 64) + v.msb() + 1;
+          break;
+        }
+      }
+      return highest_count;
+    }
+
+    //
+    // Note: This is not MT-safe: external locking
+    // is needed around this function.
+    //
+    W64s alloc(W64 index) {
+      //
+      //     17 16 15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00
+      // L3: oo oo oo oo oo oo
+      // L2: ss ss ss ss ss ss oo oo oo oo oo oo
+      // L1: ss ss ss ss ss ss ss ss ss ss ss ss oo oo oo oo oo oo
+      //
+
+      W64 slot1 = bits(index, 6, 12);
+      W64 offset1 = bits(index, 0, 6);
+      //assert(level1[slot1][offset1]); // make sure it's currently free
+      level1[slot1][offset1] = 0;
+
+      W64 slot2 = bits(index, 12, 6);
+      W64 offset2 = bits(index, 6, 6);
+      if unlikely (!level1[slot1]) level2[slot2][offset2] = 0;
+
+      W64 slot3 = 0; // a.k.a. bits(index, 18, 6);
+      W64 offset3 = bits(index, 12, 6);
+      if unlikely (!level2[slot2]) level3[slot3][offset3] = 0;
+
+      highest_count = max(highest_count, int(index+1));
+
+      return index;
+    }
+
+    W64s alloc() {
+      bitmap_t map;
+
+      map = level3[0];
+      if unlikely (!map) return -1;
+      W64 offset3 = map.lsb();
+
+      map = level2[offset3];
+      if unlikely (!map) return -1;
+      W64 offset2 = map.lsb();
+
+      map = level1[(offset3 << 6) + offset2];
+      if unlikely (!map) return -1;
+      W64 offset1 = map.lsb();
+
+      W64 index = (offset3 << 12) + (offset2 << 6) + offset1;
+
+      return alloc(index);
+    }
+
+    void free(W64 index) {
+      W64 slot1 = bits(index, 6, 12);
+      W64 offset1 = bits(index, 0, 6);
+      level1[slot1][offset1] = 1;
+
+      W64 slot2 = bits(index, 12, 6);
+      W64 offset2 = bits(index, 6, 6);
+      if unlikely (*level1[slot1]) level2[slot2][offset2] = 1;
+
+      W64 slot3 = 0; // a.k.a. bits(index, 18, 6);
+      W64 offset3 = bits(index, 12, 6);
+      if unlikely (*level2[slot2]) level3[slot3][offset3] = 1;
+    }
+
+    bool isfree(W64 index) const {
+      bool freebit = level1[index >> 6][index & 0x3f];
+      return freebit;
+    }
+
+    bool isused(W64 index) const {
+      return (!isfree(index));
+    }
+
+    ostream& print(ostream& os) const {
+      os << "FreeBitmap3Level:", endl;
+      os << "  L3:"; foreach (i, lengthof(level3)) os << ' ', level3[i], ((i % 4 == 3) ? '\n' : ' '); os << endl;
+      os << "  L2:"; foreach (i, lengthof(level2)) os << ' ', level2[i], ((i % 4 == 3) ? '\n' : ' '); os << endl;
+      os << "  L1:"; foreach (i, lengthof(level1)) os << ' ', level1[i], ((i % 4 == 3) ? '\n' : ' '); os << endl;
+      return os;
+    }
+  };
+
   //
   // Convenient list iterator
   //
@@ -2549,6 +2666,133 @@ namespace superstl {
     }
   };
 
+  // Fast vectorized method: empty only if all slots are literally zero
+  static inline bool bytes_are_all_zero(const void* ptr, size_t bytes) {
+    // Fast vectorized method: empty only if all slots are literally zero
+    const W64* p = (const W64*)ptr;
+    W64 v = 0;
+    foreach (i, (bytes/8)) v |= p[i];
+    if unlikely (v % 8) {
+      v |= (p[(bytes/8)] & bitmask((bytes % 8)*8));
+    }
+    return (v == 0);
+  }
+
+  //
+  // Chunk list for storing objects without tags.
+  // The null object is considered all zeros; this
+  // works for both pointers and integers.
+  //
+  // By default this is 64 bytes (1 cache line), enough
+  // room to fit 15 shortptrs and a next pointer.
+  //
+  template <typename T, int N = 15>
+  struct GenericChunkList {
+    T list[N];
+    shortptr< GenericChunkList<T> > next;
+
+    GenericChunkList() {
+      setzero(*this);
+    }
+
+    T* get(T obj) const {
+      foreach (i, lengthof(list)) {
+        T& p = list[i];
+        if unlikely (p == obj) return &p;
+      }
+
+      return null;
+    }
+
+    T* add(T obj) {
+      foreach (i, lengthof(list)) {
+        T& p = list[i];
+        if unlikely (!p) {
+          p = obj;
+          return &p;
+        }
+      }
+      return null;
+    }
+
+    T* addunique(T obj) {
+      T* np = null;
+      for (int i = lengthof(list)-1; i >= 0; i--) {
+        T& p = list[i];
+        if unlikely (p == obj) return &p;
+        if unlikely (!p) np = &p;
+      }
+      if unlikely (!np) return null;
+      *np = obj;
+      return np;
+    }
+
+    T* remove(T obj) {
+      foreach (i, lengthof(list)) {
+        T& p = list[i];
+        if unlikely (p == obj) {
+          p = 0;
+          return &p;
+        }
+      }
+
+      return null;
+    }
+
+    bool empty() const {
+      return bytes_are_all_zero(&list, sizeof(list));
+    }
+
+    ostream& print(ostream& os) const {
+      os << "  Chunk ", this, ":", endl;
+      foreach (i, lengthof(list)) {
+        const T& entry = list[i];
+        if unlikely (!entry) continue;
+        os << "    slot ", intstring(i, 2), ": ", entry, endl;
+      }
+
+      return os;
+    }
+
+    struct Iterator {
+      GenericChunkList<T>* chunk;
+      int slot;
+
+      Iterator() { }
+
+      Iterator(GenericChunkList<T>* chunk) { reset(chunk); }
+      Iterator(GenericChunkList<T>& chunk) { reset(chunk); }
+
+      void reset(GenericChunkList<T>* chunk) {
+        this->chunk = chunk;
+        slot = 0;
+      }
+
+      void reset(GenericChunkList<T>& chunk) { reset(&chunk); }
+
+      T next() {
+        for (;;) {
+          if unlikely (!chunk) return null;
+
+          if unlikely (slot >= lengthof(chunk->list)) {
+            slot = 0;
+            chunk = chunk->next;
+            continue;
+          }
+
+          const T& obj = chunk->list[slot++];
+          if unlikely (!obj) continue;
+          return obj;
+        }
+      }
+    };
+  };
+
+  template <typename T>
+  ostream& operator <<(ostream& os, const GenericChunkList<T>& cl) {
+    return cl.print(os);
+  }
+
   //
   // sort - sort an array of elements
   // @p: pointer to data to sort
@@ -2589,6 +2833,29 @@ namespace superstl {
       } else {
         int r = (v[a] < v[b]) ? -1 : +1;
         if (v[a] == v[b]) r = 0;
+        return r;
+      }
+    }
+  };
+
+  template <typename T, bool backwards = 0>
+  struct PointerSortComparator {
+    PointerSortComparator() { }
+
+    int operator ()(T* a, T* b) const {
+      //
+      // This strange construction helps the compiler do better peephole
+      // optimization tricks using conditional moves when using integers.
+      //
+      const T& aa = *a;
+      const T& bb = *b;
+      if (backwards) {
+        int r = (aa > bb) ? -1 : +1;
+        if (aa == bb) r = 0;
+        return r;
+      } else {
+        int r = (aa < bb) ? -1 : +1;
+        if (aa == bb) r = 0;
         return r;
       }
     }
@@ -2761,6 +3028,60 @@ namespace superstl {
     CycleTimer& ct;
     CycleTimerScope(CycleTimer& ct_): ct(ct_) { ct.start(); }
     ~CycleTimerScope() { ct.stop(); }
+  };
+
+  //
+  // Standard spinlock
+  //
+
+  //
+  // Define this to profile spinlock contention;
+  // it may increase overhead when enabled.
+  //
+  //#define ENABLE_SPINLOCK_PROFILING
+
+  struct Spinlock {
+    typedef byte T;
+    T lock;
+
+    Spinlock() { reset(); }
+
+    void reset() {
+      lock = 0;
+    }
+
+    W64 acquire() {
+      W64 iterations = 0;
+
+      for (;;) {
+        if unlikely (lock) {
+#ifdef ENABLE_SPINLOCK_PROFILING
+          iterations++;
+#endif
+          cpu_pause();
+          barrier();
+          continue;
+        }
+
+        T old = xchg(lock, T(1));
+#ifdef ENABLE_SPINLOCK_PROFILING
+        if likely (!old) return iterations;
+#else
+        if likely (!old) return 0;
+#endif
+      }
+    }
+
+    bool try_acquire() {
+      if unlikely (lock) return false;
+      T old = xchg(lock, T(1));
+      return (!old);
+    }
+
+    void release() {
+      lock = 0;
+      barrier();
+    }
   };
 
   //

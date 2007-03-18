@@ -1,6 +1,6 @@
 // -*- c++ -*-
 //
-// Copyright 1997-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1997-2007 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.
@@ -156,6 +156,19 @@ template <typename T> static inline T max(const T& a, const T& b) { typeof (a) _
 template <typename T> static inline T clipto(const T& v, const T& minv, const T& maxv) { return min(max(v, minv), maxv); }
 template <typename T> static inline bool inrange(const T& v, const T& minv, const T& maxv) { typeof (v) _v = v; return ((_v >= minv) & (_v <= maxv)); }
 // template <typename T> static inline T abs(T x) { typeof (x) _x = x; return (_x < 0) ? -_x : _x; } // (built-in for gcc)
+
+// Bit fitting
+static inline bool fits_in_signed_nbit(W64s v, int b) {
+  return inrange(v, W64s(-(1ULL<< (b-1))), W64s(+(1ULL << (b-1))-1));
+}
+
+static inline bool fits_in_signed_nbit_tagged(W64s v, int b) {
+  return inrange(v, W64s(-(1ULL<< (b-1))+1), W64s(+(1ULL << (b-1))-1));
+}
+
+static inline bool fits_in_signed_8bit(W64s v) { return fits_in_signed_nbit(v, 8); }
+static inline bool fits_in_signed_16bit(W64s v) { return fits_in_signed_nbit(v, 16); }
+static inline bool fits_in_signed_32bit(W64s v) { return fits_in_signed_nbit(v, 32); }
 
 #define sqr(x) ((x)*(x))
 #define cube(x) ((x)*(x)*(x))
@@ -480,6 +493,7 @@ static inline float fsqrt(float v) { return (float)math::sqrt(v); }
 static inline void freemem(void* p) { free(p); }
 
 template <typename T> static inline void setzero(T& x) { memset(&x, 0, sizeof(T)); }
+template <typename T> static inline void fillwith(T& x, byte v) { memset(&x, v, sizeof(T)); }
 
 #define HI32(x) (W32)((x) >> 32LL)
 #define LO32(x) (W32)((x) & 0xffffffffLL)

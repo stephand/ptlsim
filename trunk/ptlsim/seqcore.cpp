@@ -37,7 +37,7 @@ static const byte archreg_remap_table[TRANSREG_COUNT] = {
   REG_xmml8,  REG_xmmh8,  REG_xmml9,  REG_xmmh9,  REG_xmml10,  REG_xmmh10,  REG_xmml11,  REG_xmmh11,
   REG_xmml12,  REG_xmmh12,  REG_xmml13,  REG_xmmh13,  REG_xmml14,  REG_xmmh14,  REG_xmml15,  REG_xmmh15,
 
-  REG_fptos,  REG_fpsw,  REG_fptags,  REG_fpstack,  REG_tr4,  REG_tr5,  REG_tr6, REG_ctx,
+  REG_fptos,  REG_fpsw,  REG_fptags,  REG_fpstack,  REG_tr4,  REG_tr5,  REG_trace, REG_ctx,
 
   REG_rip,  REG_flags,  REG_iflags, REG_selfrip, REG_nextrip, REG_ar1, REG_ar2, REG_zero,
 
@@ -60,15 +60,193 @@ const char* seqexec_result_names[SEQEXEC_RESULT_COUNT] = {
   "interrupt",
 };
 
+template <int N, int setcount>
+struct TransactionalMemory {
+  W64 addr_list[N];
+  W64 data_list[N];
+  W16s next_list[N];
+  W8  bytemask_list[N];
+
+  W16s sets[setcount];
+  int count;
+
+  TransactionalMemory() {
+    reset();
+  }
+
+  void reset() {
+    foreach (i, N) {
+      addr_list[i] = 0;
+      data_list[i] = 0;
+      next_list[i] = -1;
+      bytemask_list[i] = 0;
+    }
+
+    count = 0;
+    memset(sets, 0xff, sizeof(sets));
+  }
+
+  static int setof(W64 addr) {
+    W64 set = 0;
+    addr >>= 3; // cut off subword bits
+
+    return lowbits(addr, log2(setcount));
+
+    foreach (i, ((setcount == 1) ? 0 : (64 / log2(setcount)))+1) {
+      set ^= addr;
+      addr >>= log2(setcount);
+    }
+
+    set = lowbits(set, log2(setcount));
+
+    return set;
+  }
+
+  int lookup(W64 addr, int& set) const {
+    set = setof(addr);
+    W16s slot = sets[set];
+    while (slot >= 0) {
+      if (addr_list[slot] == addr) return slot;
+      slot = next_list[slot];
+    }
+    return -1;
+  }
+
+  int lookup(W64 addr) const {
+    int dummy;
+    return lookup(addr, dummy);
+  }
+
+  bool store(W64 addr, W64 data, byte bytemask) {
+    int set;
+    int slot = lookup(addr, set);
+    if likely (slot < 0) {
+      slot = count++;
+      assert(slot < N);
+      addr_list[slot] = addr;
+      data_list[slot] = data;
+      bytemask_list[slot] = bytemask;
+      next_list[slot] = sets[set];
+      sets[set] = slot;
+      return true;
+    }
+
+    W64& d = data_list[slot];
+    d = mux64(expand_8bit_to_64bit_lut[bytemask], d, data);
+    bytemask_list[slot] |= bytemask;
+    return false;
+  }
+
+  bool load(W64 addr, W64& data, byte& bytemask) const {
+    bytemask = 0;
+    int slot = lookup(addr);
+    if likely (slot < 0) return false;
+    data = data_list[slot];
+    bytemask = bytemask_list[slot];
+    return true;
+  }
+
+  W64 load(W64 addr) const {
+    W64 data;
+    byte bytemask;
+
+    W64 memdata = loadimpl(addr);
+    if likely (!load(addr, data, bytemask)) return memdata;
+
+    if likely (bytemask == 0xff) return data;
+    data = mux64(expand_8bit_to_64bit_lut[bytemask], memdata, data);
+    return data;
+  }
+
+  void rollback() {
+    memset(sets, 0xff, sizeof(sets));
+    count = 0;
+  }
+
+  void commit() {
+    foreach (i, count) {
+      storeimpl(addr_list[i], data_list[i], bytemask_list[i]);
+    }
+    memset(sets, 0xff, sizeof(sets));
+    count = 0;
+  }
+
+  static W64 loadimpl(W64 addr);
+  static W64 storeimpl(W64 addr, W64 data, byte bytemask);
+
+  /*
+
+  Sample implementations for straight virtual addresses:
+
+  static W64 loadimpl(W64 addr) {
+  return *(const W64*)addr;
+  }
+
+  static W64 storeimpl(W64 addr, W64 data, byte bytemask) {
+  addr = signext64(addr, 48);
+  W64& mem = *(W64*)(Waddr)addr;
+  mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+  return mem;
+  }
+
+  */
+
+  int update(CommitRecord& cmtrec) {
+    foreach (i, count) {
+      SFR& sfr = cmtrec.stores[i];
+      sfr.data = data_list[i];
+      sfr.physaddr = addr_list[i] >> 3;
+      sfr.bytemask = bytemask_list[i];
+    }
+    cmtrec.store_count = count;
+    return count;
+  }
+
+  ostream& print(ostream& os) const {
+    os << "TransactionalMemory containing ", count, " stores:", endl;
+    foreach (i, count) {
+      W64 data = data_list[i];
+      os << "  ", intstring(i, 4), ": 0x", hexstring(W64(addr_list[i]), 64), " <= ", bytemaskstring((byte*)&data_list[i], bytemask_list[i], 8), endl;
+    }
+    os << "  Hash chains:", endl;
+    foreach (set, setcount) {
+      if (sets[set] < 0) continue;
+      os << "  Set ", intstring(set, 2), ":";
+      W16s slot = sets[set];
+      while (slot >= 0) {
+        os << ' ', slot;
+        slot = next_list[slot];
+      }
+      os << endl;
+    }
+    return os;
+  }
+};
+
+template <int N, int setcount>
+ostream& operator <<(ostream& os, const TransactionalMemory<N, setcount>& tm) {
+  return tm.print(os);
+}
+
+template <int N, int setcount>
+W64 TransactionalMemory<N, setcount>::loadimpl(W64 physaddr) {
+  W64* p = (W64*)phys_to_mapped_virt(physaddr);
+  return *p;
+}
+
+template <int N, int setcount>
+W64 TransactionalMemory<N, setcount>::storeimpl(W64 physaddr, W64 data, byte bytemask) {
+  return storemask(physaddr, data, bytemask);
+}
+
 struct SequentialCore {
-  SequentialCore(): ctx(contextof(0)) { }
-
   Context& ctx;
+  CommitRecord* cmtrec;
 
-  SequentialCore(Context& ctx_): ctx(ctx_) { }
+  SequentialCore(): ctx(contextof(0)), cmtrec(null) { }
+  SequentialCore(Context& ctx_, CommitRecord* cmtrec_ = null): ctx(ctx_), cmtrec(cmtrec_) { }
 
   BasicBlock* current_basic_block;
-  int current_basic_block_transop_index;
   int bytes_in_current_insn;
   int current_uop_in_macro_op;
   W64 current_uuid;
@@ -80,13 +258,13 @@ struct SequentialCore {
 
   W64 bbcache_inserts;
   W64 bbcache_removes;
-  
-  W64 fetch_opclass_histogram[OPCLASS_COUNT];
 
   CycleTimer ctseq;
-  CycleTimer ctfetch;
-  CycleTimer ctissue;
-  CycleTimer ctcommit;
+
+  W64 seq_total_basic_blocks;
+  W64 seq_total_uops_committed;
+  W64 seq_total_user_insns_committed;
+  W64 seq_total_cycles;
 
   //
   // Shadow flags are maintained for each archreg to simulate renaming,
@@ -94,7 +272,9 @@ struct SequentialCore {
   // specify some uops as "don't update user flags".
   //
   W64 arf[TRANSREG_COUNT];
-  W64 arflags[TRANSREG_COUNT];
+  W16 arflags[TRANSREG_COUNT];
+
+  TransactionalMemory<256, 16> transactmem;
 
   ostream& print_state(ostream& os) {
     os << "General state:", endl;
@@ -105,7 +285,6 @@ struct SequentialCore {
     os << "  Uop in macro-op:    ", current_uop_in_macro_op, endl;
     os << "Basic block state:", endl;
     os << "  BBcache block:      ", current_basic_block, endl;
-    os << "  uop in basic block: ", current_basic_block_transop_index, endl;
     os << "  uop count in block: ", (current_basic_block) ? current_basic_block->count : 0, endl;
     os << "Register state:       ", endl;
 
@@ -122,7 +301,6 @@ struct SequentialCore {
   void reset_fetch(W64 realrip) {
     arf[REG_rip] = realrip;
     current_basic_block = null;
-    current_basic_block_transop_index = 0;
   }
 
   enum {
@@ -318,8 +496,6 @@ struct SequentialCore {
     return data;
   }
 
-  CycleTimer ctload;
-
   int issueload(const TransOp& uop, SFR& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
     int status;
     Waddr rip = arf[REG_rip];
@@ -337,7 +513,10 @@ struct SequentialCore {
 
     state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
 
-    W64 data = (annul) ? 0 : *((W64*)(Waddr)floor(signext64((Waddr)mapped, 48), 8));
+    W64 data = 0;
+    if likely (!annul) {
+      data = (cmtrec) ? transactmem.load(state.physaddr << 3) : *((W64*)(Waddr)floor(signext64((Waddr)mapped, 48), 8));
+    }
 
     if unlikely (aligntype == LDST_ALIGN_HI) {
       //
@@ -409,7 +588,7 @@ struct SequentialCore {
     return ISSUE_COMPLETED;
   }
 
-  void external_to_core_state() {
+  void external_to_core_state(const Context& ctx) {
     foreach (i, ARCHREG_COUNT) {
       arf[i] = ctx.commitarf[i];
       arflags[i] = 0;
@@ -422,14 +601,14 @@ struct SequentialCore {
     arflags[REG_flags] = ctx.commitarf[REG_flags];
   }
 
-  void core_to_external_state() {
+  void core_to_external_state(Context& ctx) {
     foreach (i, ARCHREG_COUNT) {
       ctx.commitarf[i] = arf[i];
     }
   }
 
   bool handle_barrier() {
-    core_to_external_state();
+    core_to_external_state(ctx);
 
     int assistid = ctx.commitarf[REG_rip];
     assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
@@ -462,7 +641,7 @@ struct SequentialCore {
     }
 
     reset_fetch(ctx.commitarf[REG_rip]);
-    external_to_core_state();
+    external_to_core_state(ctx);
 #ifndef PTLSIM_HYPERVISOR
     if (requested_switch_to_native) {
       logfile << "PTL call requested switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
@@ -473,7 +652,7 @@ struct SequentialCore {
   }
 
   bool handle_exception() {
-    core_to_external_state();
+    core_to_external_state(ctx);
 
 #ifdef PTLSIM_HYPERVISOR
     if (logable(4)) {
@@ -507,7 +686,7 @@ struct SequentialCore {
 
     ctx.propagate_x86_exception(ctx.x86_exception, ctx.error_code, ctx.cr2);
 
-    external_to_core_state();
+    external_to_core_state(ctx);
 
     return true;
 #else
@@ -532,7 +711,7 @@ struct SequentialCore {
 
 #ifdef PTLSIM_HYPERVISOR
   bool handle_interrupt() {
-    core_to_external_state();
+    core_to_external_state(ctx);
 
     if (logable(6)) {
       logfile << "Interrupts pending at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl, flush;
@@ -552,16 +731,11 @@ struct SequentialCore {
     }
 
     reset_fetch(ctx.commitarf[REG_rip]);
-    external_to_core_state();
+    external_to_core_state(ctx);
 
     return true;
   }
 #endif
-
-  W64 seq_total_basic_blocks;
-  W64 seq_total_uops_committed;
-  W64 seq_total_user_insns_committed;
-  W64 seq_total_cycles;
 
   BasicBlock* fetch_or_translate_basic_block(Waddr rip) {
     RIPVirtPhys rvp(rip);
@@ -580,8 +754,6 @@ struct SequentialCore {
       if (logable(6)) logfile << padstring("", 20), " xlate  rip ", rvp, ": BB ", current_basic_block, " of ", current_basic_block->count, " uops", endl;
       bbcache_inserts++;
     }
-    
-    current_basic_block_transop_index = 0;
 
     current_basic_block->use(sim_cycle);
     return current_basic_block;
@@ -680,8 +852,6 @@ struct SequentialCore {
       }
 
       fetch_uops_fetched++;
-
-      fetch_opclass_histogram[opclassof(uop.opcode)]++;
 
       //
       // Issue
@@ -812,7 +982,12 @@ struct SequentialCore {
 
       if unlikely (uop.opcode == OP_st) {
         if (sfr.bytemask) {
-          storemask(sfr.physaddr << 3, sfr.data, sfr.bytemask);
+          if unlikely (cmtrec) {
+            transactmem.store(sfr.physaddr << 3, sfr.data, sfr.bytemask);
+          } else {
+            storemask(sfr.physaddr << 3, sfr.data, sfr.bytemask);
+          }
+
           Waddr mfn = (sfr.physaddr << 3) >> 12;
           smc_setdirty(mfn);
         }
@@ -827,11 +1002,24 @@ struct SequentialCore {
         }
       }
 
-      if unlikely (pteupdate) ctx.update_pte_acc_dirty(origvirt, pteupdate);
+      if unlikely (pteupdate) {
+        if unlikely (cmtrec) {
+          assert(cmtrec->pte_update_count < lengthof(cmtrec->pte_update_list));
+          cmtrec->pte_update_list[cmtrec->pte_update_count] = pteupdate;
+          cmtrec->pte_update_virt[cmtrec->pte_update_count] = origvirt;
+          cmtrec->pte_update_count++;
+        } else {
+          ctx.update_pte_acc_dirty(origvirt, pteupdate);
+        }
+      }
 
       barrier = isclass(uop.opcode, OPCLASS_BARRIER);
 
-      if (uop.eom) arf[REG_rip] = (uop.rd == REG_rip) ? state.reg.rddata : (arf[REG_rip] + bytes_in_current_insn);
+      if likely (uop.eom) {
+        arf[REG_rip] = (uop.rd == REG_rip) ? state.reg.rddata : (arf[REG_rip] + bytes_in_current_insn);
+        // Do not commit transactional memory: that's up to the caller:
+        // if unlikely (cmtrec) transactmem.commit();
+      }
 
       seq_total_user_insns_committed += uop.eom;
       total_user_insns_committed += uop.eom;
@@ -843,6 +1031,14 @@ struct SequentialCore {
       // Don't advance on cracked loads/stores:
       uopindex += unaligned_ldst_buf.empty();
       current_uop_in_macro_op++;
+
+      if (logable(9)) {
+        if unlikely (br) {
+          core_to_external_state(ctx);
+          logfile << "Core State after branch:", endl;
+          logfile << ctx;
+        }
+      }
     }
 
     if (barrier) return SEQEXEC_BARRIER;
@@ -892,6 +1088,47 @@ struct SequentialCore {
 
     return exiting;
   }
+
+  int execute_in_place(W64 bbcount = limits<W64>::max, W64s insncount = limits<W64s>::max) {
+    external_to_core_state(ctx);
+    int result = SEQEXEC_OK;
+
+    W64 user_insns_at_start = total_user_insns_committed;
+
+    foreach (i, bbcount) {
+      Waddr rip = arf[REG_rip];
+      
+      TraceDecoder trans(ctx, rip);
+      trans.split_basic_block_at_locks_and_fences = 1;
+      trans.split_invalid_basic_blocks = 1;
+
+      byte byte_buffer[MAX_BB_BYTES];
+      int valid_byte_count = trans.fillbuf(ctx, byte_buffer, lengthof(byte_buffer));
+      assert(valid_byte_count <= lengthof(byte_buffer));
+      
+      for (;;) { if (!trans.translate()) break; }
+      
+      if likely (trans.bb.rip.mfnlo != RIPVirtPhys::INVALID) smc_cleardirty(trans.bb.rip.mfnlo);
+      if unlikely (trans.bb.rip.mfnhi != RIPVirtPhys::INVALID) smc_cleardirty(trans.bb.rip.mfnhi);
+      
+      result = execute(&trans.bb, insncount);
+      insncount -= trans.bb.user_insn_count;
+
+      if (trans.bb.synthops) delete[] trans.bb.synthops;
+
+      if unlikely (result != SEQEXEC_OK) break;
+      if unlikely (insncount <= 0) break;
+    }
+
+    if likely (cmtrec) {
+      transactmem.update(*cmtrec);
+      cmtrec->exit_reason = result;
+    }
+
+    core_to_external_state(ctx);
+
+    return result;
+  }
 };
 
 struct SequentialMachine: public PTLsimMachine {
@@ -938,7 +1175,7 @@ struct SequentialMachine: public PTLsimMachine {
       SequentialCore& core =* cores[i];
       Context& ctx = contextof(i);
 
-      core.external_to_core_state();
+      core.external_to_core_state(ctx);
 
       if (logable(100)) {
         logfile << "VCPU ", i, " initial state:", endl;
@@ -988,9 +1225,9 @@ struct SequentialMachine: public PTLsimMachine {
       SequentialCore& core =* cores[i];
       Context& ctx = contextof(i);
 
-      core.core_to_external_state();
+      core.core_to_external_state(ctx);
 
-      if (logable(100)) {
+      if (logable(99)) {
         logfile << "Core State at end:", endl;
         logfile << ctx;
       }
@@ -1010,37 +1247,29 @@ struct SequentialMachine: public PTLsimMachine {
     // (nop)
   }
 
-  int execute_sequential(Context& ctx) {
-    SequentialCore& core = *cores[ctx.vcpuid];
-
-    core.external_to_core_state();
-    Waddr rip = ctx.commitarf[REG_rip];
-    // BasicBlock* bb = core.fetch_or_translate_basic_block(rip);
-
-    TraceDecoder trans(ctx, rip);
-    trans.split_basic_block_at_locks_and_fences = 1;
-    trans.split_invalid_basic_blocks = 1;
-
-    byte byte_buffer[MAX_BB_BYTES];
-    int valid_byte_count = trans.fillbuf(ctx, byte_buffer, lengthof(byte_buffer));
-    assert(valid_byte_count <= lengthof(byte_buffer));
-
-    for (;;) {
-      if (!trans.translate()) break;
-    }
-
-    int result = core.execute(&trans.bb, limits<W64>::max);
-    core.core_to_external_state();
-
-    if (trans.bb.synthops) delete[] trans.bb.synthops;
-
-    return result;
-  }
 };
 
 SequentialMachine seqmodel("seq");
 
-int execute_sequential(Context& ctx) {
-  if (!seqmodel.init_done) seqmodel.init(config);
-  return seqmodel.execute_sequential(ctx);
+int execute_sequential(Context& ctx, CommitRecord* cmtrec, W64 bbcount, W64 insncount) {
+  if unlikely (cmtrec) {
+    cmtrec->reset();
+    *(Context*)cmtrec = ctx;
+    SequentialCore core(*cmtrec, cmtrec);
+    return core.execute_in_place(bbcount, insncount);
+  } else {
+    SequentialCore core(ctx);
+    return core.execute_in_place(bbcount, insncount);
+  }
+}
+
+ostream& CommitRecord::print(ostream& os) const {
+  os << "CommitRecord: ", store_count, " stores, ", pte_update_count, " PTE updates", endl;
+  foreach (i, store_count) {
+    os << "  Store ", intstring(i, 3), ": ", stores[i], endl;
+  }
+  foreach (i, pte_update_count) {
+    os << "  PTE update ", intstring(i, 3), ": ", pte_update_list[i], " @ ", (void*)pte_update_virt[i], endl;
+  }
+  return os;
 }
