@@ -1,4 +1,4 @@
-#LyX 1.4.1 created this file. For more info see http://www.lyx.org/
+#LyX 1.4.2 created this file. For more info see http://www.lyx.org/
 \lyxformat 245
 \begin_document
 \begin_header
@@ -101,7 +101,7 @@ Matt T.
 \begin_layout Standard
 \noindent
 \align center
-Revision 20061008
+Revision 20070317
 \newline
 
 \series bold
@@ -143,7 +143,7 @@ www.ptlsim.org
 \begin_inset Formula $\copyright$
 \end_inset
 
- 2006 Matt T.
+ 2007 Matt T.
  Yourst 
 \family typewriter
 \size small
@@ -770,8 +770,7 @@ kernel.h
  transparently switch between simulation and native mode and 32-bit/64-bit
  mode (or only 32-bit mode on a 32-bit x86 machine).
  In general you should not need to touch this since it is very Linux kernel
- specific (this version works with 2.6.12 - 2.6.14) and works at a level below
- the standard C/C++ libraries.
+ specific and works at a level below the standard C/C++ libraries.
 \end_layout
 
 \begin_layout Itemize
@@ -3912,106 +3911,6 @@ release()
  Since basic blocks may be speculatively translated in the fetch stage of
  core models, this guarantees that live basic blocks currently in flight
  are never freed until they actually leave the pipeline.
-\end_layout
-
-\begin_layout Standard
-\begin_inset Note Note
-status collapsed
-
-\begin_layout Section
-Decoder Architecture
-\end_layout
-
-\begin_layout Standard
-The PTLsim x86 to uop decoder is provided by 
-\family typewriter
-\size footnotesize
-decode-*.cpp
-\family default
-\size default
- and 
-\family typewriter
-\size footnotesize
-decode.h
-\family default
-\size default
-.
- 
-\end_layout
-
-\begin_layout Standard
-The 
-\family typewriter
-\size footnotesize
-TraceDecoder
-\family default
-\size default
- structure coordinates all decoding activities for a given basic block or
- 
-\begin_inset Quotes eld
-\end_inset
-
-trace
-\begin_inset Quotes erd
-\end_inset
-
- of x86 instructions.
-\end_layout
-
-\begin_layout Standard
-For each instruction, decoding occurs in two stages.
- First, the x86 instruction bytes are parsed, and the two-operand CISC instructi
-ons are split into 
-\family typewriter
-\size footnotesize
-DecodedOperand
-\family default
-\size default
- structures, representing the register, memory or immediate operand(s).
- If any problems are found in the encoding, the 
-\family typewriter
-\size footnotesize
-MakeInvalid()
-\family default
-\size default
- macro sets the invalid flag for the instruction.
- After all parsing is complete, the 
-\family typewriter
-\size footnotesize
-CheckValid()
-\family default
-\size default
- macro turns the current instruction into a call to the 
-\family typewriter
-\size footnotesize
-INVALID_OPCODE
-\family default
-\size default
- assist and terminates decoding if the invalid flag was set (the 
-\family typewriter
-\size footnotesize
-EXEC_PAGE_FAULT
-\family default
-\size default
- assist may be generated instead for a page fault during decoding as described
- above).
-\end_layout
-
-\begin_layout Standard
-The second stage generates the actual uops once all decode failures have
- been detected.
- 
-\family typewriter
-\size footnotesize
-TransOp
-\family default
-\size default
- structures are filled out and written into the decode buffer.
-\end_layout
-
-\end_inset
-
-
 \end_layout
 
 \begin_layout Chapter
@@ -8654,7 +8553,7 @@ We
 highly recommend
 \emph default
  you use a Linux distribution already designed to work with Xen 3.x.
- We use SuSE 10.1 and highly recommend it; most other distributions now support
+ We use SuSE 10.2 and highly recommend it; most other distributions now support
  Xen.
  This requirement only applies to domain 0 - the virtual machines you'll
  be running can use any distribution and do not even need to know about
@@ -8663,8 +8562,8 @@ highly recommend
 \end_layout
 
 \begin_layout Itemize
-We have successfully built PTLsim/X with gcc 3.4.x and 4.1.x+ (gcc 4.0.x has documente
-d bugs affecting some of our code).
+aWe have successfully built PTLsim/X with gcc 3.4.x and 4.1.x+ (gcc 4.0.x has
+ documented bugs affecting some of our code).
 \end_layout
 
 \begin_layout Standard
@@ -8698,7 +8597,7 @@ Download
 our modified Xen source tree (
 \family typewriter
 \size footnotesize
-xen-source-ptlsim.tar.bz2
+xen-ptlsim-rXXXXX.tar.bz2
 \family default
 \size default
 ) from 
@@ -8720,12 +8619,6 @@ We also provide
 ptlsim-xen-hypervisor.diff
 \family default
 \size default
- and 
-\family typewriter
-\size footnotesize
-ptlsim-xen-tools.diff
-\family default
-\size default
  in case you want to manually apply the patches to a development version
  of Xen; the patches are fairly simple and can be adapted as needed.
 \end_layout
@@ -8744,7 +8637,7 @@ Build and install
 In 
 \family typewriter
 \size footnotesize
-xen-ptlsim.hg/xen
+xen-unstable.hg/xen
 \family default
 \size default
 , run 
@@ -8766,7 +8659,7 @@ xen
 In 
 \family typewriter
 \size footnotesize
-xen-ptlsim.hg/tools
+xen-unstable.hg/tools
 \family default
 \size default
 , run 
@@ -8793,26 +8686,26 @@ Download
  our sample kernel and modules (
 \family typewriter
 \size footnotesize
-linux-2.6.18-mtyrel-k8-64bit-xen.tar.bz2
+linux-2.6.20-mtyrel-64bit-xen.tar.bz2
 \family default
 \size default
 ) and extract in the root directory to create 
 \family typewriter
 \size footnotesize
-/lib/modules/2.6.18-mtyrel-k8-64bit-xen/....
+/lib/modules/2.6.20-mtyrel-64bit-xen/....
 \end_layout
 
 \begin_deeper
 \begin_layout Itemize
-This is a uniprocessor kernel based on 2.6.18 with the Xen patches maintained
- by SuSE Linux.
+This is a SMP kernel based on 2.6.20 with the Xen patches maintained by SuSE
+ Linux.
  The complete source is in 
 \family typewriter
 \size footnotesize
-linux-2.6.18-mtyrel-k8-64bit-xen-source.tar.gz
+linux-2.6.20-mtyrel-64bit-xen-source.tar.gz
 \family default
 \size default
-, if you want to recompile it (such as to enable SMP support).
+, if you want to recompile it.
 \end_layout
 
 \begin_layout Itemize
@@ -8850,7 +8743,7 @@ cat /sys/hypervisor/properties/capabilities
 
 \family typewriter
 \size footnotesize
-xen-3.0-x86_64-ptlsim
+ptlsim
 \family default
 \size default
 
@@ -8963,7 +8856,7 @@ Setup PTLsim itself:
 Download the stable version of PTLsim from our web site (in 
 \family typewriter
 \size footnotesize
-ptlsim-2006xxxx-rXXX.tar.gz
+ptlsim-2007xxxx-rXXX.tar.gz
 \family default
 \size default
 ) and unpack this file to create the 
@@ -9020,13 +8913,13 @@ If the build process complains about missing header files, make sure
  is a symlink to 
 \family typewriter
 \size footnotesize
-/project/xen-ptlsim.hg/tools/libxc/xen
+/project/xen-unstable.hg/tools/libxc/xen
 \family default
 \size default
- (or wherever you put the 
+ (or wherever you put the PTLsim-modified 
 \family typewriter
 \size footnotesize
-xen-ptlsim.hg
+xen-unstable.hg
 \family default
 \size default
  tree you downloaded).
@@ -9186,6 +9079,22 @@ Domain-0                                   0     1877     2 r-----    137.9
 \size footnotesize
 ptlvm                                     21      128     1 --p---     
  0.0
+\end_layout
+
+\begin_layout Standard
+You may also want to give the PTLsim domain a low priority; otherwise it
+ may cause the system to respond slowly.
+ This can be done by adding:
+\end_layout
+
+\begin_layout LyX-Code
+
+\size footnotesize
+sudo xm sched-credit -d 
+\emph on
+ptlvm
+\emph default
+ -w 16
 \end_layout
 
 \begin_layout Standard
