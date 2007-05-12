@@ -33,7 +33,7 @@ MemoryManagerEvent* mm_event_buffer_end = null;
 
 int mm_logging_fd = -1;
 bool enable_inline_mm_logging = false;
-bool enable_mm_validate = false;
+bool enable_mm_validate = true;
 
 void ptl_mm_set_logging(const char* mm_log_filename, int mm_event_buffer_size, bool set_enable_inline_mm_logging) {
   //
@@ -127,8 +127,8 @@ bool is_inside_ptlsim(const void* pp) {
   if likely (inrange(p, Waddr(PTLSIM_VIRT_BASE + (4096 * PTLSIM_FIRST_READ_ONLY_PAGE)), Waddr(bootinfo.heap_end)-1)) return true;
   if likely (!p) return true;
   if likely (print_validate_errors) {
-    cerr << "Error: pointer ", (void*)p, " is not in PTL space from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", __builtin_return_address(0), "); object of interest = ", object_of_interest, endl, flush;
-    logfile << "Error: pointer ", (void*)p, " is not in PTL space from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", __builtin_return_address(0), "); object of interest = ", object_of_interest, endl, flush;
+    cerr << "Error: pointer ", (void*)p, " is not in PTL space from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", getcaller(), "); object of interest = ", object_of_interest, endl, flush;
+    logfile << "Error: pointer ", (void*)p, " is not in PTL space from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", getcaller(), "); object of interest = ", object_of_interest, endl, flush;
   }
   return false;
 #else
@@ -142,8 +142,8 @@ bool is_inside_ptlsim_heap(const void* pp) {
   if likely (inrange(p, Waddr(bootinfo.heap_start), Waddr(bootinfo.heap_end)-1)) return true;
   if likely (!p) return true;
   if likely (print_validate_errors) {
-    cerr << "Error: pointer ", (void*)p, " is not in PTL heap from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", __builtin_return_address(0), "); object of interest = ", object_of_interest, endl, flush;
-    logfile << "Error: pointer ", (void*)p, " is not in PTL heap from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", __builtin_return_address(0), "); object of interest = ", object_of_interest, endl, flush;
+    cerr << "Error: pointer ", (void*)p, " is not in PTL heap from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", getcaller(), "); object of interest = ", object_of_interest, endl, flush;
+    logfile << "Error: pointer ", (void*)p, " is not in PTL heap from ", bootinfo.heap_start, "-", bootinfo.heap_end, " (called from ", getcaller(), "); object of interest = ", object_of_interest, endl, flush;
   }
   return false;
 #else
@@ -201,15 +201,9 @@ struct ExtentAllocator {
     return min(size-1, (size_t)(SIZESLOTS-1));
   }
 
-  int addr_to_hash_slot(void* size) const {
-    W64 key = ((Waddr)size >> log2(CHUNKSIZE));
-    W64 slot = 0;
-    foreach (i, (64 / log2(HASHSLOTS))+1) {
-      slot ^= key;
-      key >>= log2(HASHSLOTS);
-    }
-
-    return lowbits(slot, log2(HASHSLOTS));
+  int addr_to_hash_slot(void* addr) const {
+    W64 key = (Waddr(addr) >> log2(CHUNKSIZE));
+    return foldbits<log2(HASHSLOTS)>(key);
   }
 
   selflistlink* free_extents_by_size[SIZESLOTS];
@@ -819,8 +813,8 @@ struct SlabAllocator {
     PageHeader* page = PageHeader::headerof(p);
 
     if unlikely (page->magic != SLAB_PAGE_MAGIC) {
-      cerr << "Slab corruption: p = ", p, ", h = ", page, ", allocator ", page->allocator, ", magic = 0x", hexstring(page->magic, 32), ", caller ", __builtin_return_address(0), endl, flush;
-      abort();
+      cerr << "Slab corruption: p = ", p, ", h = ", page, ", allocator ", page->allocator, ", magic = 0x", hexstring(page->magic, 32), ", caller ", getcaller(), endl, flush;
+      assert(false);
     }
 
     return page->allocator;
@@ -977,16 +971,30 @@ struct SlabAllocator {
 
   ostream& print_page_chain(ostream& os, PageHeader* page) const {
     while (page) {
+      bitvec<4096/16> occupied_slots;
+      occupied_slots++;
+
+      FreeObjectHeader* pagebase = page->getbase();
+
       os << "  Page ", page, ": free list size ", page->freecount, ", prev ", page->link.prev, ", next ", page->link.next, ":", endl;
       FreeObjectHeader* obj = page->freelist;
       int c = 0;
       while (obj) {
-        os << "    Object #", c, ": ", obj, " (prev ", obj->prev, ", next ", obj->next, ")", endl;
+        int slot = (Waddr(obj) - Waddr(pagebase)) / objsize;
+        os << "    Free object ", obj, " in slot ", slot, " (prev ", obj->prev, ", next ", obj->next, ")", endl;
+        assert(inrange(slot, 0, int(max_objects_per_page)));
+        occupied_slots[slot] = 0;
         obj = (FreeObjectHeader*)obj->next;
         c++;
       }
       if (c != page->freecount) {
         os << "    WARNING: c = ", c, " vs page->freecount ", page->freecount, endl, flush;
+      }
+
+      foreach (i, max_objects_per_page) {
+        if (!occupied_slots[i]) continue;
+        byte* p = (byte*)pagebase + (i *objsize);
+        if (occupied_slots[i]) os << "    Used object ", p, " in slot ", i, endl;
       }
       page = (PageHeader*)page->link.next;
     }
@@ -1157,38 +1165,35 @@ void ptl_mm_dump(ostream& os) {
 extern ostream logfile;
 
 //
-// Full-system PTLxen running on the bare hardware:
+// Full-system PTLsim running on the bare hardware:
 //
+void* ptl_mm_try_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0, void* caller = 0) {
+  void* p = pagealloc.alloc(bytecount);
+  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, caller, p, bytecount);
+  return p;
+}
+
 void* ptl_mm_alloc_private_pages(Waddr bytecount, int prot, Waddr base) { 
   static const int retry_count = 64;
 
   foreach (i, retry_count) {
-    void* p = pagealloc.alloc(bytecount);
-    if likely (p) {
-      ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, __builtin_return_address(0), p, bytecount);
-      return p;
-    }
+    void* p = ptl_mm_try_alloc_private_pages(bytecount, prot, base, getcaller());
+    if likely (p) return p;
     logfile << "Before reclaim round ", i, ": largest free physical extent: ", pagealloc.largest_free_extent_bytes(), " bytes vs ", bytecount, " required bytes", endl;
     ptl_mm_dump_free_bytes(logfile);
-    // The urgency -1 means "free everything possible at all costs":
-    ptl_mm_reclaim(bytecount, ((i == (retry_count-2)) ? -1 : 0));
+    // The urgency MAX_URGENCY (currently 65536) means "free everything possible at all costs":
+    ptl_mm_reclaim(bytecount, ((i == (retry_count-2)) ? MAX_URGENCY : i));
     logfile << "After reclaim round ", i, ": largest free physical extent: ", pagealloc.largest_free_extent_bytes(), " bytes", endl, flush;
     ptl_mm_dump_free_bytes(logfile);
   }
 
-  cerr << "ptl_mm_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
-  logfile << "ptl_mm_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)__builtin_return_address(0), ")", endl, flush;
+  cerr << "ptl_mm_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)getcaller(), ")", endl, flush;
+  logfile << "ptl_mm_alloc_private_pages(", bytecount, " bytes): failed to reclaim some memory (called from ", (void*)getcaller(), ")", endl, flush;
 
   ptl_mm_dump(logfile);
 
   cerr << flush;
-  abort();
-}
-
-void* ptl_mm_try_alloc_private_pages(Waddr bytecount, int prot, Waddr base) { 
-  void* p = pagealloc.alloc(bytecount);
-  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, __builtin_return_address(0), p, bytecount);
-  return p;
+  assert(false);
 }
 
 void* ptl_mm_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
@@ -1197,7 +1202,7 @@ void* ptl_mm_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
 
 void ptl_mm_free_private_pages(void* addr, Waddr bytecount) {
   assert(addr);
-  ptl_mm_add_event(PTL_MM_EVENT_FREE, PTL_MM_POOL_PAGES, __builtin_return_address(0), addr, bytecount);
+  ptl_mm_add_event(PTL_MM_EVENT_FREE, PTL_MM_POOL_PAGES, getcaller(), addr, bytecount);
   pagealloc.free(floorptr(addr, PAGE_SIZE), ceil(bytecount, PAGE_SIZE));
 }
 
@@ -1207,12 +1212,12 @@ void ptl_mm_zero_private_pages(void* addr, Waddr bytecount) {
 
 #else
 
-void* ptl_mm_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
+void* ptl_mm_try_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0, void* caller = 0) {
   int flags = MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : 0);
   flags |= (inside_ptlsim) ? MAP_SHARED : MAP_PRIVATE;
   if (base == 0) base = PTL_PAGE_POOL_BASE;
   void* addr = sys_mmap((void*)base, ceil(bytecount, PAGE_SIZE), prot, flags, 0, 0);
-  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, __builtin_return_address(0), addr, bytecount);
+  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, caller, addr, bytecount);
   if (addr) {
     pagealloc.allocs++;
     pagealloc.current_bytes_allocated += ceil(bytecount, PAGE_SIZE);
@@ -1222,6 +1227,10 @@ void* ptl_mm_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
   return addr;
 }
 
+void* ptl_mm_alloc_private_pages(Waddr bytecount, int prot, Waddr base) {
+  return ptl_mm_try_alloc_private_pages(bytecount, prot, base, getcaller());
+}
+
 void* ptl_mm_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
 #ifdef __x86_64__
   int flags = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : MAP_32BIT);
@@ -1229,7 +1238,7 @@ void* ptl_mm_alloc_private_32bit_pages(Waddr bytecount, int prot, Waddr base) {
   int flags = MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : 0);
 #endif
   void* addr = sys_mmap((void*)base, ceil(bytecount, PAGE_SIZE), prot, flags, 0, 0);  
-  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, __builtin_return_address(0), addr, bytecount);
+  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, getcaller(), addr, bytecount);
   if (addr) {
     pagealloc.allocs++;
     pagealloc.current_bytes_allocated += ceil(bytecount, PAGE_SIZE);
@@ -1245,7 +1254,7 @@ void ptl_mm_free_private_pages(void* addr, Waddr bytecount) {
   pagealloc.frees++;
   pagealloc.current_bytes_allocated -= min(pagealloc.current_bytes_allocated, (W64)bytecount);
   sys_munmap(addr, bytecount);
-  ptl_mm_add_event(PTL_MM_EVENT_FREE, PTL_MM_POOL_PAGES, __builtin_return_address(0), addr, bytecount);
+  ptl_mm_add_event(PTL_MM_EVENT_FREE, PTL_MM_POOL_PAGES, getcaller(), addr, bytecount);
 }
 
 void ptl_mm_zero_private_pages(void* addr, Waddr bytecount) {
@@ -1324,8 +1333,8 @@ void* ptl_mm_alloc(size_t bytes, void* caller) {
       ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, caller, null, bytes, slot);
       ptl_mm_reclaim(bytes);
       p = slaballoc[slot].alloc();
-      ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, caller, p, bytes, slot);
     }
+    ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, caller, p, bytes, slot);
     return p;
   } else {
     //
@@ -1348,11 +1357,28 @@ void* ptl_mm_alloc(size_t bytes, void* caller) {
       // PTLsim/X, this is not required since we have complete control over the
       // page tables and can put the entire page pool in one 2 GB aligned block.
       //
-      void* newpool = ptl_mm_alloc_private_32bit_pages(pagebytes);
+      int prot = PROT_READ|PROT_WRITE|PROT_EXEC;
+      void* newpool = ptl_mm_try_alloc_private_pages(pagebytes, prot, 0, getcaller());
       if unlikely (!newpool) {
-        ptl_mm_reclaim(bytes);
-        pagebytes = ceil(bytes, PAGE_SIZE);
-        newpool = ptl_mm_alloc_private_32bit_pages(pagebytes);
+        size_t largest_free_extent = pagealloc.largest_free_extent_bytes();
+        logfile << "mm: attempted to allocate ", bytes, " bytes: failed allocation of new gen pool chunk (",
+          pagebytes, " bytes) failed: largest_free_extent ", largest_free_extent, " vs rounded up orig bytes ",
+          ceil(bytes, 4096), endl;
+
+        if likely (largest_free_extent >= ceil(bytes, 4096)) {
+          //
+          // Try a smaller allocation since default chunk size won't fit
+          // If we get here, largest_free_extent must be < pagebytes:
+          //
+          pagebytes = largest_free_extent;
+          newpool = ptl_mm_try_alloc_private_pages(pagebytes, prot, 0, getcaller());
+          // Must have some space for at least this amount:
+          assert(newpool);
+        } else {
+          logfile << "mm: reclaim needed since alloc request exceeds largest free extent", endl;
+          pagebytes = ceil(bytes, PAGE_SIZE);
+          newpool = ptl_mm_alloc_private_pages(pagebytes, prot, 0);
+        }
       }
 
       if unlikely (!newpool) {
@@ -1377,7 +1403,7 @@ void* ptl_mm_alloc(size_t bytes, void* caller) {
 }
 
 void* ptl_mm_alloc(size_t bytes) {
-  return ptl_mm_alloc(bytes, __builtin_return_address(0));
+  return ptl_mm_alloc(bytes, getcaller());
 }
 
 //
@@ -1398,7 +1424,7 @@ void* ptl_mm_try_alloc(size_t bytes) {
     int slot = (bytes >> log2(SlabAllocator::GRANULARITY))-1;
     assert(slot < SLAB_ALLOC_SLOT_COUNT);
     void* p = slaballoc[slot].alloc();
-    ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, __builtin_return_address(0), p, bytes, slot);
+    ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, getcaller(), p, bytes, slot);
     return p;
   } else {
     //
@@ -1411,13 +1437,13 @@ void* ptl_mm_try_alloc(size_t bytes) {
 
     W64* p = (W64*)genalloc.alloc(bytes);
     if unlikely (!p) {
-      ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_GENERAL, __builtin_return_address(0), null, bytes);
+      ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_GENERAL, getcaller(), null, bytes);
       return null;
     }
     *p = bytes;
     p += 2; // skip over hidden size word and pad-to-16-bytes word
 
-    ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_GENERAL, __builtin_return_address(0), p, bytes);
+    ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_GENERAL, getcaller(), p, bytes);
     return p;
   }
 }
@@ -1443,13 +1469,13 @@ void* ptl_mm_alloc_aligned(int alignbits) {
   assert(slot < SLAB_ALLOC_SLOT_COUNT);
   void* p = slaballoc[slot].alloc();
   if unlikely (!p) {
-    ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, __builtin_return_address(0), null, bytes, slot);
+    ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, getcaller(), null, bytes, slot);
     ptl_mm_reclaim(bytes);
     p = slaballoc[slot].alloc();
   }
 
   assert(lowbits(Waddr(p), alignbits) == 0);
-  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, __builtin_return_address(0), p, bytes, slot);
+  ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_SLAB, getcaller(), p, bytes, slot);
 
   return p;
 }
@@ -1494,11 +1520,11 @@ void ptl_mm_free(void* p, void* caller) {
 }
 
 void ptl_mm_free(void* p) {
-  ptl_mm_free(p, __builtin_return_address(0));
+  ptl_mm_free(p, getcaller());
 }
 
 void ptl_mm_validate() {
-  logfile << "ptl_mm_validate() called by ", __builtin_return_address(0), endl;
+  logfile << "ptl_mm_validate() called by ", getcaller(), endl;
   pagealloc.fast_validate();
   genalloc.fast_validate();
   
@@ -1535,7 +1561,7 @@ bool ptl_mm_register_reclaim_handler(mm_reclaim_handler_t handler) {
 // retained as a slab cache page.
 //
 void ptl_mm_cleanup() {
-  ptl_mm_add_event(PTL_MM_EVENT_CLEANUP, PTL_MM_POOL_ALL, __builtin_return_address(0), null, 0);
+  ptl_mm_add_event(PTL_MM_EVENT_CLEANUP, PTL_MM_POOL_ALL, getcaller(), null, 0);
 
   foreach (i, SLAB_ALLOC_SLOT_COUNT) {
     slaballoc[i].reclaim();
@@ -1560,19 +1586,19 @@ void ptl_mm_cleanup() {
 // for other types of big allocations.
 //
 void ptl_mm_reclaim(size_t bytes, int urgency) {
-  ptl_mm_add_event(PTL_MM_EVENT_RECLAIM_START, PTL_MM_POOL_ALL, __builtin_return_address(0), null, bytes);
+  ptl_mm_add_event(PTL_MM_EVENT_RECLAIM_START, PTL_MM_POOL_ALL, getcaller(), null, bytes);
 
   foreach (i, reclaim_handler_list_count) {
     mm_reclaim_handler_t handler = reclaim_handler_list[i];
     if likely (handler) {
-      ptl_mm_add_event(PTL_MM_EVENT_RECLAIM_CALL, PTL_MM_POOL_ALL, __builtin_return_address(0), (void*)handler, bytes);
+      ptl_mm_add_event(PTL_MM_EVENT_RECLAIM_CALL, PTL_MM_POOL_ALL, getcaller(), (void*)handler, bytes);
       reclaim_handler_list[i](bytes, urgency);
     }
   }
 
   ptl_mm_cleanup();
 
-  ptl_mm_add_event(PTL_MM_EVENT_RECLAIM_END, PTL_MM_POOL_ALL, __builtin_return_address(0), null, bytes);
+  ptl_mm_add_event(PTL_MM_EVENT_RECLAIM_END, PTL_MM_POOL_ALL, getcaller(), null, bytes);
 }
 
 DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root) {
@@ -1592,25 +1618,25 @@ DataStoreNode& ptl_mm_capture_stats(DataStoreNode& root) {
 }
 
 asmlinkage void* malloc(size_t size) {
-  return ptl_mm_alloc(size, __builtin_return_address(0));
+  return ptl_mm_alloc(size, getcaller());
 }
 
 asmlinkage void free(void* ptr) {
-  ptl_mm_free(ptr, __builtin_return_address(0));
+  ptl_mm_free(ptr, getcaller());
 }
 
 void* operator new(size_t sz) {
-  return ptl_mm_alloc(sz, __builtin_return_address(0));
+  return ptl_mm_alloc(sz, getcaller());
 }
 
 void operator delete(void* m) {
-  ptl_mm_free(m, __builtin_return_address(0));
+  ptl_mm_free(m, getcaller());
 }
 
 void* operator new[](size_t sz) {
-  return ptl_mm_alloc(sz, __builtin_return_address(0));
+  return ptl_mm_alloc(sz, getcaller());
 }
 
 void operator delete[](void* m) {
-  ptl_mm_free(m, __builtin_return_address(0));
+  ptl_mm_free(m, getcaller());
 }

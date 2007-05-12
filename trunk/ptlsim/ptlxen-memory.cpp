@@ -13,6 +13,33 @@
 #include <stats.h>
 
 //
+// Debugging
+//
+void print_page_table_tree(ostream& os, mfn_t mfn, int level = 0, int maxlevel = 3) {
+  Level1PTE* ptes = (Level1PTE*)phys_to_mapped_virt(mfn << 12);
+
+  foreach (w, 2*level) os << "  ";
+  W64 pfn = mfn_to_linear_pfn(mfn);
+  os << "  L", (4-level), " mfn ", mfn, " (pfn ", pfn, "):", endl;
+
+  foreach (i, 512) {
+    Level1PTE pte = ptes[i];
+    if likely (!pte.p) continue;
+    W64 leafpfn = mfn_to_linear_pfn(pte.mfn);
+    foreach (w, level) os << "  ";
+    os << "    [ ", intstring(i, -3), " ] ", pte, " pfn ", intstring(leafpfn, 10), endl;
+    if unlikely ((level == 2) & Level2PTE(pte).psz) {
+      foreach (w, level) os << "  ";
+      os << "      (huge page)", endl;
+    } else if unlikely ((level == 0) && inrange(int(i), 256, 271)) {
+      os << "      (hypervisor space)", endl;
+    } else if unlikely (level < maxlevel) {
+      print_page_table_tree(os, pte.mfn, level+1, maxlevel);
+    }
+  }
+}
+
+//
 // PTLsim internal page table management
 //
 mmu_update_t mmuqueue[1024];
@@ -1022,7 +1049,7 @@ bool is_mfn_ptpage(mfn_t mfn) {
     if unlikely (!pte.p) {
       // This should never occur: errors are caught while mapping
       logfile << "PTE for mfn ", mfn, " is still not present (around sim_cycle ", sim_cycle, ")!", endl, flush;
-      abort();
+      assert(false);
     }
   } else if unlikely (!pte.rw) {
     //
@@ -1068,6 +1095,7 @@ W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
     int rc = HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
     if unlikely (rc) {
       logfile << "storemask: WARNING: store to physaddr ", (void*)physaddr, " <= ", Level1PTE(data), " failed with rc ", rc, endl, flush;
+      assert(false);
     }
   } else {
     mem = merged;
@@ -1076,7 +1104,7 @@ W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
   return data;
 }
 
-void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
+void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused) {
   exception = 0;
   pteupdate = 0;
 
@@ -1097,16 +1125,17 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
   }
 
   Level1PTE pte = virt_to_pte(virtaddr);
+  pteused = pte;
 
   bool page_not_present = (!pte.p);
   bool page_read_only = (store & (!pte.rw));
   bool page_kernel_only = ((!kernel_mode) & (!pte.us));
 
   if unlikely (page_not_present | page_read_only | page_kernel_only) {
-    if unlikely (store && (!page_not_present) && (!page_kernel_only) &&
-                 page_read_only && is_mfn_mainmem(pte.mfn) && is_mfn_ptpage(pte.mfn)) {
-      if (logable(5)) {
-        logfile << "Page ", pte.mfn, " is a page table page: special semantics", endl;
+    if unlikely (kernel_mode && store && page_read_only && (!page_not_present) && is_mfn_mainmem(pte.mfn) && 
+                 (is_mfn_ptpage(pte.mfn))) {
+      if (logable(4)) {
+        logfile << "Page ", pte.mfn, " accessed via virt ", (void*)virtaddr, " is a page table page (pte was ", pte, ") near iteration ", iterations, endl;
       }
       //
       // This is a page table page and is technically mapped read only,
@@ -1115,10 +1144,6 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
       // written PTE value and emulate the store as if it was to a normal
       // read-write page.
       //
-      // For PTLsim use, we set the pteupdate.ptwrite bit to indicate that
-      // special handling is needed. However, no exception is signalled.
-      //
-      pteupdate.ptwrite = 1;
     } else {
       exception = (store) ? EXCEPTION_PageFaultOnWrite : EXCEPTION_PageFaultOnRead;
       pfec.p = pte.p;
@@ -1142,6 +1167,11 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
   pteupdate.d = (store & (!pte.d));
 
   return pte_to_mapped_virt(virtaddr, pte);
+}
+
+void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
+  Level1PTE dummy;
+  return check_and_translate(virtaddr, sizeshift, store, internal, exception, pfec, pteupdate, dummy);
 }
 
 int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec, Level1PTE& ptelo, Level1PTE& ptehi) {
@@ -1535,7 +1565,7 @@ W64 handle_memory_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
   default: {
     // All others are only used by dom0
     logfile << "memory_op (", op, ") not supported!", endl, flush;
-    abort();
+    assert(false);
   }
   }
 
@@ -1564,8 +1594,6 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
       // Unmap the requisite pages from our physmap since we may be making them read only.
       // It will be remapped by the PTLsim page fault handler on demand.
       //
-      const Level1PTE* pinptes = (Level1PTE*)phys_to_mapped_virt(mfn << 12);
-      Level1PTE pte0 = pinptes[0];
 
       if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: map/unmap mfn ", mfn, " (pin/unpin operation ", req.cmd, ")", endl, flush;
 
@@ -1575,11 +1603,21 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
         // constant time (1 L2 page scan) for systems with only a
         // few GB of physical memory:
         // (slower) unmap_phys_page_tree(mfn);
+        if (debug) logfile << "Unmapping address space...", endl, flush;
         unmap_address_space();
       }
 
       int update_count = 0;
       rc = HYPERVISOR_mmuext_op(&req, 1, &update_count, domain);
+
+      if (debug) {
+        logfile << "[result ", rc, "]", endl, flush;
+        if (rc) {
+          logfile << "Print page table tree:", endl;
+          print_page_table_tree(logfile, mfn);
+          logfile << flush;
+        }
+      }
 
       total_updates += update_count;
       break;
@@ -1680,7 +1718,7 @@ W64 handle_mmuext_op_hypercall(Context& ctx, mmuext_op_t* reqp, W64 count, int* 
     default:
       if (debug) logfile << "[vcpu ", ctx.vcpuid, "] mmuext_op: unknown op ", req.cmd, endl, flush;
       rc = -EINVAL;
-      abort();
+      assert(false);
       break;
     }
 
@@ -1714,14 +1752,14 @@ W64 handle_grant_table_op_hypercall(Context& ctx, W64 cmd, byte* arg, W64 count,
       if (debug) logfile << "GNTTABOP_map_grant_ref(host_addr ", (void*)(Waddr)req.host_addr, ", flags ", req.flags,
                    ", ref ", req.ref, ", dom ", req.dom, ")", endl;
       if (debug) logfile << "map_grant_ref is not supported yet!", endl;
-      abort();
+      assert(false);
     }
     case GNTTABOP_unmap_grant_ref: {
       getreq(gnttab_map_grant_ref);
       if (debug) logfile << "GNTTABOP_unmap_grant_ref(host_addr ", (void*)(Waddr)req.host_addr,
                    ", dev_bus_addr ", (void*)(Waddr)req.dev_bus_addr, ", handle ", (void*)(Waddr)req.handle, ")", endl, flush;
       if (debug) logfile << "unmap_grant_ref is not supported yet!", endl;
-      abort();
+      assert(false);
     }
     case GNTTABOP_setup_table: {
       getreq(gnttab_setup_table);
@@ -1751,7 +1789,7 @@ W64 handle_grant_table_op_hypercall(Context& ctx, W64 cmd, byte* arg, W64 count,
     default: {
       if (debug) logfile << "grant_table_op: unknown op ", cmd, endl, flush;
       rc = -EINVAL;
-      abort();
+      assert(false);
       break;
     }
     }

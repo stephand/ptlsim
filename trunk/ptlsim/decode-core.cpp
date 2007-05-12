@@ -11,6 +11,7 @@
 #include <decode.h>
 #include <stats.h>
 
+
 BasicBlockCache bbcache;
 
 struct BasicBlockChunkListHashtableLinkManager {
@@ -93,6 +94,7 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_iret64,
   // Control register updates
   assist_cpuid,
+  assist_rdtsc,
   assist_cld,
   assist_std,
   assist_popf,
@@ -434,19 +436,17 @@ void TraceDecoder::reset() {
   rex = 0;
   modrm = 0;
   user_insn_count = 0;
-  //
-  // if last_flags_update_was_atomic is initialized to zero,
-  // it guarantees at least one uop in the BB updates all
-  // the flags (possibly with a collcc uop).
-  //
   last_flags_update_was_atomic = 0;
   invalid = 0;
   some_insns_complex = 0;
   used_microcode_assist = 0;
   end_of_block = 0;
+  first_uop_in_insn = 1;
   split_basic_block_at_locks_and_fences = 0;
   split_invalid_basic_blocks = 0;
   no_partial_flag_updates_per_insn = 0;
+  fast_length_decode_only = 0;
+  join_with_prev_insn = 0;
   outcome = DECODE_OUTCOME_OK;
 }
 
@@ -498,28 +498,45 @@ TraceDecoder::TraceDecoder(Context& ctx, Waddr rip) {
 
 void TraceDecoder::put(const TransOp& transop) {
   assert(transbufcount < MAX_TRANSOPS_PER_USER_INSN);
-
   transbuf[transbufcount++] = transop;
-  TransOp& firstop = transbuf[0];
-  if ((transbufcount-1) == 0) firstop.som = 1;
 
-  firstop.bytes = (rip - ripstart);
   if (transop.setflags)
     last_flags_update_was_atomic = (transop.setflags == 0x7);
 }
 
-void TraceDecoder::lastop() {
-  // Did we convert the last user insn into a nop and not output anything?
-  if (!transbufcount)
+void TraceDecoder::flush() {
+  if unlikely (!transbufcount) {
     return;
-    
+  }
+
+  if unlikely (join_with_prev_insn) {
+    //
+    // Reopen the previous instruction
+    //
+    assert(bb.count > 0);
+    int i = bb.count-1;
+    while (i >= 0) {
+      TransOp& prevop = bb.transops[i];
+      prevop.eom = 0;
+      prevop.final_flags_in_insn = 0;
+      i--;
+      if unlikely (prevop.som) {
+        rip = ripstart;
+        ripstart -= prevop.bytes;
+        break;
+      }
+    }
+  }
+
   int bytes = (rip - ripstart);
   assert(bytes <= 15);
 
   TransOp& first = transbuf[0];
   TransOp& last = transbuf[transbufcount-1];
-  bool contains_branch = isbranch(last.opcode);
+  first.som = (!join_with_prev_insn);
   last.eom = 1;
+
+  bool contains_branch = isbranch(last.opcode);
 
   W8s final_archreg_writer[ARCHREG_COUNT];
   memset(final_archreg_writer, 0xff, sizeof(final_archreg_writer));
@@ -528,7 +545,7 @@ void TraceDecoder::lastop() {
   byte flag_sets_set = 0;
   foreach (i, transbufcount) {
     TransOp& transop = transbuf[i];
-    if likely (transop.rd < ARCHREG_COUNT) final_archreg_writer[transop.rd] = i;
+    if likely (transop.rd < ARCHREG_COUNT) { final_archreg_writer[transop.rd] = i; }
     bool sets_all_flags = ((transop.setflags == 7) && (!transop.nouserflags));
     if unlikely (sets_all_flags) final_flags_writer = i;
     if likely (!transop.nouserflags) flag_sets_set |= transop.setflags;
@@ -544,7 +561,7 @@ void TraceDecoder::lastop() {
   foreach (i, transbufcount) {
     TransOp& transop = transbuf[i];
     if unlikely (bb.count >= MAX_BB_UOPS) {
-      logfile << "ERROR: Too many transops (", bb.count, ") in basic block (max ", MAX_BB_UOPS, " allowed)", endl, flush;
+      logfile << "ERROR: Too many transops (", bb.count, ") in basic block (max ", MAX_BB_UOPS, " allowed)", endl;
       assert(bb.count < MAX_BB_UOPS);
     }
 
@@ -589,12 +606,15 @@ void TraceDecoder::lastop() {
     if (transop.rc < ARCHREG_COUNT) setbit(bb.usedregs, transop.rc);
   }
 
-  stats.decoder.throughput.x86_insns++;
   stats.decoder.throughput.uops += transbufcount;
-  stats.decoder.throughput.bytes += bytes;
 
-  bb.user_insn_count++;
-  bb.bytes += bytes;
+  if (!join_with_prev_insn) {
+    bb.user_insn_count++;
+    bb.bytes += bytes;
+    stats.decoder.throughput.x86_insns++;
+    stats.decoder.throughput.bytes += bytes;
+  }
+
   transbufcount = 0;
 }
 
@@ -623,8 +643,8 @@ bool DecodedOperand::gform_ext(TraceDecoder& state, int bytemode, int regfield, 
   case w_mode: this->reg.reg = reg16_to_uniform_reg[regfield + add]; break;
   case d_mode: this->reg.reg = reg32_to_uniform_reg[regfield + add]; break;
   case q_mode: this->reg.reg = reg64_to_uniform_reg[regfield + add]; break;
-  case m_mode: this->reg.reg = (state.use64) ? reg64_to_uniform_reg[regfield + add] : reg32_to_uniform_reg[regfield + add]; break;
-  case v_mode: case dq_mode: 
+  case v_mode:
+  case dq_mode: 
     this->reg.reg = (state.rex.mode64 | (def64 & (!state.opsize_prefix))) ? reg64_to_uniform_reg[regfield + add] : 
       ((!state.opsize_prefix) | (bytemode == dq_mode)) ? reg32_to_uniform_reg[regfield + add] :
       reg16_to_uniform_reg[regfield + add];
@@ -799,7 +819,7 @@ bool DecodedOperand::eform(TraceDecoder& state, int bytemode) {
   case w_mode: mem.size = 1; break;
   case d_mode: mem.size = 2; break;
   case q_mode: mem.size = 3; break;
-  case m_mode: mem.size = (state.use64) ? 3 : 2; break;
+    // case m_mode: mem.size = (state.use64) ? 3 : 2; break;
   case v_mode: case dq_mode: mem.size = (state.rex.mode64) ? 3 : ((!state.opsize_prefix) | (bytemode == dq_mode)) ? 2 : 1; break; // See table 1.2 (p35) of AMD64 ISA manual
   case x_mode: mem.size = 3; break;
   default: return false;
@@ -1232,6 +1252,9 @@ void TraceDecoder::microcode_assist(int assistid, Waddr selfrip, Waddr nextrip) 
     this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
   TransOp transop(OP_brp, REG_rip, REG_zero, REG_zero, REG_zero, 3);
   transop.riptaken = transop.ripseq = (Waddr)assistid;
+  bb.rip_taken = assistid;
+  bb.rip_not_taken = assistid;
+  bb.brtype = BRTYPE_BARRIER;
   this << transop;
 }
 
@@ -1257,13 +1280,25 @@ void TraceDecoder::decode_prefixes() {
   }
 }
 
-void TraceDecoder::split(Waddr target) {
+void TraceDecoder::split(bool after) {
+  Waddr target = (after) ? rip : ripstart;
+  if (!after) assert(!first_insn_in_bb());
+
+  //
+  // Append to the previous insn (no pre-flush) if split before
+  // the current insn. This forces the total x86 insn count to
+  // match the real code (i.e. do not count branch caps):
+  //
+  put(TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU));
+
   TransOp br(OP_bru, REG_rip, REG_zero, REG_zero, REG_zero, 3);
   br.riptaken = target;
   br.ripseq = target;
-  this << br;
+  put(br);
   bb.rip_taken = target;
   bb.rip_not_taken = target;
+  bb.brtype = BRTYPE_SPLIT;
+  join_with_prev_insn = (!after);
   end_of_block = 1;
 }
 
@@ -1347,7 +1382,7 @@ int BasicBlockCache::get_page_bb_count(Waddr mfn) {
 //
 // Invalidate any basic blocks on the specified physical page.
 // This function is suitable for calling from a reclaim handler
-// when we run out of memory (it may not allocate any memory).
+// when we run out of memory (it may will allocate any memory).
 //
 bool BasicBlockCache::invalidate_page(Waddr mfn, int reason) {
   //
@@ -1424,7 +1459,7 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
   assert(n > 0);
   average /= n;
 
-  if unlikely (urgency < 0) {
+  if unlikely (urgency >= MAX_URGENCY) {
     //
     // The allocator is so strapped for memory, we need to free
     // everything possible at all costs:
@@ -1543,7 +1578,6 @@ void BasicBlockCache::flush() {
   }
 }
 
-
 void assist_exec_page_fault(Context& ctx) {
   //
   // We need to check if faultaddr is now a valid page, since the page tables
@@ -1650,8 +1684,67 @@ bool TraceDecoder::invalidate() {
   end_of_block = 1;
   user_insn_count++;
   bb.invalidblock = 1;
-  lastop();
+  flush();
   return true;
+}
+
+//
+// Generate a memory fence of the specified type.
+//
+bool TraceDecoder::memory_fence_if_locked(bool end_of_x86_insn, int type) {
+  if likely (!(prefixes & PFX_LOCK)) return false;
+
+  if (split_basic_block_at_locks_and_fences) {
+    if (end_of_x86_insn) {
+      //
+      // Final mf that terminates the insn (always in its own BB): terminate the BB here.
+      //
+      TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+      mf.extshift = type;
+      this << mf;
+      bb.mfence = 1;
+      split_after();
+      return true;
+    } else {
+      //
+      // First uop in x86 insn
+      //
+      if (!first_insn_in_bb()) {
+        //
+        // This is not the first x86 insn in the BB, but it is the first uop in the insn.
+        // Split the existing BB at this point, so we get a sequence like this:
+        //
+        // insn1
+        // insn2
+        // (insn3):
+        //   mf
+        //   bru   insn3
+        //
+        split_before();
+        return true;
+      } else {
+        //
+        // This is the first insn in the BB and the first mf uop in that insn:
+        // just emit the mf and continue with the other uops in the insn
+        //
+        TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+        mf.extshift = type;
+        this << mf;
+        bb.mfence = 1;
+        return false; // continue emitting other uops
+      }
+    }
+  } else {
+    //
+    // Always emit fence intermingled with other insns
+    //
+    TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+    mf.extshift = type;
+    this << mf;
+  }
+
+  // never reached:
+  return false;
 }
 
 //
@@ -1698,9 +1791,9 @@ int TraceDecoder::fillbuf_phys_prechecked(byte* insnbytes, int insnbytes_bufsize
 bool TraceDecoder::translate() {
   opsize_prefix = 0;
   addrsize_prefix = 0;
-  bool uses_sse = 0;
-
+  first_uop_in_insn = 1;
   ripstart = rip;
+
   decode_prefixes();
 
 #if 0
@@ -1713,6 +1806,7 @@ bool TraceDecoder::translate() {
 
   if (prefixes & PFX_ADDR) addrsize_prefix = 1;
 
+  bool uses_sse = 0;
   op = fetch1();
   bool need_modrm = onebyte_has_modrm[op];
   if (op == 0x0f) {
@@ -1744,7 +1838,7 @@ bool TraceDecoder::translate() {
 
   bool rc;
 
-  // logfile << "Decoding op 0x", hexstring(op, 12), " (class ", (op >> 8), ") @ ", (void*)ripstart, endl, flush;
+  // logfile << "Decoding op 0x", hexstring(op, 12), " (class ", (op >> 8), ") @ ", (void*)ripstart, endl;
 
   is_x87 = 0;
   is_sse = 0;
@@ -1755,7 +1849,7 @@ bool TraceDecoder::translate() {
     invalidate();
     user_insn_count++;
     end_of_block = 1;
-    lastop();
+    flush();
     return false;
   }
 
@@ -1788,8 +1882,7 @@ bool TraceDecoder::translate() {
     stats.decoder.x86_decode_type[DECODE_TYPE_X87]++;
     rc = decode_x87(); break;
   default: {
-    MakeInvalid();
-    break;
+    assert(false);
   }
   } // switch
 
@@ -1801,13 +1894,13 @@ bool TraceDecoder::translate() {
 
   if (end_of_block) {
     // Block ended with a branch: close the uop and exit
-    lastop();
     stats.decoder.bb_decode_type.all_insns_fast += (!some_insns_complex);
     stats.decoder.bb_decode_type.some_complex_insns += some_insns_complex;
+    flush();
     return false;
   } else {
     // Block did not end with a branch: do we have more room for another x86 insn?
-    if (((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN))
+    if (((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN-2))
         || ((rip - bb.rip) >= (insnbytes_bufsize-15))
         || ((rip - bb.rip) >= valid_byte_count)
         || (user_insn_count >= MAX_BB_X86_INSNS)) {
@@ -1817,17 +1910,13 @@ bool TraceDecoder::translate() {
         if (logable(5)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " had non-atomic flags update: adding collcc", endl;
         this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
       }
-      TransOp transop(OP_bru, REG_rip, REG_zero, REG_zero, REG_zero, 3);
-      transop.riptaken = (Waddr)rip;
-      transop.ripseq = (Waddr)rip;
-      bb.rip_taken = bb.rip_not_taken = (Waddr)rip;
-      this << transop;
-      lastop();
+      split_after();
       stats.decoder.bb_decode_type.all_insns_fast += (!some_insns_complex);
       stats.decoder.bb_decode_type.some_complex_insns += some_insns_complex;
+      flush();
       return false;
     } else {
-      lastop();
+      flush();
       return true;
     }
   }
@@ -1888,7 +1977,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   }
 
   for (;;) {
-    // if (DEBUG) logfile << "rip ", (void*)trans.rip, ", relrip = ", (void*)(trans.rip - trans.bb.rip), endl, flush;
+    // if (DEBUG) logfile << "rip ", (void*)trans.rip, ", relrip = ", (void*)(trans.rip - trans.bb.rip), endl;
     if (!trans.translate()) break;
   }
 

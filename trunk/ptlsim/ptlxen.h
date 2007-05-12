@@ -62,25 +62,27 @@ typedef unsigned long pte_t;
 #define PTLSIM_SHADOW_SHINFO_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_SHADOW_SHINFO_PAGE_PFN * 4096))
 
 //
-// The transfer page is used to copy data *into* the domain, since all
+// The transfer pages are used to copy data *into* the domain, since all
 // other pages are mapped as read only. Thunked system calls and other
 // utility functions use this facility. PTLsim may need to copy data
 // from this buffer to its final destination inside the domain.
 //
-#define PTLSIM_XFER_PAGE_PFN 20
-#define PTLSIM_XFER_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_XFER_PAGE_PFN * 4096))
+#define PTLSIM_XFER_PAGES_PFN 20
+#define PTLSIM_XFER_PAGES_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_XFER_PAGES_PFN * 4096))
+#define PTLSIM_XFER_PAGES_COUNT 16 // 64 KB
+#define PTLSIM_XFER_PAGES_SIZE 65536
 
 //
 // Log page (for early boot logging)
 //
-#define PTLSIM_LOGBUF_PAGE_PFN 21
+#define PTLSIM_LOGBUF_PAGE_PFN 36
 #define PTLSIM_LOGBUF_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_LOGBUF_PAGE_PFN * 4096))
 #define PTLSIM_LOGBUF_SIZE 4096
 
 // Maximum VCPUs per domain allowed by Xen:
 #define MAX_CONTEXTS 32 // up to 32 VCPUs per domain
 
-#define PTLSIM_CTX_PAGE_PFN 22
+#define PTLSIM_CTX_PAGE_PFN 37
 #define PTLSIM_CTX_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_CTX_PAGE_PFN * 4096))
 #define PTLSIM_CTX_PAGE_COUNT MAX_CONTEXTS
 
@@ -345,7 +347,7 @@ static inline void* getbootinfo() { return (void*)(Waddr)PTLSIM_BOOT_PAGE_VIRT_B
 #define bootinfo (*((PTLsimMonitorInfo*)getbootinfo()))
 #define shinfo (*((struct shared_info*)(Waddr)PTLSIM_SHINFO_PAGE_VIRT_BASE))
 
-#define xferpage ((char*)(PTLSIM_XFER_PAGE_VIRT_BASE))
+#define xferpage ((char*)(PTLSIM_XFER_PAGES_VIRT_BASE))
 
 #define shinfo_evtchn_pending (*((bitvec<4096>*)&shinfo.evtchn_pending))
 #define shinfo_evtchn_mask (*((bitvec<4096>*)&shinfo.evtchn_mask))
@@ -542,6 +544,15 @@ static inline int update_ptl_pte(T& dest, const T& src) {
 
 static inline Level1PTE& get_ptl_pte(void* virt) {
   return bootinfo.ptl_pagedir[ptl_virt_to_pfn(virt)];
+}
+
+//
+// Convert an MFN back to a linear PFN (to make it deterministic across runs)
+//
+static inline W64 mfn_to_linear_pfn(W64 mfn) {
+  if unlikely (mfn >= bootinfo.total_machine_pages) return 0;
+  const W64* m2p = (const W64*)MACH2PHYS_VIRT_START;
+  return m2p[mfn];
 }
 
 //

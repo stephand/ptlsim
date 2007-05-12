@@ -1,0 +1,123 @@
+diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c
+--- linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c	2007-03-17 02:53:41.000000000 -0400
++++ linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c	2007-05-11 23:47:17.872451000 -0400
+@@ -8,6 +8,9 @@
+ #include <asm/hypervisor.h>
+ #include <xen/xenbus.h>
+ #include <linux/kthread.h>
++#include <asm/processor.h>
++#include <asm/uaccess.h>
++#include <xen/xen_proc.h>
+ 
+ MODULE_LICENSE("Dual BSD/GPL");
+ 
+@@ -97,6 +100,18 @@
+ 	}
+ }
+ 
++static void checkpoint_or_suspend_triggered(void) {
++  int err;
++  shutting_down = SHUTDOWN_SUSPEND;
++  err = kthread_create_on_cpu(xen_suspend, NULL, "suspend", 0);
++  /* Spin until we have resumed */
++  while (shutting_down != SHUTDOWN_INVALID) {
++    yield();
++  }
++}
++
++static int shutdown_handler_disabled = 0;
++
+ static void shutdown_handler(struct xenbus_watch *watch,
+ 			     const char **vec, unsigned int len)
+ {
+@@ -104,6 +119,11 @@
+ 	struct xenbus_transaction xbt;
+ 	int err;
+ 
++	if (shutdown_handler_disabled) {
++		printk("shutdown_handler: currently disabled; waiting for locally initiated checkpoint or suspend\n");
++		return;
++	}
++
+ 	if (shutting_down != SHUTDOWN_INVALID)
+ 		return;
+ 
+@@ -186,6 +206,63 @@
+ 	.callback = sysrq_handler
+ };
+ 
++static struct proc_dir_entry *checkpoint_trigger_pde = NULL;
++
++static int checkpoint_trigger_write(struct file *file, const char __user *buffer,
++                                    unsigned long count, void *data)
++{
++	char action[64];
++  int n = 0;
++
++	if (count <= 1)
++		return -EBADMSG; /* runt */
++	if (count >= sizeof(action))
++		return -EFBIG;   /* too long */
++
++	if (copy_from_user(action, buffer, count))
++		return -EFAULT;
++	action[count] = '\0';
++
++  n = strlen(action);
++  if ((n > 0) && (action[n-1] == '\n')) action[n-1] = '\0';
++
++  if (!strcmp(action, "prep")) {
++    /*
++     * Disable default response for control/shutdown xenbus broadcast,
++     * so we only respond after the "checkpoint" or "suspend" commands.
++     */
++    printk("External shutdown request xenbus listener disabled: waiting for locally initiated checkpoint or suspend\n");
++    shutdown_handler_disabled = 1;
++  } else if (!strcmp(action, "unprep")) {
++    /*
++     * Re-enable default action for control/shutdown xenbus broadcast
++     */
++    printk("External shutdown request xenbus listener enabled: allow external shutdown requests\n");
++    shutdown_handler_disabled = 0;
++  } else if (!strcmp(action, "checkpoint")) {
++    /*
++     * Actually perform the requested action
++     */
++    printk("Performing locally initiated %s\n", action);
++    checkpoint_or_suspend_triggered();
++  } else {
++    printk("checkpoint_trigger_write(\"%s\"): unknown action\n", action);
++  }
++
++	return count;
++}
++
++static int checkpoint_trigger_read(char *page, char **start, off_t off,
++                                   int count, int *eof, void *data)
++{
++	int len;
++
++	len = sprintf(page, "prep, unprep, checkpoint, suspend\n");
++
++	*eof = 1;
++	return len;
++}
++
+ static int setup_shutdown_watcher(struct notifier_block *notifier,
+ 				  unsigned long event,
+ 				  void *data)
+@@ -204,6 +281,14 @@
+ 	else
+ 		xenbus_write(XBT_NIL, "control", "feature-sysrq", "1");
+ 
++	/* Use "chmod a+rw /proc/xen/checkpoint" to enable ordinary users to do this */
++	if ((checkpoint_trigger_pde = create_xen_proc_entry("checkpoint", 0644))) {
++		checkpoint_trigger_pde->read_proc  = checkpoint_trigger_read;
++		checkpoint_trigger_pde->write_proc = checkpoint_trigger_write;
++	} else {
++		printk(KERN_ERR "Failed to create /proc/xen/checkpoint\n");
++	}
++
+ 	return NOTIFY_DONE;
+ }
+ 

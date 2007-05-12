@@ -90,16 +90,7 @@ struct TransactionalMemory {
     W64 set = 0;
     addr >>= 3; // cut off subword bits
 
-    return lowbits(addr, log2(setcount));
-
-    foreach (i, ((setcount == 1) ? 0 : (64 / log2(setcount)))+1) {
-      set ^= addr;
-      addr >>= log2(setcount);
-    }
-
-    set = lowbits(set, log2(setcount));
-
-    return set;
+    return foldbits<log2(setcount)>(addr);
   }
 
   int lookup(W64 addr, int& set) const {
@@ -194,6 +185,7 @@ struct TransactionalMemory {
   int update(CommitRecord& cmtrec) {
     foreach (i, count) {
       SFR& sfr = cmtrec.stores[i];
+      setzero(sfr);
       sfr.data = data_list[i];
       sfr.physaddr = addr_list[i] >> 3;
       sfr.bytemask = bytemask_list[i];
@@ -676,7 +668,7 @@ struct SequentialCore {
       ctx.x86_exception = EXCEPTION_x86_fpu; break;
     default:
       logfile << "Unsupported internal exception type ", exception_name(ctx.exception), endl, flush;
-      abort();
+      assert(false);
     }
 
     if (logable(4)) {
@@ -704,7 +696,7 @@ struct SequentialCore {
     logfile << "Aborting...", endl, flush;
     cerr << "Aborting...", endl, flush;
 
-    abort();
+    assert(false);
     return false;
 #endif
   }
@@ -1110,11 +1102,43 @@ struct SequentialCore {
       
       if likely (trans.bb.rip.mfnlo != RIPVirtPhys::INVALID) smc_cleardirty(trans.bb.rip.mfnlo);
       if unlikely (trans.bb.rip.mfnhi != RIPVirtPhys::INVALID) smc_cleardirty(trans.bb.rip.mfnhi);
-      
+
+      W64 user_insns_at_start = total_user_insns_committed;
       result = execute(&trans.bb, insncount);
-      insncount -= trans.bb.user_insn_count;
+      W64 delta_insns = total_user_insns_committed - user_insns_at_start;
+      insncount -= delta_insns;
 
       if (trans.bb.synthops) delete[] trans.bb.synthops;
+
+      if unlikely (result == SEQEXEC_SMC) continue;
+      if unlikely (result != SEQEXEC_OK) break;
+      if unlikely (insncount <= 0) break;
+    }
+
+    if likely (cmtrec) {
+      transactmem.update(*cmtrec);
+      cmtrec->exit_reason = result;
+    }
+
+    core_to_external_state(ctx);
+
+    return result;
+  }
+
+  int execute_transactional(W64 bbcount = limits<W64>::max, W64s insncount = limits<W64s>::max) {
+    external_to_core_state(ctx);
+    int result = SEQEXEC_OK;
+
+    W64 user_insns_at_start = total_user_insns_committed;
+
+    foreach (i, bbcount) {
+      Waddr rip = arf[REG_rip];
+
+      BasicBlock* bb = fetch_or_translate_basic_block(rip);
+      assert(bb);
+      
+      result = execute(bb, insncount);
+      insncount -= bb->user_insn_count;
 
       if unlikely (result != SEQEXEC_OK) break;
       if unlikely (insncount <= 0) break;
@@ -1129,6 +1153,7 @@ struct SequentialCore {
 
     return result;
   }
+
 };
 
 struct SequentialMachine: public PTLsimMachine {

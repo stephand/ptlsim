@@ -449,8 +449,8 @@ make_exp_shiftop_64bit(sar, (rb = lowbits(rb, log2(sizeof(W64)*8)), rd = ((W64s)
 
 make_exp_shiftop_64bit(rotl, (rb = lowbits(rb, log2(sizeof(W64)*8)), rd = (ra << rb) | (ra >> (64 - rb)), cf = bit(ra, (sizeof(W64)*8) - rb), of = cf ^ bit(rd, (sizeof(W64)*8)-1), rd));
 make_exp_shiftop_64bit(rotr, (rb = lowbits(rb, log2(sizeof(W64)*8)), rd = (ra >> rb) | (ra << (64 - rb)), cf = bit(ra, (rb-1)), of = bit(rd, (sizeof(W64)*8)-1), ra));
-make_exp_shiftop_64bit(rotcl, (abort(), rd)); // not supported in 32-bit mode because it's too complex
-make_exp_shiftop_64bit(rotcr, (abort(), rd)); // not supported in 32-bit mode because it's too complex
+make_exp_shiftop_64bit(rotcl, (assert(false), rd)); // not supported in 32-bit mode because it's too complex
+make_exp_shiftop_64bit(rotcr, (assert(false), rd)); // not supported in 32-bit mode because it's too complex
 #endif
 
 //

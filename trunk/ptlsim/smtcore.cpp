@@ -1006,7 +1006,7 @@ bool ThreadContext::handle_exception() {
     ctx.x86_exception = EXCEPTION_x86_fpu; break;
   default:
     logfile << "Unsupported internal exception type ", exception_name(ctx.exception), endl, flush;
-    abort();
+    assert(false);
   }
 
   if (logable(4)) {
@@ -1035,7 +1035,7 @@ bool ThreadContext::handle_exception() {
   logfile << "Aborting...", endl, flush;
   cerr << "Aborting...", endl, flush;
 
-  abort();
+  assert(false);
   return false;
 #endif
 }

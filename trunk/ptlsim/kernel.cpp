@@ -212,7 +212,9 @@ extern "C" void assert_fail(const char *__assertion, const char *__file, unsigne
     if (machine) machine->dump_state(logfile);
     logfile.close();
   }
-  abort();
+
+  // Crash and make a core dump:
+  asm("ud2a");
 }
 
 //
@@ -1002,7 +1004,7 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
 
   logfile << "Aborting...", endl, flush;
   cerr << "Aborting...", endl, flush;
-  abort();
+  assert(false);
 }
 
 #ifdef __x86_64__
@@ -1408,7 +1410,7 @@ W64 get_core_freq_hz() {
   }
 
   // Can't read either of these procfiles: abort
-  abort();
+  assert(false);
   return 0;
 }
 

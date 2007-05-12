@@ -1418,7 +1418,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   per_context_dcache_stats_update(threadid, load.dtlb.hits++);
 #endif
 
-  return probecache(addr, sfra);
+  return probecache(physaddr, sfra);
 }
 
 //
@@ -1491,6 +1491,17 @@ void ReorderBufferEntry::tlbwalk() {
 
   if unlikely (!tlb_walk_level) {
     // End of walk sequence: try to probe cache
+    if unlikely (core.caches.lfrq_or_missbuf_full()) {
+      //
+      // Make sure we have at least one miss buffer entry free, to avoid deadlock.
+      // This is required because the load or store cannot be replayed if no MB
+      // entries are free (since the uop already left the scheduler).
+      //
+      if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_NO_LFRQ_MB, this, null, 0);
+      per_context_dcache_stats_update(threadid, load.tlbwalk.no_lfrq_mb++);
+      return;
+    }
+
     if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_COMPLETE, this, null, virtaddr);
     core.caches.dtlb.insert(virtaddr, threadid);
     probecache(virtaddr, null);

@@ -53,8 +53,8 @@ namespace CacheSubsystem {
 
   // 256 KB L2 at 6 cycles
   const int L2_LINE_SIZE = 64;
-  const int L2_SET_COUNT = 512; // 256 KB
-  const int L2_WAY_COUNT = 8;
+  const int L2_SET_COUNT = 256; // 256 KB
+  const int L2_WAY_COUNT = 16;
   const int L2_LATENCY   = 6; // don't include the extra wakeup cycle (waiting->ready state transition) in the LFRQ
 
 #define ENABLE_L3_CACHE
@@ -63,14 +63,14 @@ namespace CacheSubsystem {
   const int L3_SET_COUNT = 1024;
   const int L3_WAY_COUNT = 16;
   const int L3_LINE_SIZE = 128;
-  const int L3_LATENCY   = 12;
+  const int L3_LATENCY   = 16;
 #endif
   // Load Fill Request Queue (maximum number of missed loads)
   const int LFRQ_SIZE = 63;
 
   // Allow up to 16 outstanding lines in the L2 awaiting service:
   const int MISSBUF_COUNT = 16;
-  const int MAIN_MEM_LATENCY = 140;
+  const int MAIN_MEM_LATENCY = 100;
 
   // TLBs
 #define USE_TLB
@@ -626,7 +626,8 @@ namespace CacheSubsystem {
     int issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi);
     bool lfrq_or_missbuf_full() const { return lfrq.full() | missbuf.full(); }
 
-    W64 commitstore(const SFR& sfr, int threadid = 0xff);
+    W64 commitstore(const SFR& sfr, int threadid = 0xff, bool perform_actual_write = true);
+    W64 speculative_store(const SFR& sfr, int threadid = 0xff);
 
     void initiate_prefetch(W64 addr, int cachelevel);
 

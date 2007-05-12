@@ -1078,7 +1078,7 @@ DataStoreNode* DataStoreNodeTemplate::reconstruct(const W64*& p) const {
   }
   case DS_NODE_TYPE_STRING: {
     if (count > 1) {
-      abort(); // not supported
+      assert(false); // not supported
       const char** strings = new const char* [count];
       foreach (i, count) {
         strings[i] = (const char*)p;

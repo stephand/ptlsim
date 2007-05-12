@@ -1204,7 +1204,7 @@ namespace superstl {
     }
 
     shortptr<T, P, base, granularity>& operator =(const T& obj) { 
-      index = obj.index();
+      p = (P)((((Waddr)&obj) - base) / granularity);
       return *this;
     }
 
@@ -1905,6 +1905,14 @@ namespace superstl {
       return bitvec<S>((*this) >> i);
     }
 
+    bitvec<N> swap(size_t i0, size_t i1) {
+      bitvec<N>& v = *this;
+      bool t = v[i0];
+      v[i0] = v[i1];
+      v[i1] = t;
+      return v;
+    }
+
     // This introduces ambiguity:
     // explicit operator unsigned long long() const { return integer(); }
 
@@ -2140,14 +2148,7 @@ namespace superstl {
   template <int setcount>
   struct HashtableKeyManager<W64, setcount> {
     static inline int hash(W64 key) {
-      W64 slot = 0;
-
-      foreach (i, ((setcount == 1) ? 0 : (64 / log2(setcount)))+1) {
-        slot ^= key;
-        key >>= log2(setcount);
-      }
-
-      return slot;
+      return foldbits<log2(setcount)>(key);
     }
 
     static inline bool equal(W64 a, W64 b) { return (a == b); }
@@ -2686,15 +2687,22 @@ namespace superstl {
   // By default this is 64 bytes (1 cache line), enough
   // room to fit 15 shortptrs and a next pointer.
   //
+  // Adds to a chunk are thread safe, and removes should
+  // also be thread safe so long as only one caller
+  // tries to remove the same object at any given time;
+  // this is generally the case by design for most
+  // applications of chunk lists.
+  //
   template <typename T, int N = 15>
   struct GenericChunkList {
     T list[N];
-    shortptr< GenericChunkList<T> > next;
+    shortptr< GenericChunkList<T, N> > next;
 
     GenericChunkList() {
       setzero(*this);
     }
 
+    // Thread safe as long as removes are appropriately serialized:
     T* get(T obj) const {
       foreach (i, lengthof(list)) {
         T& p = list[i];
@@ -2708,13 +2716,16 @@ namespace superstl {
       foreach (i, lengthof(list)) {
         T& p = list[i];
         if unlikely (!p) {
-          p = obj;
+          // thread safe: check for race:
+          T oldp = xchg(p, obj);
+          if (oldp) continue;
           return &p;
         }
       }
       return null;
     }
 
+    // NOT thread safe:
     T* addunique(T obj) {
       T* np = null;
       for (int i = lengthof(list)-1; i >= 0; i--) {
@@ -2727,18 +2738,19 @@ namespace superstl {
       return np;
     }
 
+    // Thread safe
     T* remove(T obj) {
       foreach (i, lengthof(list)) {
         T& p = list[i];
-        if unlikely (p == obj) {
-          p = 0;
-          return &p;
-        }
+        if likely (p != obj) continue;
+        T old = cmpxchg(p, T(0), obj);
+        if (old == obj) return &p;
       }
 
       return null;
     }
 
+    // Not thread safe: should only be called during RCU-like update
     bool empty() const {
       return bytes_are_all_zero(&list, sizeof(list));
     }
@@ -2770,7 +2782,7 @@ namespace superstl {
 
       void reset(GenericChunkList<T>& chunk) { reset(&chunk); }
 
-      T next() {
+      T* next() {
         for (;;) {
           if unlikely (!chunk) return null;
 
@@ -2780,9 +2792,9 @@ namespace superstl {
             continue;
           }
 
-          const T& obj = chunk->list[slot++];
+          T& obj = chunk->list[slot++];
           if unlikely (!obj) continue;
-          return obj;
+          return &obj;
         }
       }
     };
@@ -2885,6 +2897,84 @@ namespace superstl {
         swap(p[r], p[c]);
       }
     }
+  }
+
+  template <typename T, typename S>
+  void subtract_structures(S& d, const S& a, const S& b) {
+    const T* ap = (const T*)&a;
+    const T* bp = (const T*)&b;
+    T* dp = (T*)&d;
+    assert((sizeof(S) % sizeof(T)) == 0);
+    int n = sizeof(S) / sizeof(T);
+    foreach (i, n) {
+      dp[i] = ap[i] - bp[i];
+    }
+  }
+
+  template <typename T, typename S>
+  T sum_structure_fields(const S& a) {
+    assert((sizeof(S) % sizeof(T)) == 0);
+    const T* ap = (const T*)&a;
+    int n = sizeof(S) / sizeof(T);
+    T s = 0;
+    foreach (i, n) {
+      s += ap[i];
+    }
+    return s;
+  }
+
+  //
+  // Simple parameterized array comparator:
+  //
+  template <typename T>
+  int cmpeq_arrays(const T* a, const T* b, int n) {
+    foreach (i, n) {
+      if unlikely (a[i] != b[i]) return i;
+    }
+    return n;
+  }
+
+  //
+  // Detect repeated patterns in an array 
+  //
+  template <typename T>
+  bool detect_repeated_pattern(const T* list, int n, int& pattern_length, int& repeat_count, int& remaining_count) {
+    pattern_length = 1;
+    repeat_count = 1;
+    remaining_count = 0;
+
+    T first = list[0];
+    for (int i = 1; i < n; i++) {
+      if unlikely (list[i] == first) {
+        pattern_length = i;
+        break;
+      }
+    }
+
+    if likely (pattern_length >= n) return false;
+
+    int start = pattern_length;
+
+    for (;;) {
+      if unlikely ((n - start) < pattern_length) {
+        remaining_count = n - start;
+        break;
+      }
+
+      int matchlen = cmpeq_arrays(list, list + start, pattern_length);
+      if unlikely (matchlen < pattern_length) {
+        remaining_count = n - start;
+        break;
+      }
+    
+      repeat_count++;
+      start += pattern_length;
+    }
+
+    // Do not allow a single "repeat" of a 1-block pattern:
+    if likely ((repeat_count == 1) && (pattern_length == 1)) return false;
+
+    return true;
   }
 
   static inline W64s expandword(const byte*& p, int type) {

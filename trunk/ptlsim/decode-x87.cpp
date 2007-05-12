@@ -394,7 +394,7 @@ bool TraceDecoder::decode_x87() {
     bool memform = (modrm.mod != 3);
     int x87op = modrm.reg;
     DECODE(eform, ra, (deform) ? w_mode : (dcform) ? q_mode : d_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     x87_load_stack(REG_temp0, REG_fptos);
     this << TransOp(OP_addm, REG_temp2, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
@@ -443,7 +443,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x654 ... 0x655: { // 0xdd xx: fpflags = st(0) fucom st(modrm.rm); optional pop
     if (modrm.mod != 3) MakeInvalid();
-    CheckInvalid();
+    EndOfDecode();
 
     bool pop = bit(op, 0);
 
@@ -463,7 +463,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x610: { // fld mem32 or fld reg
     if (modrm.mod == 3) {
-      CheckInvalid();
+      EndOfDecode();
       // load from FP stack register
       this << TransOp(OP_addm, REG_temp0, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
 
@@ -477,7 +477,7 @@ bool TraceDecoder::decode_x87() {
       // st.lm.p      [ctx + fptos],t0
       // subm         fptos = fptos,8,0x3f
       DECODE(eform, ra, d_mode);
-      CheckInvalid();
+      EndOfDecode();
       operand_load(REG_temp0, ra, OP_ld, DATATYPE_FLOAT);
       this << TransOp(OP_cvtf_s2d_lo, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
       this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
@@ -488,7 +488,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x616: { // misc functions
     if (modrm.mod != 3) MakeInvalid();
-    CheckInvalid();
+    EndOfDecode();
     int subop = modrm.rm;
     if (inrange(subop, 0, 5)) {
       static const int subop_to_assistid[6] = { ASSIST_X87_F2XM1, ASSIST_X87_FYL2X, ASSIST_X87_FPTAN, ASSIST_X87_FPATAN, ASSIST_X87_FXTRACT, ASSIST_X87_FPREM1 };
@@ -503,7 +503,7 @@ bool TraceDecoder::decode_x87() {
   case 0x650: { // fld mem64 or ffree
     if (modrm.mod == 3) {
       // ffree (just clear tag bit)
-      CheckInvalid();
+      EndOfDecode();
       this << TransOp(OP_btr, REG_fptags, REG_fptags, REG_fptos, REG_zero, 3);
     } else {
       // load from memory
@@ -511,7 +511,7 @@ bool TraceDecoder::decode_x87() {
       // st.lm.p      [ctx + fptos],t0
       // subm         fptos = fptos,8,0x3f
       DECODE(eform, ra, q_mode);
-      CheckInvalid();
+      EndOfDecode();
       operand_load(REG_temp0, ra, OP_ld, DATATYPE_DOUBLE);
       this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
       x87_store_stack(REG_fptos, REG_temp0);
@@ -525,7 +525,7 @@ bool TraceDecoder::decode_x87() {
       MakeInvalid();
     } else {
       DECODE(eform, rd, q_mode);
-      CheckInvalid();
+      EndOfDecode();
       x87_load_stack(REG_temp0, REG_fptos);
       this << TransOp(OP_cvtf_d2q, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x651) ? 3 : 2);
       result_store(REG_temp0, REG_temp1, rd, DATATYPE_DOUBLE);
@@ -538,7 +538,7 @@ bool TraceDecoder::decode_x87() {
   case 0x613: { // fst/fstp mem32 or fnop
     if (modrm.mod == 3) {
       // fnop
-      CheckInvalid();
+      EndOfDecode();
       this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     } else {
       // store st0 to memory
@@ -547,7 +547,7 @@ bool TraceDecoder::decode_x87() {
       // st.lm.p      [ctx + fptos],t0
       // subm         fptos = fptos,8,0x3f
       DECODE(eform, rd, d_mode);
-      CheckInvalid();
+      EndOfDecode();
       x87_load_stack(REG_temp0, REG_fptos);
       this << TransOp(OP_cvtf_d2s_ins, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
       result_store(REG_temp0, REG_temp1, rd, DATATYPE_FLOAT);
@@ -562,7 +562,7 @@ bool TraceDecoder::decode_x87() {
   case 0x652:
   case 0x653: { // fst/fstp mem64 or fst st(0) to FP stack reg
     if (modrm.mod == 3) {
-      CheckInvalid();
+      EndOfDecode();
       // fst st(0) to FP stack reg
       this << TransOp(OP_addm, REG_temp1, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
 
@@ -579,7 +579,7 @@ bool TraceDecoder::decode_x87() {
       // st.lm.p      [ctx + fptos],t0
       // subm         fptos = fptos,8,0x3f
       DECODE(eform, rd, q_mode);
-      CheckInvalid();
+      EndOfDecode();
 
       x87_load_stack(REG_temp0, REG_fptos);
       result_store(REG_temp0, REG_temp1, rd, DATATYPE_DOUBLE);
@@ -604,7 +604,7 @@ bool TraceDecoder::decode_x87() {
 
     DECODE(eform, rd, w_mode);
     if (modrm.mod == 3) MakeInvalid();
-    CheckInvalid();
+    EndOfDecode();
     this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_fptos, REG_imm, 3, 0, MaskControlInfo((64-11), 3, (64-(11-3))));
     result_store(REG_fpsw, REG_temp1, rd);
     break;
@@ -612,7 +612,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x674: { // fstsw ax
     if ((modrm.mod != 3) | (modrm.rm != 0)) MakeInvalid();
-    CheckInvalid();
+    EndOfDecode();
     this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_fptos, REG_imm, 3, 0, MaskControlInfo((64-11), 3, (64-(11-3))));
     this << TransOp(OP_mov, REG_rax, REG_rax, REG_fpsw, REG_zero, 1);
     break;
@@ -620,7 +620,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x611: { // fxch
     if (modrm.mod == 0x3) {
-      CheckInvalid();
+      EndOfDecode();
       // load from FP stack register
       this << TransOp(OP_addm, REG_temp2, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
       x87_load_stack(REG_temp0, REG_fptos);
@@ -635,7 +635,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x615: { // fldCONST
     if (modrm.mod == 0x3) {
-      CheckInvalid();
+      EndOfDecode();
       // fld1 fld2t fldl2e fldpi fldlg2 fldln2 fldz (inv):
       static const double constants[8] = {1.0, 3.3219280948873623479, 1.4426950408889634074, 3.1415926535897932385, .30102999566398119521, .69314718055994530942, 0, 0};
       // load from constant
@@ -646,7 +646,7 @@ bool TraceDecoder::decode_x87() {
       // fldcw
       //++MTY TODO This should be a barrier assist!
       DECODE(eform, ra, w_mode);
-      CheckInvalid();
+      EndOfDecode();
       operand_load(REG_temp1, ra, OP_ld);
       TransOp stp(OP_st, REG_mem, REG_ctx, REG_imm, REG_temp1, 1, offsetof(Context, fpcw)); stp.internal = 1; this << stp;
     }
@@ -655,7 +655,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x617: { // fnstcw | fprem fyl2xp1 fsqrt fsincos frndint fscale fsin fcos
     if (modrm.mod == 3) {
-      CheckInvalid();
+      EndOfDecode();
       int x87op = modrm.rm;
       // Microcoded FP functions, except for sqrt
       if (x87op == 2) {
@@ -676,7 +676,7 @@ bool TraceDecoder::decode_x87() {
     } else {
       // fnstcw
       DECODE(eform, rd, w_mode);
-      CheckInvalid();
+      EndOfDecode();
       TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, fpcw)); ldp.internal = 1; this << ldp;
       result_store(REG_temp1, REG_temp0, rd);
     }
@@ -686,7 +686,7 @@ bool TraceDecoder::decode_x87() {
   case 0x670: { // ffreep (free and pop: not documented but widely used)
     if (modrm.mod == 0x3) {
       // ffreep
-      CheckInvalid();
+      EndOfDecode();
       x87_pop_stack();
     } else {
       // fild mem16
@@ -696,7 +696,7 @@ bool TraceDecoder::decode_x87() {
       // subm         fptos = fptos,8,0x3f
       // bts          fptags = fptags,fptos
       DECODE(eform, ra, w_mode);
-      CheckInvalid();
+      EndOfDecode();
       operand_load(REG_temp0, ra, OP_ldx, 1);
       this << TransOp(OP_cvtf_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
       this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
@@ -707,7 +707,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x671 ... 0x673: { // [fisttp | fist | fistp] mem16
     DECODE(eform, rd, w_mode);
-    CheckInvalid();
+    EndOfDecode();
     x87_load_stack(REG_temp0, REG_fptos);
     this << TransOp(OP_cvtf_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x671) ? 1 : 0);
     result_store(REG_temp0, REG_temp1, rd);
@@ -721,7 +721,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x614: { // fchs fabs ? ? ftst fxam ? ?
     if (modrm.mod != 3) MakeInvalid();
-    CheckInvalid();
+    EndOfDecode();
 
     switch (modrm.rm) {
     case 0: { // fchs
@@ -759,11 +759,11 @@ bool TraceDecoder::decode_x87() {
   case 0x620 ... 0x627: { // fcmovb fcmove fcmovbe fcmovu
     DECODE(eform, ra, d_mode);
     int x87op = modrm.reg;
-    CheckInvalid();
+    EndOfDecode();
     if (modrm.mod == 3) {
       // conditional moves, OR fucompp
       if ((x87op == 4) | (x87op == 6) | (x87op == 7)) MakeInvalid();
-      CheckInvalid();
+      EndOfDecode();
       if (x87op == 5) {
         // fucompp was just slapped down here for some random reason...
         x87_load_stack(REG_temp0, REG_fptos);
@@ -851,7 +851,7 @@ bool TraceDecoder::decode_x87() {
     int x87op = modrm.reg;
 
     DECODE(eform, rd, d_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     if (modrm.mod == 3) {
       // fcmovnb fcmovne fcmovnbe fcmovnu
@@ -919,7 +919,7 @@ bool TraceDecoder::decode_x87() {
 
   case 0x634: { // fclex
     if (modrm.mod != 3) MakeInvalid();
-    CheckInvalid();
+    EndOfDecode();
 
     switch (modrm.rm) {
     case 2:
@@ -941,7 +941,7 @@ bool TraceDecoder::decode_x87() {
   case 0x676: { // 0xdf fcomip
     if (modrm.mod == 3) {
       if (op == 0x637) MakeInvalid();
-      CheckInvalid();
+      EndOfDecode();
       //
       // For cmpccf, uop.size bits have following meaning:
       // 00 = single precision ordered compare
@@ -973,7 +973,7 @@ bool TraceDecoder::decode_x87() {
         // subm         fptos = fptos,8,0x3f
         // bts          fptags = fptags,fptos
         DECODE(eform, ra, q_mode);
-        CheckInvalid();
+        EndOfDecode();
         operand_load(REG_temp0, ra, OP_ld);
         this << TransOp(OP_cvtf_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
         this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
@@ -981,7 +981,7 @@ bool TraceDecoder::decode_x87() {
       } else if ((op == 0x635) | (op == 0x637)) {
         // fld mem80 or fstp mem80
         DECODE(eform, ra, q_mode);
-        CheckInvalid();
+        EndOfDecode();
 
         // Get effective address into sr2
         int basereg = arch_pseudo_reg_to_arch_reg[ra.mem.basereg];

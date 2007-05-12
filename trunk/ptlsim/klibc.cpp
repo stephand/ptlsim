@@ -1969,13 +1969,14 @@ char* strndup(const char *s, size_t n) {
 
 extern ostream logfile;
 
+// We now use the abort() macro identical to assert(false):
 extern "C" void abort() {
-  cerr << "Aborted by caller ", __builtin_return_address(0), endl, flush;
+  cerr << "Aborted by caller ", getcaller(), endl, flush;
   cout.flush();
   cerr.flush();
   logfile.flush();
   if (logfile) logfile.close();
-  asm("ud2a" : : "a" (__builtin_return_address(0)));
+  asm("ud2a" : : "a" (getcaller()));
   for (;;) { asm("nop"); }
 }
 

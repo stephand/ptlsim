@@ -931,8 +931,11 @@ W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
     // If problems arise with negative timer values, force this to be a fixed timer interrupt period:
     // NOTE: the hypervisor itself now contains an equivalent workaround, so disable this: 
     //
-    if (delta_cycles < timer_interrupt_period_in_cycles)
-      ctx.timer_cycle = ctx.base_tsc + sim_cycle + timer_interrupt_period_in_cycles;
+    // if (delta_cycles < timer_interrupt_period_in_cycles)
+    //   ctx.timer_cycle = ctx.base_tsc + sim_cycle + timer_interrupt_period_in_cycles;
+
+    if unlikely (delta_cycles < 100000)
+      ctx.timer_cycle = ctx.base_tsc + sim_cycle + 100000;
 
     delta_cycles = ctx.timer_cycle - (ctx.base_tsc + sim_cycle);
 
@@ -975,7 +978,7 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
   }
   default:
     logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;
-    abort();
+    assert(false);
   }
 
   return 0;
@@ -1010,7 +1013,7 @@ W64 handle_sched_op_hypercall(Context& ctx, W64 op, void* arg, bool debug) {
   }
   case SCHEDOP_poll: {
     // Not currently used by Linux guests:
-    abort();
+    assert(false);
     return -EINVAL;
   }
   default: {

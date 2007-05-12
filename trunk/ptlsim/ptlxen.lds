@@ -26,16 +26,16 @@ SECTIONS
   . = 0x0000000000014000;
   .xfer        : { *(.xfer) }
 
-  . = 0x0000000000015000;
+  . = 0x0000000000024000;
   .logbuf      : { *(.logbuf) }
 
-  . = 0x0000000000016000;
+  . = 0x0000000000025000;
   .ctx         : { *(.ctx)  }
 
   /* Skip 32 VCPU context pages */
-  . = 0x0000000000036000;
+  . = 0x0000000000045000;
 
-  PROVIDE (__executable_start = 0x0000000000036000);
+  PROVIDE (__executable_start = 0x0000000000045000);
 
   .interp         : { *(.interp) }
   .hash           : { *(.hash) }

@@ -507,7 +507,7 @@ void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcoun
       stackbase[sample] = ypoints[col][sample];
     }
   }
-  /*
+#if 0
   foreach (x, xcount) {
     cout << "[", x, "]";
     foreach (y, ycount) {
@@ -515,7 +515,8 @@ void create_svg_of_percentage_line_graph(ostream& os, double* xpoints, int xcoun
     }
     cout << endl;
   }
-  */
+#endif
+
   delete[] stackbase;
 
   /*
@@ -1273,6 +1274,8 @@ int main(int argc, char* argv[]) {
 
       xpoints[i] = i;
 
+      double sum = 0;
+
       foreach (col, colnames.length) {
         DataStoreNode* ds = dsroot->searchpath(colnames[col]);
 
@@ -1288,16 +1291,35 @@ int main(int argc, char* argv[]) {
         
         W64 rawvalue = W64(*ds);
         double value = rawvalue;
-        if (config.use_percents) value = (ds->percent_of_parent() * 100);
         if (isnan(value)) value = 0;
-        ypoints[col][i] = value;
+        sum += value;
 
+        /*
         if (graphing) {
-          // graph it
+          // graph it later
         } else {
-          if (config.use_percents)
-            cout << ' ', floatstring(value, 16, 1);
-          else cout << ' ', intstring(rawvalue, 16);
+          cout << ' ', intstring(rawvalue, 16);
+        }
+        */
+        /*
+        if (config.use_percents) {
+          if (config.percent_of_toplevel)
+            value = (ds->percent_of_toplevel() * 100);
+          else value = (ds->percent_of_parent() * 100);
+        }
+        */
+        ypoints[col][i] = value;
+      }
+
+      foreach (col, colnames.length) {
+        double& value = ypoints[col][i];
+        if (config.use_percents) {
+          if (sum) value = 100 * (value / sum);
+        }
+        if (graphing) {
+          // graph it later
+        } else {
+          cout << ' ', floatstring(value, 16, 1);
         }
       }
 

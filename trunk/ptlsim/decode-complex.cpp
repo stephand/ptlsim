@@ -48,7 +48,7 @@ void assist_int(Context& ctx) {
     handle_syscall_32bit(SYSCALL_SEMANTICS_INT80);
   } else {
     logfile << "Unknown int 0x", hexstring(intid, 8), "; aborting", endl, flush;
-    abort();
+    assert(false);
   }
 #endif
 }
@@ -106,7 +106,7 @@ void assist_sysenter(Context& ctx) {
 #ifdef PTLSIM_HYPERVISOR
   //++MTY TODO
   cerr << "assist_sysenter()", endl, flush;
-  abort();
+  assert(false);
 #else
   handle_syscall_32bit(SYSCALL_SEMANTICS_SYSENTER);
 #endif
@@ -311,6 +311,20 @@ void assist_cpuid(Context& ctx) {
     break;
   }
   }
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_rdtsc(Context& ctx) {
+  W64& rax = ctx.commitarf[REG_rax];
+  W64& rdx = ctx.commitarf[REG_rdx];
+#ifdef PTLSIM_HYPERVISOR
+  W64 tsc = ctx.base_tsc + sim_cycle; 
+#else
+  W64 tsc = sim_cycle;
+#endif
+  rax = LO32(tsc);
+  rdx = HI32(tsc);
 
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
@@ -807,7 +821,7 @@ bool TraceDecoder::decode_complex() {
     // xchg
     DECODE(eform, rd, bit(op, 0) ? v_mode : b_mode);
     DECODE(gform, ra, bit(op, 0) ? v_mode : b_mode);
-    CheckInvalid();
+    EndOfDecode();
     /*
 
     xchg [mem],ra
@@ -917,7 +931,7 @@ bool TraceDecoder::decode_complex() {
     // mov Ev,segreg
     DECODE(eform, rd, w_mode);
     DECODE(gform, ra, w_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     // Same encoding as order in SEGID_xxx: ES CS SS DS FS GS - - (last two are invalid)
     if (modrm.reg >= 6) MakeInvalid();
@@ -934,7 +948,7 @@ bool TraceDecoder::decode_complex() {
     // mov segreg,Ev
     DECODE(gform, rd, w_mode);
     DECODE(eform, ra, w_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     // Same encoding as order in SEGID_xxx: ES CS SS DS FS GS - - (last two are invalid)
     if (modrm.reg >= 6) MakeInvalid();
@@ -951,10 +965,47 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
+  case 0x8f: {
+    // pop Ev: pop to reg or memory
+    DECODE(eform, rd, v_mode);
+    EndOfDecode();
+
+    prefixes &= ~PFX_LOCK;
+    int sizeshift = (rd.type == OPTYPE_REG) ? reginfo[rd.reg.reg].sizeshift : rd.mem.size;
+    if (sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
+    int rdreg = (rd.type == OPTYPE_REG) ? arch_pseudo_reg_to_arch_reg[rd.reg.reg] : REG_temp7;
+
+    this << TransOp(OP_ld, rdreg, REG_rsp, REG_imm, REG_zero, sizeshift, 0);
+
+    //
+    // Special ordering semantics: if the destination is memory
+    // and in [base + index*scale + offs], the base is rsp,
+    // rsp is incremented *before* calculating the store address.
+    // To maintain idempotent atomic semantics, we simply add
+    // 2/4/8 to the immediate in this case.
+    //
+    if unlikely ((rd.type == OPTYPE_MEM) & (arch_pseudo_reg_to_arch_reg[rd.mem.basereg] == REG_rsp))
+      rd.mem.offset += (1 << sizeshift);
+
+    // There is no way to encode 32-bit pushes and pops in 64-bit mode:
+    if (rd.type == OPTYPE_MEM && rd.mem.size == 2) rd.mem.size = 3;
+
+    if (rd.type == OPTYPE_MEM) {
+      prefixes &= ~PFX_LOCK;
+      result_store(REG_temp7, REG_temp0, rd);
+      this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
+    } else {
+      // Only update %rsp if the target register (if any) itself is not itself %rsp
+      if (rdreg != REG_rsp) this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, (1 << sizeshift));
+    }
+
+    break;
+  }
+
   case 0x91 ... 0x97: {
     // xchg A,reg (A = ax|eax|rax):
     ra.gform_ext(*this, v_mode, bits(op, 0, 3), false, true);
-    CheckInvalid();
+    EndOfDecode();
 
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -980,9 +1031,10 @@ bool TraceDecoder::decode_complex() {
 
   case 0x9c: {
     // pushfw/pushfq
+    EndOfDecode();
+
     int sizeshift = (opsize_prefix) ? 1 : ((use64) ? 3 : 2);
     int size = (1 << sizeshift);
-    CheckInvalid();
 
     if (last_flags_update_was_atomic) {
       this << TransOp(OP_movccr, REG_temp0, REG_zero, REG_zf, REG_zero, 3);
@@ -1002,9 +1054,10 @@ bool TraceDecoder::decode_complex() {
 
   case 0x9d: {
     // popfw/popfd/popfq
+    EndOfDecode();
+
     int sizeshift = (opsize_prefix) ? 1 : ((use64) ? 3 : 2);
     int size = (1 << sizeshift);
-    CheckInvalid();
 
     this << TransOp(OP_ld, REG_ar1, REG_rsp, REG_imm, REG_zero, sizeshift, 0);
     this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
@@ -1014,8 +1067,47 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
+  case 0x9e: { // sahf: %flags[7:0] = %ah
+    EndOfDecode();
+    this << TransOp(OP_maskb, REG_temp0, REG_zero, REG_rax, REG_imm, 3, 0, MaskControlInfo(0, 8, 8));
+    // only low 8 bits affected (OF not included)
+    this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_temp0, REG_zero, 3, 0, 0, SETFLAG_ZF|SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+    break;
+  }
+
+  case 0x9f: { // lahf: %ah = %flags[7:0]
+    EndOfDecode();
+    this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+    this << TransOp(OP_maskb, REG_rax, REG_rax, REG_temp0, REG_imm, 3, 0, MaskControlInfo(56, 8, 56));
+    break;
+  }
+
+  case 0xf5: {
+    // cmc
+    //++MTY TODO: this is very rare: move to slowpath decoder
+    // TransOp(int opcode, int rd, int ra, int rb, int rc, int size, W64s rbimm = 0, W64s rcimm = 0, W32 setflags = 0)
+    EndOfDecode();
+    this << TransOp(OP_xorcc, REG_temp0, REG_cf, REG_imm, REG_zero, 3, FLAG_CF, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+    break;
+  }
+
+  case 0xf8: { // clc
+    EndOfDecode();
+    this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_imm, REG_zero, 3, 0, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+    break;
+  }
+  case 0xf9: { // stc
+    EndOfDecode();
+    this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_imm, REG_zero, 3, FLAG_CF, 0, SETFLAG_CF);
+    if unlikely (no_partial_flag_updates_per_insn) this << TransOp(OP_collcc, REG_temp10, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
+    break;
+  }
+
   case 0xfc: { // cld
-    CheckInvalid();
+    EndOfDecode();
     if (dirflag) {
       microcode_assist(ASSIST_CLD, ripstart, rip);
       end_of_block = 1;
@@ -1027,7 +1119,7 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0xfd: { // std
-    CheckInvalid();
+    EndOfDecode();
     if (!dirflag) {
       microcode_assist(ASSIST_STD, ripstart, rip);
       end_of_block = 1;
@@ -1043,18 +1135,18 @@ bool TraceDecoder::decode_complex() {
   case 0xaa ... 0xab:
   case 0xac ... 0xad:
   case 0xae ... 0xaf: {
+    EndOfDecode();
+
     W64 rep = (prefixes & (PFX_REPNZ|PFX_REPZ));
     int sizeshift = (!bit(op, 0)) ? 0 : (rex.mode64) ? 3 : opsize_prefix ? 1 : 2;
     int addrsizeshift = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
     prefixes &= ~PFX_LOCK;
 
-    CheckInvalid();
-
-    // only actually code if it is the very first insn in the block!
-    // otherwise emit a branch:
+    //
+    // Only support REP prefix if it is the very first
+    // insn in the BB; otherwise emit a split branch.
+    //
     if (rep && (!first_insn_in_bb())) {
-      if (!last_flags_update_was_atomic) 
-        this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
       split_before();
     } else {
       // This is the very first x86 insn in the block, so translate it as a loop!
@@ -1063,6 +1155,7 @@ bool TraceDecoder::decode_complex() {
         chk.cond = COND_ne; // make sure rcx is not equal to zero
         this << chk;
         bb.repblock = 1;
+        bb.brtype = BRTYPE_REP;
       }
       int increment = (1 << sizeshift);
       if (dirflag) increment = -increment;
@@ -1229,9 +1322,6 @@ bool TraceDecoder::decode_complex() {
 
         break;
       }
-      default:
-        MakeInvalid();
-        break;
       }
       if (rep) end_of_block = 1;
     }
@@ -1252,7 +1342,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0xcc: {
     // INT3 (breakpoint)
-    CheckInvalid();
+    EndOfDecode();
     immediate(REG_ar1, 3, 0);
     microcode_assist(ASSIST_INT, ripstart, rip);
     end_of_block = 1;
@@ -1262,7 +1352,7 @@ bool TraceDecoder::decode_complex() {
   case 0xcd: {
     // int imm8
     DECODE(iform, ra, b_mode);
-    CheckInvalid();
+    EndOfDecode();
     immediate(REG_ar1, 0, ra.imm.imm & 0xff);
     microcode_assist(ASSIST_INT, ripstart, rip);
     end_of_block = 1;
@@ -1279,7 +1369,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0xcf: {
     // IRET
-    CheckInvalid();
+    EndOfDecode();
     int assistid = (use64) ? (opsize_prefix ? ASSIST_IRET32 : ASSIST_IRET64) : (opsize_prefix ? ASSIST_IRET16 : ASSIST_IRET32);
     microcode_assist(assistid, ripstart, rip);
     end_of_block = 1;
@@ -1311,7 +1401,11 @@ bool TraceDecoder::decode_complex() {
     // 0xe1 loopz
     // 0xe2 loop
     DECODE(iform, ra, b_mode);
-    CheckInvalid();
+    bb.rip_taken = (Waddr)rip + ra.imm.imm;
+    bb.rip_not_taken = (Waddr)rip;
+    bb.brtype = BRTYPE_BR_IMM8;
+    end_of_block = 1;
+    EndOfDecode();
 
     int sizeshift = (rex.mode64) ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2);
 
@@ -1330,10 +1424,8 @@ bool TraceDecoder::decode_complex() {
     transop.cond = COND_e;
     transop.riptaken = (Waddr)rip + ra.imm.imm;
     transop.ripseq = (Waddr)rip;
-    bb.rip_taken = (Waddr)rip + ra.imm.imm;
-    bb.rip_not_taken = (Waddr)rip;
     this << transop;
-    end_of_block = true;
+
     break;
   };
 
@@ -1341,7 +1433,11 @@ bool TraceDecoder::decode_complex() {
     // jcxz
     // near conditional branches with 8-bit displacement:
     DECODE(iform, ra, b_mode);
-    CheckInvalid();
+    bb.rip_taken = (Waddr)rip + ra.imm.imm;
+    bb.rip_not_taken = (Waddr)rip;
+    bb.brtype = BRTYPE_BR_IMM8;
+    end_of_block = 1;
+    EndOfDecode();
 
     int sizeshift = (use64) ? (opsize_prefix ? 2 : 3) : (opsize_prefix ? 1 : 2);
 
@@ -1356,10 +1452,7 @@ bool TraceDecoder::decode_complex() {
     transop.cond = COND_e;
     transop.riptaken = (Waddr)rip + ra.imm.imm;
     transop.ripseq = (Waddr)rip;
-    bb.rip_taken = (Waddr)rip + ra.imm.imm;
-    bb.rip_not_taken = (Waddr)rip;
     this << transop;
-    end_of_block = true;
     break;
   }
 
@@ -1367,7 +1460,7 @@ bool TraceDecoder::decode_complex() {
   case 0xe6 ... 0xe7: {
     // out [imm8] = %al|%ax|%eax
     DECODE(iform, ra, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int sizeshift = (op == 0xe6) ? 0 : (opsize_prefix ? 1 : 2);
 
@@ -1380,7 +1473,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0xee ... 0xef: {
     // out [%dx] = %al|%ax|%eax
-    CheckInvalid();
+    EndOfDecode();
 
     int sizeshift = (op == 0xee) ? 0 : (opsize_prefix ? 1 : 2);
 
@@ -1394,7 +1487,7 @@ bool TraceDecoder::decode_complex() {
   case 0xe4 ... 0xe5: {
     // in %al|%ax|%eax = [imm8]
     DECODE(iform, ra, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int sizeshift = (op == 0xe4) ? 0 : (opsize_prefix ? 1 : 2);
 
@@ -1407,7 +1500,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0xec ... 0xed: {
     // in %al|%ax|%eax = [%dx]
-    CheckInvalid();
+    EndOfDecode();
 
     int sizeshift = (op == 0xec) ? 0 : (opsize_prefix ? 1 : 2);
 
@@ -1428,7 +1521,7 @@ bool TraceDecoder::decode_complex() {
   case 0xf4: {
     // hlt (nop)
     // This should be trapped by hypervisor to properly do idle time
-    CheckInvalid();
+    EndOfDecode();
     this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     break;
   }
@@ -1439,13 +1532,13 @@ bool TraceDecoder::decode_complex() {
   case 0xf6 ... 0xf7: {
     // GRP3b and GRP3S
     DECODE(eform, rd, (op & 1) ? v_mode : b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     prefixes &= ~PFX_LOCK;
     switch (modrm.reg) {
     case 0 ... 3: // test, (inv), not, neg
       // These are handled by the fast decoder!
-      abort();
+      assert(false);
       break;
       //
       // NOTE: gcc does not synthesize these forms of imul since they target both %rdx:%rax.
@@ -1511,7 +1604,7 @@ bool TraceDecoder::decode_complex() {
   case 0xfa: { // cli
     // (nop)
     // NOTE! We still have to output something so %rip gets incremented correctly!
-    CheckInvalid();
+    EndOfDecode();
     this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     break;
   }
@@ -1519,7 +1612,7 @@ bool TraceDecoder::decode_complex() {
   case 0xfb: { // sti
     // (nop)
     // NOTE! We still have to output something so %rip gets incremented correctly!
-    CheckInvalid();
+    EndOfDecode();
     this << TransOp(OP_nop, REG_temp0, REG_zero, REG_zero, REG_zero, 3);
     break;
   }
@@ -1534,8 +1627,8 @@ bool TraceDecoder::decode_complex() {
     //
     if (((valid_byte_count - ((int)(rip - (Waddr)bb.rip))) >= 5) && 
         (fetch(5) == 0xa20f6e6578)) { // 78 65 6e 0f a2 = 'x' 'e' 'n' <cpuid>
-      logfile << "Decode special intercept cpuid at rip ", (void*)ripstart, "; return to rip ", (void*)rip, endl, flush;
-      CheckInvalid();
+      // logfile << "Decode special intercept cpuid at rip ", (void*)ripstart, "; return to rip ", (void*)rip, endl;
+      EndOfDecode();
       microcode_assist(ASSIST_CPUID, ripstart, rip);
       end_of_block = 1;
     } else {
@@ -1554,7 +1647,7 @@ bool TraceDecoder::decode_complex() {
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
     if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
-    CheckInvalid();
+    EndOfDecode();
 
     int offset;
 
@@ -1577,6 +1670,17 @@ bool TraceDecoder::decode_complex() {
     break;
   }
 
+  case 0x10d: {
+    // prefetchw [eform] (NOTE: this is an AMD-only insn from K6 onwards)
+    DECODE(eform, ra, b_mode);
+    EndOfDecode();
+
+    int level = 2;
+    prefixes &= ~PFX_LOCK;
+    operand_load(REG_temp0, ra, OP_ld_pre, level);
+    break;
+  }
+
   case 0x122: { // mov crN,reg
     DECODE(gform, rd, v_mode);
     DECODE(eform, ra, v_mode);
@@ -1584,7 +1688,7 @@ bool TraceDecoder::decode_complex() {
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
     if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
-    CheckInvalid();
+    EndOfDecode();
 
     int offset;
 
@@ -1615,7 +1719,7 @@ bool TraceDecoder::decode_complex() {
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
     if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
-    CheckInvalid();
+    EndOfDecode();
 
     int offset;
 
@@ -1645,7 +1749,7 @@ bool TraceDecoder::decode_complex() {
     if (rd.type != OPTYPE_REG) MakeInvalid();
     if (ra.type != OPTYPE_REG) MakeInvalid();
     if (!kernel) { outcome = DECODE_OUTCOME_GP_FAULT; MakeInvalid(); }
-    CheckInvalid();
+    EndOfDecode();
 
     this << TransOp(OP_mov, REG_ar1, REG_zero, arch_pseudo_reg_to_arch_reg[ra.reg.reg], REG_zero, reginfo[ra.reg.reg].sizeshift);
     this << TransOp(OP_mov, REG_ar2, REG_zero, REG_imm, REG_zero, 3, modrm.reg);
@@ -1658,14 +1762,14 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x132: { // rdmsr
-    CheckInvalid();
+    EndOfDecode();
     microcode_assist(ASSIST_RDMSR, ripstart, rip);
     end_of_block = 1;
     break;
   };
 
   case 0x130: { // wrmsr
-    CheckInvalid();
+    EndOfDecode();
     microcode_assist(ASSIST_WRMSR, ripstart, rip);
     end_of_block = 1;
     break;
@@ -1679,7 +1783,7 @@ bool TraceDecoder::decode_complex() {
     // If the LOCK prefix is present, ld.acq and st.rel are used
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     static const byte x86_to_uop[4] = {OP_bt, OP_bts, OP_btr, OP_btc};
     int opcode = x86_to_uop[bits(op, 3, 2)];
@@ -1725,7 +1829,7 @@ bool TraceDecoder::decode_complex() {
     DECODE(eform, rd, v_mode);
     DECODE(iform, ra, b_mode);
     if (modrm.reg < 4) MakeInvalid();
-    CheckInvalid();
+    EndOfDecode();
 
     static const byte x86_to_uop[4] = {OP_bt, OP_bts, OP_btr, OP_btc};
     int opcode = x86_to_uop[lowbits(modrm.reg, 2)];
@@ -1766,14 +1870,13 @@ bool TraceDecoder::decode_complex() {
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
 
-    bool left = (op == 0x1a4 || op == 0x1a5);
-
     bool immform = (bit(op, 0) == 0);
     DecodedOperand rimm;
     rimm.imm.imm = 0;
     if (immform) DECODE(iform, rimm, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
+    bool left = (op == 0x1a4 || op == 0x1a5);
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
 
     if (rd.type == OPTYPE_MEM) operand_load(REG_temp4, rd);
@@ -1884,7 +1987,7 @@ bool TraceDecoder::decode_complex() {
     // If the LOCK prefix is present, ld.acq and st.rel are used
     DECODE(eform, rd, bit(op, 0) ? v_mode : b_mode);
     DECODE(gform, ra, bit(op, 0) ? v_mode : b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -1936,7 +2039,7 @@ bool TraceDecoder::decode_complex() {
     // If the LOCK prefix is present, ld.acq and st.rel are used
     DECODE(eform, rd, bit(op, 0) ? v_mode : b_mode);
     DECODE(gform, ra, bit(op, 0) ? v_mode : b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -1978,7 +2081,7 @@ bool TraceDecoder::decode_complex() {
     // movnti
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, v_mode);
-    CheckInvalid();
+    EndOfDecode();
     move_reg_or_mem(rd, ra);
     break;
   }
@@ -1989,7 +2092,7 @@ bool TraceDecoder::decode_complex() {
     switch (modrm.reg) {
     case 0: { // fxsave
       DECODE(eform, rd, q_mode);
-      CheckInvalid();
+      EndOfDecode();
       is_sse = 1;
 
       address_generate_and_load_or_store(REG_ar1, REG_zero, rd, OP_add, 0, 0, true);
@@ -1999,7 +2102,7 @@ bool TraceDecoder::decode_complex() {
     }
     case 1: { // fxrstor
       DECODE(eform, ra, q_mode);
-      CheckInvalid();
+      EndOfDecode();
       is_sse = 1;
 
       address_generate_and_load_or_store(REG_ar1, REG_zero, ra, OP_add, 0, 0, true);
@@ -2009,7 +2112,7 @@ bool TraceDecoder::decode_complex() {
     }
     case 2: { // ldmxcsr
       DECODE(eform, ra, d_mode);
-      CheckInvalid();
+      EndOfDecode();
       is_sse = 1;
 
       ra.type = OPTYPE_REG;
@@ -2025,7 +2128,7 @@ bool TraceDecoder::decode_complex() {
     }
     case 3: { // stmxcsr
       DECODE(eform, rd, d_mode);
-      CheckInvalid();
+      EndOfDecode();
       is_sse = 1;
 
       TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, mxcsr)); ldp.internal = 1; this << ldp;
@@ -2035,7 +2138,7 @@ bool TraceDecoder::decode_complex() {
     case 5: // lfence
     case 6: // mfence
     case 7: { // sfence
-      CheckInvalid();
+      EndOfDecode();
 
       if (first_insn_in_bb()) {
         TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
@@ -2066,7 +2169,7 @@ bool TraceDecoder::decode_complex() {
   case 0x105: {
     // syscall or hypercall
     // Saves return address into %rcx and jumps to MSR_LSTAR
-    CheckInvalid();
+    EndOfDecode();
     abs_code_addr_immediate(REG_rcx, 3, (Waddr)rip);
     microcode_assist((kernel) ? ASSIST_HYPERCALL : ASSIST_SYSCALL, ripstart, rip);
     end_of_block = 1;
@@ -2080,7 +2183,7 @@ bool TraceDecoder::decode_complex() {
     // but we do not have the information the kernel has about the fixed %eip
     // to return to, so we have to pretend:
     //
-    CheckInvalid();
+    EndOfDecode();
     microcode_assist(ASSIST_SYSENTER, ripstart, rip);
     end_of_block = 1;
     break;
@@ -2088,7 +2191,7 @@ bool TraceDecoder::decode_complex() {
 
   case 0x131: {
     // rdtsc: put result into %edx:%eax
-    CheckInvalid();
+    EndOfDecode();
     TransOp ldp1(OP_ld, REG_rdx, REG_zero, REG_imm, REG_zero, 3, (Waddr)&sim_cycle); ldp1.internal = 1; this << ldp1;
 #ifdef PTLSIM_HYPERVISOR
     TransOp ldp2(OP_ld, REG_temp0, REG_ctx, REG_imm, REG_zero, 3, offsetof(Context, base_tsc)); ldp2.internal = 1; this << ldp2;
@@ -2096,20 +2199,19 @@ bool TraceDecoder::decode_complex() {
 #endif
     this << TransOp(OP_mov, REG_rax, REG_zero, REG_rdx, REG_zero, 2);
     this << TransOp(OP_shr, REG_rdx, REG_rdx, REG_imm, REG_zero, 3, 32);
-
     break;
   }
 
   case 0x1a2: {
     // cpuid: update %rax,%rbx,%rcx,%rdx
-    CheckInvalid();
+    EndOfDecode();
     microcode_assist(ASSIST_CPUID, ripstart, rip);
     end_of_block = 1;
     break;
   }
 
   case 0x137: { // 0f 37: PTL undocumented opcode
-    CheckInvalid();
+    EndOfDecode();
     microcode_assist(ASSIST_PTLCALL, ripstart, rip);      
     end_of_block = 1;
     break;

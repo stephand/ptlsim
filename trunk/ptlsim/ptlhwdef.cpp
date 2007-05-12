@@ -425,6 +425,10 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
 
   if (isbranch(op.opcode)) sb << " [taken ", (void*)(Waddr)op.riptaken, ", seq ", (void*)(Waddr)op.ripseq, "]";
 
+  if (op.som) { sb << " [som]"; }
+  if (op.eom) { sb << " [eom]"; }
+  if (op.som|op.eom) { sb << " [", op.bytes, " bytes]"; }
+
   return sb;
 }
 
@@ -455,33 +459,11 @@ ostream& RIPVirtPhysBase::print(ostream& os) const {
 }
 
 void BasicBlock::reset() {
+  setzero(*((BasicBlockBase*)this));
   hashlink.reset();
   mfnlo_loc.reset();
   mfnhi_loc.reset();
-  rip_taken = 0;
-  rip_not_taken = 0;
-  refcount = 0;
-  repblock = 0;
-  invalidblock = 0;
-  call = 0;
-  ret = 0;
   type = BB_TYPE_COND;
-  usedregs = 0;
-  count = 0;
-  tagcount = 0;
-  memcount = 0;
-  storecount = 0;
-  user_insn_count = 0;
-  bytes = 0;
-  synthops = null;
-  hitcount = 0;
-  predcount = 0;
-  confidence = 0;
-  lastused = 0;
-  marked = 0;
-  mfence = 0;
-  x87 = 0;
-  sse = 0;
 }
 
 void BasicBlock::reset(const RIPVirtPhys& rip) {
@@ -521,7 +503,7 @@ BasicBlock* BasicBlock::clone() {
 }
 
 ostream& operator <<(ostream& os, const BasicBlock& bb) {
-  os << "BasicBlock ", (void*)(Waddr)bb.rip, ": ", bb.count, " transops (", bb.tagcount, "t ", bb.memcount, "m ", bb.storecount, "s";
+  os << "BasicBlock ", (void*)(Waddr)bb.rip, " of type ", branch_type_names[bb.brtype], ": ", bb.bytes, " bytes, ", bb.count, " transops (", bb.tagcount, "t ", bb.memcount, "m ", bb.storecount, "s";
   if (bb.repblock) os << " rep";
   os << ", uses ", bitstring(bb.usedregs, 64, true), "), ";
   os << bb.refcount, " refs, ", (void*)(Waddr)bb.rip_taken, " taken, ", (void*)(Waddr)bb.rip_not_taken, " not taken:", endl;

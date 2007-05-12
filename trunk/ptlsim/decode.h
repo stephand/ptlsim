@@ -79,7 +79,7 @@ extern const char* uniform_arch_reg_names[APR_COUNT];
 
 extern const byte arch_pseudo_reg_to_arch_reg[APR_COUNT];
 
-enum { b_mode = 1, v_mode, w_mode, d_mode, q_mode, x_mode, m_mode, cond_jump_mode, loop_jcxz_mode, dq_mode };
+enum { b_mode, v_mode, w_mode, d_mode, q_mode, x_mode, dq_mode };
 
 struct ArchPseudoRegInfo {
   W32 sizeshift:3, hibyte:1;
@@ -125,7 +125,7 @@ struct DecodedOperand {
     } mem;
   };
 
-  bool gform_ext(TraceDecoder& state, int bytemode, int regfield, bool def64 = false, bool in_ext_z = false);
+  bool gform_ext(TraceDecoder& state, int bytemode, int regfield, bool def64 = false, bool in_rex_base = false);
   bool gform(TraceDecoder& state, int bytemode);
   bool iform(TraceDecoder& state, int bytemode);
   bool iform64(TraceDecoder& state, int bytemode);
@@ -178,14 +178,18 @@ struct TraceDecoder {
   bool is_sse;
   bool used_microcode_assist;
   bool some_insns_complex;
-  bool split_basic_block_at_locks_and_fences;
-  bool split_invalid_basic_blocks;
-  bool no_partial_flag_updates_per_insn;
-
+  bool first_uop_in_insn;
+  bool join_with_prev_insn;
   int outcome;
 
   Level1PTE ptelo;
   Level1PTE ptehi;
+
+  // Configuration options
+  bool split_basic_block_at_locks_and_fences;
+  bool split_invalid_basic_blocks;
+  bool no_partial_flag_updates_per_insn;
+  bool fast_length_decode_only;
 
   TraceDecoder(const RIPVirtPhys& rvp);
   TraceDecoder(Context& ctx, Waddr rip);
@@ -227,10 +231,10 @@ struct TraceDecoder {
 
   bool translate();
   void put(const TransOp& transop);
-  void lastop();
-  void split(Waddr target);
-  void split_before() { split(ripstart); }
-  void split_after() { split(rip); }
+  void flush();
+  void split(bool after);
+  void split_before() { split(0); }
+  void split_after() { split(1); }
   bool first_insn_in_bb() { return (Waddr(ripstart) == Waddr(bb.rip)); }
 };
 
@@ -244,72 +248,21 @@ static inline TraceDecoder& operator <<(TraceDecoder& dec, const TransOp& transo
   return dec;
 }
 
-//
-// Generate a memory fence of the specified type.
-//
-inline bool TraceDecoder::memory_fence_if_locked(bool end_of_x86_insn, int type) {
-  if likely (!(prefixes & PFX_LOCK)) return false;
-
-  if (split_basic_block_at_locks_and_fences) {
-    if (end_of_x86_insn) {
-      //
-      // Final mf that terminates the insn (always in its own BB): terminate the BB here.
-      //
-      TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
-      mf.extshift = type;
-      this << mf;
-      bb.mfence = 1;
-      split_after();
-      return true;
-    } else {
-      //
-      // First uop in x86 insn
-      //
-      if (!first_insn_in_bb()) {
-        //
-        // This is not the first x86 insn in the BB, but it is the first uop in the insn.
-        // Split the existing BB at this point, so we get a sequence like this:
-        //
-        // insn1
-        // insn2
-        // (insn3):
-        //   mf
-        //   bru   insn3
-        //
-        split_before();
-        return true;
-      } else {
-        //
-        // This is the first insn in the BB and the first mf uop in that insn:
-        // just emit the mf and continue with the other uops in the insn
-        //
-        TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
-        mf.extshift = type;
-        this << mf;
-        bb.mfence = 1;
-        return false; // continue emitting other uops
-      }
-    }
-  } else {
-    //
-    // Always emit fence intermingled with other insns
-    //
-    TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
-    mf.extshift = type;
-    this << mf;
-  }
-
-  // never reached:
-  return false;
-}
-
 enum {
   DECODE_TYPE_FAST, DECODE_TYPE_COMPLEX, DECODE_TYPE_X87, DECODE_TYPE_SSE, DECODE_TYPE_ASSIST, DECODE_TYPE_COUNT,
 };
 
 #define DECODE(form, decbuf, mode) invalid |= (!decbuf.form(*this, mode));
-#define CheckInvalid() { invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count); if (invalid) { if (invalidate()) return false; break; } }
-#define MakeInvalid() { invalid |= true; CheckInvalid(); }
+#define EndOfDecode() { \
+  invalid |= ((rip - (Waddr)bb.rip) > valid_byte_count); \
+  if unlikely (invalid) { \
+    if (invalidate()) return false; \
+    break; \
+  } \
+  if unlikely (fast_length_decode_only) break; \
+}
+
+#define MakeInvalid() { invalid |= true; EndOfDecode(); }
 
 enum {
   // Forced assists based on decode context
@@ -362,6 +315,7 @@ enum {
   ASSIST_IRET64,
   // Control register updates
   ASSIST_CPUID,
+  ASSIST_RDTSC,
   ASSIST_CLD,
   ASSIST_STD,
   ASSIST_POPF,
@@ -439,6 +393,7 @@ static const char* assist_names[ASSIST_COUNT] = {
   "iret64",
   // Control register updates
   "cpuid",
+  "rdtsc",
   "cld",
   "std",
   "popf",
@@ -508,6 +463,7 @@ void assist_iret32(Context& ctx);
 void assist_iret64(Context& ctx);
 // Control registe rupdates
 void assist_cpuid(Context& ctx);
+void assist_rdtsc(Context& ctx);
 void assist_cld(Context& ctx);
 void assist_std(Context& ctx);
 void assist_popf(Context& ctx);
@@ -535,13 +491,8 @@ namespace superstl {
   template <int setcount>
   struct HashtableKeyManager<RIPVirtPhys, setcount> {
     static inline int hash(const RIPVirtPhys& key) {
-      W64 slot = 0;
-
       W64 rip = key.rip;
-      foreach (i, (64 / log2(setcount))+1) {
-        slot ^= rip;
-        rip >>= log2(setcount);
-      }
+      W64 slot = foldbits<log2(setcount)>(rip);
 #ifdef PTLSIM_HYPERVISOR
       slot ^= key.mfnlo;
 #endif

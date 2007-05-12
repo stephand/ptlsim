@@ -47,6 +47,7 @@ typedef W32 Waddr;
 #define unlikely(x) (__builtin_expect(!!(x), 0))
 #define likely(x) (__builtin_expect(!!(x), 1))
 #define isconst(x) (__builtin_constant_p(x))
+#define getcaller() (__builtin_return_address(0))
 #define asmlinkage extern "C"
 
 //
@@ -333,6 +334,15 @@ static inline W64 rdtsc() {
   return ((W64)lo) | (((W64)hi) << 32);
 }
 
+template <typename T>
+static inline T x86_ror(T r, int n) { asm("ror %%cl,%[r]" : [r] "+q" (r) : [n] "c" ((byte)n)); return r; }
+
+template <typename T>
+static inline T x86_rol(T r, int n) { asm("rol %%cl,%[r]" : [r] "+q" (r) : [n] "c" ((byte)n)); return r; }
+
+template <typename T>
+static inline T dupb(const byte b) { return T(b) * T(0x0101010101010101ULL); }
+
 //
 // Get the frequency of the CPU core(s) in cycles per second
 // Defined differently depending on the (usermode vs bare hardware in kernel mode)
@@ -355,6 +365,23 @@ template <int n> struct lg10 { static const int value = 1 + lg10<n/10>::value; }
 template <> struct lg10<1> { static const int value = 0; };
 template <> struct lg10<0> { static const int value = 0; };
 #define log10(v) (lg10<(v)>::value)
+
+template <int N, typename T>
+static inline T foldbits(T a) {
+  if (N == 0) return 0;
+  
+  const int B = (sizeof(T) * 8);
+  const int S = (B / N) + ((B % N) ? 1 : 0);
+  
+  T z = 0;
+  foreach (i, S) {
+    z ^= a;
+    a >>= N;
+  }
+  
+  return lowbits(z, N);
+}
+
 
 // For specifying easy to read arrays
 #define _ (0)

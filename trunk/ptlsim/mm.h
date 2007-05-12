@@ -39,6 +39,7 @@ static inline T* ptl_mm_alloc_and_zero_private_pages_for_objects(int count) {
   return p;
 }
 
+static const int MAX_URGENCY = 65535;
 typedef void (*mm_reclaim_handler_t)(size_t bytes, int urgency);
 bool ptl_mm_register_reclaim_handler(mm_reclaim_handler_t handler);
 void ptl_mm_reclaim(size_t bytes = 0, int urgency = 0);

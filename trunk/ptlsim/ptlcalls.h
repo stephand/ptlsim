@@ -39,10 +39,10 @@ static inline W64 ptlcall_rdtsc() {
 #ifdef PTLSIM_HYPERVISOR
 // PTLsim/X
 enum {
-  PTLCALL_NOP,
-  PTLCALL_VERSION,
-  PTLCALL_ENQUEUE,
-  PTLCALL_FLUSH_QUEUE,
+  PTLCALL_NOP = 0,
+  PTLCALL_VERSION = 1,
+  PTLCALL_ENQUEUE = 2,
+  PTLCALL_FLUSH_QUEUE = 3,
 };
 
 struct PTLsimCommandDescriptor {
@@ -53,11 +53,11 @@ struct PTLsimCommandDescriptor {
 #else
 // Userspace PTLsim
 enum {
-  PTLCALL_NOP,
-  PTLCALL_MARKER,
-  PTLCALL_SWITCH_TO_SIM,
-  PTLCALL_SWITCH_TO_NATIVE,
-  PTLCALL_CAPTURE_STATS,
+  PTLCALL_NOP = 0,
+  PTLCALL_MARKER = 1,
+  PTLCALL_SWITCH_TO_SIM = 2,
+  PTLCALL_SWITCH_TO_NATIVE = 3,
+  PTLCALL_CAPTURE_STATS = 4,
   PTLCALL_COUNT,
 };
 
@@ -116,18 +116,13 @@ static inline W64 ptlcall_op(W32 op, W32 arg1, W32 arg2, W32 arg3, W32 arg4) {
 }
 #endif
 
-static inline W64 ptlcall(W64 op, W64 arg1 = 0, W64 arg2 = 0, W64 arg3 = 0, W64 arg4 = 0) {
+static inline W64 ptlcall_running_under_ptlsim() {
   struct sigaction oldsa;
   struct sigaction sa;
   W64 rc;
 
-  if (running_under_ptlsim_checked) {
-    if (running_under_ptlsim) {
-      return -ENOSYS;
-    } else {
-      return ptlcall_op(op, arg1, arg2, arg3, arg4);
-    }
-  }
+  if (running_under_ptlsim_checked)
+    return running_under_ptlsim;
 
   running_under_ptlsim_checked = 1;
 
@@ -138,13 +133,18 @@ static inline W64 ptlcall(W64 op, W64 arg1 = 0, W64 arg2 = 0, W64 arg3 = 0, W64 
   sigaction(SIGILL, &sa, &oldsa);
 
   running_under_ptlsim = 1;
-  rc = ptlcall_op(op, arg1, arg2, arg3, arg4);
-
-  if (!running_under_ptlsim) return -ENOSYS;
+  rc = ptlcall_op(PTLCALL_VERSION, 0, 0, 0, 0);
 
   sigaction(SIGILL, &oldsa, NULL);
 
-  return rc;
+  return running_under_ptlsim;
+}
+
+static inline W64 ptlcall(W64 op, W64 arg1 = 0, W64 arg2 = 0, W64 arg3 = 0, W64 arg4 = 0) {
+  if (!ptlcall_running_under_ptlsim())
+    return -ENOSYS;
+
+  return ptlcall_op(op, arg1, arg2, arg3, arg4);
 }
 
 //
@@ -205,7 +205,7 @@ static inline W64 ptlcall_nop() {
 }
 
 static inline W64 ptlcall_switch_to_sim() {
-  return ptlcall_single_flush("-run -stopinsns inf");
+  return ptlcall_single_flush("-run");
 }
 
 static inline W64 ptlcall_switch_to_native() {

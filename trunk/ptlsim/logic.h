@@ -93,14 +93,14 @@ struct SynchronousRegisterFile {
 #define foreach_backward_before(Q, E, i) for (int i = add_index_modulo(E->index(), -1, (Q).size); ((i != add_index_modulo((Q).head, -1, (Q).size)) && (E->index() != (Q).head)); i = add_index_modulo(i, -1, (Q).size))
 
 template <class T, int SIZE>
-struct Queue: public array<T, SIZE> {
+struct FixedQueue: public array<T, SIZE> {
   int head; // used for allocation
   int tail; // used for deallocation
   int count; // count of entries
 
   static const int size = SIZE;
 
-  Queue() {
+  FixedQueue() {
     reset();
   }
 
@@ -110,9 +110,6 @@ struct Queue: public array<T, SIZE> {
 
   void reset() {
     head = tail = count = 0;
-    foreach (i, SIZE) {
-      (*this)[i].init(i);
-    }
   }
 
   int remaining() const {
@@ -132,7 +129,6 @@ struct Queue: public array<T, SIZE> {
       return null;
 
     T* entry = &(*this)[tail];
-    entry->validate();
 
     tail = add_index_modulo(tail, +1, SIZE);
     count++;
@@ -149,6 +145,10 @@ struct Queue: public array<T, SIZE> {
     if (!slot) return null;
     *slot = data;
     return slot;
+  }
+
+  T* enqueue(const T& data) {
+    return push(data);
   }
 
   void commit(T& entry) {
@@ -220,6 +220,28 @@ struct Queue: public array<T, SIZE> {
     foreach_forward(*this, i) {
       os << (*this)[i];
     }
+  }
+};
+
+template <class T, int SIZE>
+struct Queue: public FixedQueue<T, SIZE> {
+  typedef FixedQueue<T, SIZE> base_t;
+
+  Queue() {
+    reset();
+  }
+
+  void reset() {
+    base_t::reset();
+    foreach (i, SIZE) {
+      (*this)[i].init(i);
+    }
+  }
+
+  T* alloc() {
+    T* p = base_t::alloc();
+    if likely (p) p->validate();
+    return p;
   }
 };
 
@@ -1202,7 +1224,36 @@ ostream& operator <<(ostream& os, const LockableAssociativeArray<T, V, size, way
   return aa.print(os);
 }
 
-template <typename T, typename V, int setcount, int waycount, int linesize, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
+template <typename T, int setcount, int linesize>
+struct DefaultCacheIndexingFunction {
+  static inline Waddr setof(T address) { return bits(address, log2(linesize), log2(setcount)); }
+};
+
+template <typename T, int setcount, int linesize>
+struct XORCacheIndexingFunction {
+  static inline Waddr setof(T address) {
+    address >>= log2(linesize);
+
+    const int tagbits = (sizeof(Waddr) * 8) - log2(linesize);
+    address = lowbits(address, tagbits);
+    return foldbits<log2(setcount)>(address);
+  }
+};
+
+template <typename T, int setcount, int linesize>
+struct CRCCacheIndexingFunction {
+  static inline Waddr setof(T address) {
+    Waddr slot = 0;
+    address >>= log2(linesize);
+    CRC32 crc;
+    crc << address;
+    W32 v = crc;
+
+    return foldbits<log2(setcount)>(v);
+  }
+};
+
+template <typename T, typename V, int setcount, int waycount, int linesize, typename indexfunc = DefaultCacheIndexingFunction<T, setcount, linesize>, typename stats = NullAssociativeArrayStatisticsCollector<T, V> >
 struct LockableCommitRollbackAssociativeArray {
   typedef LockableFullyAssociativeArray<T, V, waycount, stats> Set;
   Set sets[setcount];
@@ -1212,8 +1263,19 @@ struct LockableCommitRollbackAssociativeArray {
     W16 way;
   };
 
-  ClearList clearlist[setcount * waycount];
+  //
+  // Technically (setcount * waycount) will cover everything,
+  // but this is not true if we allow lines to be explicitly
+  // invalidated between commits. In this case, a potentially
+  // unlimited buffer would be required as noted below.
+  //
+  // Therefore, we choose a small size, above which it becomes
+  // more efficient to just invalidate everything without
+  // traversing a clear list.
+  //
+  ClearList clearlist[64];
   ClearList* cleartail;
+  bool clearlist_exceeded;
 
   LockableCommitRollbackAssociativeArray() {
     reset();
@@ -1224,10 +1286,11 @@ struct LockableCommitRollbackAssociativeArray {
       sets[set].reset();
     }
     cleartail = clearlist;
+    clearlist_exceeded = 0;
   }
 
   static int setof(T addr) {
-    return bits(addr, log2(linesize), log2(setcount));
+    return indexfunc::setof(addr);
   }
 
   static T tagof(T addr) {
@@ -1253,13 +1316,25 @@ struct LockableCommitRollbackAssociativeArray {
 
   V* select_and_lock(T addr, bool& firstlock, T& oldtag) {
     V* line = sets[setof(addr)].select_and_lock(tagof(addr), firstlock, oldtag);
-    if (!line) return null;
-    if (firstlock) {
+    if unlikely (!line) return null;
+    if likely (firstlock) {
       int set = setof(addr);
       int way = sets[set].wayof(line);
-      cleartail->set = set;
-      cleartail->way = way;
-      cleartail++;
+      if unlikely ((cleartail - clearlist) >= lengthof(clearlist)) {
+        //
+        // Too many lines are locked to keep track of: this can
+        // happen if some lines are intentionally invalidated
+        // before the final commit or rollback; these invalidates
+        // do not remove the corresponding slot from the clearlist,
+        // so the list may still overflow. In this case, just bulk
+        // process every set and every way.
+        //
+        clearlist_exceeded = 1;
+      } else {
+        cleartail->set = set;
+        cleartail->way = way;
+        cleartail++;
+      }
     }
     return line;
   }
@@ -1272,18 +1347,26 @@ struct LockableCommitRollbackAssociativeArray {
   V* select_and_lock(T addr) { bool dummy; return select_and_lock(addr, dummy); }
 
   void unlock_all_and_invalidate() {
-    ClearList* p = clearlist;
-    while (p < cleartail) {
+    if unlikely (clearlist_exceeded) {
+      foreach (setid, setcount) {
+        Set& set = sets[setid];
+        foreach (wayid, waycount) set.invalidate_way(wayid);
+      }
+    } else {
+      ClearList* p = clearlist;
+      while (p < cleartail) {
 #if 0
-      assert(p->set < setcount);
-      assert(p->way < waycount);
+        assert(p->set < setcount);
+        assert(p->way < waycount);
 #endif
-      Set& set = sets[p->set];
-      V& line = set[p->way];
-      set.invalidate_line(&line);
-      p++;
+        Set& set = sets[p->set];
+        V& line = set[p->way];
+        set.invalidate_line(&line);
+        p++;
+      }
     }
     cleartail = clearlist;
+    clearlist_exceeded = 0;
 #if 0
     foreach (s, setcount) {
       Set& set = sets[s];
@@ -1299,18 +1382,26 @@ struct LockableCommitRollbackAssociativeArray {
   }
 
   void unlock_all() {
-    ClearList* p = clearlist;
-    while (p < cleartail) {
+    if unlikely (clearlist_exceeded) {
+      foreach (setid, setcount) {
+        Set& set = sets[setid];
+        foreach (wayid, waycount) set.unlock_way(wayid);
+      }
+    } else {
+      ClearList* p = clearlist;
+      while (p < cleartail) {
 #if 0
-      assert(p->set < setcount);
-      assert(p->way < waycount);
+        assert(p->set < setcount);
+        assert(p->way < waycount);
 #endif
-      Set& set = sets[p->set];
-      V& line = set[p->way];
-      set.unlock_line(&line);
-      p++;
+        Set& set = sets[p->set];
+        V& line = set[p->way];
+        set.unlock_line(&line);
+        p++;
+      }
     }
     cleartail = clearlist;
+    clearlist_exceeded = 0;
   }
 
   ostream& print(ostream& os) const {

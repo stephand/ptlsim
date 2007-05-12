@@ -186,7 +186,7 @@ enum {
 };
 
 static const int MAX_BB_BYTES = 127;
-static const int MAX_BB_X86_INSNS = 63;
+static const int MAX_BB_X86_INSNS = 60;
 static const int MAX_BB_UOPS = 63;
 static const int MAX_BB_PER_PAGE = 4096;
 
@@ -276,7 +276,7 @@ struct IssueState {
 
     struct {
       W64 rddata;
-      W64 physaddr:48, flags:16;
+      W64 physaddr:48, flags:8, lfrqslot:8;
     } ldreg;
 
     struct { 
@@ -537,11 +537,10 @@ ostream& operator <<(ostream& os, const PageFaultErrorCode& pfec);
 // to a normal read-write page.
 //
 struct PTEUpdateBase {
-  byte a:1, d:1, ptwrite:1;
+  byte a:1, d:1, ptwrite:1, pad:5;
 };
 
 struct PTEUpdate: public PTEUpdateBase {
-  byte a:1, d:1, ptwrite:1;
   RawDataAccessors(PTEUpdate, byte);
 };
 
@@ -896,6 +895,7 @@ struct Context: public ContextBase {
   // Flush the context mini-TLB and propagate flush to any core-specific TLBs
   void flush_tlb(bool propagate_flush_to_model = true);
   void flush_tlb_virt(Waddr virtaddr, bool propagate_flush_to_model = true);
+  void* check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused);
 
   void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) {
     return page_table_acc_dirty_update(rawvirt, cr3 >> 12, update);
@@ -1339,6 +1339,67 @@ struct BasicBlockChunkList: public ChunkList<BasicBlockPtr, BB_PTRS_PER_CHUNK> {
 enum { BB_TYPE_COND, BB_TYPE_UNCOND, BB_TYPE_INDIR, BB_TYPE_ASSIST, BB_TYPE_COUNT };
 extern const char* bb_type_names[BB_TYPE_COUNT];
 
+//
+// Predecode information for basic blocks:
+//
+// Given the BB start RIP, the BB length in bytes (up to 127)  and the
+// branch type (with implied x86 immediate size), we can reconstruct
+// the immediate by reading it from the actual x86 code. This allows the
+// predecode info storage to be very small.
+//
+// BranchType:
+//   000: bru   imm8
+//   001: bru   imm32
+//   010: br.cc imm8
+//   011: br.cc imm32
+//   100: brp          no immediate in x86 code, but this is barrier we cannot cross anyway
+//   101: br.split     branch split for overlength BBs: implied offset is zero
+//   110: rep          repeated string move (examine opcode prefix bytes to find out which type)
+//   111: jmp          indirect jump
+//
+// Possible x86 instructions:
+//
+// Direct:
+//   7x    imm8      jcc cond
+//   0f 8x imm32     jcc cond
+//   e3    imm8      jcxz cond
+//   eb    imm8      jmp uncond
+//   e9    imm32     jmp uncond
+//   e8    imm32     call
+//   e0    imm8      loopnz
+//   e1    imm8      loopz
+//   e2    imm8      loop
+// Indirect:
+//   ff/4            jmp indirect
+//   ff/2            call indirect
+//   c3              ret indirect
+//   c2    imm16     ret indirect with arg count
+//
+// Far control transfers and other uncommon instructions are considered barriers.
+//
+
+enum {
+  BRTYPE_BRU_IMM8   = 0,
+  BRTYPE_BRU_IMM32  = 1,
+  BRTYPE_BR_IMM8    = 2,
+  BRTYPE_BR_IMM32   = 3,
+  BRTYPE_BARRIER    = 4,
+  BRTYPE_SPLIT      = 5,
+  BRTYPE_REP        = 6,
+  BRTYPE_JMP        = 7
+};
+
+static const char* branch_type_names[8] = {
+  "bru.8",
+  "bru.32",
+  "br.8",
+  "br.32",
+  "barrier",
+  "split",
+  "rep",
+  "jmp"
+};
+
 struct BasicBlockBase {
   RIPVirtPhys rip;
   selflistlink hashlink;
@@ -1346,14 +1407,14 @@ struct BasicBlockBase {
   BasicBlockChunkList::Locator mfnhi_loc;
   W64 rip_taken;
   W64 rip_not_taken;
-  byte count;
-  byte bytes;
-  byte user_insn_count;
-  byte tagcount;
-  byte memcount;
-  byte storecount;
+  W16 count;
+  W16 bytes;
+  W16 user_insn_count;
+  W16 tagcount;
+  W16 memcount;
+  W16 storecount;
   byte type:4, repblock:1, invalidblock:1, call:1, ret:1;
-  byte marked:1, mfence:1, x87:1, sse:1;
+  byte marked:1, mfence:1, x87:1, sse:1, nondeterministic:1, brtype:3;
   W64 usedregs;
   uopimpl_func_t* synthops;
   int refcount;

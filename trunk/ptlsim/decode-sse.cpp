@@ -26,7 +26,7 @@ bool TraceDecoder::decode_sse() {
   case 0x5ef: { // pxor      66 0f ef
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
@@ -127,7 +127,6 @@ bool TraceDecoder::decode_sse() {
   case 0x5c2: { // cmp (has imm byte at end for compare type)
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
 
     bool cmp = (lowbits(op, 8) == 0xc2);
     DecodedOperand imm;
@@ -135,8 +134,9 @@ bool TraceDecoder::decode_sse() {
     if (cmp) {
       // cmpXX has imm8 at end to specify 3 bits of compare type:
       DECODE(iform, imm, b_mode);
-      CheckInvalid();
     }
+
+    EndOfDecode();
 
     int destreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
 
@@ -186,7 +186,7 @@ bool TraceDecoder::decode_sse() {
   case 0x57d: { // hsubpd
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
@@ -215,7 +215,7 @@ bool TraceDecoder::decode_sse() {
   case 0x22a: { // cvtsi2ss with W32 or W64 source
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, v_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -236,7 +236,7 @@ bool TraceDecoder::decode_sse() {
   case 0x42a: { // cvtsi2sd with W32 or W64 source
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, v_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -258,7 +258,7 @@ bool TraceDecoder::decode_sse() {
   case 0x52a: { // cvtpi2pd
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -278,7 +278,7 @@ bool TraceDecoder::decode_sse() {
   case 0x35b: { // cvtdq2ps
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -300,7 +300,7 @@ bool TraceDecoder::decode_sse() {
   case 0x5e6: { // cvttpd2dq
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -323,7 +323,7 @@ bool TraceDecoder::decode_sse() {
   case 0x55a: { // cvtpd2ps
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -344,7 +344,7 @@ bool TraceDecoder::decode_sse() {
   case 0x32a: { // cvtpi2ps
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -366,7 +366,7 @@ bool TraceDecoder::decode_sse() {
   case 0x25b: { // cvttps2dq
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -390,7 +390,7 @@ bool TraceDecoder::decode_sse() {
   case 0x42c: { // cvttsd2si
     DECODE(gform, rd, v_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -409,7 +409,7 @@ bool TraceDecoder::decode_sse() {
   case 0x22c: { // cvttss2si
     DECODE(gform, rd, v_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -427,7 +427,7 @@ bool TraceDecoder::decode_sse() {
   case 0x25a: { // cvtss2sd
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -445,7 +445,7 @@ bool TraceDecoder::decode_sse() {
   case 0x35a: { // cvtps2pd
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -466,7 +466,7 @@ bool TraceDecoder::decode_sse() {
   case 0x45a: { // cvtsd2ss
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -489,7 +489,7 @@ bool TraceDecoder::decode_sse() {
   case 0x26f: { // movdqu load
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (ra.type == OPTYPE_MEM) {
@@ -515,7 +515,7 @@ bool TraceDecoder::decode_sse() {
   case 0x27f: { // movdqu store
     DECODE(eform, rd, x_mode);
     DECODE(gform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (rd.type == OPTYPE_MEM) {
@@ -537,7 +537,7 @@ bool TraceDecoder::decode_sse() {
   case 0x410: { // movsd load
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     bool isdouble = ((op >> 8) == 0x4);
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
@@ -562,7 +562,7 @@ bool TraceDecoder::decode_sse() {
   case 0x411: { // movsd store
     DECODE(eform, rd, x_mode);
     DECODE(gform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     bool isdouble = ((op >> 8) == 0x4);
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
@@ -597,7 +597,7 @@ bool TraceDecoder::decode_sse() {
     // any counts >= 64 result in the register being cleared.
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
@@ -617,10 +617,7 @@ bool TraceDecoder::decode_sse() {
     case 0x5f3: opcode = OP_shl; break;
     case 0x5d4: opcode = OP_add; break;
     case 0x5fb: opcode = OP_sub; break;
-    default: opcode = OP_nop; break;
     }
-
-    if (opcode == OP_nop) MakeInvalid();
 
     int add_to_second_reg = ((opcode == OP_shr) | (opcode == OP_shl)) ? 0 : 1;
     this << TransOp(opcode, rdreg+0, rdreg+0, rareg, REG_zero, 3);
@@ -628,20 +625,68 @@ bool TraceDecoder::decode_sse() {
     break;
   }
 
-  case 0x573: { // psrlq|psllq imm8
+  case 0x573: { // psrlq|psllq imm8 (bit count) or psrldq|pslldq imm8 (byte count)
     DECODE(gform, rd, x_mode);
     DECODE(iform, ra, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-
-    static const int modrm_reg_to_opcode[8] = {OP_nop, OP_nop, OP_shr, OP_nop, OP_nop, OP_nop, OP_shl, OP_nop};
-
+    static const int modrm_reg_to_opcode[8] = {OP_nop, OP_nop, OP_shr, OP_shr, OP_nop, OP_nop, OP_shl, OP_shl};
     int opcode = modrm_reg_to_opcode[modrm.reg];
     if (opcode == OP_nop) MakeInvalid();
 
-    this << TransOp(opcode, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, ra.imm.imm);
-    this << TransOp(opcode, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, ra.imm.imm);
+    //++MTY CHECKME: technically shifts >= data width will zero everything rather than masking the shift count
+    int imm = ra.imm.imm;
+
+    bool right = (opcode == OP_shr);
+    bool left = (!right);
+
+    if unlikely (lowbits(modrm.reg, 2) == 3) {
+      //
+      // psrldq:
+      //
+      // t0 = 8fedcba9   rotr     t0 = hi,imm*8
+      // lo = 87654321   maskb    lo = t0,lo,[ms=0 mc=(8-imm)*8 ds=imm*8]
+      // hi = 0fedcba9   shr      hi = hi,imm*8
+      //
+      // pslldq:
+      //
+      // lo = 65432107   rotl     t0 = lo,(imm*8)
+      // hi = edcba987   maskb    hi = t0,hi,[ms=(8-imm)*8 mc=(8-imm)*8 ds=(8-imm)*8]
+      // lo = 65432100   shl      lo = lo,(imm*8)
+      //
+      if unlikely (!imm) {
+        this << TransOp(OP_nop, REG_zero, REG_zero, REG_zero, REG_zero, 3);
+      } else if likely (imm < 8) {
+        this << TransOp((right) ? OP_rotr : OP_rotl, REG_temp0, rdreg+1, REG_imm, REG_zero, 3, imm*8);
+        this << TransOp(OP_maskb, rdreg+left, REG_temp0, rdreg+left, REG_imm, 3, 0,
+                        (right) ? MaskControlInfo(0, (8-imm)*8, imm*8) : MaskControlInfo((8-imm)*8, (8-imm)*8, (8-imm)*8));
+        this << TransOp((right) ? OP_shr : OP_shl, rdreg+right, rdreg+right, REG_zero, 3, (imm*8));
+      } else if likely (imm < 16) {
+        // imm >= 8
+        //
+        // psrldq: (right = 1, left = 0)
+        //
+        // lo = >>      shr       lo = hi,(imm & 0x7)*8
+        // hi = 0       mov       hi = 0,0
+        //
+        // pslldq: (right = 0, left = 1)
+        //
+        // hi = <<      shl       hi = lo,(imm & 0x7)*8
+        // lo = 0       mov       lo = 0,0
+        //
+        this << TransOp(opcode, rdreg+left, rdreg+right, REG_imm, REG_zero, 3, (imm & 7) * 8);
+        this << TransOp(OP_mov, rdreg+right, REG_zero, REG_zero, REG_zero, 3);
+      } else {
+        // all zeros
+        this << TransOp(OP_mov, rdreg+0, REG_zero, REG_zero, REG_zero, 3);
+        this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3);
+      }
+    } else {
+      // psrlq | psllq
+      this << TransOp(opcode, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, ra.imm.imm);
+      this << TransOp(opcode, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, ra.imm.imm);
+    }
     break;
   }
 
@@ -650,7 +695,7 @@ bool TraceDecoder::decode_sse() {
     DECODE(eform, ra, x_mode);
     DecodedOperand imm;
     DECODE(iform, imm, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
@@ -666,7 +711,7 @@ bool TraceDecoder::decode_sse() {
     DECODE(eform, ra, w_mode);
     DecodedOperand imm;
     DECODE(iform, imm, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
@@ -684,7 +729,7 @@ bool TraceDecoder::decode_sse() {
     DECODE(eform, ra, x_mode);
     DecodedOperand imm;
     DECODE(iform, imm, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
@@ -716,7 +761,7 @@ bool TraceDecoder::decode_sse() {
     DECODE(eform, ra, x_mode);
     DecodedOperand imm;
     DECODE(iform, imm, b_mode);
-    CheckInvalid();
+    EndOfDecode();
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
@@ -741,7 +786,7 @@ bool TraceDecoder::decode_sse() {
   case 0x52e: { // ucomisd
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int rareg;
 
@@ -774,7 +819,7 @@ bool TraceDecoder::decode_sse() {
   case 0x312: { // movlps load or movhlps
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (ra.type == OPTYPE_MEM) {
@@ -801,7 +846,7 @@ bool TraceDecoder::decode_sse() {
   case 0x313: { // movlps store
     DECODE(eform, rd, x_mode);
     DECODE(gform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     if (rd.type != OPTYPE_MEM) MakeInvalid();
@@ -821,7 +866,7 @@ bool TraceDecoder::decode_sse() {
   case 0x515: { // unpckhpd
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (ra.type == OPTYPE_MEM) {
@@ -853,7 +898,7 @@ bool TraceDecoder::decode_sse() {
   case 0x315: { // unpckhps
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     int rareg;
@@ -899,7 +944,7 @@ bool TraceDecoder::decode_sse() {
   case 0x56e: { // movd xmm,rm32/rm64
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, v_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (ra.type == OPTYPE_MEM) {
@@ -918,7 +963,7 @@ bool TraceDecoder::decode_sse() {
   case 0x57e: { // movd rm32/rm64,xmm
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (rd.type == OPTYPE_MEM) {
@@ -934,7 +979,7 @@ bool TraceDecoder::decode_sse() {
   case 0x27e: { // movq xmm,xmmlo|mem64 with zero extension
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (ra.type == OPTYPE_MEM) {
@@ -953,7 +998,7 @@ bool TraceDecoder::decode_sse() {
   case 0x5d6: { // movd xmmlo|mem64,xmm with zero extension
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, x_mode);
-    CheckInvalid();
+    EndOfDecode();
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     int datatype = sse_float_datatype_to_ptl_datatype[(op >> 8) - 2];
     if (rd.type == OPTYPE_MEM) {

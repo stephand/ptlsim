@@ -469,12 +469,12 @@ W64 accept_upcall(char* buf, size_t count, bool blocking = 1) {
   call.op = PTLSIM_HOST_ACCEPT_UPCALL;
   call.ready = 0;
   call.accept_upcall.buf = xferpage;
-  call.accept_upcall.length = min(count, PAGE_SIZE);
+  call.accept_upcall.length = min(count, size_t(PTLSIM_XFER_PAGES_SIZE));
   call.accept_upcall.blocking = blocking;
 
   int rc = synchronous_host_call(call);
   if (rc) {
-    count = min(count, PAGE_SIZE-1);
+    count = min(count, size_t(PTLSIM_XFER_PAGES_SIZE-1));
     memcpy(buf, xferpage, count);
     buf[count] = 0;
 
@@ -524,13 +524,13 @@ W64 inject_upcall(const char* buf, size_t count, bool flushing) {
   PTLsimHostCall call;
   logfile << "inject_upcall: '", buf, "'", endl, flush;
 
-  count = min(count, PAGE_SIZE);
+  count = min(count, size_t(PTLSIM_XFER_PAGES_SIZE));
   memcpy(xferpage, buf, count);
 
   call.op = PTLSIM_HOST_INJECT_UPCALL;
   call.ready = 0;
   call.inject_upcall.buf = xferpage;
-  call.inject_upcall.length = min(count, PAGE_SIZE);
+  call.inject_upcall.length = min(count, size_t(PTLSIM_XFER_PAGES_SIZE));
   call.inject_upcall.flush = 0;
 
   return synchronous_host_call(call);
@@ -574,7 +574,7 @@ declare_syscall3(__NR_lseek, W64, sys_seek, int, fd, W64, offset, unsigned int, 
 
 declare_syscall3(__NR_open, int, sys_open_thunk, const char*, pathname, int, flags, int, mode);
 asmlinkage int sys_open(const char* pathname, int flags, int mode) {
-  strncpy(xferpage, pathname, PAGE_SIZE);
+  strncpy(xferpage, pathname, PTLSIM_XFER_PAGES_SIZE);
   return sys_open_thunk(xferpage, flags, mode);
 }
 
@@ -587,7 +587,7 @@ asmlinkage ssize_t sys_read(int fd, void* buf, size_t count) {
   int rc;
 
   while (count) {
-    rc = sys_read_thunk(fd, xferpage, min(count, PAGE_SIZE));
+    rc = sys_read_thunk(fd, xferpage, min(count, size_t(PTLSIM_XFER_PAGES_SIZE)));
     if (rc < 0) return rc;
     memcpy(p, xferpage, rc);
     count -= rc;
@@ -607,8 +607,9 @@ asmlinkage ssize_t sys_write(int fd, const void* buf, size_t count) {
   int rc;
 
   while (count) {
-    memcpy(xferpage, p, min(count, PAGE_SIZE));
-    rc = sys_write_thunk(fd, xferpage, min(count, PAGE_SIZE));
+    size_t n = min(count, size_t(PTLSIM_XFER_PAGES_SIZE));
+    memcpy(xferpage, p, n);
+    rc = sys_write_thunk(fd, xferpage, n);
     if (rc < 0) return rc;
     count -= rc;
     realcount += rc;
@@ -621,7 +622,7 @@ asmlinkage ssize_t sys_write(int fd, const void* buf, size_t count) {
 
 declare_syscall1(__NR_unlink, int, sys_unlink_thunk, const char*, pathname);
 asmlinkage int sys_unlink(const char* pathname) {
-  strncpy(xferpage, pathname, PAGE_SIZE);
+  strncpy(xferpage, pathname, PTLSIM_XFER_PAGES_SIZE);
   return sys_unlink_thunk(xferpage);
 }
 
@@ -797,18 +798,21 @@ static trap_info_t trap_table[] = {
 bool lowlevel_init_done = 0;
 
 asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
-  stringbuf sb;
-  sb << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits", endl;
+  // use two stringbufs to avoid allocating any memory:
+  stringbuf sb1, sb2;
+  sb1 << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") from ", getcaller();
+  sb2 << " at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits, ", iterations, " iterations", endl;
 
   if (!lowlevel_init_done) {
-    sys_write(2, sb, strlen(sb));
-    asm("mov %[ra],%%rax; ud2a;" : : [ra] "r" (__builtin_return_address(0)));
+    sys_write(2, sb1, strlen(sb1));
+    sys_write(2, sb2, strlen(sb2));
+    asm("mov %[ra],%%rax; ud2a;" : : [ra] "r" (getcaller()));
   }
 
-  cerr << sb, flush;
+  cerr << sb1, sb2, flush;
 
   if (logfile) {
-    logfile << sb, flush;
+    logfile << sb1, sb2, flush;
     PTLsimMachine* machine = PTLsimMachine::getcurrent();
     if (machine) machine->dump_state(logfile);
     logfile.close();
@@ -821,8 +825,7 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
 
   // Force crash here:
   asm("ud2a");
-
-  abort();
+  for (;;) { }
 }
 
 //
@@ -874,7 +877,7 @@ SegmentDescriptor Context::get_gdt_entry(W16 idx) {
 }
 
 void Context::flush_tlb(bool propagate_flush_to_model) {
-  if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb() called from ", __builtin_return_address(0), endl;
+  if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb() called from ", getcaller(), endl;
 
   foreach (i, lengthof(cached_pte_virt)) {
     cached_pte_virt[i] = 0xffffffffffffffffULL;
@@ -888,7 +891,7 @@ void Context::flush_tlb(bool propagate_flush_to_model) {
 }
 
 void Context::flush_tlb_virt(Waddr virtaddr, bool propagate_flush_to_model) {
-  if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb(", (void*)virtaddr, ") called from ", __builtin_return_address(0), endl;
+  if (logable(5)) logfile << "[vcpu ", vcpuid, "] flush_tlb(", (void*)virtaddr, ") called from ", getcaller(), endl;
 
   int slot = lowbits(virtaddr >> 12, log2(PTE_CACHE_SIZE));
   if (cached_pte_virt[slot] == floor(virtaddr, PAGE_SIZE)) {
@@ -1324,7 +1327,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       break;
     }
     default:
-      abort();
+      assert(false);
     }
     break;
   }
@@ -1395,7 +1398,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     }
     default:
       if (debug) logfile << "set_segment_base: unknown segment id ", arg1, endl;
-      abort();
+      assert(false);
     }
 
     break;
@@ -1450,14 +1453,14 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
       default:
         logfile << "callback_op: set unknown callback ", req.type, " to ", 
           (void*)(Waddr)req.address, " (disable events? ", disable_events, ")", endl;
-        abort();
+        assert(false);
         break;
       }
       rc = 0;
       break;
     }
     default:
-      abort();
+      assert(false);
       rc = -EINVAL;
     }
     break;
@@ -1480,14 +1483,14 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     }
     default:
       rc = -EINVAL;
-      abort();
+      assert(false);
     }
     break;
   }
 
   default:
     if (debug) logfile << "Cannot handle hypercall ", hypercallid, "!", endl, flush;
-    abort();
+    assert(false);
   }
 
   // if (debug) logfile << "  Returning rc ", rc, endl, flush;
@@ -1547,7 +1550,7 @@ void handle_xen_hypercall_assist(Context& ctx) {
     ctx.commitarf[REG_rax] = 0;
   } else if (hypercallid == __HYPERVISOR_iret) {
     iret_context iretctx;
-    if (ctx.copy_from_user(&iretctx, ctx.commitarf[REG_rsp], sizeof(iretctx)) != sizeof(iretctx)) { abort(); }
+    if (ctx.copy_from_user(&iretctx, ctx.commitarf[REG_rsp], sizeof(iretctx)) != sizeof(iretctx)) { assert(false); }
 
     if (logable(2)) {
       logfile << "[vcpu ", ctx.vcpuid, "] IRET from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ",
@@ -1818,6 +1821,7 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
     logfile << "[vcpu ", vcpuid, "] Exception ", exception, " (x86 ", x86_exception_names[exception], ") at rip ", (RIPVirtPhys)rvp, ": error code ";
     if likely (exception == EXCEPTION_x86_page_fault) {
       logfile << PageFaultErrorCode(errorcode), " (", (void*)(Waddr)errorcode, ") @ virtaddr ", (void*)virtaddr;
+      //logfile << "Offending 
     } else {
       logfile << "0x", hexstring(errorcode, 32);
     }
@@ -2365,10 +2369,9 @@ bool check_for_async_sim_break() {
   return false;
 }
 
-#define PTLCALL_VERSION      0
-#define PTLCALL_SEND_COMMAND 1
-
 char ptlcall_buf[4096];
+
+int ptlcall_while_in_native = 0;
 
 // This is where we end up after issuing opcode 0x0f37 (undocumented x86 ptlcall opcode)
 void assist_ptlcall(Context& ctx) {
@@ -2385,6 +2388,10 @@ void assist_ptlcall(Context& ctx) {
 
   switch (op) {
   case PTLCALL_VERSION: {
+    logfile << "PTLcall PTLCALL_VERSION: called from native mode? ", ptlcall_while_in_native, endl;
+    const char* c = (ptlcall_while_in_native) ? "-native" : "-run";
+    ptlcall_while_in_native = 0;
+    inject_upcall(c, strlen(c), 1);
     break;
   }
   case PTLCALL_ENQUEUE: {
@@ -2453,6 +2460,7 @@ void process_native_upcall() {
 
     ctx.commitarf[REG_selfrip] = ctx.commitarf[REG_rip];
     ctx.commitarf[REG_nextrip] = ctx.commitarf[REG_selfrip] + 2;
+    ptlcall_while_in_native = 1;
     assist_ptlcall(ctx);
   }
 }
@@ -2561,6 +2569,6 @@ int main(int argc, char** argv) {
   }
 
   // We should never get here!
-  abort();
+  assert(false);
   return 0;
 }

@@ -27,6 +27,7 @@ typedef W16 domid_t;
 
 asmlinkage {
 #include <xenctrl.h>
+#include <xs.h>
 };
 
 #include <xen/io/console.h>
@@ -304,7 +305,7 @@ PendingRequestTable pendingreqs;
 struct XenController;
 
 static inline bool thunk_ptr_valid(Waddr w) {
-  return (inrange(w, (Waddr)PTLSIM_XFER_PAGE_VIRT_BASE, PTLSIM_XFER_PAGE_VIRT_BASE+4095));
+  return (inrange(w, (Waddr)PTLSIM_XFER_PAGES_VIRT_BASE, PTLSIM_XFER_PAGES_VIRT_BASE+(PTLSIM_XFER_PAGES_SIZE-1)));
 }
 
 static ostream& operator <<(ostream& os, const page_type_t& pagetype) {
@@ -1434,7 +1435,7 @@ struct XenController {
         break;
       default:
         cerr << "PTLmon does not support thunked syscall ", syscall, "!", endl, flush;
-        abort();
+        assert(false);
       }
       bootinfo->hostreq.rc = do_syscall_64bit(syscall,
                                               arg1,
@@ -1624,10 +1625,14 @@ struct XenController {
     barrier();
     //bootinfo->hostreq_spinlock.release();
 
+    wakeup_ptlsim();
+    return 0;
+  }
+
+  void wakeup_ptlsim() {
     ioctl_evtchn_notify notify;
     notify.port = ptlsim_hostcall_port;
-    rc = ioctl(evtchnfd, IOCTL_EVTCHN_NOTIFY, &notify);
-    return 0;
+    int rc = ioctl(evtchnfd, IOCTL_EVTCHN_NOTIFY, &notify);
   }
 
   XenController(int domain) {
@@ -1774,6 +1779,55 @@ void print_saved_usage(ostream& os) {
   os.write(&_binary_usage_txt_start, &_binary_usage_txt_end - &_binary_usage_txt_start);
 }
 
+int atoi_with_check(const char* s) {
+  bool all_nums = 1;
+  W64 id = 0;
+  int n = strlen(s);
+
+  foreach (i, n) {
+    char c = s[i];
+    all_nums &= inrange(c, '0', '9');
+    id = (id * 10) + (int)(c - '0');
+  }
+
+  return (all_nums) ? id : -1;
+}
+
+int xc_get_domain_from_name(const char* name) {
+  int domain = -1;
+  xc_dominfo_t list[1024];
+  int found = 0;
+
+  int xc = xc_interface_open();
+  if unlikely (xc < 0) return -1;
+  int n = xc_domain_getinfo(xc, 0, lengthof(list), list);
+
+  xs_handle* xs = xs_daemon_open();
+  
+  foreach (i, n) {
+    xc_dominfo_t& info = list[i];
+
+    char* dompath = xs_get_domain_path(xs, info.domid);
+    if unlikely (!dompath) continue;
+    stringbuf path;
+    path << dompath, '/', "name";
+    delete dompath;
+    unsigned int len = strlen(path);
+    char* data = (char*)xs_read(xs, XBT_NULL, path, &len);
+    if unlikely (data && strequal(name, data)) {
+      domain = info.domid;
+      break;
+    }
+    if likely (data) delete data;
+  }
+
+  if (xs) xs_daemon_close(xs);
+
+  xc_interface_close(xc);
+
+  return domain;
+}
+
 int main(int argc, char** argv) {
   int rc;
   argc--; argv++;
@@ -1783,10 +1837,14 @@ int main(int argc, char** argv) {
 
   // 32 MB default:
   W64 ptlsim_reserved_mb = 32;
+  const char* domain_name = null;
 
   foreach (i, argc) {
-    if (strequal(argv[i], "-domain")) {
-      if (argc > i) { domain = atoi(argv[i+1]); }
+    if (strequal(argv[i], "-domain") && (argc > i)) {
+      domain_name = argv[i+1];
+      domain = atoi_with_check(domain_name);
+      // Was it a number? If so, no need to save the domain name:
+      if likely (domain >= 0) domain_name = null;
     } else if (strequal(argv[i], "-reservemem")) {
       if (argc > i) { ptlsim_reserved_mb = atoi(argv[i+1]); }
     } else if (strequal(argv[i], "-bootlog")) {
@@ -1800,7 +1858,12 @@ int main(int argc, char** argv) {
     return -1;
   }
 
+  if likely (domain_name) {
+    domain = xc_get_domain_from_name(domain_name);
+  }
+
   if (domain < 0) {
+    if likely (domain_name) cerr << "Cannot find domain '", domain_name, "'", endl;
     cerr << "Please use the -domain XXX option to specify a Xen domain to access.", endl, endl;
     return -2;
   }
@@ -1842,11 +1905,13 @@ int main(int argc, char** argv) {
       return 0;
     }
 
+#if 0
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = sigterm_handler;
     sa.sa_flags = SA_SIGINFO;
-    assert(sys_rt_sigaction(SIGXCPU, &sa, NULL, sizeof(W64)) == 0);
+    assert(sys_rt_sigaction(SIGINT, &sa, NULL, sizeof(W64)) == 0);
+#endif
 
     //
     // Child process: act as server
@@ -1883,7 +1948,11 @@ int main(int argc, char** argv) {
       int rc = epoll_wait(waitfd, &event, 1, 100);
       if (rc < 0) break;
 
-      if (!rc) continue;
+      if (!rc) {
+        // kick-start the other domain in case we raced and it missed the last interrupt
+        xc.wakeup_ptlsim();
+        continue;
+      }
 
       if (event.data.fd == sd) {
         sockaddr_un acceptaddr;

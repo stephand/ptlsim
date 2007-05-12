@@ -610,9 +610,8 @@ int CacheHierarchy::initiate_icache_miss(W64 addr, int rob, int threadid) {
 // any cache lines. The store must have already been checked
 // to have no exceptions.
 //
-W64 CacheHierarchy::commitstore(const SFR& sfr, int threadid) {
-  if unlikely (sfr.invalid | (sfr.bytemask == 0))
-                return 0;
+W64 CacheHierarchy::commitstore(const SFR& sfr, int threadid, bool perform_actual_write) {
+  if unlikely (sfr.invalid | (sfr.bytemask == 0)) return 0;
 
   static const bool DEBUG = 0;
 
@@ -622,7 +621,7 @@ W64 CacheHierarchy::commitstore(const SFR& sfr, int threadid) {
 
   L2CacheLine* L2line = L2.select(addr);
 
-  storemask(addr, sfr.data, sfr.bytemask);
+  if likely (perform_actual_write) storemask(addr, sfr.data, sfr.bytemask);
 
   L1CacheLine* L1line = L1.select(addr);
 
@@ -637,6 +636,15 @@ W64 CacheHierarchy::commitstore(const SFR& sfr, int threadid) {
   stoptimer(store_flush_timer);
 
   return 0;
+}
+
+//
+// Submit a speculative store that marks the relevant bytes as valid
+// so they can be immediately forwarded to loads, but do not actually
+// write to the cache itself.
+//
+W64 CacheHierarchy::speculative_store(const SFR& sfr, int threadid) {
+  return commitstore(sfr, threadid, false);
 }
 
 void CacheHierarchy::clock() {
