@@ -476,10 +476,10 @@ void exp_op_mask(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbf
 
 #if 0
   // For debugging purposes:
-  if (logable(5)) {
+  if unlikely (logable(5)) {
     logfile << "mask [", sizeof(T), ", ", ZEROEXT, ", ", SIGNEXT, ", ss = ", sizeshift, ", mcms ", mcms, " [shmask ", bitstring(shmask, 18), " (ms=", ms, " mc=", mc, " ds=", ds, " (mcms ", mcms, "))]:", endl;
-    logfile << "  M      = ", bitstring(M, 64), endl;
-    logfile << "  rot rb = ", bitstring(rotr<T>(rb, ds), 64), endl;
+    logfile << "  M      = ", bitstring(M, 64), " 0x", hexstring(M, 64), endl;
+    logfile << "  rot rb = ", bitstring(rotr<T>(rb, ds), 64), " 0x", hexstring(rotr<T>(rb, ds), 64), endl;
     logfile << "  ra     = ", hexstring(ra, 64), endl;
     logfile << "  rb     = ", hexstring(rb, 64), endl;
     logfile << "  rc     = ", hexstring(rc, 64), endl;

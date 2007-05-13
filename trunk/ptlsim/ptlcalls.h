@@ -11,6 +11,7 @@
 #ifndef __INSIDE_PTLSIM__
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <malloc.h>
@@ -228,6 +229,23 @@ static inline W64 ptlcall_capture_stats(const char* snapshot) {
 
   char* commands[2] = {buf, "-run"};
   return ptlcall_multi_flush(commands, 2);
+}
+
+//
+// This is not really a PTLcall: it just creates a Xen checkpoint
+// from within the domain by writing to /proc/xen/checkpoint.
+//
+// This feature is added by this Linux 2.6.20 patch:
+// ptlsim/patches/linux-2.6.20-xen-self-checkpointing.diff 
+//
+static inline W64 ptlcall_checkpoint(const char* name) {
+  int n;
+  int fd = open("/proc/xen/checkpoint", O_WRONLY);
+  if (fd < 0) return 0;
+  const char command[] = "checkpoint\n";
+  n = write(fd, command, sizeof(command));
+  close(fd);
+  return (n == sizeof(command));
 }
 
 #else

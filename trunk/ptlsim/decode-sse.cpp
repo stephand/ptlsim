@@ -626,16 +626,17 @@ bool TraceDecoder::decode_sse() {
   }
 
   case 0x573: { // psrlq|psllq imm8 (bit count) or psrldq|pslldq imm8 (byte count)
-    DECODE(gform, rd, x_mode);
+    DECODE(eform, rd, x_mode);
     DECODE(iform, ra, b_mode);
+    if (rd.type == OPTYPE_MEM) MakeInvalid();
     EndOfDecode();
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+
     static const int modrm_reg_to_opcode[8] = {OP_nop, OP_nop, OP_shr, OP_shr, OP_nop, OP_nop, OP_shl, OP_shl};
     int opcode = modrm_reg_to_opcode[modrm.reg];
     if (opcode == OP_nop) MakeInvalid();
 
-    //++MTY CHECKME: technically shifts >= data width will zero everything rather than masking the shift count
     int imm = ra.imm.imm;
 
     bool right = (opcode == OP_shr);
@@ -643,25 +644,30 @@ bool TraceDecoder::decode_sse() {
 
     if unlikely (lowbits(modrm.reg, 2) == 3) {
       //
-      // psrldq:
-      //
-      // t0 = 8fedcba9   rotr     t0 = hi,imm*8
-      // lo = 87654321   maskb    lo = t0,lo,[ms=0 mc=(8-imm)*8 ds=imm*8]
-      // hi = 0fedcba9   shr      hi = hi,imm*8
-      //
-      // pslldq:
+      // pslldq: (left)
       //
       // lo = 65432107   rotl     t0 = lo,(imm*8)
       // hi = edcba987   maskb    hi = t0,hi,[ms=(8-imm)*8 mc=(8-imm)*8 ds=(8-imm)*8]
       // lo = 65432100   shl      lo = lo,(imm*8)
       //
+      // psrldq: (right)
+      //
+      // t0 = 8fedcba9   rotr     t0 = hi,imm*8
+      // lo = 87654321   maskb    lo = t0,lo,[ms=0 mc=(8-imm)*8 ds=imm*8]
+      // hi = 0fedcba9   shr      hi = hi,imm*8
+      //
       if unlikely (!imm) {
         this << TransOp(OP_nop, REG_zero, REG_zero, REG_zero, REG_zero, 3);
       } else if likely (imm < 8) {
-        this << TransOp((right) ? OP_rotr : OP_rotl, REG_temp0, rdreg+1, REG_imm, REG_zero, 3, imm*8);
-        this << TransOp(OP_maskb, rdreg+left, REG_temp0, rdreg+left, REG_imm, 3, 0,
-                        (right) ? MaskControlInfo(0, (8-imm)*8, imm*8) : MaskControlInfo((8-imm)*8, (8-imm)*8, (8-imm)*8));
-        this << TransOp((right) ? OP_shr : OP_shl, rdreg+right, rdreg+right, REG_zero, 3, (imm*8));
+        if (left) {
+          this << TransOp(OP_rotl, REG_temp0, rdreg+0, REG_imm, REG_zero, 3, imm*8);
+          this << TransOp(OP_maskb, rdreg+1, REG_temp0, rdreg+1, REG_imm, 3, 0, MaskControlInfo((8-imm)*8, (8-imm)*8, (8-imm)*8));
+          this << TransOp(OP_shl, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, (imm*8));
+        } else {
+          this << TransOp(OP_rotr, REG_temp0, rdreg+1, REG_imm, REG_zero, 3, imm*8);
+          this << TransOp(OP_maskb, rdreg+0, REG_temp0, rdreg+0, REG_imm, 3, 0, MaskControlInfo(0, (8-imm)*8, imm*8));
+          this << TransOp(OP_shr, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, (imm*8));
+        }
       } else if likely (imm < 16) {
         // imm >= 8
         //
@@ -684,8 +690,13 @@ bool TraceDecoder::decode_sse() {
       }
     } else {
       // psrlq | psllq
-      this << TransOp(opcode, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, ra.imm.imm);
-      this << TransOp(opcode, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, ra.imm.imm);
+      if (imm >= 64) {
+        this << TransOp(OP_mov, rdreg+0, REG_zero, REG_zero, REG_zero, 3);
+        this << TransOp(OP_mov, rdreg+1, REG_zero, REG_zero, REG_zero, 3);
+      } else {
+        this << TransOp(opcode, rdreg+0, rdreg+0, REG_imm, REG_zero, 3, ra.imm.imm);
+        this << TransOp(opcode, rdreg+1, rdreg+1, REG_imm, REG_zero, 3, ra.imm.imm);
+      }
     }
     break;
   }

@@ -1,6 +1,6 @@
 diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c
 --- linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c	2007-03-17 02:53:41.000000000 -0400
-+++ linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c	2007-05-11 23:47:17.872451000 -0400
++++ linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c	2007-05-12 23:14:19.477405000 -0400
 @@ -8,6 +8,9 @@
  #include <asm/hypervisor.h>
  #include <xen/xenbus.h>
@@ -11,18 +11,34 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
  
  MODULE_LICENSE("Dual BSD/GPL");
  
-@@ -97,6 +100,18 @@
+@@ -59,10 +62,16 @@
+ 	return 0;
+ }
+ 
+-static int xen_suspend(void *__unused)
++static DECLARE_WAIT_QUEUE_HEAD(suspend_waitq);
++
++static int xen_suspend(void *p)
+ {
+ 	__xen_suspend();
+ 	shutting_down = SHUTDOWN_INVALID;
++	if (p) {
++		wait_queue_head_t* wakeup = (wait_queue_head_t*)p;
++		wake_up(wakeup);
++	}
+ 	return 0;
+ }
+ 
+@@ -97,6 +106,16 @@
  	}
  }
  
-+static void checkpoint_or_suspend_triggered(void) {
-+  int err;
-+  shutting_down = SHUTDOWN_SUSPEND;
-+  err = kthread_create_on_cpu(xen_suspend, NULL, "suspend", 0);
-+  /* Spin until we have resumed */
-+  while (shutting_down != SHUTDOWN_INVALID) {
-+    yield();
-+  }
++static void checkpoint_or_suspend_triggered(void)
++{
++	int err;
++	shutting_down = SHUTDOWN_SUSPEND;
++	err = kthread_create_on_cpu(xen_suspend, &suspend_waitq, "suspend", 0);
++	wait_event_interruptible(suspend_waitq, (shutting_down < 0));
 +}
 +
 +static int shutdown_handler_disabled = 0;
@@ -30,19 +46,19 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
  static void shutdown_handler(struct xenbus_watch *watch,
  			     const char **vec, unsigned int len)
  {
-@@ -104,6 +119,11 @@
- 	struct xenbus_transaction xbt;
- 	int err;
+@@ -107,6 +126,11 @@
+ 	if (shutting_down != SHUTDOWN_INVALID)
+ 		return;
  
 +	if (shutdown_handler_disabled) {
 +		printk("shutdown_handler: currently disabled; waiting for locally initiated checkpoint or suspend\n");
 +		return;
 +	}
 +
- 	if (shutting_down != SHUTDOWN_INVALID)
- 		return;
- 
-@@ -186,6 +206,63 @@
+  again:
+ 	err = xenbus_transaction_start(&xbt);
+ 	if (err)
+@@ -186,6 +210,64 @@
  	.callback = sysrq_handler
  };
  
@@ -52,7 +68,7 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +                                    unsigned long count, void *data)
 +{
 +	char action[64];
-+  int n = 0;
++	int n = 0;
 +
 +	if (count <= 1)
 +		return -EBADMSG; /* runt */
@@ -63,31 +79,29 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +		return -EFAULT;
 +	action[count] = '\0';
 +
-+  n = strlen(action);
-+  if ((n > 0) && (action[n-1] == '\n')) action[n-1] = '\0';
++	n = strlen(action);
++	if ((n > 0) && (action[n-1] == '\n')) action[n-1] = '\0';
 +
-+  if (!strcmp(action, "prep")) {
-+    /*
-+     * Disable default response for control/shutdown xenbus broadcast,
-+     * so we only respond after the "checkpoint" or "suspend" commands.
-+     */
-+    printk("External shutdown request xenbus listener disabled: waiting for locally initiated checkpoint or suspend\n");
-+    shutdown_handler_disabled = 1;
-+  } else if (!strcmp(action, "unprep")) {
-+    /*
-+     * Re-enable default action for control/shutdown xenbus broadcast
-+     */
-+    printk("External shutdown request xenbus listener enabled: allow external shutdown requests\n");
-+    shutdown_handler_disabled = 0;
-+  } else if (!strcmp(action, "checkpoint")) {
-+    /*
-+     * Actually perform the requested action
-+     */
-+    printk("Performing locally initiated %s\n", action);
-+    checkpoint_or_suspend_triggered();
-+  } else {
-+    printk("checkpoint_trigger_write(\"%s\"): unknown action\n", action);
-+  }
++	if (!strcmp(action, "prep")) {
++		/*
++		 * Disable default response for control/shutdown xenbus broadcast,
++		 * so we only respond after the "checkpoint" or "suspend" commands.
++		 */
++		shutdown_handler_disabled = 1;
++	} else if (!strcmp(action, "unprep")) {
++		/*
++		 * Re-enable default action for control/shutdown xenbus broadcast
++		 */
++		shutdown_handler_disabled = 0;
++	} else if (!strcmp(action, "checkpoint")) {
++		/*
++		 * Actually perform the requested action
++		 */
++		printk("Performing locally initiated %s\n", action);
++		checkpoint_or_suspend_triggered();
++	} else {
++		printk("checkpoint_trigger_write(\"%s\"): unknown action\n", action);
++	}
 +
 +	return count;
 +}
@@ -97,7 +111,10 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +{
 +	int len;
 +
-+	len = sprintf(page, "prep, unprep, checkpoint, suspend\n");
++	if (shutdown_handler_disabled)
++		len = sprintf(page, "trigger: local\n");
++	else
++		len = sprintf(page, "trigger: external\n");
 +
 +	*eof = 1;
 +	return len;
@@ -106,7 +123,7 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
  static int setup_shutdown_watcher(struct notifier_block *notifier,
  				  unsigned long event,
  				  void *data)
-@@ -204,6 +281,14 @@
+@@ -204,6 +286,14 @@
  	else
  		xenbus_write(XBT_NIL, "control", "feature-sysrq", "1");
  
