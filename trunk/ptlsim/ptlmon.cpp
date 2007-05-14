@@ -1220,15 +1220,17 @@ struct XenController {
     rc = xc_domctl(xc, &dom0op);
 
     foreach (i, vcpu_count) {
-      if (bit(dom0op.u.contextswap.vcpumap, i)) {
-        // cerr << "ptlmon: Warning: cannot swap context for vcpu ", i, " (vcpu may not be up yet)", endl, flush;
-        clearbit(bootinfo->vcpu_ctx_initialized, i);
-      }
+      ctx[i].restorefrom(oldctx[i]);
+      ctx[i].restorefrom(oldext[i]);
     }
 
     foreach (i, vcpu_count) {
-      ctx[i].restorefrom(oldctx[i]);
-      ctx[i].restorefrom(oldext[i]);
+      if (bit(dom0op.u.contextswap.vcpumap, i)) {
+        // cerr << "ptlmon: Warning: cannot swap context for vcpu ", i, " (vcpu may not be up yet)", endl, flush;
+        clearbit(bootinfo->vcpu_ctx_initialized, i);
+        ctx[i].running = 0;
+        ctx[i].runstate.state = RUNSTATE_offline;
+      }
     }
 
     // Release PTLsim if it's waiting on the context

@@ -458,6 +458,8 @@ ostream& operator <<(ostream& os, const evtchn_status_t& status) {
 // into PTLsim,since all the timing critical work is done in
 // capture_initial_timestamps().
 //
+static bool first_time_calibration_after_boot = 1;
+
 void time_and_virq_resume() {
   logfile << "Calibrate initial time conversions:", endl;
 
@@ -471,12 +473,33 @@ void time_and_virq_resume() {
 
   W64 phys_tsc = rdtsc();
 
+  vcpu_time_info_t& localtimeinfo = shinfo.vcpu_info[0].time;
+
   foreach (i, contextcount) {
     Context& ctx = contextof(i);
     ctx.core_freq_hz = core_freq_hz;
 
     vcpu_time_info_t& timeinfo = sshinfo.vcpu_info[i].time;
     compute_time_scale(timeinfo.tsc_to_system_mul, timeinfo.tsc_shift, ctx.core_freq_hz);
+
+    if unlikely (first_time_calibration_after_boot) {
+      //
+      // In SMP configurations, some VCPUs (other than vcpu 0)
+      // may not be up and running when time_and_virq_resume()
+      // is called; this means tsc_timestamp and system_time 
+      // are uninitialized.
+      //
+      // We solve this by copying PTLsim's notion of these
+      // timestamps into the shadow shared info page. Since
+      // PTLsim always gets control before the domain's
+      // kernel ever sees these values, we can set them
+      // to whatever we want.
+      //
+      logfile << "Initialize VCPU ", i, " to PTLsim timestamps (tsc_timestamp ",
+        localtimeinfo.tsc_timestamp, ", system_time ", localtimeinfo.system_time, ")", endl;
+      timeinfo.tsc_timestamp = localtimeinfo.tsc_timestamp;
+      timeinfo.system_time = localtimeinfo.system_time;
+    }
 
     if (config.pseudo_real_time_clock) {
       timeinfo.tsc_timestamp = 0;
@@ -498,11 +521,14 @@ void time_and_virq_resume() {
     logfile << "  system_time (physical): ", intstring(shinfo.vcpu_info[0].time.system_time, 20), endl;
 
     RunstateInfo& runstate = ctx.runstate;
-    runstate.state = RUNSTATE_running;
     runstate.state_entry_time = (W64)ctx.base_system_time;
     setzero(runstate.time);
-    ctx.running = 1;
+    // Don't do this: some VCPUs may not yet be up
+    // runstate.state = RUNSTATE_running;
+    // ctx.running = 1;
   }
+
+  first_time_calibration_after_boot = 0;
 
   if (config.pseudo_real_time_clock) {
     initial_realtime_info.wc_sec = 0;
@@ -693,7 +719,7 @@ bool Context::change_runstate(int newstate) {
     // Change from running -> blocked
     // Block or yield requires a hypercall or HLT: those only work in kernel mode
     //
-    assert(newstate == RUNSTATE_blocked);
+    // assert(newstate == RUNSTATE_blocked);
     assert(kernel_mode);
     assert(use64);
 
@@ -951,7 +977,14 @@ W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
   return 0;
 }
 
+bool vcpu_online_map_changed = 0;
+
 W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool debug) {
+  int vcpuid = arg2;
+  if (arg2 >= contextcount) { return W64(-EINVAL); }
+
+  Context& vctx = contextof(vcpuid);
+
   switch (arg1) {
   case VCPUOP_register_runstate_memory_area: {
     //
@@ -964,17 +997,47 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     //
     vcpu_register_runstate_memory_area req;
     if (ctx.copy_from_user(&req, (Waddr)arg3, sizeof(req)) != sizeof(req)) { return W64(-EFAULT); }
-    if (arg2 >= contextcount) { return W64(-EINVAL); }
-    if (debug) logfile << "vcpu_op: register_runstate_memory_area: registered virt ", req.addr.v, " for runstate info on vcpu ", arg2, endl, flush;
+    if (debug) logfile << "vcpu_op: register_runstate_memory_area: registered virt ", req.addr.v, " for runstate info on vcpu ", vcpuid, endl, flush;
     // Since this is virtual, we need to check it every time we "reschedule" the VCPU:
-    contextof(arg2).user_runstate = (RunstateInfo*)req.addr.v;
-    
+    vctx.user_runstate = (RunstateInfo*)req.addr.v;
     return 0;
   }
   case VCPUOP_is_up: {
-    //++MTY SMP FIXME
-    return 1;
-    break;
+    return (vctx.runstate.state != RUNSTATE_offline);
+  }
+  case VCPUOP_initialise: {
+    if (debug) logfile << "vcpu_op: initialize vcpu ", vcpuid, ": xenctx @ ", (void*)arg3, endl;
+    vcpu_guest_context_t xenctx;
+    if (ctx.copy_from_user(&xenctx, (Waddr)arg3, sizeof(xenctx)) != sizeof(xenctx)) { return W64(-EFAULT); }
+    vctx.restorefrom(xenctx);
+    vctx.init(); // refill segment descriptor caches
+    vctx.running = 0; // not running until VCPUOP_up is called
+    if (debug) logfile << "VCPU ", vcpuid, " context at initialize is:", endl, vctx, endl;
+    return 0;
+  }
+  case VCPUOP_up: {
+    if (debug) logfile << "vcpu_op: bring up vcpu ", vcpuid, endl;
+    if (debug) logfile << "VCPU ", vcpuid, " context at bringup is:", endl, vctx, endl;
+    //
+    // The VCPU is coming up for the first time after booting or being
+    // taken offline by the user.
+    //
+    // Force the active core model to flush any cached (uninitialized)
+    // internal state (like register file copies) it might have, since
+    // it did not know anything about this VCPU prior to now: if it
+    // suddenly gets marked as running without this, the core model
+    // will try to execute from bogus state data.
+    //
+    vctx.dirty = 1;
+    vctx.change_runstate(RUNSTATE_running);
+    vcpu_online_map_changed = 1;
+    return 0;
+  }
+  case VCPUOP_down: {
+    if (debug) logfile << "vcpu_op: bring down vcpu ", vcpuid, endl;
+    vcpu_online_map_changed = 1;
+    vctx.change_runstate(RUNSTATE_offline);
+    return 0;
   }
   default:
     logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;

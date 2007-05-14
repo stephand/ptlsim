@@ -778,6 +778,7 @@ struct ContextBase {
   byte syscall_disables_events;
   byte saved_upcall_mask;
   byte running;
+  byte dirty; // VCPU was just brought online
 
   CR0 cr0;
   Waddr cr1, cr2, cr3;
@@ -987,7 +988,9 @@ enum {
 
 #define OPCLASS_FP                      (OPCLASS_FP_ALU | OPCLASS_FP_DIVSQRT | OPCLASS_FP_COMPARE | OPCLASS_FP_PERMUTE | OPCLASS_FP_CONVERTI2F | OPCLASS_FP_CONVERTF2I, OPCLASS_FP_CONVERTFP)
 
-#define OPCLASS_COUNT                   27
+#define OPCLASS_VEC_ALU                 (1 << 27)
+
+#define OPCLASS_COUNT                   28
 
 #define OPCLASS_USECOND                 (OPCLASS_COND_BRANCH|OPCLASS_SELECT|OPCLASS_CHECK)
 
@@ -1108,6 +1111,27 @@ enum {
   OP_cvtf_d2s_p,
   OP_cvtf_s2d_lo,
   OP_cvtf_s2d_hi,
+  // Vector integer uops
+  // size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (same as normal ops)
+  OP_addv,
+  OP_subv,
+  OP_addv_us,
+  OP_subv_us,
+  OP_addv_ss,
+  OP_subv_ss,
+  OP_shlv,
+  OP_shrv,
+  OP_btv, // bit test vector (e.g. pack bit 7 of 8 bytes into 8-bit output, for pmovmskb)
+  OP_sarv,
+  OP_avgv,
+  OP_cmpv,
+  OP_minv,
+  OP_maxv,
+  OP_minv_s,
+  OP_maxv_s,
+  OP_mullv,
+  OP_mulhv,
+  OP_mulhuv,
   OP_MAX_OPCODE,
 };
 

@@ -1316,7 +1316,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
     case CONSOLEIO_write: {
       if (debug) logfile << "console_io (write): write ", arg2, " bytes at ", (void*)(Waddr)arg3, endl, flush;
       logfile << "Console output (", arg2, " bytes):", endl, flush;
-      logfile.write((void*)arg3, arg2);
+      // logfile.write((void*)arg3, arg2); (page tables may not be set up yet)
       logfile << flush;
       rc = arg2;
       break;

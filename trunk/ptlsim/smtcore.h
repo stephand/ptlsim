@@ -243,6 +243,27 @@ namespace SMTModel {
     {OP_cvtf_d2s_p,     6, ANYFPU},
     {OP_cvtf_s2d_lo,    6, ANYFPU},
     {OP_cvtf_s2d_hi,    6, ANYFPU},
+    // Vector integer uops
+    // uop.size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (i.e. same as normal ALU uops)
+    {OP_addv,           1, ANYFPU},
+    {OP_subv,           1, ANYFPU},
+    {OP_addv_us,        1, ANYFPU},
+    {OP_subv_us,        1, ANYFPU},
+    {OP_addv_ss,        1, ANYFPU},
+    {OP_subv_ss,        1, ANYFPU},
+    {OP_shlv,           1, ANYFPU},
+    {OP_shrv,           1, ANYFPU},
+    {OP_btv,            1, ANYFPU},
+    {OP_sarv,           1, ANYFPU},
+    {OP_avgv,           1, ANYFPU},
+    {OP_cmpv,           1, ANYFPU},
+    {OP_minv,           1, ANYFPU},
+    {OP_maxv,           1, ANYFPU},
+    {OP_minv_s,         1, ANYFPU},
+    {OP_maxv_s,         1, ANYFPU},
+    {OP_mullv,          4, ANYFPU},
+    {OP_mulhv,          4, ANYFPU},
+    {OP_mulhuv,         4, ANYFPU},
   };
 
 #undef A

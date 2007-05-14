@@ -14,8 +14,8 @@
 #include <stats.h>
 
 // With these disabled, simulation is faster
-//#define ENABLE_CHECKS
-//#define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 #ifndef ENABLE_CHECKS
 #undef assert
@@ -764,7 +764,7 @@ struct SequentialCore {
     
     bool barrier = 0;
 
-    if (logable(5)) logfile << "Sequentially executing basic block ", bb->rip, " (", bb->count, " uops), insn limit ", insnlimit, endl, flush;
+    if (logable(5)) logfile << "[vcpu ", ctx.vcpuid, "] Sequentially executing basic block ", bb->rip, " (", bb->count, " uops), insn limit ", insnlimit, endl, flush;
 
     if unlikely (!bb->synthops) synth_uops_for_bb(*bb);
     bb->hitcount++;
@@ -1194,7 +1194,7 @@ struct SequentialMachine: public PTLsimMachine {
   // is hit (as configured elsewhere in config).
   //
   virtual int run(PTLsimConfig& config) {
-    logfile << "Starting sequential core toplevel loop at cycle ", sim_cycle, ", commits ", total_user_insns_committed, endl, flush;
+    logfile << "Starting sequential core toplevel loop at ", sim_cycle, " cycles and ", total_user_insns_committed, " commits", endl, flush;
 
     foreach (i, contextcount) {
       SequentialCore& core =* cores[i];
@@ -1202,18 +1202,13 @@ struct SequentialMachine: public PTLsimMachine {
 
       core.external_to_core_state(ctx);
 
-      if (logable(100)) {
-        logfile << "VCPU ", i, " initial state:", endl;
-        core.print_state(logfile);
-        logfile << endl;
-      }
+      logfile << "VCPU ", i, " initial state:", endl;
+      logfile << ctx, endl;
     }
 
 #ifdef PTLSIM_HYPERVISOR
-    if (logable(100)) {
-      logfile << "Shared info at start:", endl;
-      logfile << sshinfo;
-    }
+    logfile << "Shared info at start:", endl;
+    logfile << sshinfo;
 #endif
 
     bool exiting = false;
@@ -1229,6 +1224,11 @@ struct SequentialMachine: public PTLsimMachine {
         Context& ctx = contextof(i);
 
 #ifdef PTLSIM_HYPERVISOR
+        if unlikely (ctx.dirty) {
+          logfile << "VCPU ", ctx.vcpuid, " context was dirty: update core model internal state", endl;
+          core.external_to_core_state(ctx);
+          ctx.dirty = 0;
+        }
         if unlikely (ctx.check_events()) core.handle_interrupt();
         if unlikely (!ctx.running) continue;
 #endif
@@ -1252,7 +1252,7 @@ struct SequentialMachine: public PTLsimMachine {
 
       core.core_to_external_state(ctx);
 
-      if (logable(99)) {
+      if (logable(9)) {
         logfile << "Core State at end:", endl;
         logfile << ctx;
       }

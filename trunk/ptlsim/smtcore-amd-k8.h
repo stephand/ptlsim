@@ -241,6 +241,25 @@ namespace SMTModel {
     {OP_cvtf_d2s_p,     4, FCVT},
     {OP_cvtf_s2d_lo,    4, FCVT},
     {OP_cvtf_s2d_hi,    4, FCVT},
+    // Vector integer uops
+    // uop.size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (i.e. same as normal ALU uops)
+    {OP_addv,           1, FADD|FMUL},
+    {OP_subv,           1, FADD|FMUL},
+    {OP_addv_us,        1, FADD|FMUL},
+    {OP_subv_us,        1, FADD|FMUL},
+    {OP_addv_ss,        1, FADD|FMUL},
+    {OP_subv_ss,        1, FADD|FMUL},
+    {OP_shlv,           1, FMUL},
+    {OP_shrv,           1, FMUL},
+    {OP_btv,            1, FMUL},
+    {OP_sarv,           1, FMUL},
+    {OP_avgv,           1, FADD},
+    {OP_cmpv,           1, FADD|FMUL},
+    {OP_minv,           1, FADD|FMUL},
+    {OP_maxv,           1, FADD|FMUL},
+    {OP_mullv,          4, FMUL},
+    {OP_mulhv,          4, FMUL},
+    {OP_mulhuv,         4, FMUL},
   };
 
 #undef A

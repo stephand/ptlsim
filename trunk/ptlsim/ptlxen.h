@@ -436,6 +436,14 @@ static inline Context& contextof(int vcpu) {
 #define contextcount bootinfo.vcpu_count
 
 //
+// This flag is set whenever a new VCPU is added or removed
+// from the set of online VCPUs. It is used to force core
+// models to reconstruct their internal state for the new
+// VCPU. The ctx.dirty bit indicates which VCPUs changed.
+//
+extern bool vcpu_online_map_changed;
+
+//
 // Utility functions
 //
 W64s synchronous_host_call(const PTLsimHostCall& call, bool spin = false, bool ignorerc = false);

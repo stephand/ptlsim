@@ -17,7 +17,7 @@ extern void print_message(const char* text);
 const char* opclass_names[OPCLASS_COUNT] = {
   "logic", "addsub", "addsubc", "addshift", "sel", "cmp", "br.cc", "jmp", "bru", 
   "assist", "mf", "ld", "st", "ld.pre", "shiftsimple", "shift", "mul", "bitscan", "flags",  "chk", 
-  "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f",
+  "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f", "vec",
 };
 
 //
@@ -105,7 +105,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"ctz",            OPCLASS_BITSCAN,       opB  },
   {"clz",            OPCLASS_BITSCAN,       opB  },
   {"ctpop",          OPCLASS_BITSCAN,       opB  },  
-  {"permb",          OPCLASS_SHIFTROT,      opABC}, // from fpa port
+  {"permb",          OPCLASS_SHIFTROT,      opABC},
   // Floating point
   // uop.size bits have following meaning:
   // 00 = single precision, scalar (preserve high 32 bits of ra)
@@ -150,6 +150,27 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"cvtf.d2s.p",     OPCLASS_FP_CONVERTFP,  opAB }, // pair of doubles in <ra> (high), <rb> (low) to pair of singles in <rd> (for cvtpd2ps)
   {"cvtf.s2d.lo",    OPCLASS_FP_CONVERTFP,  opB  }, // low single in <rb> to double in <rd> (for cvtps2pd, part 1, cvtss2sd)
   {"cvtf.s2d.hi",    OPCLASS_FP_CONVERTFP,  opB  }, // high single in <rb> to double in <rd> (for cvtps2pd, part 2)
+  // Vector integer uops
+  // uop.size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (i.e. same as normal ALU uops)
+  {"addv",           OPCLASS_VEC_ALU,       opAB }, // vector add with wraparound
+  {"subv",           OPCLASS_VEC_ALU,       opAB }, // vector sub with wraparound
+  {"addv.us",        OPCLASS_VEC_ALU,       opAB }, // vector add with unsigned saturation
+  {"subv.us",        OPCLASS_VEC_ALU,       opAB }, // vector sub with unsigned saturation
+  {"addv.ss",        OPCLASS_VEC_ALU,       opAB }, // vector add with signed saturation
+  {"subv.ss",        OPCLASS_VEC_ALU,       opAB }, // vector sub with signed saturation
+  {"shlv",           OPCLASS_VEC_ALU,       opAB }, // vector shift left
+  {"shrv",           OPCLASS_VEC_ALU,       opAB }, // vector shift right
+  {"btv",            OPCLASS_VEC_ALU,       opAB }, // vector bit test (pack bit <rb> of each element in <ra> into low N bits of output)
+  {"sarv",           OPCLASS_VEC_ALU,       opAB }, // vector shift right arithmetic (sign extend)
+  {"avgv",           OPCLASS_VEC_ALU,       opAB }, // vector average ((<ra> + <rb> + 1) >> 1)
+  {"cmpv",           OPCLASS_VEC_ALU,       opAB }, // vector compare (uop.cond specifies compare type; result is all 1's for true, or all 0's for false in each element)
+  {"minv",           OPCLASS_VEC_ALU,       opAB }, // vector minimum
+  {"maxv",           OPCLASS_VEC_ALU,       opAB }, // vector maximum
+  {"minv.s",         OPCLASS_VEC_ALU,       opAB }, // vector signed minimum
+  {"maxv.s",         OPCLASS_VEC_ALU,       opAB }, // vector signed maximum
+  {"mullv",          OPCLASS_VEC_ALU,       opAB }, // multiply and keep low bits
+  {"mulhv",          OPCLASS_VEC_ALU,       opAB }, // multiply and keep high bits
+  {"mulhuv",         OPCLASS_VEC_ALU,       opAB }, // multiply and keep high bits (unsigned)
 };
 
 const char* exception_names[EXCEPTION_COUNT] = {
@@ -702,6 +723,7 @@ ostream& operator <<(ostream& os, const Context& ctx) {
 #ifdef PTLSIM_HYPERVISOR
   os << "  Flags:", endl;
   os << "    Running?   ", ((ctx.running) ? "running" : "blocked"), endl;
+  if unlikely (ctx.dirty) os << "    Context is dirty: refresh any internal state cached by active core model", endl;
   os << "    Mode:      ", ((ctx.kernel_mode) ? "kernel" : "user"), ((ctx.kernel_in_syscall) ? " (in syscall)" : ""), endl;
   os << "    32/64:     ", ((ctx.use64) ? "64-bit x86-64" : "32-bit x86"), endl;
   os << "    x87 state: ", ((ctx.i387_valid) ? "valid" : "invalid"), endl;

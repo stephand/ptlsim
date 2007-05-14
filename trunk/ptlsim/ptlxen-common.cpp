@@ -74,6 +74,9 @@ void Context::restorefrom(const vcpu_guest_context& ctx) {
   dr6 = ctx.debugreg[6];
   dr7 = ctx.debugreg[7];
 
+  kernel_ptbase_mfn = (cr3 >> 12);
+  user_ptbase_mfn = 0;
+
   saved_upcall_mask = ctx.user_regs.saved_upcall_mask;
   event_callback_rip = ctx.event_callback_eip;
   failsafe_callback_rip = ctx.failsafe_callback_eip;
@@ -101,6 +104,7 @@ void Context::restorefrom(const vcpu_guest_context& ctx) {
   foreach (i, NR_VIRQS) virq_to_port[i] = -1;
 
   running = 1;
+  dirty = 1;
 }
 
 void Context::restorefrom(const vcpu_extended_context& ctx) {
