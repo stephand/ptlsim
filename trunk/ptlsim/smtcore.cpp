@@ -98,6 +98,7 @@ void ThreadContext::reset() {
   current_basic_block_transop_index = -1;
   stall_frontend = false;
   waiting_for_icache_fill = false;
+  waiting_for_icache_fill_physaddr = 0;
   fetch_uuid = 0;
   current_icache_block = 0;
   loads_in_flight = 0;
@@ -354,8 +355,8 @@ bool SMTCore::runcycle() {
     }
   }
 
-  assert (total_issueq_count == issueq_all.count);
-  assert((ISSUE_QUEUE_SIZE - issueq_all.count) == (issueq_all.shared_entries + total_issueq_reserved_free));
+  // assert (total_issueq_count == issueq_all.count);
+  // assert((ISSUE_QUEUE_SIZE - issueq_all.count) == (issueq_all.shared_entries + total_issueq_reserved_free));
 #endif
 
   foreach (i, threadcount) threads[i]->loads_in_this_cycle = 0;
@@ -385,9 +386,11 @@ bool SMTCore::runcycle() {
   // This may use up load ports, so do it before other
   // loads can issue 
   //
+#ifdef PTLSIM_HYPERVISOR
   foreach (i, threadcount) {
     threads[i]->tlbwalk();
   }
+#endif
 
   //
   // Issue whatever is ready
@@ -473,6 +476,8 @@ bool SMTCore::runcycle() {
   // Flush event log ring buffer
   //
   if unlikely (config.event_log_enabled) {
+    // logfile << "[cycle ", sim_cycle, "] Miss buffer contents:", endl;
+    // logfile << caches.missbuf;
     if unlikely (config.flush_event_log_every_cycle) {
       eventlog.flush(true);
     }
@@ -1164,6 +1169,9 @@ ostream& EventLog::print(ostream& os, bool only_to_tail) {
 
   W64 cycle = limits<W64>::max;
   size_t bufsize = end - start;
+
+  if (!config.flush_event_log_every_cycle) os << "#-------- Start of event log --------", endl;
+
   foreach (i, (only_to_tail ? (tail - start) : bufsize)) {
     if unlikely (p >= end) p = start;
     if unlikely (p < start) p = end-1;
@@ -1180,6 +1188,8 @@ ostream& EventLog::print(ostream& os, bool only_to_tail) {
     p->print(os);
     p++;
   }
+
+  if (!config.flush_event_log_every_cycle) os << "#-------- End of event log --------", endl;
 
   return os;
 }
@@ -1710,6 +1720,11 @@ int SMTMachine::run(PTLsimConfig& config) {
   // All VCPUs are running:
   stopped = 0;
 
+  if unlikely (iterations >= config.start_log_at_iteration) {
+    if unlikely (!logenable) logfile << "Start logging at level ", config.loglevel, " in cycle ", iterations, endl, flush;
+    logenable = 1;
+  }
+
   cores[0]->reset();
   cores[0]->flush_pipeline_all();
 
@@ -1733,9 +1748,11 @@ int SMTMachine::run(PTLsimConfig& config) {
     inject_events();
 
     SMTCore& core =* cores[0]; // only one core for now
+    int running_thread_count = 0;
     foreach (i, core.threadcount) {
       ThreadContext* thread = core.threads[i];
 #ifdef PTLSIM_HYPERVISOR
+      running_thread_count += thread->ctx.running;
       if unlikely (!thread->ctx.running) {
         if unlikely (stopping) {
           // Thread is already waiting for an event: stop it now
@@ -1768,6 +1785,7 @@ int SMTMachine::run(PTLsimConfig& config) {
     stats.summary.cycles++;
     stats.smtcore.cycles++;
     sim_cycle++;
+    unhalted_cycle_count += (running_thread_count > 0);
     iterations++;
 
     if unlikely (stopping) {

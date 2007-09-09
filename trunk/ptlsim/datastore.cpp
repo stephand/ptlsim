@@ -593,6 +593,11 @@ ostream& DataStoreNode::print(ostream& os, const DataStoreNodePrintSettings& pri
     return os;
   }
 
+  if ((!selfsum) && printinfo.hide_zero_branches) {
+    os << " { (zero) }", endl;
+    return os;
+  }
+
   if (subnodes && (!hide_subnodes)) {
     bool isint = ((selfsum - math::floor(selfsum)) < 0.0001);
     if (summable) {

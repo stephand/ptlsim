@@ -35,7 +35,7 @@ extern const char* seqexec_result_names[SEQEXEC_RESULT_COUNT];
 //
 // Execute N basic blocks and capture state (but do not commit)
 //
-static const int MAX_STORES_IN_COMMIT_RECORD = 256;
+static const int MAX_STORES_IN_COMMIT_RECORD = 4096;
 
 struct CommitRecord: public Context {
   int exit_reason;
@@ -44,9 +44,9 @@ struct CommitRecord: public Context {
   SFR stores[MAX_STORES_IN_COMMIT_RECORD];
 
   int pte_update_count;
-  PTEUpdate pte_update_list[MAX_STORES_IN_COMMIT_RECORD];
-  Waddr pte_update_virt[MAX_STORES_IN_COMMIT_RECORD];
-
+  // PTEUpdate pte_update_list[MAX_STORES_IN_COMMIT_RECORD];
+  // Waddr pte_update_virt[MAX_STORES_IN_COMMIT_RECORD];
+  
   void reset() {
     store_count = 0;
     pte_update_count = 0;

@@ -298,7 +298,7 @@ void assist_x87_finit(Context& ctx) {
 //
 // #include <ptlhwdef.h>
 //
-// void gen_cmpccf_to_fcom_flags() {
+// void gen_fcmpcc_to_fcom_flags() {
 //
 //   foreach (v, 128) {
 //      bool zf = bit(v, log2(FLAG_ZF));
@@ -319,7 +319,7 @@ void assist_x87_finit(Context& ctx) {
 //    }
 //
 
-static const byte translate_cmpccf_to_x87[128] = {
+static const byte translate_fcmpcc_to_x87[128] = {
   0,  1,  0,  1,  4,  5,  4,  5,  0,  1,  0,  1,  4,  5,  4,  5,
   0,  1,  0,  1,  4,  5,  4,  5,  0,  1,  0,  1,  4,  5,  4,  5,
   0,  1,  0,  1,  4,  5,  4,  5,  0,  1,  0,  1,  4,  5,  4,  5,
@@ -403,12 +403,12 @@ bool TraceDecoder::decode_x87() {
       x87_load_stack(REG_temp1, REG_temp2);
     } else {
       operand_load(REG_temp1, ra, OP_ldx, (d8form) ? DATATYPE_DOUBLE : DATATYPE_INT);
-      if (d8form) this << TransOp(OP_cvtf_s2d_lo, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
-      if (deform) this << TransOp(OP_cvtf_q2d, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
+      if (d8form) this << TransOp(OP_fcvt_s2d_lo, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
+      if (deform) this << TransOp(OP_fcvt_q2d, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
     }
     // fadd fmul fcom fcomp fsub fsubr fdiv fdivr
 
-    static const int x87_translate_opcode[8] = {OP_addf, OP_mulf, OP_cmpccf, OP_cmpccf, OP_subf, OP_subf, OP_divf, OP_divf};
+    static const int x87_translate_opcode[8] = {OP_fadd, OP_fmul, OP_fcmpcc, OP_fcmpcc, OP_fsub, OP_fsub, OP_fdiv, OP_fdiv};
     // the "r" variants have ra and rb flipped:
     static const int x87_d8da_translate_ra[8] = {REG_temp0, REG_temp0, REG_temp0, REG_temp0,  REG_temp0, REG_temp1, REG_temp0, REG_temp1};
     static const int x87_d8da_translate_rb[8] = {REG_temp1, REG_temp1, REG_temp1, REG_temp1,  REG_temp1, REG_temp0, REG_temp1, REG_temp0};
@@ -421,8 +421,8 @@ bool TraceDecoder::decode_x87() {
     int rb = ((dcform|deform) & (!memform)) ? x87_dcde_translate_rb[x87op] : x87_d8da_translate_rb[x87op];
     TransOp uop(translated_opcode, REG_temp0, ra, rb, REG_zero, 2); uop.datatype = DATATYPE_DOUBLE; this << uop;
 
-    if (translated_opcode == OP_cmpccf) {
-      TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_cmpccf_to_x87); ldpxlate.internal = 1; this << ldpxlate;
+    if (translated_opcode == OP_fcmpcc) {
+      TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_fcmpcc_to_x87); ldpxlate.internal = 1; this << ldpxlate;
       this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-8), 3, (64-8)));
       this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-14), 1, (64-11)));
       // FCOMP requires pop from stack
@@ -450,8 +450,8 @@ bool TraceDecoder::decode_x87() {
     x87_load_stack(REG_temp0, REG_fptos);
     this << TransOp(OP_addm, REG_temp2, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
     x87_load_stack(REG_temp1, REG_temp2);
-    this << TransOp(OP_cmpccf, REG_temp0, REG_temp0, REG_temp1, REG_zero, 2);
-    TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_cmpccf_to_x87); ldpxlate.internal = 1; this << ldpxlate;
+    this << TransOp(OP_fcmpcc, REG_temp0, REG_temp0, REG_temp1, REG_zero, 2);
+    TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_fcmpcc_to_x87); ldpxlate.internal = 1; this << ldpxlate;
     this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-8), 3, (64-8)));
     this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-14), 1, (64-11)));
     // FCOMP requires pop from stack
@@ -479,7 +479,7 @@ bool TraceDecoder::decode_x87() {
       DECODE(eform, ra, d_mode);
       EndOfDecode();
       operand_load(REG_temp0, ra, OP_ld, DATATYPE_FLOAT);
-      this << TransOp(OP_cvtf_s2d_lo, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
+      this << TransOp(OP_fcvt_s2d_lo, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
       this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
       x87_store_stack(REG_fptos, REG_temp0);
     }
@@ -527,7 +527,7 @@ bool TraceDecoder::decode_x87() {
       DECODE(eform, rd, q_mode);
       EndOfDecode();
       x87_load_stack(REG_temp0, REG_fptos);
-      this << TransOp(OP_cvtf_d2q, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x651) ? 3 : 2);
+      this << TransOp(OP_fcvt_d2q, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x651) ? 3 : 2);
       result_store(REG_temp0, REG_temp1, rd, DATATYPE_DOUBLE);
       x87_pop_stack();
     }
@@ -549,7 +549,7 @@ bool TraceDecoder::decode_x87() {
       DECODE(eform, rd, d_mode);
       EndOfDecode();
       x87_load_stack(REG_temp0, REG_fptos);
-      this << TransOp(OP_cvtf_d2s_ins, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
+      this << TransOp(OP_fcvt_d2s_ins, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
       result_store(REG_temp0, REG_temp1, rd, DATATYPE_FLOAT);
 
       if (bit(op, 0)) {
@@ -661,7 +661,7 @@ bool TraceDecoder::decode_x87() {
       if (x87op == 2) {
         // sqrt can be inlined
         x87_load_stack(REG_temp0, REG_fptos);
-        this << TransOp(OP_sqrtf, REG_temp0, REG_temp0, REG_temp0, REG_zero, 2);
+        this << TransOp(OP_fsqrt, REG_temp0, REG_temp0, REG_temp0, REG_zero, 2);
         x87_store_stack(REG_fptos, REG_temp0);
       } else {
         static const int x87op_to_assist_idx[8] = {
@@ -698,7 +698,7 @@ bool TraceDecoder::decode_x87() {
       DECODE(eform, ra, w_mode);
       EndOfDecode();
       operand_load(REG_temp0, ra, OP_ldx, 1);
-      this << TransOp(OP_cvtf_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
+      this << TransOp(OP_fcvt_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
       this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
       x87_store_stack(REG_fptos, REG_temp0);
     }
@@ -709,7 +709,7 @@ bool TraceDecoder::decode_x87() {
     DECODE(eform, rd, w_mode);
     EndOfDecode();
     x87_load_stack(REG_temp0, REG_fptos);
-    this << TransOp(OP_cvtf_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x671) ? 1 : 0);
+    this << TransOp(OP_fcvt_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x671) ? 1 : 0);
     result_store(REG_temp0, REG_temp1, rd);
 
     int x87op = modrm.rm;
@@ -738,8 +738,8 @@ bool TraceDecoder::decode_x87() {
     }
     case 4: { // ftst: compare st(0) to 0.0
       x87_load_stack(REG_temp0, REG_fptos);
-      this << TransOp(OP_cmpccf, REG_temp0, REG_temp0, REG_zero, REG_zero, 2);
-      TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_cmpccf_to_x87); ldpxlate.internal = 1; this << ldpxlate;
+      this << TransOp(OP_fcmpcc, REG_temp0, REG_temp0, REG_zero, REG_zero, 2);
+      TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_fcmpcc_to_x87); ldpxlate.internal = 1; this << ldpxlate;
       this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-8), 3, (64-8)));
       this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-14), 1, (64-11)));
       break;
@@ -770,8 +770,8 @@ bool TraceDecoder::decode_x87() {
 
         this << TransOp(OP_addm, REG_temp2, REG_fptos, REG_imm, REG_imm, 3, 8*modrm.rm, FP_STACK_MASK);
         x87_load_stack(REG_temp1, REG_temp2);
-        this << TransOp(OP_cmpccf, REG_temp0, REG_temp0, REG_temp1, REG_zero, 2);
-        TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_cmpccf_to_x87); ldpxlate.internal = 1; this << ldpxlate;
+        this << TransOp(OP_fcmpcc, REG_temp0, REG_temp0, REG_temp1, REG_zero, 2);
+        TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_fcmpcc_to_x87); ldpxlate.internal = 1; this << ldpxlate;
         this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-8), 3, (64-8)));
         this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-14), 1, (64-11)));
         // FUCOMPP requires pop from stack twice
@@ -819,9 +819,9 @@ bool TraceDecoder::decode_x87() {
       // st(0) = st(0) OP mem32int
       x87_load_stack(REG_temp0, REG_fptos);
       operand_load(REG_temp1, ra, OP_ldx);
-      this << TransOp(OP_cvtf_q2d, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
+      this << TransOp(OP_fcvt_q2d, REG_temp1, REG_zero, REG_temp1, REG_zero, 2);
 
-      static const int x87_translate_opcode[8] = {OP_addf, OP_mulf, OP_cmpccf, OP_cmpccf, OP_subf, OP_subf, OP_divf, OP_divf};
+      static const int x87_translate_opcode[8] = {OP_fadd, OP_fmul, OP_fcmpcc, OP_fcmpcc, OP_fsub, OP_fsub, OP_fdiv, OP_fdiv};
       static const int x87_d8da_translate_ra[8] = {REG_temp0, REG_temp0, REG_temp0, REG_temp0,  REG_temp0, REG_temp1, REG_temp0, REG_temp1};
       static const int x87_d8da_translate_rb[8] = {REG_temp1, REG_temp1, REG_temp1, REG_temp1,  REG_temp1, REG_temp0, REG_temp1, REG_temp0};
       // fadd fmul fcom fcomp fsub fsubr fdiv fdivr
@@ -829,8 +829,8 @@ bool TraceDecoder::decode_x87() {
       int translated_opcode = x87_translate_opcode[x87op];
       this << TransOp(translated_opcode, REG_temp0, x87_d8da_translate_ra[x87op], x87_d8da_translate_rb[x87op], REG_zero, 2);
 
-      if (translated_opcode == OP_cmpccf) {
-        TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_cmpccf_to_x87); ldpxlate.internal = 1; this << ldpxlate;
+      if (translated_opcode == OP_fcmpcc) {
+        TransOp ldpxlate(OP_ld, REG_temp0, REG_temp0, REG_imm, REG_zero, 0, (Waddr)&translate_fcmpcc_to_x87); ldpxlate.internal = 1; this << ldpxlate;
         this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-8), 3, (64-8)));
         this << TransOp(OP_mask, REG_fpsw, REG_fpsw, REG_temp0, REG_imm, 3, 0, MaskControlInfo((64-14), 1, (64-11)));
         // FCOMP requires pop from stack
@@ -894,7 +894,7 @@ bool TraceDecoder::decode_x87() {
       switch (x87op) {
       case 0: { // fild mem32
         operand_load(REG_temp0, rd, OP_ldx, 1);
-        this << TransOp(OP_cvtf_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
+        this << TransOp(OP_fcvt_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
         this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         x87_store_stack(REG_fptos, REG_temp0);
         break;
@@ -903,7 +903,7 @@ bool TraceDecoder::decode_x87() {
       case 2:   // fist w32
       case 3: { // fistp w32
         x87_load_stack(REG_temp0, REG_fptos);
-        this << TransOp(OP_cvtf_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1));
+        this << TransOp(OP_fcvt_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1));
         result_store(REG_temp0, REG_temp1, rd);
 
         if ((x87op == 1) | (x87op == 3)) {
@@ -943,7 +943,7 @@ bool TraceDecoder::decode_x87() {
       if (op == 0x637) MakeInvalid();
       EndOfDecode();
       //
-      // For cmpccf, uop.size bits have following meaning:
+      // For fcmpcc, uop.size bits have following meaning:
       // 00 = single precision ordered compare
       // 01 = single precision unordered compare
       // 10 = double precision ordered compare
@@ -959,7 +959,7 @@ bool TraceDecoder::decode_x87() {
       // is fucomi/fcomi/fucomip/fcomip:
       //
       bool unordered = bit(op, 0);
-      this << TransOp(OP_cmpccf, REG_temp0, REG_temp0, REG_temp1, REG_zero, (unordered ? 3 : 2), 0, 0, FLAGS_DEFAULT_ALU);
+      this << TransOp(OP_fcmpcc, REG_temp0, REG_temp0, REG_temp1, REG_zero, (unordered ? 3 : 2), 0, 0, FLAGS_DEFAULT_ALU);
 
       if ((op >> 4) == 0x67) {
         x87_pop_stack();
@@ -975,7 +975,7 @@ bool TraceDecoder::decode_x87() {
         DECODE(eform, ra, q_mode);
         EndOfDecode();
         operand_load(REG_temp0, ra, OP_ld);
-        this << TransOp(OP_cvtf_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
+        this << TransOp(OP_fcvt_q2d, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
         this << TransOp(OP_subm, REG_fptos, REG_fptos, REG_imm, REG_imm, 3, 8, FP_STACK_MASK); // push stack
         x87_store_stack(REG_fptos, REG_temp0);
       } else if ((op == 0x635) | (op == 0x637)) {
@@ -983,14 +983,7 @@ bool TraceDecoder::decode_x87() {
         DECODE(eform, ra, q_mode);
         EndOfDecode();
 
-        // Get effective address into sr2
-        int basereg = arch_pseudo_reg_to_arch_reg[ra.mem.basereg];
-        int indexreg = arch_pseudo_reg_to_arch_reg[ra.mem.indexreg];
-        basereg = bias_by_segreg(basereg);
-        TransOp addop(OP_adda, REG_ar1, basereg, REG_imm, indexreg, (use64) ? 3 : 2, ra.mem.offset);
-        addop.extshift = ra.mem.scale;
-        this << addop;
-
+        address_generate_and_load_or_store(REG_ar1, REG_zero, ra, OP_add, 0, 0, true);
         microcode_assist((op == 0x635) ? ASSIST_X87_FLD80 : ASSIST_X87_FSTP80, ripstart, rip);
         end_of_block = 1;
         break;

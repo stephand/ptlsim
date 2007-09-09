@@ -149,6 +149,10 @@ void Context::saveto(vcpu_guest_context& ctx) {
   ctx.user_regs.error_code = error_code;
 
   ctx.flags = 0;
+#ifdef VGCF_online
+  // Newer hypervisor versions require this:
+  ctx.flags |= VGCF_online;
+#endif
   if (kernel_mode) ctx.flags |= VGCF_IN_KERNEL;
   if (kernel_in_syscall) ctx.flags |= VGCF_IN_SYSCALL;
   if (i387_valid) ctx.flags |= VGCF_I387_VALID;

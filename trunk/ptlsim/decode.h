@@ -190,6 +190,7 @@ struct TraceDecoder {
   bool split_invalid_basic_blocks;
   bool no_partial_flag_updates_per_insn;
   bool fast_length_decode_only;
+  W64 stop_at_rip;
 
   TraceDecoder(const RIPVirtPhys& rvp);
   TraceDecoder(Context& ctx, Waddr rip);
@@ -231,7 +232,7 @@ struct TraceDecoder {
 
   bool translate();
   void put(const TransOp& transop);
-  void flush();
+  bool flush();
   void split(bool after);
   void split_before() { split(0); }
   void split_after() { split(1); }

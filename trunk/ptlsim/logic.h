@@ -158,7 +158,7 @@ struct FixedQueue: public array<T, SIZE> {
   }
 
   void annul(T& entry) {
-    assert(entry.index() == add_index_modulo(tail, -1, SIZE));
+    // assert(entry.index() == add_index_modulo(tail, -1, SIZE));
     count--;
     tail = add_index_modulo(tail, -1, SIZE);
   }
@@ -214,14 +214,21 @@ struct FixedQueue: public array<T, SIZE> {
     return &(*this)[t];
   }
 
-  void print(ostream& os) const {
-    int i;
-
-    foreach_forward(*this, i) {
-      os << (*this)[i];
+  ostream& print(ostream& os) const {
+    os << "Queue<", SIZE, "]: head ", head, " to tail ", tail, " (", count, " entries):", endl;
+    foreach_forward((*this), i) {
+      const T& entry = (*this)[i];
+      os << "  slot ", intstring(i, 3), ": ", entry, endl;
     }
+    
+    return os;
   }
 };
+
+template <class T, int SIZE>
+ostream& operator <<(ostream& os, FixedQueue<T, SIZE>& queue) {
+  return queue.print(os);
+}
 
 template <class T, int SIZE>
 struct Queue: public FixedQueue<T, SIZE> {
@@ -1274,7 +1281,7 @@ struct LockableCommitRollbackAssociativeArray {
   // traversing a clear list.
   //
   ClearList clearlist[64];
-  ClearList* cleartail;
+  int cleartail;
   bool clearlist_exceeded;
 
   LockableCommitRollbackAssociativeArray() {
@@ -1285,7 +1292,7 @@ struct LockableCommitRollbackAssociativeArray {
     foreach (set, setcount) {
       sets[set].reset();
     }
-    cleartail = clearlist;
+    cleartail = 0;
     clearlist_exceeded = 0;
   }
 
@@ -1320,7 +1327,7 @@ struct LockableCommitRollbackAssociativeArray {
     if likely (firstlock) {
       int set = setof(addr);
       int way = sets[set].wayof(line);
-      if unlikely ((cleartail - clearlist) >= lengthof(clearlist)) {
+      if unlikely (cleartail >= lengthof(clearlist)) {
         //
         // Too many lines are locked to keep track of: this can
         // happen if some lines are intentionally invalidated
@@ -1331,9 +1338,9 @@ struct LockableCommitRollbackAssociativeArray {
         //
         clearlist_exceeded = 1;
       } else {
-        cleartail->set = set;
-        cleartail->way = way;
-        cleartail++;
+        ClearList& c = clearlist[cleartail++];
+        c.set = set;
+        c.way = way;
       }
     }
     return line;
@@ -1353,19 +1360,18 @@ struct LockableCommitRollbackAssociativeArray {
         foreach (wayid, waycount) set.invalidate_way(wayid);
       }
     } else {
-      ClearList* p = clearlist;
-      while (p < cleartail) {
+      foreach (i, cleartail) {
+        ClearList& c = clearlist[i];
 #if 0
-        assert(p->set < setcount);
-        assert(p->way < waycount);
+        assert(c.set < setcount);
+        assert(c.way < waycount);
 #endif
-        Set& set = sets[p->set];
-        V& line = set[p->way];
+        Set& set = sets[c.set];
+        V& line = set[c.way];
         set.invalidate_line(&line);
-        p++;
       }
     }
-    cleartail = clearlist;
+    cleartail = 0;
     clearlist_exceeded = 0;
 #if 0
     foreach (s, setcount) {
@@ -1388,19 +1394,18 @@ struct LockableCommitRollbackAssociativeArray {
         foreach (wayid, waycount) set.unlock_way(wayid);
       }
     } else {
-      ClearList* p = clearlist;
-      while (p < cleartail) {
+      foreach (i, cleartail) {
+        ClearList& c = clearlist[i];
 #if 0
-        assert(p->set < setcount);
-        assert(p->way < waycount);
+        assert(c.set < setcount);
+        assert(c.way < waycount);
 #endif
-        Set& set = sets[p->set];
-        V& line = set[p->way];
+        Set& set = sets[c.set];
+        V& line = set[c.way];
         set.unlock_line(&line);
-        p++;
       }
     }
-    cleartail = clearlist;
+    cleartail = 0;
     clearlist_exceeded = 0;
   }
 

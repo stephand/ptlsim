@@ -93,7 +93,7 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
 #endif
     if (base_t::full()) {
       if (logable(5)) logfile << "  Return address stack overflow: removing oldest entry to make space", endl;
-      stats.ooocore.branchpred.ras.overflows++;
+      stats.smtcore.branchpred.ras.overflows++;
       base_t::pophead();
     }
 
@@ -108,7 +108,7 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
     e.uuid = uuid;
     e.rip = rip;
 
-    stats.ooocore.branchpred.ras.pushes++;
+    stats.smtcore.branchpred.ras.pushes++;
 #ifdef DEBUG_RAS
     if (logable(5)) { logfile << *this; }
 #endif
@@ -119,7 +119,7 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
     if (logable(5)) logfile << "ReturnAddressStack::pop():", endl;
 #endif
     if (base_t::empty()) {
-      stats.ooocore.branchpred.ras.underflows++;
+      stats.smtcore.branchpred.ras.underflows++;
       if (logable(5)) logfile << "  Return address stack underflow: returning entry with zero fields", endl;
       old.idx = -1;
       old.uuid = 0;
@@ -134,7 +134,7 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
     if (logable(5)) { logfile << "  Old entry: ", old, endl; logfile << *this; }
 #endif
 
-    stats.ooocore.branchpred.ras.pops++;
+    stats.smtcore.branchpred.ras.pops++;
 
     return e;
   }
@@ -181,7 +181,7 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
     assert(e.index() == base_t::tail);
 #endif
 
-    stats.ooocore.branchpred.ras.annuls++;
+    stats.smtcore.branchpred.ras.annuls++;
   }
 
   //
@@ -205,7 +205,7 @@ struct ReturnAddressStack: public Queue<ReturnAddressStackEntry, SIZE> {
     assert(old.index() == base_t::tail);
 #endif
     push(old.uuid, old.rip, dummy);
-    stats.ooocore.branchpred.ras.annuls++;
+    stats.smtcore.branchpred.ras.annuls++;
   }
 };
 

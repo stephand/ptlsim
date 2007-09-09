@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Decoder for x86 and x86-64 to PTL transops
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2007 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -448,6 +448,7 @@ void TraceDecoder::reset() {
   fast_length_decode_only = 0;
   join_with_prev_insn = 0;
   outcome = DECODE_OUTCOME_OK;
+  stop_at_rip = limits<W64>::max;
 }
 
 TraceDecoder::TraceDecoder(const RIPVirtPhys& rvp) {
@@ -504,9 +505,31 @@ void TraceDecoder::put(const TransOp& transop) {
     last_flags_update_was_atomic = (transop.setflags == 0x7);
 }
 
-void TraceDecoder::flush() {
+bool TraceDecoder::flush() {
   if unlikely (!transbufcount) {
-    return;
+    return true;
+  }
+
+  //
+  // Can we fit all the uops in this x86 insn?
+  //
+  // If not, remove the pending uops and split
+  // the BB with an uncond branch.
+  //
+  // We reserve 2 uops for the splitting branch
+  // and a possible collcc if needed.
+  //
+  bool overflow = (transbufcount >= ((MAX_BB_UOPS-2) - bb.count));
+
+  if unlikely (overflow) {
+    if (logable(5)) {
+      logfile << "Basic block overflowed (too many uops) during decode of ", bb.rip, " (ripstart ", (void*)ripstart,
+        "): req ", transbufcount, " uops but only have ", ((MAX_BB_UOPS-2) - bb.count), " free", endl;
+    }
+    assert(!first_insn_in_bb());
+    transbufcount = 0;
+    // This will set join_with_prev_insn and fill in the (collcc, bru) ops
+    split_before();
   }
 
   if unlikely (join_with_prev_insn) {
@@ -561,7 +584,8 @@ void TraceDecoder::flush() {
   foreach (i, transbufcount) {
     TransOp& transop = transbuf[i];
     if unlikely (bb.count >= MAX_BB_UOPS) {
-      logfile << "ERROR: Too many transops (", bb.count, ") in basic block (max ", MAX_BB_UOPS, " allowed)", endl;
+      logfile << "ERROR: Too many transops (", bb.count, ") in basic block ", bb.rip, " (current RIP: ", (void*)ripstart, ") (max ", MAX_BB_UOPS, " allowed)", endl;
+      logfile << bb;
       assert(bb.count < MAX_BB_UOPS);
     }
 
@@ -616,6 +640,8 @@ void TraceDecoder::flush() {
   }
 
   transbufcount = 0;
+
+  return (!overflow);
 }
 
 ostream& DecodedOperand::print(ostream& os) const {
@@ -1309,6 +1335,7 @@ void print_invalid_insns(int op, const byte* ripstart, const byte* rip, int vali
       "page fault error code: ", pfec, endl, flush;
   } else {
     if (logable(4)) logfile << "translate: invalid opcode at iteration ", iterations, ": ", (void*)(Waddr)op, " commits ", total_user_insns_committed, " (at ripstart ", ripstart, ", rip ", rip, "); may be speculative", endl, flush;
+#if 0
     if (!config.dumpcode_filename.empty()) {
       byte insnbuf[256];
       PageFaultErrorCode copypfec;
@@ -1317,6 +1344,7 @@ void print_invalid_insns(int op, const byte* ripstart, const byte* rip, int vali
       os.write(insnbuf, sizeof(insnbuf));
       os.close();
     }
+#endif
   }
 }
 
@@ -1655,6 +1683,7 @@ bool TraceDecoder::invalidate() {
     // The instruction-specific decoder may have already set the outcome type
     if (outcome == DECODE_OUTCOME_OK) outcome = DECODE_OUTCOME_INVALID_OPCODE;
 
+    logfile << "Invalid opcode at ", (void*)ripstart, ": split_invalid_basic_blocks ", split_invalid_basic_blocks, ", first_insn_in_bb? ", first_insn_in_bb(), endl;
     print_invalid_insns(op, (const byte*)ripstart, (const byte*)rip, valid_byte_count, 0, faultaddr);
 
     if likely (split_invalid_basic_blocks && (!first_insn_in_bb())) {
@@ -1664,6 +1693,8 @@ bool TraceDecoder::invalidate() {
       // Outside code is responsible for dispatching exceptions.
       //
       invalid = 0;
+      bb.invalidblock = 0;
+      outcome = DECODE_OUTCOME_OK;
       rip = ripstart;
       split_before();
       return false;
@@ -1900,10 +1931,11 @@ bool TraceDecoder::translate() {
     return false;
   } else {
     // Block did not end with a branch: do we have more room for another x86 insn?
-    if (((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN-2))
-        || ((rip - bb.rip) >= (insnbytes_bufsize-15))
-        || ((rip - bb.rip) >= valid_byte_count)
-        || (user_insn_count >= MAX_BB_X86_INSNS)) {
+    if (// ((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN-2)) ||
+        ((rip - bb.rip) >= (insnbytes_bufsize-15)) ||
+        ((rip - bb.rip) >= valid_byte_count) ||
+        (user_insn_count >= MAX_BB_X86_INSNS) ||
+        (rip == stop_at_rip)) {
       if (logable(5)) logfile << "Basic block ", (void*)(Waddr)bb.rip, " too long: cutting at ", bb.count, " transops (", transbufcount, " currently in buffer)", endl;
       // bb.rip_taken and bb.rip_not_taken were already filled out for the last instruction.
       if unlikely (!last_flags_update_was_atomic) {
@@ -1916,8 +1948,8 @@ bool TraceDecoder::translate() {
       flush();
       return false;
     } else {
-      flush();
-      return true;
+      bool ok_to_continue = flush();
+      return ok_to_continue;
     }
   }
 #undef DECODE

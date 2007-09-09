@@ -16,14 +16,13 @@
 
 #define STATS_ONLY
 #include <decode.h>
-#include <ooocore.h>
-#ifdef PTLSIM_HYPERVISOR
 #include <smtcore.h>
-#endif
 #include <dcache.h>
 #include <branchpred.h>
 #undef STATS_ONLY
 
+
+#define increment_clipped_histogram(h, slot, incr) h[clipto(W64(slot), W64(0), W64(lengthof(h)-1))] += incr;
 
 //
 // This file is run through dstbuild to auto-generate
@@ -144,11 +143,7 @@ struct PTLsimStats { // rootnode:
     W64 reclaim_rounds;
   } decoder;
 
-  OutOfOrderCoreStats ooocore;
-#ifdef PTLSIM_HYPERVISOR
   SMTCoreStats smtcore;
-#endif
-
   DataCacheStats dcache;
 
 

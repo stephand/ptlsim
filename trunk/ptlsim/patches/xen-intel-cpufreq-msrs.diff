@@ -1,0 +1,99 @@
+diff -r 015d9abeacfb xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/traps.c	Mon Jun 25 03:03:40 2007 -0400
+@@ -1300,7 +1300,7 @@ static int emulate_privileged_op(struct 
+     /* Input/Output String instructions. */
+     if ( (opcode >= 0x6c) && (opcode <= 0x6f) )
+     {
+-        unsigned long data_base, data_limit;
++        unsigned long data_base = 0, data_limit = 0;
+ 
+         if ( rep_prefix && (rd_ad(ecx) == 0) )
+             goto done;
+@@ -1724,6 +1724,22 @@ static int emulate_privileged_op(struct 
+                 ((u64)regs->edx << 32) | regs->eax;
+             break;
+ #endif
++        case MSR_IA32_PERF_STATUS:
++        case MSR_IA32_PERF_CTL:
++        case MSR_IA32_MPERF:
++        case MSR_IA32_APERF: {
++            struct cpuinfo_x86 *c = cpu_data + smp_processor_id();
++
++            if ( !IS_PRIV(current->domain) )
++                goto fail;
++
++            if ((c->x86_vendor != X86_VENDOR_INTEL) || (!(test_bit(X86_FEATURE_CONSTANT_TSC, &boot_cpu_data.x86_capability))))
++                goto fail;
++
++            if ( wrmsr_safe(regs->ecx, regs->eax, regs->edx) )
++                goto fail;
++            break;
++        }
+         default:
+             if ( wrmsr_hypervisor_regs(regs->ecx, regs->eax, regs->edx) )
+                 break;
+@@ -1764,6 +1780,37 @@ static int emulate_privileged_op(struct 
+             if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
+                 goto fail;
+             break;
++        case MSR_IA32_PERF_STATUS:
++        case MSR_IA32_PERF_CTL:
++        case MSR_IA32_MPERF:
++        case MSR_IA32_APERF: {
++            struct cpuinfo_x86 *c = cpu_data + smp_processor_id();
++
++            if ( !IS_PRIV(current->domain) )
++                goto fail;
++
++            if ((c->x86_vendor != X86_VENDOR_INTEL) || (!(test_bit(X86_FEATURE_CONSTANT_TSC, &boot_cpu_data.x86_capability))))
++                goto fail;
++
++            if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
++                goto fail;
++            break;
++        }
++#ifdef CONFIG_X86_64
++            /* These are only available on Intel Core 2 chips, all of which are 64-bit: */
++        case MSR_CORE_PERF_FIXED_CTR0:
++        case MSR_CORE_PERF_FIXED_CTR1:
++        case MSR_CORE_PERF_FIXED_CTR2: {
++            struct cpuinfo_x86 *c = cpu_data + smp_processor_id();
++
++            if ((c->x86_vendor != X86_VENDOR_INTEL) || (c->x86 != 0x6) || (c->x86_model < 0x0e))
++                goto fail;
++
++            if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
++                goto fail;
++            break;
++        }
++#endif
+         default:
+             if ( rdmsr_hypervisor_regs(regs->ecx, &l, &h) )
+             {
+diff -r 015d9abeacfb xen/include/asm-x86/msr.h
+--- a/xen/include/asm-x86/msr.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/asm-x86/msr.h	Mon Jun 25 03:09:10 2007 -0400
+@@ -198,6 +198,8 @@ static inline void write_efer(__u64 val)
+ 
+ #define MSR_IA32_PERF_STATUS		0x198
+ #define MSR_IA32_PERF_CTL		0x199
++#define MSR_IA32_MPERF      0xe7
++#define MSR_IA32_APERF      0xe8
+ 
+ #define MSR_IA32_THERM_CONTROL		0x19a
+ #define MSR_IA32_THERM_INTERRUPT	0x19b
+@@ -384,4 +386,13 @@ static inline void write_efer(__u64 val)
+ #define MSR_TMTA_LRTI_READOUT		0x80868018
+ #define MSR_TMTA_LRTI_VOLT_MHZ		0x8086801a
+ 
++/* Intel Core-based CPU performance counters */
++#define MSR_CORE_PERF_FIXED_CTR0	0x309
++#define MSR_CORE_PERF_FIXED_CTR1	0x30a
++#define MSR_CORE_PERF_FIXED_CTR2	0x30b
++#define MSR_CORE_PERF_FIXED_CTR_CTRL	0x38d
++#define MSR_CORE_PERF_GLOBAL_STATUS	0x38e
++#define MSR_CORE_PERF_GLOBAL_CTRL	0x38f
++#define MSR_CORE_PERF_GLOBAL_OVF_CTRL	0x390
++
+ #endif /* __ASM_MSR_H */

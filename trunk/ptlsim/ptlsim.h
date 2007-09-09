@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Simulator Structures
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2004-2007 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _PTLSIM_H_
@@ -21,6 +21,7 @@
 #include <datastore.h>
 
 extern W64 sim_cycle;
+extern W64 unhalted_cycle_count;
 extern W64 total_uops_committed;
 extern W64 total_user_insns_committed;
 
@@ -114,7 +115,6 @@ struct PTLsimStats;
 void print_banner(ostream& os, const PTLsimStats& stats, int argc = 0, char** argv = null);
 
 extern ostream logfile;
-extern W64 sim_cycle;
 extern W64 user_insn_commits;
 extern W64 iterations;
 extern W64 total_uops_executed;
@@ -183,6 +183,8 @@ struct PTLsimConfig {
   W64 stop_at_cycle;
   W64 stop_at_iteration;
   W64 stop_at_rip;
+  W64 stop_at_marker;
+  W64 stop_at_marker_hits;
   W64 insns_in_last_basic_block;
   W64 stop_at_user_insns_relative;
   W64 flush_interval;
@@ -206,6 +208,7 @@ struct PTLsimConfig {
 #endif
 
   bool continuous_validation;
+  W64 validation_start_cycle;
 
   // Out of order core features
   bool perfect_cache;

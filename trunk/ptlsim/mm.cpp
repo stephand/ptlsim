@@ -33,7 +33,7 @@ MemoryManagerEvent* mm_event_buffer_end = null;
 
 int mm_logging_fd = -1;
 bool enable_inline_mm_logging = false;
-bool enable_mm_validate = true;
+bool enable_mm_validate = false;
 
 void ptl_mm_set_logging(const char* mm_log_filename, int mm_event_buffer_size, bool set_enable_inline_mm_logging) {
   //
@@ -85,7 +85,7 @@ void ptl_mm_add_event(int event, int pool, void* caller, void* address, W32 byte
   e->slab = slab;
 
   if unlikely (enable_inline_mm_logging) {
-    logfile << "mm: ", *e, endl;
+    cerr << "mm: ", *e, endl;
   }
 
   mm_event_buffer_tail++;
@@ -287,11 +287,13 @@ struct ExtentAllocator {
 
     FreeExtent* r = FreeExtent::sizelink_to_self(free_extents_by_size[sizeslot]);
 
-    if (DEBUG) logfile << "find_extent_in_size_slot(size ", size, ", slot ", sizeslot, "): r = ", r, endl;
+    if (r) {
+      if (DEBUG) cerr << "find_extent_in_size_slot(size ", size, ", slot ", sizeslot, "): r = ", r, endl;
+    }
 
     while (r) {
       if likely (r->size < size) {
-        if (DEBUG) logfile << "  ", r, " too small: only ", r->size, " chunks", endl;
+        if (DEBUG) cerr << "  ", r, " too small: only ", r->size, " chunks", endl;
         r = FreeExtent::sizelink_to_self(r->sizelink.next);
         continue;
       }
@@ -299,13 +301,13 @@ struct ExtentAllocator {
       alloc_extent(r);
 
       if likely (size == r->size) {
-        if (DEBUG) logfile << "  Exact match: ", r, endl;
+        if (DEBUG) cerr << "  Exact match: ", r, endl;
         return r;
       }
       
       int remaining_size = r->size - size;
       FreeExtent* rsplit = r + size;
-      if (DEBUG) logfile << "rsplit = ", rsplit, ", size ", size, ", r->size = ", r->size, ", remaining_size = ", remaining_size, endl, flush;
+      if (DEBUG) cerr << "rsplit = ", rsplit, ", size ", size, ", r->size = ", r->size, ", remaining_size = ", remaining_size, endl, flush;
 
       free_extent(rsplit, remaining_size);
       
@@ -386,10 +388,14 @@ struct ExtentAllocator {
   }
 
   void* alloc(size_t size) {
+    bool DEBUG = 0;
     if unlikely (enable_mm_validate) fast_validate();
+    if (DEBUG) cerr << "ExtentAllocator<", CHUNKSIZE, ">::alloc(", size, ")", endl, flush;
 
     size = ceil(size, CHUNKSIZE) >> log2(CHUNKSIZE);
     void* addr = (void*)find_free_extent_of_size(size);
+    if (DEBUG) cerr << "ExtentAllocator<", CHUNKSIZE, ">::alloc(", size, "): found free extent ", addr, endl, flush;
+
     if unlikely (!addr) return null;
     allocs++;
     current_bytes_allocated += (size * CHUNKSIZE);
@@ -630,7 +636,7 @@ struct ExtentAllocator {
       W64 min_expected_bytes = ((i+1) * CHUNKSIZE);
       while (r) {
         os << "    ";
-        os << r->print(os);
+        r->print(os);
         os << endl;
 
         W64 bytes = (r->size * CHUNKSIZE);
@@ -1157,6 +1163,7 @@ void ptl_mm_dump(ostream& os) {
     slaballoc[i].print(os);
   }
 
+  os << "End of memory dump", endl;
   os << flush;
 }
 
@@ -1167,7 +1174,7 @@ extern ostream logfile;
 //
 // Full-system PTLsim running on the bare hardware:
 //
-void* ptl_mm_try_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0, void* caller = 0) {
+void* ptl_mm_try_alloc_private_pages(Waddr bytecount, int prot, Waddr base, void* caller) {
   void* p = pagealloc.alloc(bytecount);
   ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_PAGES, caller, p, bytecount);
   return p;
@@ -1212,7 +1219,7 @@ void ptl_mm_zero_private_pages(void* addr, Waddr bytecount) {
 
 #else
 
-void* ptl_mm_try_alloc_private_pages(Waddr bytecount, int prot = PROT_READ|PROT_WRITE|PROT_EXEC, Waddr base = 0, void* caller = 0) {
+void* ptl_mm_try_alloc_private_pages(Waddr bytecount, int prot, Waddr base, void* caller) {
   int flags = MAP_ANONYMOUS|MAP_NORESERVE | (base ? MAP_FIXED : 0);
   flags |= (inside_ptlsim) ? MAP_SHARED : MAP_PRIVATE;
   if (base == 0) base = PTL_PAGE_POOL_BASE;
@@ -1265,6 +1272,10 @@ void ptl_mm_zero_private_pages(void* addr, Waddr bytecount) {
 
 void* ptl_mm_alloc_private_page() {
   return ptl_mm_alloc_private_pages(PAGE_SIZE);
+}
+
+void* ptl_mm_try_alloc_private_page() {
+  return ptl_mm_try_alloc_private_pages(PAGE_SIZE);
 }
 
 void* ptl_mm_alloc_private_32bit_page() {
@@ -1400,6 +1411,8 @@ void* ptl_mm_alloc(size_t bytes, void* caller) {
     ptl_mm_add_event(PTL_MM_EVENT_ALLOC, PTL_MM_POOL_GENERAL, caller, p, bytes);
     return p;
   }
+
+  return null;
 }
 
 void* ptl_mm_alloc(size_t bytes) {
@@ -1571,7 +1584,7 @@ void ptl_mm_cleanup() {
 
   int n;
 
-  while (n = genalloc.reclaim_unused_extents(ass, lengthof(ass), PAGE_SIZE)) {
+  while ((n = genalloc.reclaim_unused_extents(ass, lengthof(ass), PAGE_SIZE))) {
     // cout << "Reclaimed ", n, " extents", endl;
 
     foreach (i, n) {

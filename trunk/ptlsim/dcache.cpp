@@ -58,11 +58,13 @@ template <int size>
 void LoadFillReqQueue<size>::reset(int threadid) {
   foreach (i, SIZE) {
     LoadFillReq& req = reqs[i];
-    if likely (req.lsi.threadid == threadid) {
+    if likely ((!freemap[i]) && (req.lsi.threadid == threadid)) {
       if (logable(6)) logfile << "[vcpu ", threadid, "] reset lfrq slot ", i, ": ", req, endl;
       waiting[i] = 0;
       ready[i] = 0;
       freemap[i] = 1;
+      count--;
+      assert(count >= 0);
     }
   }
 
@@ -75,7 +77,11 @@ void LoadFillReqQueue<size>::annul(int lfrqslot) {
   if (logable(6)) logfile << "  Annul LFRQ slot ", lfrqslot, endl;
   stats.dcache.lfrq.annuls++;
   hierarchy.missbuf.annul_lfrq(lfrqslot);
+  reqs[lfrqslot].mbidx = -1;
+  assert(!freemap[lfrqslot]);
   changestate(lfrqslot, ready, freemap);
+  count--;
+  assert(count >= 0);
 }
 
 //
@@ -84,9 +90,24 @@ void LoadFillReqQueue<size>::annul(int lfrqslot) {
 template <int size>
 int LoadFillReqQueue<size>::add(const LoadFillReq& req) {
   if unlikely (full()) return -1;
+#if 0
+  // Sanity check: make sure (tid, rob) is unique:
+  foreach (i, size) {
+    if likely (freemap[i]) continue;
+    const LoadFillReq& old = reqs[i];
+    if ((old.lsi.threadid == req.lsi.threadid) && (old.lsi.rob == req.lsi.rob)) {
+      logfile << "ERROR: during add LFRQ req ", req, ", entry ", i, " (", old, ") already matches at cycle ", sim_cycle, endl;
+      logfile << *this;
+      logfile << hierarchy.missbuf;
+      // assert(false);
+    }
+  }
+#endif
   int idx = freemap.lsb();
   changestate(idx, freemap, waiting);         
   reqs[idx] = req;
+  assert(count < size);
+  count++;
   stats.dcache.lfrq.inserts++;
   return idx;
 }
@@ -146,15 +167,36 @@ void LoadFillReqQueue<size>::clock() {
     wakeupcount++;
     if likely (hierarchy.callback) hierarchy.callback->dcache_wakeup(req.lsi, req.addr);
 
+    assert(!freemap[idx]);
     changestate(idx, ready, freemap);
+    count--;
+    assert(count >= 0);
   }
 
   stats.dcache.lfrq.width[wakeupcount]++;
 }
 
+LoadFillReq::LoadFillReq(W64 addr, W64 data, byte mask, LoadStoreInfo lsi) {
+  this->addr = addr;
+  this->data = data;
+  this->mask = mask;
+  this->lsi = lsi;
+  this->lsi.threadid = lsi.threadid; 
+  this->fillL1 = 1;
+  this->fillL2 = 1;
+  this->initcycle = sim_cycle;
+  this->mbidx = -1;
+}
+
+ostream& LoadFillReq::print(ostream& os) const {
+  os << "0x", hexstring(data, 64), " @ ", (void*)(Waddr)addr, " -> rob ", lsi.rob, " @ t", lsi.threadid;
+  os << ": shift ", lsi.sizeshift, ", signext ", lsi.signext, ", mask ", bitstring(mask, 8, true);
+  return os;
+}
+
 template <int size>
 ostream& LoadFillReqQueue<size>::print(ostream& os) const {
-  os << "LoadFillReqQueue<", size, ">:", endl;
+  os << "LoadFillReqQueue<", size, ">: ", count, " of ", size, " entries (", (size - count), " free)", endl;
   os << "  Free:   ", freemap, endl;
   os << "  Wait:   ", waiting, endl;
   os << "  Ready:  ", ready, endl;
@@ -176,6 +218,7 @@ void MissBuffer<SIZE>::reset() {
     missbufs[i].reset();
   }
   freemap.setall();
+  count = 0;
 }
 
 
@@ -184,8 +227,11 @@ void MissBuffer<SIZE>::reset(int threadid) {
   foreach (i, SIZE) {
     if likely (missbufs[i].threadid == threadid) {
       if (logable(6)) logfile << "[vcpu ", threadid, "] reset missbuf slot ", i, ": for rob", missbufs[i].rob, endl;
+      assert(!freemap[i]);
       missbufs[i].reset();
       freemap[i] = 1;
+      count--;
+      assert(count >= 0);
     }
   }
 }
@@ -220,13 +266,13 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
 
   int idx = find(addr);
 
-  if unlikely (idx >= 0 && threadid == missbufs[idx].threadid) {
+  // if unlikely (idx >= 0 && threadid == missbufs[idx].threadid) {
+  if unlikely (idx >= 0) {
     // Handle case where dcache miss is already in progress but some 
     // code needed in icache is also stored in that line:
     Entry& mb = missbufs[idx];
     mb.icache |= icache;
     mb.dcache |= (!icache);
-    //assert(mb.rob == rob);
     // Handle case where icache miss is already in progress but some
     // data needed in dcache is also stored in that line:
     if (DEBUG) logfile << "[vcpu ", threadid, "] miss buffer hit for address ", (void*)(Waddr)addr, ": returning old slot ", idx, endl;
@@ -240,6 +286,9 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
 
   idx = freemap.lsb();
   freemap[idx] = 0;
+  assert(count < SIZE);
+  count++;
+
   stats.dcache.missbuf.inserts++;
   Entry& mb = missbufs[idx];
   mb.addr = addr;
@@ -248,10 +297,8 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
   mb.dcache = (!icache);
   mb.rob = rob;
   mb.threadid = threadid;
-
  
   if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", idx, ": allocated for address ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
-  //  assert(threadid != 0xff);
 
   if likely (hit_in_L2) {
     if (DEBUG) logfile << "[vcpu ", mb.threadid, "] mb", idx, ": enter state deliver to L1 on ", (void*)(Waddr)addr, " (iter ", iterations, ")", endl;
@@ -280,20 +327,18 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
   mb.state = STATE_DELIVER_TO_L2;
   mb.cycles = MAIN_MEM_LATENCY;
 #endif
-
   if unlikely (icache) per_context_dcache_stats_update(mb.threadid, fetch.hit.mem++); else per_context_dcache_stats_update(mb.threadid, load.hit.mem++);
 
   return idx;
 }
 
 template <int SIZE>
-int MissBuffer<SIZE>::initiate_miss(const LoadFillReq& req, bool hit_in_L2, int rob) {
+int MissBuffer<SIZE>::initiate_miss(LoadFillReq& req, bool hit_in_L2, int rob) {
   int lfrqslot = hierarchy.lfrq.add(req);
 
   if (logable(6)) logfile << "[vcpu ", req.lsi.threadid, "] missbuf.initiate_miss(req ", req, ", L2hit? ", hit_in_L2, ") -> lfrqslot ", lfrqslot, endl;
 
-  if unlikely (lfrqslot < 0)
-                return -1;
+  if unlikely (lfrqslot < 0) return -1;
   
   int mbidx = initiate_miss(req.addr, hit_in_L2, 0, rob, req.lsi.threadid);
   if unlikely (mbidx < 0) {
@@ -303,6 +348,7 @@ int MissBuffer<SIZE>::initiate_miss(const LoadFillReq& req, bool hit_in_L2, int 
 
   Entry& missbuf = missbufs[mbidx];
   missbuf.lfrqmap[lfrqslot] = 1;
+  hierarchy.lfrq[lfrqslot].mbidx = mbidx;
   // missbuf.threadid = req.lsi.threadid;
 
   return lfrqslot;
@@ -310,8 +356,7 @@ int MissBuffer<SIZE>::initiate_miss(const LoadFillReq& req, bool hit_in_L2, int 
 
 template <int SIZE>
 void MissBuffer<SIZE>::clock() {
-  if (freemap.allset())
-    return;
+  if likely (freemap.allset()) return;
 
   bool DEBUG = logable(6);
 
@@ -372,8 +417,11 @@ void MissBuffer<SIZE>::clock() {
           if likely (hierarchy.callback) hierarchy.callback->icache_wakeup(lsi, mb.addr);
         }
 
+        assert(!freemap[i]);
         freemap[i] = 1;
         mb.reset();
+        count--;
+        assert(count >= 0);
       }
       break;
     }
@@ -427,7 +475,7 @@ ostream& CacheLineWithValidMask<linesize>::print(ostream& os, W64 tag) const {
   return os;
 }
 
-int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi) {
+int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi, bool& L2hit) {
   static const bool DEBUG = 0;
 
   starttimer(load_slowpath_timer);
@@ -457,7 +505,7 @@ int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo 
     stats.dcache.load.transfer.L2_to_L1_partial++;
   }
 
-  int L2hit = 0;
+  L2hit = 0;
     
   L2CacheLine* L2line = L2.probe(physaddr);
 
@@ -515,6 +563,23 @@ int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo 
   stoptimer(load_slowpath_timer);
 
   return lfrqslot;
+}
+
+int CacheHierarchy::get_lfrq_mb(int lfrqslot) const {
+  assert(inrange(lfrqslot, 0, LFRQ_SIZE-1));
+
+  const LoadFillReq& req = lfrq.reqs[lfrqslot];
+  return req.mbidx;
+}
+
+int CacheHierarchy::get_lfrq_mb_state(int lfrqslot) const {
+  assert(inrange(lfrqslot, 0, LFRQ_SIZE-1));
+
+  const LoadFillReq& req = lfrq.reqs[lfrqslot];
+  if unlikely (req.mbidx < 0) return -1;
+
+  assert(!missbuf.freemap[req.mbidx]);
+  return missbuf.missbufs[req.mbidx].state;
 }
 
 bool CacheHierarchy::covered_by_sfr(W64 addr, SFR* sfr, int sizeshift) {

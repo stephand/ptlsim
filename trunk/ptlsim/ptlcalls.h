@@ -17,6 +17,10 @@
 #include <malloc.h>
 #include <stdio.h>
 #include <errno.h>
+#ifndef __USE_GNU
+#define __USE_GNU
+#endif
+#include <sys/ucontext.h>
 #define sys_munlock munlock
 
 typedef unsigned char byte;
@@ -31,6 +35,7 @@ typedef W32 Waddr;
 #endif
 #endif // !__INSIDE_PTLSIM
 
+// Read timestamp counter
 static inline W64 ptlcall_rdtsc() {
   W32 lo, hi;
   asm volatile("rdtsc" : "=a" (lo), "=d" (hi));
@@ -39,12 +44,15 @@ static inline W64 ptlcall_rdtsc() {
 
 #ifdef PTLSIM_HYPERVISOR
 // PTLsim/X
-enum {
-  PTLCALL_NOP = 0,
-  PTLCALL_VERSION = 1,
-  PTLCALL_ENQUEUE = 2,
-  PTLCALL_FLUSH_QUEUE = 3,
-};
+
+#define PTLCALL_VERSION      0
+#define PTLCALL_MARKER       1
+#define PTLCALL_ENQUEUE      2
+
+#define PTLCALL_STATUS_VERSION_MASK      0xff
+#define PTLCALL_STATUS_PTLSIM_ACTIVE     (1 << 8)
+
+#define PTLCALL_INTERFACE_VERSION_1      1
 
 struct PTLsimCommandDescriptor {
   W64 command; // pointer to command string
@@ -77,7 +85,7 @@ struct PTLsimThunkPage {
   W64 call_code_addr; // thunk function to call
 };
 
-#endif
+#endif // (userspace version)
 
 #ifndef __INSIDE_PTLSIM__
 #ifdef PTLSIM_HYPERVISOR
@@ -86,8 +94,13 @@ struct PTLsimThunkPage {
 // instruction (0x0f37) that's trapped by the hypervisor.
 //
 
-static int running_under_ptlsim_checked = 0;
+static int ptlcall_insn_supported = -1;
 static int running_under_ptlsim = 0;
+
+//
+// For utility usage in benchmarks:
+//
+static W64 ptlsim_marker_id = 0;
 
 static inline void handle_invalid_opcode(int sig, siginfo_t* si, void* contextp) {
   ucontext_t* context = (ucontext_t*)contextp;
@@ -96,36 +109,35 @@ static inline void handle_invalid_opcode(int sig, siginfo_t* si, void* contextp)
 #else
   context->uc_mcontext.gregs[REG_EIP] += 2;
 #endif
+  ptlcall_insn_supported = 0;
   running_under_ptlsim = 0;
 }
 
 #ifdef __x86_64__
 static inline W64 ptlcall_op(W64 op, W64 arg1, W64 arg2, W64 arg3, W64 arg4) {
   asm volatile(".byte 0x0f,0x37"
-               : "+a" (op)
-               : "c" (arg1), "d" (arg2), "S" (arg3), "D" (arg4)
+               : "+a" (op), "+c" (arg1), "+d" (arg2), "+S" (arg3), "+D" (arg4)
+               :
                : "memory");
   return op;
 }
 #else
 static inline W64 ptlcall_op(W32 op, W32 arg1, W32 arg2, W32 arg3, W32 arg4) {
   asm volatile(".byte 0x0f,0x37"
-               : "+a" (op)
-               : "c" (arg1), "d" (arg2), "S" (arg3), "D" (arg4)
+               : "+a" (op), "+c" (arg1), "+d" (arg2), "+S" (arg3), "+D" (arg4)
+               :
                : "memory");
   return op;
 }
 #endif
 
-static inline W64 ptlcall_running_under_ptlsim() {
+static inline W64 check_ptlcall_insn() {
   struct sigaction oldsa;
   struct sigaction sa;
   W64 rc;
 
-  if (running_under_ptlsim_checked)
-    return running_under_ptlsim;
-
-  running_under_ptlsim_checked = 1;
+  if (ptlcall_insn_supported >= 0)
+    return ptlcall_insn_supported;
 
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = handle_invalid_opcode;
@@ -133,17 +145,25 @@ static inline W64 ptlcall_running_under_ptlsim() {
 
   sigaction(SIGILL, &sa, &oldsa);
 
-  running_under_ptlsim = 1;
+  ptlcall_insn_supported = 1;
+  running_under_ptlsim = 0;
+  // The invalid opcode exception handler will clear ptlcall_insn_supported:
   rc = ptlcall_op(PTLCALL_VERSION, 0, 0, 0, 0);
-
+  running_under_ptlsim = ((rc & PTLCALL_STATUS_PTLSIM_ACTIVE) != 0);
   sigaction(SIGILL, &oldsa, NULL);
 
-  return running_under_ptlsim;
+  return ptlcall_insn_supported;
 }
 
-static inline W64 ptlcall(W64 op, W64 arg1 = 0, W64 arg2 = 0, W64 arg3 = 0, W64 arg4 = 0) {
-  if (!ptlcall_running_under_ptlsim())
-    return -ENOSYS;
+static inline int check_running_under_ptlsim() {
+  if (!check_ptlcall_insn()) return 0;
+  W64 rc = ptlcall_op(PTLCALL_VERSION, 0, 0, 0, 0);
+  return (rc & PTLCALL_STATUS_PTLSIM_ACTIVE) ? 1 : 0;
+}
+
+static inline W64 ptlcall(W64 op, W64 arg1, W64 arg2, W64 arg3, W64 arg4) {
+  if (!check_ptlcall_insn())
+    return (W64)(-ENOSYS);
 
   return ptlcall_op(op, arg1, arg2, arg3, arg4);
 }
@@ -160,7 +180,7 @@ static inline W64 ptlcall(W64 op, W64 arg1 = 0, W64 arg2 = 0, W64 arg3 = 0, W64 
 // queued and processed in sequence.
 //
 static inline W64 ptlcall_multi(char* const list[], size_t length, int flush) {
-  PTLsimCommandDescriptor* desc = (PTLsimCommandDescriptor*)malloc(length * sizeof(PTLsimCommandDescriptor));
+  struct PTLsimCommandDescriptor* desc = (struct PTLsimCommandDescriptor*)malloc(length * sizeof(struct PTLsimCommandDescriptor));
   W64 rc;
   int i;
 
@@ -169,7 +189,7 @@ static inline W64 ptlcall_multi(char* const list[], size_t length, int flush) {
     desc[i].length = strlen(list[i]);
   }
 
-  rc = ptlcall(PTLCALL_ENQUEUE, (W64)desc, length, flush);
+  rc = ptlcall(PTLCALL_ENQUEUE, (W64)desc, length, flush, 0);
   free(desc);
   return rc;
 }
@@ -183,11 +203,11 @@ static inline W64 ptlcall_multi_flush(char* const list[], size_t length) {
 }
 
 static inline W64 ptlcall_single(const char* command, int flush) {
-  PTLsimCommandDescriptor desc;
+ struct  PTLsimCommandDescriptor desc;
   desc.command = (W64)command;
   desc.length = strlen(command);
 
-  return ptlcall(PTLCALL_ENQUEUE, (W64)&desc, 1, flush);
+  return ptlcall(PTLCALL_ENQUEUE, (W64)&desc, 1, flush, 0);
 }
 
 static inline W64 ptlcall_single_enqueue(const char* command) {
@@ -213,21 +233,22 @@ static inline W64 ptlcall_switch_to_native() {
   return ptlcall_single_flush("-native");
 }
 
-static inline W64 ptlcall_marker(const char* name) {
-  char buf[128];
-  if (!name) name = "forced";
-  snprintf(buf, sizeof(buf), "-marker %s", name);
+static inline W64 ptlcall_marker(W64 marker) {
+  if (!check_ptlcall_insn()) {
+    printf("ptlcall_marker: not running under PTLsim hypervisor\n");
+    return 0;
+  }
 
-  char* commands[2] = {buf, "-run"};
-  return ptlcall_multi_flush(commands, 2);
+  return ptlcall(PTLCALL_MARKER, marker, 0, 0, 0);
 }
 
 static inline W64 ptlcall_capture_stats(const char* snapshot) {
   char buf[128];
+  char* commands[2] = {buf, "-run"};
+
   if (!snapshot) snapshot = "forced";
   snprintf(buf, sizeof(buf), "-snapshot-now %s", snapshot);
 
-  char* commands[2] = {buf, "-run"};
   return ptlcall_multi_flush(commands, 2);
 }
 
@@ -239,10 +260,10 @@ static inline W64 ptlcall_capture_stats(const char* snapshot) {
 // ptlsim/patches/linux-2.6.20-xen-self-checkpointing.diff 
 //
 static inline W64 ptlcall_checkpoint(const char* name) {
+  static const char command[] = "checkpoint\n";
   int n;
   int fd = open("/proc/xen/checkpoint", O_WRONLY);
   if (fd < 0) return 0;
-  const char command[] = "checkpoint\n";
   n = write(fd, command, sizeof(command));
   close(fd);
   return (n == sizeof(command));

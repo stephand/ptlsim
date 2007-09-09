@@ -1,26 +1,26 @@
-diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/machine_reboot.c linux-2.6.20-mtyrel-new/drivers/xen/core/machine_reboot.c
---- linux-2.6.20-mtyrel-old/drivers/xen/core/machine_reboot.c	2007-03-17 02:53:40.000000000 -0400
-+++ linux-2.6.20-mtyrel-new/drivers/xen/core/machine_reboot.c	2007-05-18 00:08:42.168470000 -0400
-@@ -130,6 +130,8 @@
+diff -urN a/drivers/xen/core/machine_reboot.c b/drivers/xen/core/machine_reboot.c
+--- a/drivers/xen/core/machine_reboot.c	2007-09-08 19:18:12.272880000 -0400
++++ b/drivers/xen/core/machine_reboot.c	2007-09-08 19:18:23.541161000 -0400
+@@ -128,6 +128,8 @@
  
  #endif
  
 +unsigned long long resume_started_at_tsc = 0;
 +
- int __xen_suspend(void)
+ static int take_machine_down(void *p_fast_suspend)
  {
- 	int err, suspend_cancelled;
-@@ -168,6 +170,7 @@
+ 	int fast_suspend = *(int *)p_fast_suspend;
+@@ -166,6 +168,7 @@
  	 * merely checkpointed, and 0 if it is resuming in a new domain.
  	 */
  	suspend_cancelled = HYPERVISOR_suspend(virt_to_mfn(xen_start_info));
 +	rdtscll(resume_started_at_tsc);
  
  	post_suspend(suspend_cancelled);
- 
-diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c
---- linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c	2007-03-17 02:53:41.000000000 -0400
-+++ linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c	2007-05-18 02:15:11.208715000 -0400
+ 	gnttab_resume();
+diff -urN a/drivers/xen/core/reboot.c b/drivers/xen/core/reboot.c
+--- a/drivers/xen/core/reboot.c	2007-09-08 19:18:12.276879000 -0400
++++ b/drivers/xen/core/reboot.c	2007-09-09 03:47:09.000000000 -0400
 @@ -8,6 +8,9 @@
  #include <asm/hypervisor.h>
  #include <xen/xenbus.h>
@@ -29,9 +29,9 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +#include <asm/uaccess.h>
 +#include <xen/xen_proc.h>
  
- MODULE_LICENSE("Dual BSD/GPL");
- 
-@@ -59,10 +62,16 @@
+ #ifdef HAVE_XEN_PLATFORM_COMPAT_H
+ #include <xen/platform-compat.h>
+@@ -63,12 +66,18 @@
  	return 0;
  }
  
@@ -40,7 +40,9 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +
 +static int xen_suspend(void *p)
  {
- 	__xen_suspend();
+ 	int err = __xen_suspend(fast_suspend);
+ 	if (err)
+ 		printk(KERN_ERR "Xen suspend failed (%d)\n", err);
  	shutting_down = SHUTDOWN_INVALID;
 +	if (p) {
 +		wait_queue_head_t* wakeup = (wait_queue_head_t*)p;
@@ -49,7 +51,7 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
  	return 0;
  }
  
-@@ -97,6 +106,89 @@
+@@ -103,6 +112,102 @@
  	}
  }
  
@@ -61,12 +63,14 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +typedef unsigned int W32;
 +typedef unsigned long long W64;
 +
-+enum {
-+  PTLCALL_NOP = 0,
-+  PTLCALL_VERSION = 1,
-+  PTLCALL_ENQUEUE = 2,
-+  PTLCALL_FLUSH_QUEUE = 3,
-+};
++#define PTLCALL_VERSION      0
++#define PTLCALL_MARKER       1
++#define PTLCALL_ENQUEUE      2
++
++#define PTLCALL_STATUS_VERSION_MASK      0xff
++#define PTLCALL_STATUS_PTLSIM_ACTIVE     (1 << 8)
++
++#define PTLCALL_INTERFACE_VERSION_1      1
 +
 +struct PTLsimCommandDescriptor {
 +  W64 command; // pointer to command string
@@ -129,6 +133,17 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +  printk("Resume took %llu cycles\n", resume_ended_at_tsc - resume_started_at_tsc);
 +  if (strlen(ptlcall_after_resume)) {
 +    printk("Executing PTLsim action after resume: '%s'\n", ptlcall_after_resume);
++    {
++      /*
++       * This unusual construction is used to work around a bug w.r.t. xtime_lock:
++       * if we enter PTLsim while the timer update is in progress, we may get
++       * inconsistent virtualized values, leading to deadlock. This little bit
++       * of black magic minimizes the chances of this happening by forcing us to
++       * wait for the seqlock if it's in progress.
++       */
++      struct timespec ts;
++      getnstimeofday(&ts);
++    }
 +    err = ptlcall_single_flush(ptlcall_after_resume);
 +    if (err <= 0) printk("PTLcall returned error %d\n", err);
 +  }
@@ -139,7 +154,7 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
  static void shutdown_handler(struct xenbus_watch *watch,
  			     const char **vec, unsigned int len)
  {
-@@ -107,6 +199,11 @@
+@@ -114,6 +219,11 @@
  	if (shutting_down != SHUTDOWN_INVALID)
  		return;
  
@@ -151,7 +166,7 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
   again:
  	err = xenbus_transaction_start(&xbt);
  	if (err)
-@@ -186,6 +283,143 @@
+@@ -194,6 +304,174 @@
  	.callback = sysrq_handler
  };
  
@@ -167,6 +182,8 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +		return -EBADMSG; /* runt */
 +	if (count >= sizeof(action))
 +		return -EFBIG;   /* too long */
++	if (is_initial_xendomain())
++		return -ENOSYS; /* not allowed in dom0 */
 +
 +	if (copy_from_user(action, buffer, count))
 +		return -EFAULT;
@@ -190,8 +207,14 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +		/*
 +		 * Actually perform the requested action
 +		 */
-+		printk("Performing locally initiated %s\n", action);
-+		checkpoint_or_suspend_triggered();
++		if (shutdown_handler_disabled) {
++			printk("Performing locally initiated checkpoint\n");
++			/* One shot: do not keep doing this every time the checkpoint is attempted */
++			shutdown_handler_disabled = 0;
++			checkpoint_or_suspend_triggered();
++		} else {
++			printk("Checkpoint request ignored: self-checkpointing disabled\n");
++		}
 +	} else {
 +		printk("checkpoint_trigger_write(\"%s\"): unknown action\n", action);
 +	}
@@ -204,10 +227,14 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +{
 +	int len;
 +
-+	if (shutdown_handler_disabled)
-+		len = sprintf(page, "trigger: local\n");
-+	else
-+		len = sprintf(page, "trigger: external\n");
++	if (is_initial_xendomain()) {
++    len = sprintf(page, "trigger: unsupported-in-dom0\n");
++  } else {
++    if (shutdown_handler_disabled)
++      len = sprintf(page, "trigger: local\n");
++    else
++      len = sprintf(page, "trigger: external\n");
++  }
 +
 +	*eof = 1;
 +	return len;
@@ -224,6 +251,8 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +
 +	if (count >= PAGE_SIZE)
 +		return -EFBIG;   /* too long */
++	if (is_initial_xendomain())
++		return -ENOSYS; /* not allowed in dom0 */
 +
 +  buf = (char*)__get_free_page(GFP_KERNEL);
 +  if (!buf)
@@ -238,8 +267,6 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +
 +	n = strlen(buf);
 +	if ((n > 0) && (buf[n-1] == '\n')) buf[n-1] = '\0';
-+
-+  /* printk("Sending PTLsim command '%s' to hypervisor\n", buf); */
 +
 +  rc = ptlcall_single_flush(buf);
 +
@@ -259,6 +286,25 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +	return 0;
 +}
 +
++static struct proc_dir_entry *ptlcall_marker_pde = NULL;
++
++static int ptlcall_marker_write(struct file *file, const char __user *userbuf,
++                         unsigned long count, void *data)
++{
++	unsigned long long marker = 0;
++
++	if (count > sizeof(marker))
++		return -EFBIG;   /* too long */
++	/* Markers are allowed in dom0, unlike other ptlcalls */
++
++	if (copy_from_user(&marker, userbuf, count))
++		return -EFAULT;
++
++	ptlcall(PTLCALL_MARKER, marker, 0, 0, 0);
++
++	return count;
++}
++
 +static struct proc_dir_entry *ptlcall_after_resume_pde = NULL;
 +
 +static int ptlcall_after_resume_write(struct file *file, const char __user *buffer,
@@ -268,6 +314,8 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +
 +	if (count >= sizeof(ptlcall_after_resume))
 +		return -EFBIG;   /* too long */
++	if (is_initial_xendomain())
++		return -ENOSYS; /* not allowed in dom0 */
 +
 +	if (copy_from_user(ptlcall_after_resume, buffer, count))
 +		return -EFAULT;
@@ -275,8 +323,6 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +
 +	n = strlen(ptlcall_after_resume);
 +	if ((n > 0) && (ptlcall_after_resume[n-1] == '\n')) ptlcall_after_resume[n-1] = '\0';
-+
-+  /* printk("Set ptlcall_after_resume = '%s'\n", ptlcall_after_resume); */
 +
 +	return count;
 +}
@@ -292,12 +338,12 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +	return len;
 +}
 +
- static int setup_shutdown_watcher(struct notifier_block *notifier,
- 				  unsigned long event,
- 				  void *data)
-@@ -204,6 +438,30 @@
- 	else
- 		xenbus_write(XBT_NIL, "control", "feature-sysrq", "1");
+ static int setup_shutdown_watcher(void)
+ {
+ 	int err;
+@@ -214,6 +492,37 @@
+ 		return err;
+ 	}
  
 +	/* Use "chmod a+rw /proc/xen/checkpoint" to enable ordinary users to do this */
 +	if ((checkpoint_trigger_pde = create_xen_proc_entry("checkpoint", 0644))) {
@@ -323,6 +369,13 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +		printk(KERN_ERR "Failed to create /proc/xen/ptlcall\n");
 +	}
 +
- 	return NOTIFY_DONE;
++	/* Use "chmod a+rw /proc/xen/checkpoint" to enable ordinary users to do this */
++	if ((ptlcall_marker_pde = create_xen_proc_entry("ptlcall-marker", 0644))) {
++		ptlcall_marker_pde->write_proc = ptlcall_marker_write;
++	} else {
++		printk(KERN_ERR "Failed to create /proc/xen/ptlcall-marker\n");
++	}
++
+ 	return 0;
  }
  

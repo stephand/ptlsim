@@ -215,6 +215,7 @@ extern "C" void assert_fail(const char *__assertion, const char *__file, unsigne
 
   // Crash and make a core dump:
   asm("ud2a");
+  abort();
 }
 
 //
@@ -248,8 +249,12 @@ void AddressSpace::make_accessible(void* p, Waddr size, spat_t top) {
   Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
   Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
   Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
-  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " (size ", size, ") accessible for ", 
-    ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"), endl, flush;
+  if (logable(1)) {
+    logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ",
+      (void*)(lastpage << log2(PAGE_SIZE)), " (size ", size, ") accessible for ", 
+    ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"),
+      endl, flush;
+  }
   assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
   for (W64 i = firstpage; i <= lastpage; i++) { setbit(pageid_to_map_byte(top, i), lowbits(i, 3)); }
 }
@@ -258,8 +263,12 @@ void AddressSpace::make_inaccessible(void* p, Waddr size, spat_t top) {
   Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
   Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
   Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
-  logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ", (void*)(lastpage << log2(PAGE_SIZE)), " (size ", size, ") inaccessible for ", 
-    ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"), endl, flush;
+  if (logable(1)) {
+    logfile << "SPT: Making byte range ", (void*)(firstpage << log2(PAGE_SIZE)), " to ",
+      (void*)(lastpage << log2(PAGE_SIZE)), " (size ", size, ") inaccessible for ", 
+    ((top == readmap) ? "read" : (top == writemap) ? "write" : (top == execmap) ? "exec" : "UNKNOWN"),
+      endl, flush;
+  }
   assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
   for (Waddr i = firstpage; i <= lastpage; i++) { clearbit(pageid_to_map_byte(top, i), lowbits(i, 3)); }
 }
@@ -2133,6 +2142,7 @@ extern "C" void* ptlsim_preinit(void* origrsp, void* nextinit) {
   ctx.fxrstor(x87state);
 
   ctx.vcpuid = 0;
+  ctx.running = 1;
   ctx.commitarf[REG_ctx] = (Waddr)&ctx;
   ctx.commitarf[REG_fpstack] = (Waddr)&ctx.fpstack;
 

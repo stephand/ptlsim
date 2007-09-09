@@ -1,0 +1,955 @@
+diff -r f0ba459065d3 xen/arch/x86/cpu/common.c
+--- a/xen/arch/x86/cpu/common.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/cpu/common.c	Sun Jan  7 00:12:24 2007
+@@ -560,6 +560,9 @@
+ 	if (cpu_has_vme || cpu_has_tsc || cpu_has_de)
+ 		clear_in_cr4(X86_CR4_VME|X86_CR4_PVI|X86_CR4_TSD|X86_CR4_DE);
+ 
++  /* Allow userspace to read performance counters */
++  set_in_cr4(X86_CR4_PCE);
++
+ 	*(unsigned short *)(&gdt_load[0]) = LAST_RESERVED_GDT_BYTE;
+ 	*(unsigned long  *)(&gdt_load[2]) = GDT_VIRT_START(current);
+ 	__asm__ __volatile__ ( "lgdt %0" : "=m" (gdt_load) );
+diff -r f0ba459065d3 xen/arch/x86/domain.c
+--- a/xen/arch/x86/domain.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/domain.c	Sun Jan  7 00:12:24 2007
+@@ -421,6 +421,35 @@
+         break;
+     }
+ 
++    case VCPUOP_get_registered_runstate_memory_area: {
++        unsigned long runstate_virtaddr = (unsigned long)v->runstate_guest.p;
++        if (copy_to_guest(arg, &runstate_virtaddr, 1))
++            rc = -EFAULT;
++        break;
++    }
++
++    case VCPUOP_set_breakout_insn_action: {
++        vcpu_breakout_insn_action_t action;
++        rc = -EFAULT;
++        if (copy_from_guest(&action, arg, 1))
++            break;
++
++        rc = -E2BIG;
++        if (action.insn_length > sizeof(v->breakout.insn))
++            break;
++
++        v->breakout.flags = 0;
++        barrier();
++        v->breakout.notify_port = action.notify_port;
++        v->breakout.insn_length = action.insn_length;
++        memcpy(v->breakout.insn, action.insn, sizeof(v->breakout.insn));
++        barrier();
++        v->breakout.flags = action.flags;
++
++        rc = 0;
++        break;
++    }
++
+     default:
+         rc = -ENOSYS;
+         break;
+@@ -688,6 +717,13 @@
+ 
+     write_ptbase(n);
+ 
++    /* Set up TSC virtualization */
++    if (unlikely((!(n->tsc_timestamp_bias)) ^ (!(p->tsc_timestamp_bias)))) {
++        if (n->tsc_timestamp_bias)
++            set_in_cr4(X86_CR4_TSD);
++        else clear_in_cr4(X86_CR4_TSD);
++    }
++
+     if ( p->vcpu_id != n->vcpu_id )
+     {
+         char gdt_load[10];
+diff -r f0ba459065d3 xen/arch/x86/domctl.c
+--- a/xen/arch/x86/domctl.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/domctl.c	Sun Jan  7 00:12:24 2007
+@@ -316,6 +316,38 @@
+     c->vm_assist = v->domain->vm_assist;
+ }
+ 
++void arch_get_ext_vcpu_context(struct vcpu *v, struct vcpu_extended_context *c)
++{
++    c->guest_table = v->arch.guest_table.pfn;
++    c->guest_table_user = v->arch.guest_table_user.pfn;
++    c->cr3 = v->arch.cr3;
++    c->iobmp = v->arch.iobmp.p;
++    c->iobmp_limit = v->arch.iobmp_limit;
++    c->iopl = v->arch.iopl;
++}
++
++int update_user_pt_base(struct vcpu *v, mfn_t mfn);
++
++int arch_finish_context_swap(struct vcpu *v, struct vcpu_guest_context *c, struct vcpu_extended_context *ext) {
++    int ok = 1;
++
++    if (ext) {
++        mfn_t kernel_mfn = gmfn_to_mfn(v->domain, ext->guest_table);
++        mfn_t user_mfn = gmfn_to_mfn(v->domain, ext->guest_table_user);
++
++        ok &= update_vcpu_pt_base(v, kernel_mfn, 0);
++
++        /* Prevent installation of a null user page table */
++        /* if we're in user mode already */        
++        ok &= ((!(v->arch.flags & TF_kernel_mode)) & (!user_mfn)) ? 0 :
++            update_user_pt_base(v, user_mfn);
++
++        update_cr3(v);
++    }
++
++    return (ok) ? 0 : -1;
++}
++
+ /*
+  * Local variables:
+  * mode: C
+diff -r f0ba459065d3 xen/arch/x86/mm.c
+--- a/xen/arch/x86/mm.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/mm.c	Sun Jan  7 00:12:24 2007
+@@ -1709,9 +1709,8 @@
+ }
+ 
+ 
+-int new_guest_cr3(unsigned long mfn)
+-{
+-    struct vcpu *v = current;
++int update_vcpu_pt_base(struct vcpu *v, unsigned long mfn, int update_real_cr3)
++{
+     struct domain *d = v->domain;
+     int okay;
+     unsigned long old_base_mfn;
+@@ -1731,6 +1730,11 @@
+     else
+     {
+         okay = get_page_and_type_from_pagenr(mfn, PGT_root_page_table, d);
++        if ( unlikely((!okay) && (!update_real_cr3)) ) {
++            printk("Cannot install new baseptr %lu for vcpu %d in domain %d: not pinned as a root page table\n", mfn, v->vcpu_id, d->domain_id);
++            return 0;
++        }
++
+         if ( unlikely(!okay) )
+         {
+             /* Switch to idle pagetable: this VCPU has no active p.t. now. */
+@@ -1738,7 +1742,7 @@
+             old_base_mfn = pagetable_get_pfn(v->arch.guest_table);
+             v->arch.guest_table = pagetable_null();
+             update_cr3(v);
+-            write_cr3(__pa(idle_pg_table));
++            if (update_real_cr3) write_cr3(__pa(idle_pg_table));
+             if ( old_base_mfn != 0 )
+                 put_page_and_type(mfn_to_page(old_base_mfn));
+ 
+@@ -1747,9 +1751,16 @@
+             if ( !okay )
+             {
+                 /* Failure here is unrecoverable: the VCPU has no pagetable! */
+-                MEM_LOG("Fatal error while installing new baseptr %lx", mfn);
+-                domain_crash(d);
+-                ASSERT(v->processor == smp_processor_id());
++                printk("Fatal error while installing new baseptr %lu on vcpu %d in domain %d\n", mfn, v->vcpu_id, d->domain_id);
++                if (v == current) {
++                    /*
++                     * Only crash the domain if it attempted to change its own base pointer.
++                     * When dom0 changes another domain's base pointer and fails, we just
++                     * return an error instead - the domain is getting killed anyway.
++                     */
++                    domain_crash(d);
++                    ASSERT(v->processor == smp_processor_id());
++                }
+                 this_cpu(percpu_mm_info).deferred_ops = 0;
+                 return 0;
+             }
+@@ -1763,7 +1774,7 @@
+     v->arch.guest_table = pagetable_from_pfn(mfn);
+     update_cr3(v); /* update shadow_table and cr3 fields of vcpu struct */
+ 
+-    write_ptbase(v);
++    if (update_real_cr3) write_ptbase(v);
+ 
+     if ( likely(old_base_mfn != 0) )
+     {
+@@ -1774,6 +1785,26 @@
+     }
+ 
+     return 1;
++}
++
++int update_user_pt_base(struct vcpu *v, mfn_t mfn) {
++    struct domain *d = v->domain;
++
++    int ok = 1;
++    if (mfn) ok = get_page_and_type_from_pagenr(mfn, PGT_root_page_table, d);
++
++    if (ok) {
++        mfn_t old_mfn = pagetable_get_pfn(v->arch.guest_table_user);
++        v->arch.guest_table_user = pagetable_from_pfn(mfn);
++        if (old_mfn != 0) put_page_and_type(mfn_to_page(old_mfn));
++    } else {
++        printk("Error installing user page table base mfn %lu in domain %d vcpu %d\n",
++               mfn, d->domain_id, v->vcpu_id);
++    }
++
++    update_cr3(v);
++
++    return ok;
+ }
+ 
+ static void process_deferred_ops(void)
+@@ -2132,6 +2163,106 @@
+             break;
+         }
+ 
++        /*
++         * PTLsim specific hypercalls
++         */
++
++        /* Get template GDT mapped by Xen into the FIRST_RESERVED_GDT_PAGE gdt_frames[] slot */
++
++        case MMUEXT_GET_GDT_TEMPLATE: {       
++            rc = -E2BIG;
++            if (op.arg2.nr_ents > PAGE_SIZE)
++                break;
++            
++            rc = -EFAULT;
++            if (copy_to_user((void*)op.arg1.linear_addr, &gdt_table, op.arg2.nr_ents))
++                break;
++            
++            rc = 0;
++            break;
++        }
++
++        case MMUEXT_GET_KERNEL_BASEPTR:
++        case MMUEXT_GET_USER_BASEPTR: {
++            struct vcpu *v;
++
++            rc = -E2BIG;
++            if ((op.arg2.vcpuid < 0) || (op.arg2.vcpuid >= MAX_VIRT_CPUS))
++                break;
++
++            rc = -ENOENT;
++            if ((v = FOREIGNDOM->vcpu[op.arg2.vcpuid]) == NULL)
++                break;
++
++            mfn = (op.cmd == MMUEXT_GET_KERNEL_BASEPTR)
++                ? pagetable_get_pfn(v->arch.guest_table)
++                : pagetable_get_pfn(v->arch.guest_table_user);
++
++            rc = -EFAULT;
++            if (copy_to_user((void*)op.arg1.linear_addr, &mfn, sizeof(mfn)))
++                break;
++
++            rc = 0;
++            break;            
++        }
++
++        case MMUEXT_QUERY_PAGES: {
++            page_type_t* ptr = (page_type_t*)op.arg1.linear_addr;
++            page_type_t pagetype;
++            unsigned long mfn;
++            int i;
++
++            rc = 0;
++            okay = 0;
++            for (i = 0; i < op.arg2.nr_ents; i++) {
++                rc = -EFAULT;
++                if (unlikely(copy_from_user(&pagetype, &ptr[i], sizeof(page_type_t))))
++                    break;
++
++                mfn = pagetype.in.mfn;
++                pagetype.out.type = PAGE_TYPE_INVALID_MFN;
++                pagetype.out.pinned = 0;
++                pagetype.out.type_count = 0;
++                pagetype.out.total_count = 0;
++
++                if (likely(mfn_valid(mfn))) {
++                    page = mfn_to_page(mfn);
++                    if (likely(get_page(page, FOREIGNDOM))) {
++                        int type = PAGE_TYPE_NONE;
++                        switch (page->u.inuse.type_info & PGT_type_mask) {
++                        case PGT_none: type = PAGE_TYPE_NONE; break;
++                        case PGT_l1_page_table: type = PAGE_TYPE_L1; break;
++                        case PGT_l2_page_table: type = PAGE_TYPE_L2; break;
++                        case PGT_l3_page_table: type = PAGE_TYPE_L3; break;
++                        case PGT_l4_page_table: type = PAGE_TYPE_L4; break;
++                        case PGT_gdt_page: type = PAGE_TYPE_GDT; break;
++                        case PGT_ldt_page: type = PAGE_TYPE_LDT; break;
++                        case PGT_writable_page: type = PAGE_TYPE_WRITABLE; break;
++                        default: type = PAGE_TYPE_NONE; break;
++                        }
++
++                        pagetype.out.type = type;
++                        pagetype.out.pinned = ((page->u.inuse.type_info & PGT_pinned) != 0);
++                        pagetype.out.type_count = page->u.inuse.type_info & PGT_count_mask;
++                        pagetype.out.total_count = page->count_info & PGC_count_mask;
++                        put_page(page);
++                    } else {
++                        pagetype.out.type = PAGE_TYPE_INACCESSIBLE;
++                    }
++                }
++
++                rc = -EFAULT;
++                if (unlikely(copy_to_user(&ptr[i], &pagetype, sizeof(page_type_t))))
++                    break;
++
++                rc = 0;
++            }
++
++            okay = (rc == 0);
++
++            break;
++        }
++
+         default:
+             MEM_LOG("Invalid extended pt command 0x%x", op.cmd);
+             rc = -ENOSYS;
+diff -r f0ba459065d3 xen/arch/x86/platform_hypercall.c
+--- a/xen/arch/x86/platform_hypercall.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/platform_hypercall.c	Sun Jan  7 00:12:24 2007
+@@ -22,6 +22,23 @@
+ #include <public/platform.h>
+ #include <asm/mtrr.h>
+ #include "cpu/mtrr/mtrr.h"
++
++static void wrmsr_on_specific_cpu(void *arg)
++{
++    xenpf_msr_t* msr = (xenpf_msr_t*)arg;
++    uint32_t* v = (uint32_t*)&msr->value;
++
++    if (smp_processor_id() == msr->cpu)
++        msr->rc = wrmsr_safe(msr->index, v[0], v[1]);
++}
++
++static void rdmsr_on_specific_cpu(void *arg)
++{
++    xenpf_msr_t* msr = (xenpf_msr_t*)arg;
++    uint32_t* v = (uint32_t*)&msr->value;
++    if (smp_processor_id() == msr->cpu)
++        msr->rc = rdmsr_safe(msr->index, v[0], v[1]);
++}
+ 
+ long do_platform_op(XEN_GUEST_HANDLE(xen_platform_op_t) u_xenpf_op)
+ {
+@@ -138,6 +155,20 @@
+     }
+     break;
+ 
++    case XENPF_rdmsr:
++    {
++        on_each_cpu(rdmsr_on_specific_cpu, &op->u.msr, 1, 1);
++        ret = copy_to_guest(u_xenpf_op, op, 1) ? -EFAULT : 0;
++    }
++    break;
++
++    case XENPF_wrmsr:
++    {
++        on_each_cpu(wrmsr_on_specific_cpu, &op->u.msr, 1, 1);
++        ret = copy_to_guest(u_xenpf_op, op, 1) ? -EFAULT : 0;
++    }
++    break;
++
+     default:
+         ret = -ENOSYS;
+         break;
+diff -r f0ba459065d3 xen/arch/x86/setup.c
+--- a/xen/arch/x86/setup.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/setup.c	Sun Jan  7 00:12:24 2007
+@@ -735,7 +735,7 @@
+ 
+ #elif defined(CONFIG_X86_64)
+ 
+-    p += sprintf(p, "xen-%d.%d-x86_64 ", major, minor);
++    p += sprintf(p, "xen-%d.%d-x86_64-ptlsim ", major, minor);
+     if ( hvm_enabled )
+     {
+         p += sprintf(p, "hvm-%d.%d-x86_32 ", major, minor);
+diff -r f0ba459065d3 xen/arch/x86/time.c
+--- a/xen/arch/x86/time.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/time.c	Sun Jan  7 00:12:24 2007
+@@ -680,8 +691,8 @@
+ 
+     version_update_begin(&u->version);
+ 
+-    u->tsc_timestamp     = t->local_tsc_stamp;
+-    u->system_time       = t->stime_local_stamp;
++    u->tsc_timestamp     = t->local_tsc_stamp + v->tsc_timestamp_bias;
++    u->system_time       = t->stime_local_stamp + v->system_time_bias;
+     u->tsc_to_system_mul = t->tsc_scale.mul_frac;
+     u->tsc_shift         = (s8)t->tsc_scale.shift;
+ 
+@@ -690,7 +701,7 @@
+ 
+ void update_vcpu_system_time(struct vcpu *v)
+ {
+-    if ( v->vcpu_info->time.tsc_timestamp !=
++    if ( (v->vcpu_info->time.tsc_timestamp - v->tsc_timestamp_bias) !=
+          this_cpu(cpu_time).local_tsc_stamp )
+         __update_vcpu_system_time(v);
+ }
+diff -r f0ba459065d3 xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Fri Nov 17 02:47:28 2006
++++ b/xen/arch/x86/traps.c	Sun Jan  7 00:12:24 2007
+@@ -618,6 +618,58 @@
+     return EXCRET_fault_fixed;
+ }
+ 
++static int handle_breakout_op(struct cpu_user_regs *regs) {
++    char insn[16];
++    unsigned long eip, rc;
++    int match;
++    int i;
++
++    if (!current->breakout.flags)
++        return 0;
++
++    eip = regs->eip;
++
++    if ((rc = copy_from_user(insn, (char *)eip, current->breakout.insn_length)) != 0) {
++        propagate_page_fault(eip + sizeof(insn) - rc, 0);
++        return EXCRET_fault_fixed;
++    }
++
++    match = 1;
++    for (i = 0; i < current->breakout.insn_length; i++) {
++        match &= (insn[i] == current->breakout.insn[i]);
++    }
++
++    if (!match)
++        return 0;
++
++    if (current->breakout.flags & BREAKOUT_INCREMENT_RIP) {
++        eip += current->breakout.insn_length;
++    }
++
++    regs->eip = eip;
++
++    if (current->breakout.flags & BREAKOUT_PAUSE_DOMAIN) {
++        /* This is the same concept as pause_for_debugger() */
++        struct domain *d = current->domain;
++        struct vcpu *v;
++
++        /*
++         * NOTE: This does not synchronously pause the domain. The debugger
++         * must issue a PAUSEDOMAIN command to ensure that all execution
++         * has ceased and guest state is committed to memory.
++         */
++        set_bit(_DOMF_ctrl_pause, &d->domain_flags);
++        for_each_vcpu ( d, v )
++            vcpu_sleep_nosync(v);
++    }
++
++    if (current->breakout.flags & BREAKOUT_NOTIFY_PORT) {
++        evtchn_send(current->breakout.notify_port);
++    }
++
++    return EXCRET_fault_fixed;
++}
++
+ asmlinkage int do_invalid_op(struct cpu_user_regs *regs)
+ {
+     int rc;
+@@ -641,6 +693,9 @@
+     }
+ 
+     if ( (rc = emulate_forced_invalid_op(regs)) != 0 )
++        return rc;
++
++    if ( (rc = handle_breakout_op(regs)) != 0 )
+         return rc;
+ 
+     return do_guest_trap(TRAP_invalid_op, regs, 0);
+@@ -1281,12 +1341,26 @@
+     goto fail;
+ 
+  twobyte_opcode:
++    opcode = insn_fetch(u8, 1, cs, eip);
++
++    switch ( opcode )
++    {
++    case 0x31: { /* RDTSC */
++        uint64_t tsc;
++        rdtscll(tsc);
++        tsc += v->tsc_timestamp_bias;
++        regs->eax = tsc & 0xFFFFFFFFULL;
++        regs->edx = (tsc >> 32) & 0xFFFFFFFFULL;
++        goto done;
++        break;
++    }
++    }
++
+     /* Two-byte opcodes only emulated from guest kernel. */
+     if ( !guest_kernel_mode(v, regs) )
+         goto fail;
+ 
+     /* Privileged (ring 0) instructions. */
+-    opcode = insn_fetch(u8, 1, cs, eip);
+     switch ( opcode )
+     {
+     case 0x06: /* CLTS */
+@@ -1378,11 +1452,7 @@
+             break;
+ 
+         case 4:
+-            if ( *reg != (read_cr4() & ~(X86_CR4_PGE|X86_CR4_PSE)) )
+-            {
+-                gdprintk(XENLOG_WARNING, "Attempt to change CR4 flags.\n");
+-                goto fail;
+-            }
++            /* Ignore attempts to write CR4 */
+             break;
+ 
+         default:
+diff -r f0ba459065d3 xen/common/domain.c
+--- a/xen/common/domain.c	Fri Nov 17 02:47:28 2006
++++ b/xen/common/domain.c	Sun Jan  7 00:12:24 2007
+@@ -535,6 +535,33 @@
+         break;
+     }
+ 
++    case VCPUOP_set_timestamp_bias:
++    {
++        vcpu_timestamp_bias_t bias;
++        rc = -EFAULT;
++        if ( copy_from_guest(&bias, arg, 1) )
++            break;
++
++        rc = 0;
++        v->tsc_timestamp_bias = bias.tsc_timestamp_bias;
++        v->system_time_bias = bias.system_time_bias;
++        break;
++    }
++
++    case VCPUOP_get_timestamp_bias:
++    {
++        vcpu_timestamp_bias_t bias;
++        bias.tsc_timestamp_bias = v->tsc_timestamp_bias;
++        bias.system_time_bias = v->system_time_bias;
++
++        rc = -EFAULT;
++        if ( copy_to_guest(arg, &bias, 1) )
++            break;
++
++        rc = 0;
++        break;
++    }
++
+     default:
+         rc = arch_do_vcpu_op(cmd, v, arg);
+         break;
+diff -r f0ba459065d3 xen/common/domctl.c
+--- a/xen/common/domctl.c	Fri Nov 17 02:47:28 2006
++++ b/xen/common/domctl.c	Sun Jan  7 00:12:24 2007
+@@ -169,6 +169,123 @@
+     return cpu;
+ }
+ 
++extern void arch_get_ext_vcpu_context(struct vcpu *v, struct vcpu_extended_context *c);
++extern int arch_finish_context_swap(struct vcpu *v, struct vcpu_guest_context *c, struct vcpu_extended_context *ext);
++
++int do_contextswap(struct domain *d, xen_domctl_contextswap_t* op) {
++    struct vcpu_guest_context *oldbuf = NULL;
++    struct vcpu_guest_context *newbuf = NULL;
++    struct shared_info *shinfobuf = NULL;
++    uint64_t phys_tsc_at_capture;
++    int rc = 0;
++    int i;
++
++    domain_pause(d);
++    rdtscll(phys_tsc_at_capture);
++
++    rc = -ENOMEM;
++    if ((oldbuf = xmalloc(struct vcpu_guest_context)) == NULL)
++        goto out;
++
++    rc = -ENOMEM;
++    if ((newbuf = xmalloc(struct vcpu_guest_context)) == NULL)
++        goto free_oldbuf;
++
++    rc = -ENOMEM;
++    if ((shinfobuf = (struct shared_info*)alloc_xenheap_page()) == NULL)
++        goto free_newbuf;
++
++    /* Exchange shared info */
++
++    rc = -EFAULT;
++    if (op->new_shared_info && copy_from_user(shinfobuf, op->new_shared_info, sizeof(shared_info_t)))
++        goto free_all;
++
++    rc = -EFAULT;
++    if (op->old_shared_info && copy_to_user(op->old_shared_info, d->shared_info, sizeof(shared_info_t)))
++        goto free_all;
++
++    if (op->new_shared_info) memcpy(d->shared_info, shinfobuf, sizeof(shared_info_t));
++
++    /* Exchange per-VCPU info */
++
++    for (i = 0; i < MAX_VIRT_CPUS; i++) {
++        struct vcpu* v = d->vcpu[i];
++        vcpu_extended_context_t oldext;
++        vcpu_extended_context_t newext;
++
++        if (!test_bit(i, &op->vcpumap)) continue;
++
++        if (!v) continue;
++
++        if (!test_bit(_VCPUF_initialised, &v->vcpu_flags)) continue;
++
++        if (op->newctx && copy_from_user(newbuf, &op->newctx[i], sizeof(struct vcpu_guest_context))) continue;
++
++        if (op->newext && copy_from_user(&newext, &op->newext[i], sizeof(struct vcpu_extended_context))) continue;
++
++        if (op->oldctx) {
++            arch_getdomaininfo_ctxt(v, oldbuf);
++            if (copy_to_user(&op->oldctx[i], oldbuf, sizeof(struct vcpu_guest_context))) continue;
++
++            memcpy(&oldext.runstate, &v->runstate, sizeof(oldext.runstate));
++            oldext.runstate.state = (v->vcpu_flags & (VCPUF_blocked | VCPUF_blocked_in_xen | VCPUF_down)) ? RUNSTATE_blocked : RUNSTATE_runnable;
++            oldext.phys_tsc_at_capture = phys_tsc_at_capture;
++            oldext.tsc_timestamp_bias = v->tsc_timestamp_bias;
++            oldext.system_time_bias = v->system_time_bias;
++            memcpy(&oldext.virq_to_evtchn, v->virq_to_evtchn, sizeof(oldext.virq_to_evtchn));
++            oldext.runstate_guest = v->runstate_guest.p;
++            oldext.nmi_addr = v->nmi_addr;
++            oldext.timer_expires = v->timer.expires;
++            oldext.timer_killed = v->timer.killed;
++            oldext.poll_timer_expires = v->poll_timer.expires;
++            oldext.poll_timer_killed = v->poll_timer.killed;
++            arch_get_ext_vcpu_context(v, &oldext);
++
++            if (op->oldext) { if (copy_to_user(&op->oldext[i], &oldext, sizeof(oldext))) continue; }
++        }
++
++        if (op->newctx) {
++            if (arch_set_info_guest(v, newbuf)) continue;
++            if (arch_finish_context_swap(v, newbuf, (op->newext ? &newext : NULL))) continue;
++        }
++
++        if (op->newext) {
++            switch (newext.runstate.state) {
++            case RUNSTATE_running:
++            case RUNSTATE_runnable:
++                /* Unblock the VCPU when we resume */
++                vcpu_unblock(v);
++                break;
++            case RUNSTATE_blocked:
++                /* It's already paused, but make sure it doesn't get */
++                /* rescheduled when we unpause the entire domain: */
++                v->vcpu_info->evtchn_upcall_mask = 0;
++                set_bit(_VCPUF_blocked, &v->vcpu_flags);
++                if (v->vcpu_info->evtchn_upcall_pending)
++                    clear_bit(_VCPUF_blocked, &v->vcpu_flags);
++                break;
++            case RUNSTATE_offline:
++                /* No action: already blocked */
++                break;
++            }
++        }
++
++        clear_bit(i, &op->vcpumap);
++    }
++
++    rc = 0;
++  free_all:
++    free_xenheap_page(shinfobuf);
++  free_newbuf:
++    xfree(newbuf);
++  free_oldbuf:
++    xfree(oldbuf);
++  out:
++    domain_unpause(d);
++    return rc;
++}
++
+ long do_domctl(XEN_GUEST_HANDLE(xen_domctl_t) u_domctl)
+ {
+     long ret = 0;
+@@ -643,6 +760,18 @@
+             put_domain(d);
+             ret = 0;
+         }
++    }
++    break;
++
++    case XEN_DOMCTL_contextswap:
++    {
++        struct domain *d = find_domain_by_id(op->domain);
++        ret = -ESRCH;
++        if ( d != NULL ) {
++            ret = do_contextswap(d, &op->u.contextswap);
++            put_domain(d);
++        }
++        if ( copy_to_guest(u_domctl, op, 1) ) ret = -EFAULT;
+     }
+     break;
+ 
+diff -r f0ba459065d3 xen/common/grant_table.c
+--- a/xen/common/grant_table.c	Fri Nov 17 02:47:28 2006
++++ b/xen/common/grant_table.c	Sun Jan  7 00:12:24 2007
+@@ -844,7 +844,7 @@
+     struct gnttab_copy *op)
+ {
+     struct domain *sd = NULL, *dd = NULL;
+-    unsigned long s_frame, d_frame;
++    unsigned long s_frame = 0, d_frame = 0;
+     char *sp, *dp;
+     s16 rc = GNTST_okay;
+     int have_d_grant = 0, have_s_grant = 0, have_s_ref = 0;
+diff -r f0ba459065d3 xen/include/asm-x86/mm.h
+--- a/xen/include/asm-x86/mm.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/asm-x86/mm.h	Sun Jan  7 00:12:24 2007
+@@ -7,6 +7,7 @@
+ #include <xen/list.h>
+ #include <asm/io.h>
+ #include <asm/uaccess.h>
++#include <asm/current.h>
+ 
+ /*
+  * Per-page-frame information.
+@@ -343,7 +344,12 @@
+ 
+ #endif
+ 
+-int new_guest_cr3(unsigned long pfn);
++int update_vcpu_pt_base(struct vcpu *v, unsigned long mfn, int update_cr3);
++
++static inline int new_guest_cr3(unsigned long mfn) {
++  return update_vcpu_pt_base(current, mfn, 1);
++}
++
+ void make_cr3(struct vcpu *v, unsigned long mfn);
+ 
+ void propagate_page_fault(unsigned long addr, u16 error_code);
+diff -r f0ba459065d3 xen/include/public/domctl.h
+--- a/xen/include/public/domctl.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/domctl.h	Sun Jan  7 00:12:24 2007
+@@ -33,6 +33,7 @@
+ #endif
+ 
+ #include "xen.h"
++#include "vcpu.h"
+ 
+ #define XEN_DOMCTL_INTERFACE_VERSION 0x00000004
+ 
+@@ -385,6 +386,61 @@
+ typedef struct xen_domctl_settimeoffset xen_domctl_settimeoffset_t;
+ DEFINE_XEN_GUEST_HANDLE(xen_domctl_settimeoffset_t);
+ 
++/* PTLsim specific */
++
++/*
++ * Extended VCPU context (PTLsim specific)
++ */
++struct vcpu_extended_context {
++    struct vcpu_runstate_info runstate;
++
++    uint64_t      phys_tsc_at_capture;
++    uint64_t      tsc_timestamp_bias;
++    uint64_t      system_time_bias;
++
++    uint16_t              virq_to_evtchn[NR_VIRQS];
++    struct vcpu_runstate_info *runstate_guest;
++    unsigned long    nmi_addr;
++
++    /* for timer_op: system time expiry value (nanoseconds since boot). */
++    uint64_t      timer_expires;      /* (v->timer.expires) */
++    int           timer_killed;       /* (v->timer.killed) */
++    uint64_t      poll_timer_expires; /* (v->timer.expires) */
++    int           poll_timer_killed;  /* (v->timer.killed) */
++
++    /* Memory management */
++    unsigned long guest_table_user;   /* (MFN) x86/64 user-space pagetable */
++    unsigned long guest_table;        /* (MFN) guest notion of cr3 */
++    unsigned long cr3;           	  /* (MA) value to install in HW CR3 */
++
++    /* I/O-port access bitmap. */
++    uint8_t *iobmp;        /* Guest kernel virtual address of the bitmap. */
++    int iobmp_limit;  /* Number of ports represented in the bitmap.  */
++    int iopl;         /* Current IOPL for this VCPU. */
++};
++typedef struct vcpu_extended_context vcpu_extended_context_t;
++
++/*
++ * Perform an atomic context swap of all VCPUs in the domain.
++ * This must be done within Xen to avoid nasty race conditions
++ * with paused domains and page tables that can crash the
++ * hypervisor. The traditional setvpucontext domctl op is
++ * only intended for use at domain startup, while contextswap
++ * can be safely used at any time.
++ */
++#define XEN_DOMCTL_contextswap 32
++struct xen_domctl_contextswap {
++    unsigned long vcpumap; /* IN/OUT */
++    shared_info_t* old_shared_info; /* OUT */
++    shared_info_t* new_shared_info; /* IN */
++    vcpu_guest_context_t* oldctx; /* OUT */
++    vcpu_guest_context_t* newctx; /* IN */
++    vcpu_extended_context_t* oldext; /* OUT */
++    vcpu_extended_context_t* newext; /* IN */
++};
++typedef struct xen_domctl_contextswap xen_domctl_contextswap_t;
++DEFINE_XEN_GUEST_HANDLE(xen_domctl_contextswap_t);
++
+ struct xen_domctl {
+     uint32_t cmd;
+     uint32_t interface_version; /* XEN_DOMCTL_INTERFACE_VERSION */
+@@ -410,7 +466,9 @@
+         struct xen_domctl_hypercall_init    hypercall_init;
+         struct xen_domctl_arch_setup        arch_setup;
+         struct xen_domctl_settimeoffset     settimeoffset;
+-        uint8_t                             pad[128];
++        /* PTLsim specific */
++        struct xen_domctl_contextswap       contextswap;
++        uint8_t                             pad[512];
+     } u;
+ };
+ typedef struct xen_domctl xen_domctl_t;
+diff -r f0ba459065d3 xen/include/public/platform.h
+--- a/xen/include/public/platform.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/platform.h	Sun Jan  7 00:12:24 2007
+@@ -114,6 +114,20 @@
+ typedef struct xenpf_platform_quirk xenpf_platform_quirk_t;
+ DEFINE_XEN_GUEST_HANDLE(xenpf_platform_quirk_t);
+ 
++#define XENPF_rdmsr               40
++#define XENPF_wrmsr               41
++struct xenpf_msr {
++    /* IN variables */
++    uint32_t cpu;
++    uint32_t index;
++    /* IN/OUT variables */
++    uint64_t value;
++    /* OUT variables */
++    uint32_t rc;
++};
++typedef struct xenpf_msr xenpf_msr_t;
++DEFINE_XEN_GUEST_HANDLE(xenpf_msr_t);
++
+ struct xen_platform_op {
+     uint32_t cmd;
+     uint32_t interface_version; /* XENPF_INTERFACE_VERSION */
+@@ -124,6 +138,7 @@
+         struct xenpf_read_memtype      read_memtype;
+         struct xenpf_microcode_update  microcode;
+         struct xenpf_platform_quirk    platform_quirk;
++        struct xenpf_msr               msr;
+         uint8_t                        pad[128];
+     } u;
+ };
+diff -r f0ba459065d3 xen/include/public/vcpu.h
+--- a/xen/include/public/vcpu.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/vcpu.h	Sun Jan  7 00:12:24 2007
+@@ -129,6 +129,35 @@
+ };
+ typedef struct vcpu_register_runstate_memory_area vcpu_register_runstate_memory_area_t;
+ 
++/* PTLsim specific */
++#define VCPUOP_get_registered_runstate_memory_area 6
++
++/* Virtualize rdtsc and shinfo system_time to properly do time dilation */
++struct vcpu_timestamp_bias {
++    int64_t  tsc_timestamp_bias; /* virtualize rdtsc and add this value (may be negative) */
++    int64_t  system_time_bias; /* add this value to system_time field in shared_info */
++};
++typedef struct vcpu_timestamp_bias vcpu_timestamp_bias_t;
++
++#define VCPUOP_set_timestamp_bias 7
++#define VCPUOP_get_timestamp_bias 8
++
++/* Set the breakout instruction opcode and action when that instruction is executed */
++struct vcpu_breakout_insn_action {
++    uint32_t  flags;
++    char      insn[16];
++    uint32_t  insn_length;
++    uint32_t  notify_port;
++};
++
++#define BREAKOUT_PAUSE_DOMAIN  (1 << 0)
++#define BREAKOUT_NOTIFY_PORT   (1 << 1)
++#define BREAKOUT_INCREMENT_RIP (1 << 2)
++
++typedef struct vcpu_breakout_insn_action vcpu_breakout_insn_action_t;
++
++#define VCPUOP_set_breakout_insn_action 9
++
+ #endif /* __XEN_PUBLIC_VCPU_H__ */
+ 
+ /*
+diff -r f0ba459065d3 xen/include/public/xen.h
+--- a/xen/include/public/xen.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/public/xen.h	Sun Jan  7 00:12:24 2007
+@@ -233,20 +233,55 @@
+ #define MMUEXT_SET_LDT          13
+ #define MMUEXT_NEW_USER_BASEPTR 15
+ 
++/* PTLsim specific calls */
++#define MMUEXT_GET_GDT_TEMPLATE     32
++#define MMUEXT_GET_KERNEL_BASEPTR   33
++#define MMUEXT_GET_USER_BASEPTR     35
++#define MMUEXT_QUERY_PAGES          37
++
+ #ifndef __ASSEMBLY__
++
++union page_type {
++    struct {
++        /* Use 0xffffffffffffffffULL for end of list marker */
++        uint64_t mfn;
++    } in;
++    struct {
++        uint8_t type;
++        uint8_t pinned:1;
++        uint16_t type_count;
++        uint32_t total_count;
++    } out;
++};
++ 
++typedef union page_type page_type_t;
++ 
++#define PAGE_TYPE_NONE           0 /* no special uses of this page */
++#define PAGE_TYPE_L1             1 /* using this page as an L1 page table? */
++#define PAGE_TYPE_L2             2 /* using this page as an L2 page table? */
++#define PAGE_TYPE_L3             3 /* using this page as an L3 page table? */
++#define PAGE_TYPE_L4             4 /* using this page as an L4 page table? */
++#define PAGE_TYPE_GDT            5 /* using this page in a GDT? */
++#define PAGE_TYPE_LDT            6 /* using this page in an LDT? */
++#define PAGE_TYPE_WRITABLE       7 /* has writable mappings of this page? */
++#define PAGE_TYPE_INVALID_MFN  254 /* MFN is invalid */
++#define PAGE_TYPE_INACCESSIBLE 255 /* not accessible to this domain */ 
++
+ struct mmuext_op {
+     unsigned int cmd;
+     union {
+         /* [UN]PIN_TABLE, NEW_BASEPTR, NEW_USER_BASEPTR */
+         xen_pfn_t     mfn;
+-        /* INVLPG_LOCAL, INVLPG_ALL, SET_LDT */
++        /* INVLPG_LOCAL, INVLPG_ALL, SET_LDT, GET_GDT_TEMPLATE, QUERY_PAGES */
+         unsigned long linear_addr;
+     } arg1;
+     union {
+-        /* SET_LDT */
++        /* SET_LDT, QUERY_PAGES */
+         unsigned int nr_ents;
+         /* TLB_FLUSH_MULTI, INVLPG_MULTI */
+         XEN_GUEST_HANDLE_00030205(void) vcpumask;
++        /* GET_KERNEL_BASEPTR, GET_USER_BASEPTR */
++        unsigned int vcpuid;
+     } arg2;
+ };
+ typedef struct mmuext_op mmuext_op_t;
+diff -r f0ba459065d3 xen/include/xen/sched.h
+--- a/xen/include/xen/sched.h	Fri Nov 17 02:47:28 2006
++++ b/xen/include/xen/sched.h	Sun Jan  7 00:12:24 2007
+@@ -91,6 +91,12 @@
+ 
+     /* Bitmask of CPUs which are holding onto this VCPU's state. */
+     cpumask_t        vcpu_dirty_cpumask;
++
++    /* Time dilation */
++    int64_t          tsc_timestamp_bias;
++    int64_t          system_time_bias;
++
++    vcpu_breakout_insn_action_t breakout;
+ 
+     struct arch_vcpu arch;
+ };

@@ -25,6 +25,7 @@ PTLsimStats stats;
 ostream logfile;
 bool logenable = 0;
 W64 sim_cycle = 0;
+W64 unhalted_cycle_count = 0;
 W64 iterations = 0;
 W64 total_uops_executed = 0;
 W64 total_uops_committed = 0;
@@ -43,16 +44,11 @@ void PTLsimConfig::reset() {
   simswitch = 0;
 #endif
 
-#ifdef PTLSIM_HYPERVISOR
-  core_name = "smt";
-#else
-  core_name = "ooo";
-#endif
-
   quiet = 0;
+  core_name = "smt";
   log_filename = "ptlsim.log";
   loglevel = 0;
-  start_log_at_iteration = infinity;
+  start_log_at_iteration = 0;
   start_log_at_rip = INVALIDRIP;
   log_on_console = 0;
   log_ptlsim_boot = 0;
@@ -87,6 +83,8 @@ void PTLsimConfig::reset() {
   stop_at_cycle = infinity;
   stop_at_iteration = infinity;
   stop_at_rip = INVALIDRIP;
+  stop_at_marker = infinity;
+  stop_at_marker_hits = infinity;
   stop_at_user_insns_relative = infinity;
   insns_in_last_basic_block = 65536;
   flush_interval = infinity;
@@ -108,6 +106,7 @@ void PTLsimConfig::reset() {
 #endif
 
   continuous_validation = 0;
+  validation_start_cycle = 0;
 
   perfect_cache = 0;
 
@@ -184,6 +183,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(stop_at_cycle,                "stopcycle",            "Stop after <stop> cycles");
   add(stop_at_iteration,            "stopiter",             "Stop after <stop> iterations (does not apply to cycle-accurate cores)");  
   add(stop_at_rip,                  "stoprip",              "Stop before rip <stoprip> is translated for the first time");
+  add(stop_at_marker,               "stop-at-marker",       "Stop after PTLCALL_MARKER with marker X");
+  add(stop_at_marker_hits,          "stop-at-marker-hits",  "Stop after PTLCALL_MARKER is called N times");
   add(stop_at_user_insns_relative,  "stopinsns-rel",        "Stop after executing <stopinsns-rel> user instructions relative to start of current run");
   add(insns_in_last_basic_block,    "bbinsns",              "In final basic block, only translate <bbinsns> user instructions");
   add(flush_interval,               "flushevery",           "Flush the pipeline every N committed instructions");
@@ -209,6 +210,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
 
   section("Validation");
   add(continuous_validation,        "validate",             "Continuous validation: validate against known-good sequential model");
+  add(validation_start_cycle,       "validate-start-cycle", "Start continuous validation after N cycles");
 
   section("Out of Order Core (ooocore)");
   add(perfect_cache,                "perfect-cache",        "Perfect cache performance: all loads and stores hit in L1");
@@ -393,6 +395,8 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
     logenable = 0;
   }
 
+  logenable = 1;
+
   if (config.bbcache_dump_filename.set() && (config.bbcache_dump_filename != current_bbcache_dump_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
     bbcache_dump_file.open(config.bbcache_dump_filename);
@@ -445,7 +449,7 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
   return true;
 }
 
-Hashtable<const char*, PTLsimMachine*, 1> machinetable;
+Hashtable<const char*, PTLsimMachine*, 1>* machinetable = null;
 
 // Make sure the vtable gets compiled:
 PTLsimMachine dummymachine;
@@ -458,11 +462,15 @@ void PTLsimMachine::flush_tlb(Context& ctx) { return; }
 void PTLsimMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) { return; }
 
 void PTLsimMachine::addmachine(const char* name, PTLsimMachine* machine) {
-  machinetable.add(name, machine);
+  if unlikely (!machinetable) {
+    machinetable = new Hashtable<const char*, PTLsimMachine*, 1>();
+  }
+  machinetable->add(name, machine);
 }
 
 PTLsimMachine* PTLsimMachine::getmachine(const char* name) {
-  PTLsimMachine** p = machinetable.get(name);
+  if unlikely (!machinetable) return null;
+  PTLsimMachine** p = machinetable->get(name);
   if (!p) return null;
   return *p;
 }
@@ -496,6 +504,16 @@ void update_progress() {
 
     sb << ": rip";
     foreach (i, contextcount) {
+      Context& ctx = contextof(i);
+#ifdef PTLSIM_HYPERVISOR
+      if (!ctx.running) {
+        static const char* runstate_names[] = {"running", "runnable", "blocked", "offline"}; 
+        const char* runstate_name = (inrange(ctx.runstate.state, 0, lengthof(runstate_names)-1)) ? runstate_names[ctx.runstate.state] : "???";
+
+        sb << " (", runstate_name, ")";
+        continue;
+      }
+#endif
       sb << ' ', (void*)contextof(i).commitarf[REG_rip];
     }
 
@@ -551,13 +569,21 @@ bool simulate(const char* machinename) {
   last_printed_status_at_user_insn = 0;
   last_printed_status_at_cycle = 0;
 
+  W64 tsc_at_start = rdtsc();
   current_machine = machine;
   machine->run(config);
+  W64 tsc_at_end = rdtsc();
   machine->update_stats(stats);
   current_machine = null;
 
-  logfile << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
-  cerr << endl, "Stopped after ", sim_cycle, " cycles and ", total_user_insns_committed, " instructions", endl, flush;
+  W64 seconds = W64(ticks_to_seconds(tsc_at_end - tsc_at_start));
+
+  stringbuf sb;
+  sb << endl, "Stopped after ", sim_cycle, " cycles, ", total_user_insns_committed, " instructions and ",
+    seconds, " seconds of sim time (", W64(double(sim_cycle) / double(seconds)), " Hz sim rate)", endl;
+
+  logfile << sb, flush;
+  cerr << sb, flush;
 
   if (config.dumpcode_filename.set()) {
     byte insnbuf[256];

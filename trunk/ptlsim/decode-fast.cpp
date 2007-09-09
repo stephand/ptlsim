@@ -688,7 +688,7 @@ bool TraceDecoder::decode_fast() {
       }
 
       int sizeshift = (ra.type == OPTYPE_REG) ? reginfo[ra.reg.reg].sizeshift : ra.mem.size;
-      if (use64 && sizeshift == 2) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
+      if (use64 && (sizeshift == 2)) sizeshift = 3; // There is no way to encode 32-bit pushes and pops in 64-bit mode:
       this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, rareg, sizeshift, -(1 << sizeshift));
       this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, (use64 ? 3 : 2), (1 << sizeshift));
 
@@ -755,16 +755,7 @@ bool TraceDecoder::decode_fast() {
     int condcode = bits(op, 0, 4);
     const CondCodeToFlagRegs& cctfr = cond_code_to_flag_regs[condcode];
 
-    int condreg;
-    if (cctfr.req2) {
-      this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
-      condreg = REG_temp0;
-    } else {
-      condreg = (cctfr.ra != REG_zero) ? cctfr.ra : cctfr.rb;
-    }
-    assert(condreg != REG_zero);
-
-    TransOp transop(OP_set, r, (rd.type == OPTYPE_MEM) ? REG_zero : r, REG_imm, condreg, 0, +1);
+    TransOp transop(OP_set, r, cctfr.ra, cctfr.rb, (rd.type == OPTYPE_MEM) ? REG_zero : r, 0);
     transop.cond = condcode;
     this << transop, endl;
 

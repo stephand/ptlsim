@@ -304,18 +304,18 @@ W64 get_core_freq_hz() {
   return get_core_freq_hz(shinfo.vcpu_info[0].time);
 }
 
-void set_virtualized_tsc_bias(int vcpuid, W64s tsc_timestamp_bias, W64s system_time_bias) {
-  vcpu_timestamp_bias_t bias;
-  bias.tsc_timestamp_bias = tsc_timestamp_bias;
-  bias.system_time_bias = system_time_bias;
-  HYPERVISOR_vcpu_op(VCPUOP_set_timestamp_bias, vcpuid, &bias);
-}
-
 void get_virtualized_tsc_bias(int vcpuid, W64s& tsc_timestamp_bias, W64s& system_time_bias) {
   vcpu_timestamp_bias_t bias;
   HYPERVISOR_vcpu_op(VCPUOP_get_timestamp_bias, vcpuid, &bias);
   tsc_timestamp_bias = bias.tsc_timestamp_bias;
   system_time_bias = bias.system_time_bias;
+}
+
+void set_virtualized_tsc_bias(int vcpuid, W64s tsc_timestamp_bias, W64s system_time_bias) {
+  vcpu_timestamp_bias_t bias;
+  bias.tsc_timestamp_bias = tsc_timestamp_bias;
+  bias.system_time_bias = system_time_bias;
+  HYPERVISOR_vcpu_op(VCPUOP_set_timestamp_bias, vcpuid, &bias);
 }
 
 void disable_virtualized_tsc(int vcpuid) {
@@ -1003,6 +1003,7 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     return 0;
   }
   case VCPUOP_is_up: {
+    if (debug) logfile << "vcpu_op: is_up: vcpu ", vcpuid, " is ", ((vctx.runstate.state != RUNSTATE_offline) ? "up" : "offline"), endl;
     return (vctx.runstate.state != RUNSTATE_offline);
   }
   case VCPUOP_initialise: {
@@ -1012,11 +1013,13 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     vctx.restorefrom(xenctx);
     vctx.init(); // refill segment descriptor caches
     vctx.running = 0; // not running until VCPUOP_up is called
+
     if (debug) logfile << "VCPU ", vcpuid, " context at initialize is:", endl, vctx, endl;
+
     return 0;
   }
   case VCPUOP_up: {
-    if (debug) logfile << "vcpu_op: bring up vcpu ", vcpuid, endl;
+    if (debug) logfile << "vcpu_op: up: bring up vcpu ", vcpuid, endl;
     if (debug) logfile << "VCPU ", vcpuid, " context at bringup is:", endl, vctx, endl;
     //
     // The VCPU is coming up for the first time after booting or being
@@ -1031,6 +1034,13 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     vctx.dirty = 1;
     vctx.change_runstate(RUNSTATE_running);
     vcpu_online_map_changed = 1;
+
+    //
+    // At this point we also need to bring up the real VCPU
+    // on which PTLsim will run its interrupt redirector.
+    //
+    bring_up_secondary_vcpu(vcpuid);
+
     return 0;
   }
   case VCPUOP_down: {
@@ -1038,6 +1048,11 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     vcpu_online_map_changed = 1;
     vctx.change_runstate(RUNSTATE_offline);
     return 0;
+  }
+  case VCPUOP_set_singleshot_timer: {
+    //++MTY TODO: add support for this newer hypercall:
+    if (debug) logfile << "vcpu_op: set singleshot timer on ", vcpuid, " not supported", endl;
+    return -ENOSYS;
   }
   default:
     logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;

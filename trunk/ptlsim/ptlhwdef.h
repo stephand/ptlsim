@@ -25,13 +25,13 @@
 #define FLAG_PF    0x004     // (1 << 2)
 #define FLAG_WAIT  0x008     // (1 << 3)
 #define FLAG_AF    0x010     // (1 << 4)
-#define FLAG_BR_TK 0x020     // (1 << 5)
 #define FLAG_ZF    0x040     // (1 << 6)
 #define FLAG_SF    0x080     // (1 << 7)
 #define FLAG_OF    0x800     // (1 << 11)
+#define FLAG_BR_TK 0x8000    // (1 << 15)
 #define FLAG_SF_ZF 0x0c0     // (1 << 7) | (1 << 6)
 #define FLAG_ZAPS  0x0d4     // 000011010100
-#define FLAG_NOT_WAIT_INV 0x08d5 // 00000100011010101: exclude others not in ZAPS/CF/OF
+#define FLAG_NOT_WAIT_INV (FLAG_ZAPS|FLAG_CF|FLAG_OF) // 00000100011010101: exclude others not in ZAPS/CF/OF
 
 #define COND_o   0
 #define COND_no  1
@@ -178,7 +178,6 @@ enum {
   EXCEPTION_LoadStoreAliasing,
   EXCEPTION_CheckFailed,
   EXCEPTION_SkipBlock,
-  EXCEPTION_CacheLocked,
   EXCEPTION_LFRQFull,
   EXCEPTION_FloatingPoint,
   EXCEPTION_FloatingPointNotAvailable,
@@ -711,8 +710,10 @@ struct EFER {
 struct vcpu_guest_context;
 struct vcpu_extended_context;
 
-Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
+Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn, bool do_special_translations = true);
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);
+W64 host_mfn_to_sim_mfn(W64 hostmfn);
+W64 sim_mfn_to_host_mfn(W64 simmfn);
 
 //
 // This is the same format as Xen's vcpu_runstate_info_t
@@ -820,6 +821,9 @@ struct ContextBase {
   static const int PTE_CACHE_SIZE = 16;
   W64 cached_pte_virt[PTE_CACHE_SIZE];
   Level1PTE cached_pte[PTE_CACHE_SIZE];
+#else
+  // Always running in userspace version:
+  byte running;
 #endif
 
   inline void reset() {
@@ -838,7 +842,14 @@ struct Context: public ContextBase {
   byte padding[PAGE_SIZE - sizeof(ContextBase)];
 
   void propagate_x86_exception(byte exception, W32 errorcode = 0, Waddr virtaddr = 0);
-  void* check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate);
+
+  Waddr check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused);
+
+  Waddr check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
+    Level1PTE dummy;
+    return check_and_translate(virtaddr, sizeshift, store, internal, exception, pfec, pteupdate, dummy);
+  }
+
   int copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr);
 
   int copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec, Level1PTE& ptelo, Level1PTE& ptehi);
@@ -879,15 +890,10 @@ struct Context: public ContextBase {
   bool gdt_entry_valid(W16 idx);
   SegmentDescriptor get_gdt_entry(W16 idx);
 
-  Level1PTE virt_to_pte(W64 rawvirt) {
-    int slot = lowbits(rawvirt >> 12, log2(PTE_CACHE_SIZE));
-    if unlikely (cached_pte_virt[slot] != floor(rawvirt, PAGE_SIZE)) {
-      cached_pte_virt[slot] = floor(rawvirt, PAGE_SIZE);
-      cached_pte[slot] = page_table_walk(rawvirt, cr3 >> 12);
-    }
-    return cached_pte[slot];
-    // return page_table_walk(rawvirt, cr3 >> 12); // do not use mini-TLB
-  }
+#ifndef PTLSIM_PUBLIC_ONLY
+  Level1PTE virt_to_host_pte(W64 rawvirt);
+  Level1PTE virt_to_pte(W64 rawvirt);
+#endif
 
   W64 virt_to_pte_phys_addr(Waddr virtaddr, int level = 0);
 
@@ -896,7 +902,7 @@ struct Context: public ContextBase {
   // Flush the context mini-TLB and propagate flush to any core-specific TLBs
   void flush_tlb(bool propagate_flush_to_model = true);
   void flush_tlb_virt(Waddr virtaddr, bool propagate_flush_to_model = true);
-  void* check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused);
+  void print_tlb(ostream& os);
 
   void update_pte_acc_dirty(W64 rawvirt, const PTEUpdate& update) {
     return page_table_acc_dirty_update(rawvirt, cr3 >> 12, update);
@@ -1044,6 +1050,7 @@ enum {
   OP_set_sub,
   OP_set_and,
   OP_sel,
+  OP_sel_cmp,
   // Branches
   OP_br,
   OP_br_sub,
@@ -1075,63 +1082,68 @@ enum {
   OP_mull,
   OP_mulh,
   OP_mulhu,
+  OP_mulhl,
   // Bit scans
   OP_ctz,
   OP_clz,
   OP_ctpop,
   OP_permb,
   // Floating point
-  OP_addf,
-  OP_subf,
-  OP_mulf,
-  OP_maddf,
-  OP_msubf,
-  OP_divf,
-  OP_sqrtf,
-  OP_rcpf,
-  OP_rsqrtf,
-  OP_minf,
-  OP_maxf,
-  OP_cmpf,
-  OP_cmpccf,
-  OP_permf,
-  OP_cvtf_i2s_ins,
-  OP_cvtf_i2s_p,
-  OP_cvtf_i2d_lo,
-  OP_cvtf_i2d_hi,
-  OP_cvtf_q2s_ins,
-  OP_cvtf_q2d,
-  OP_cvtf_s2i,
-  OP_cvtf_s2q,
-  OP_cvtf_s2i_p,
-  OP_cvtf_d2i,
-  OP_cvtf_d2q,
-  OP_cvtf_d2i_p,
-  OP_cvtf_d2s_ins,
-  OP_cvtf_d2s_p,
-  OP_cvtf_s2d_lo,
-  OP_cvtf_s2d_hi,
+  OP_fadd,
+  OP_fsub,
+  OP_fmul,
+  OP_fmadd,
+  OP_fmsub,
+  OP_fmsubr,
+  OP_fdiv,
+  OP_fsqrt,
+  OP_frcp,
+  OP_frsqrt,
+  OP_fmin,
+  OP_fmax,
+  OP_fcmp,
+  OP_fcmpcc,
+  OP_fcvt_i2s_ins,
+  OP_fcvt_i2s_p,
+  OP_fcvt_i2d_lo,
+  OP_fcvt_i2d_hi,
+  OP_fcvt_q2s_ins,
+  OP_fcvt_q2d,
+  OP_fcvt_s2i,
+  OP_fcvt_s2q,
+  OP_fcvt_s2i_p,
+  OP_fcvt_d2i,
+  OP_fcvt_d2q,
+  OP_fcvt_d2i_p,
+  OP_fcvt_d2s_ins,
+  OP_fcvt_d2s_p,
+  OP_fcvt_s2d_lo,
+  OP_fcvt_s2d_hi,
   // Vector integer uops
   // size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (same as normal ops)
-  OP_addv,
-  OP_subv,
-  OP_addv_us,
-  OP_subv_us,
-  OP_addv_ss,
-  OP_subv_ss,
-  OP_shlv,
-  OP_shrv,
-  OP_btv, // bit test vector (e.g. pack bit 7 of 8 bytes into 8-bit output, for pmovmskb)
-  OP_sarv,
-  OP_avgv,
-  OP_cmpv,
-  OP_minv,
-  OP_maxv,
-  OP_minv_s,
-  OP_maxv_s,
-  OP_mullv,
-  OP_mulhv,
-  OP_mulhuv,
+  OP_vadd,
+  OP_vsub,
+  OP_vadd_us,
+  OP_vsub_us,
+  OP_vadd_ss,
+  OP_vsub_ss,
+  OP_vshl,
+  OP_vshr,
+  OP_vbt, // bit test vector (e.g. pack bit 7 of 8 bytes into 8-bit output, for pmovmskb)
+  OP_vsar,
+  OP_vavg,
+  OP_vcmp,
+  OP_vmin,
+  OP_vmax,
+  OP_vmin_s,
+  OP_vmax_s,
+  OP_vmull,
+  OP_vmulh,
+  OP_vmulhu,
+  OP_vmaddp,
+  OP_vsad,
+  OP_vpack_us,
+  OP_vpack_ss,
   OP_MAX_OPCODE,
 };
 
@@ -1171,6 +1183,7 @@ inline bool isclass(int opcode, W32 opclass) { return ((opinfo[opcode].opclass &
 inline int opclassof(int opcode) { return lsbindex(opinfo[opcode].opclass); }
 
 inline bool isload(int opcode) { return isclass(opcode, OPCLASS_LOAD); }
+inline bool isprefetch(int opcode) { return isclass(opcode, OPCLASS_PREFETCH); }
 inline bool isstore(int opcode) { return isclass(opcode, OPCLASS_STORE); }
 inline bool iscondbranch(int opcode) { return isclass(opcode, OPCLASS_COND_BRANCH|OPCLASS_INDIR_BRANCH); }
 inline bool isbranch(int opcode) { return isclass(opcode, OPCLASS_BRANCH); }
@@ -1193,6 +1206,10 @@ union MaskControlInfo {
 
   operator W32() const { return data; }
 };
+
+#define MakePermuteControlInfo(b7, b6, b5, b4, b3, b2, b1, b0) \
+  (b7 << (7*4)) + (b6 << (6*4)) + (b5 << (5*4)) + (b4 << (4*4)) + \
+  (b3 << (3*4)) + (b2 << (2*4)) + (b1 << (1*4)) + (b0 << (0*4))
 
 union PermbControlInfo {
   struct { W32 b0:4, b1:4, b2:4, b3:4, b4:4, b5:4, b6:4, b7:4; } info;
@@ -1414,11 +1431,11 @@ enum {
 };
 
 static const char* branch_type_names[8] = {
-  "bru.8",
-  "bru.32",
-  "br.8",
-  "br.32",
-  "barrier",
+  "bru8",
+  "bru32",
+  "br8",
+  "br32",
+  "asist",
   "split",
   "rep",
   "jmp"

@@ -1,0 +1,1290 @@
+diff -r 015d9abeacfb xen/arch/x86/cpu/common.c
+--- a/xen/arch/x86/cpu/common.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/cpu/common.c	Mon Jun 25 04:23:05 2007 -0400
+@@ -560,6 +560,9 @@ void __devinit cpu_init(void)
+ 	if (cpu_has_vme || cpu_has_tsc || cpu_has_de)
+ 		clear_in_cr4(X86_CR4_VME|X86_CR4_PVI|X86_CR4_TSD|X86_CR4_DE);
+ 
++  /* Allow userspace to read performance counters */
++  set_in_cr4(X86_CR4_PCE);
++
+ 	*(unsigned short *)(&gdt_load[0]) = LAST_RESERVED_GDT_BYTE;
+ 	*(unsigned long  *)(&gdt_load[2]) = GDT_VIRT_START(current);
+ 	__asm__ __volatile__ ( "lgdt %0" : "=m" (gdt_load) );
+diff -r 015d9abeacfb xen/arch/x86/cpu/intel.c
+--- a/xen/arch/x86/cpu/intel.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/cpu/intel.c	Mon Jun 25 04:23:05 2007 -0400
+@@ -187,6 +187,17 @@ static void __devinit init_intel(struct 
+ 		(c->x86 == 0x6 && c->x86_model >= 0x0e))
+ 		set_bit(X86_FEATURE_CONSTANT_TSC, c->x86_capability);
+ 
++	if (c->x86 == 0x6 && c->x86_model >= 0x0e) {
++    /*
++     * Intel Core and Core 2 have fixed function performance counters.
++     * Configure them to only count events outside the hypervisor.
++     *
++     * This MSR is divided into 4 bit fields: the low 2 bits of
++     * each field specify where to count events (0x2 = guest only)
++     */
++    wrmsr(MSR_CORE_PERF_FIXED_CTR_CTRL, 0x2222, 0);
++  }
++
+ 	start_vmx();
+ }
+ 
+diff -r 015d9abeacfb xen/arch/x86/domain.c
+--- a/xen/arch/x86/domain.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/domain.c	Mon Jun 25 04:23:05 2007 -0400
+@@ -897,6 +897,35 @@ arch_do_vcpu_op(
+         break;
+     }
+ 
++    case VCPUOP_get_registered_runstate_memory_area: {
++        unsigned long runstate_virtaddr = (unsigned long)runstate_guest(v).p;
++        if (copy_to_guest(arg, &runstate_virtaddr, 1))
++            rc = -EFAULT;
++        break;
++    }
++
++    case VCPUOP_set_breakout_insn_action: {
++        vcpu_breakout_insn_action_t action;
++        rc = -EFAULT;
++        if (copy_from_guest(&action, arg, 1))
++            break;
++
++        rc = -E2BIG;
++        if (action.insn_length > sizeof(v->breakout.insn))
++            break;
++
++        v->breakout.flags = 0;
++        barrier();
++        v->breakout.notify_port = action.notify_port;
++        v->breakout.insn_length = action.insn_length;
++        memcpy(v->breakout.insn, action.insn, sizeof(v->breakout.insn));
++        barrier();
++        v->breakout.flags = action.flags;
++
++        rc = 0;
++        break;
++    }
++
+     default:
+         rc = -ENOSYS;
+         break;
+@@ -1215,6 +1244,13 @@ static void __context_switch(void)
+     cpu_set(cpu, n->vcpu_dirty_cpumask);
+ 
+     write_ptbase(n);
++
++    /* Set up TSC virtualization */
++    if (unlikely((!(n->tsc_timestamp_bias)) ^ (!(p->tsc_timestamp_bias)))) {
++        if (n->tsc_timestamp_bias)
++            set_in_cr4(X86_CR4_TSD);
++        else clear_in_cr4(X86_CR4_TSD);
++    }
+ 
+     if ( p->vcpu_id != n->vcpu_id )
+     {
+diff -r 015d9abeacfb xen/arch/x86/domctl.c
+--- a/xen/arch/x86/domctl.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/domctl.c	Wed Jun 27 21:12:45 2007 -0400
+@@ -506,6 +506,38 @@ void arch_get_info_guest(struct vcpu *v,
+ #undef c
+ }
+ 
++void arch_get_ext_vcpu_context(struct vcpu *v, struct vcpu_extended_context *c)
++{
++    c->guest_table = v->arch.guest_table.pfn;
++    c->guest_table_user = v->arch.guest_table_user.pfn;
++    c->cr3 = v->arch.cr3;
++    c->iobmp = v->arch.iobmp.p;
++    c->iobmp_limit = v->arch.iobmp_limit;
++    c->iopl = v->arch.iopl;
++}
++
++int update_user_pt_base(struct vcpu *v, mfn_t mfn);
++
++int arch_finish_context_swap(struct vcpu *v, struct vcpu_guest_context *c, struct vcpu_extended_context *ext) {
++    int ok = 1;
++
++    if (ext) {
++        mfn_t kernel_mfn = gmfn_to_mfn(v->domain, ext->guest_table);
++        mfn_t user_mfn = gmfn_to_mfn(v->domain, ext->guest_table_user);
++
++        ok &= update_vcpu_pt_base(v, kernel_mfn, 0);
++
++        /* Prevent installation of a null user page table */
++        /* if we're in user mode already */        
++        ok &= ((!(v->arch.flags & TF_kernel_mode)) & (!user_mfn)) ? 0 :
++            update_user_pt_base(v, user_mfn);
++
++        update_cr3(v);
++    }
++
++    return (ok) ? 0 : -1;
++}
++
+ /*
+  * Local variables:
+  * mode: C
+diff -r 015d9abeacfb xen/arch/x86/mm.c
+--- a/xen/arch/x86/mm.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/mm.c	Mon Jun 25 04:23:05 2007 -0400
+@@ -1788,9 +1788,8 @@ int get_page_type(struct page_info *page
+ }
+ 
+ 
+-int new_guest_cr3(unsigned long mfn)
+-{
+-    struct vcpu *v = current;
++int update_vcpu_pt_base(struct vcpu *v, unsigned long mfn, int update_real_cr3)
++{
+     struct domain *d = v->domain;
+     int okay;
+     unsigned long old_base_mfn;
+@@ -1814,7 +1813,7 @@ int new_guest_cr3(unsigned long mfn)
+         }
+ 
+         invalidate_shadow_ldt(v);
+-        write_ptbase(v);
++        if (update_real_cr3) write_ptbase(v);
+ 
+         return 1;
+     }
+@@ -1835,7 +1834,7 @@ int new_guest_cr3(unsigned long mfn)
+     v->arch.guest_table = pagetable_from_pfn(mfn);
+     update_cr3(v);
+ 
+-    write_ptbase(v);
++    if (update_real_cr3) write_ptbase(v);
+ 
+     if ( likely(old_base_mfn != 0) )
+     {
+@@ -1846,6 +1845,26 @@ int new_guest_cr3(unsigned long mfn)
+     }
+ 
+     return 1;
++}
++
++int update_user_pt_base(struct vcpu *v, mfn_t mfn) {
++    struct domain *d = v->domain;
++
++    int ok = 1;
++    if (mfn) ok = get_page_and_type_from_pagenr(mfn, PGT_root_page_table, d);
++
++    if (ok) {
++        mfn_t old_mfn = pagetable_get_pfn(v->arch.guest_table_user);
++        v->arch.guest_table_user = pagetable_from_pfn(mfn);
++        if (old_mfn != 0) put_page_and_type(mfn_to_page(old_mfn));
++    } else {
++        printk("Error installing user page table base mfn %lu in domain %d vcpu %d\n",
++               mfn, d->domain_id, v->vcpu_id);
++    }
++
++    update_cr3(v);
++
++    return ok;
+ }
+ 
+ static void process_deferred_ops(void)
+@@ -2214,6 +2233,106 @@ int do_mmuext_op(
+                 if ( ents != 0 )
+                     this_cpu(percpu_mm_info).deferred_ops |= DOP_RELOAD_LDT;
+             }
++            break;
++        }
++
++        /*
++         * PTLsim specific hypercalls
++         */
++
++        /* Get template GDT mapped by Xen into the FIRST_RESERVED_GDT_PAGE gdt_frames[] slot */
++
++        case MMUEXT_GET_GDT_TEMPLATE: {       
++            rc = -E2BIG;
++            if (op.arg2.nr_ents > PAGE_SIZE)
++                break;
++            
++            rc = -EFAULT;
++            if (copy_to_user((void*)op.arg1.linear_addr, &gdt_table, op.arg2.nr_ents))
++                break;
++            
++            rc = 0;
++            break;
++        }
++
++        case MMUEXT_GET_KERNEL_BASEPTR:
++        case MMUEXT_GET_USER_BASEPTR: {
++            struct vcpu *v;
++
++            rc = -E2BIG;
++            if ((op.arg2.vcpuid < 0) || (op.arg2.vcpuid >= MAX_VIRT_CPUS))
++                break;
++
++            rc = -ENOENT;
++            if ((v = FOREIGNDOM->vcpu[op.arg2.vcpuid]) == NULL)
++                break;
++
++            mfn = (op.cmd == MMUEXT_GET_KERNEL_BASEPTR)
++                ? pagetable_get_pfn(v->arch.guest_table)
++                : pagetable_get_pfn(v->arch.guest_table_user);
++
++            rc = -EFAULT;
++            if (copy_to_user((void*)op.arg1.linear_addr, &mfn, sizeof(mfn)))
++                break;
++
++            rc = 0;
++            break;            
++        }
++
++        case MMUEXT_QUERY_PAGES: {
++            page_type_t* ptr = (page_type_t*)op.arg1.linear_addr;
++            page_type_t pagetype;
++            unsigned long mfn;
++            int i;
++
++            rc = 0;
++            okay = 0;
++            for (i = 0; i < op.arg2.nr_ents; i++) {
++                rc = -EFAULT;
++                if (unlikely(copy_from_user(&pagetype, &ptr[i], sizeof(page_type_t))))
++                    break;
++
++                mfn = pagetype.in.mfn;
++                pagetype.out.type = PAGE_TYPE_INVALID_MFN;
++                pagetype.out.pinned = 0;
++                pagetype.out.type_count = 0;
++                pagetype.out.total_count = 0;
++
++                if (likely(mfn_valid(mfn))) {
++                    page = mfn_to_page(mfn);
++                    if (likely(get_page(page, FOREIGNDOM))) {
++                        int type = PAGE_TYPE_NONE;
++                        switch (page->u.inuse.type_info & PGT_type_mask) {
++                        case PGT_none: type = PAGE_TYPE_NONE; break;
++                        case PGT_l1_page_table: type = PAGE_TYPE_L1; break;
++                        case PGT_l2_page_table: type = PAGE_TYPE_L2; break;
++                        case PGT_l3_page_table: type = PAGE_TYPE_L3; break;
++                        case PGT_l4_page_table: type = PAGE_TYPE_L4; break;
++                        case PGT_gdt_page: type = PAGE_TYPE_GDT; break;
++                        case PGT_ldt_page: type = PAGE_TYPE_LDT; break;
++                        case PGT_writable_page: type = PAGE_TYPE_WRITABLE; break;
++                        default: type = PAGE_TYPE_NONE; break;
++                        }
++
++                        pagetype.out.type = type;
++                        pagetype.out.pinned = ((page->u.inuse.type_info & PGT_pinned) != 0);
++                        pagetype.out.type_count = page->u.inuse.type_info & PGT_count_mask;
++                        pagetype.out.total_count = page->count_info & PGC_count_mask;
++                        put_page(page);
++                    } else {
++                        pagetype.out.type = PAGE_TYPE_INACCESSIBLE;
++                    }
++                }
++
++                rc = -EFAULT;
++                if (unlikely(copy_to_user(&ptr[i], &pagetype, sizeof(page_type_t))))
++                    break;
++
++                rc = 0;
++            }
++
++            okay = (rc == 0);
++
+             break;
+         }
+ 
+diff -r 015d9abeacfb xen/arch/x86/platform_hypercall.c
+--- a/xen/arch/x86/platform_hypercall.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/platform_hypercall.c	Mon Jun 25 04:23:05 2007 -0400
+@@ -27,6 +27,23 @@ extern uint16_t boot_edid_caps;
+ extern uint16_t boot_edid_caps;
+ extern uint8_t boot_edid_info[];
+ 
++static void wrmsr_on_specific_cpu(void *arg)
++{
++    xenpf_msr_t* msr = (xenpf_msr_t*)arg;
++    uint32_t* v = (uint32_t*)&msr->value;
++
++    if (smp_processor_id() == msr->cpu)
++        msr->rc = wrmsr_safe(msr->index, v[0], v[1]);
++}
++
++static void rdmsr_on_specific_cpu(void *arg)
++{
++    xenpf_msr_t* msr = (xenpf_msr_t*)arg;
++    uint32_t* v = (uint32_t*)&msr->value;
++    if (smp_processor_id() == msr->cpu)
++        msr->rc = rdmsr_safe(msr->index, v[0], v[1]);
++}
++
+ #ifndef COMPAT
+ typedef long ret_t;
+ DEFINE_SPINLOCK(xenpf_lock);
+@@ -156,6 +173,20 @@ ret_t do_platform_op(XEN_GUEST_HANDLE(xe
+             ret = -EINVAL;
+             break;
+         }
++    }
++    break;
++
++    case XENPF_rdmsr:
++    {
++        on_each_cpu(rdmsr_on_specific_cpu, &op->u.msr, 1, 1);
++        ret = copy_to_guest(u_xenpf_op, op, 1) ? -EFAULT : 0;
++    }
++    break;
++
++    case XENPF_wrmsr:
++    {
++        on_each_cpu(wrmsr_on_specific_cpu, &op->u.msr, 1, 1);
++        ret = copy_to_guest(u_xenpf_op, op, 1) ? -EFAULT : 0;
+     }
+     break;
+ 
+diff -r 015d9abeacfb xen/arch/x86/setup.c
+--- a/xen/arch/x86/setup.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/setup.c	Mon Jun 25 04:23:05 2007 -0400
+@@ -1138,6 +1138,7 @@ void arch_get_xen_caps(xen_capabilities_
+         safe_strcat(*info, s);
+     }
+ 
++    safe_strcat(*info, "-ptlsim");
+ #endif
+ }
+ 
+diff -r 015d9abeacfb xen/arch/x86/time.c
+--- a/xen/arch/x86/time.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/time.c	Mon Jun 25 04:23:58 2007 -0400
+@@ -705,8 +705,8 @@ void update_vcpu_system_time(struct vcpu
+ 
+     version_update_begin(&u->version);
+ 
+-    u->tsc_timestamp     = t->local_tsc_stamp;
+-    u->system_time       = t->stime_local_stamp;
++    u->tsc_timestamp     = t->local_tsc_stamp + v->tsc_timestamp_bias;
++    u->system_time       = t->stime_local_stamp + v->system_time_bias;
+     u->tsc_to_system_mul = t->tsc_scale.mul_frac;
+     u->tsc_shift         = (s8)t->tsc_scale.shift;
+ 
+diff -r 015d9abeacfb xen/arch/x86/traps.c
+--- a/xen/arch/x86/traps.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/traps.c	Fri Jul 13 22:12:21 2007 -0400
+@@ -636,6 +636,179 @@ static int emulate_forced_invalid_op(str
+     return EXCRET_fault_fixed;
+ }
+ 
++#define PTLCALL_VERSION      0
++#define PTLCALL_MARKER       1
++#define PTLCALL_ENQUEUE      2
++
++#define PTLCALL_STATUS_VERSION_MASK      0xff
++#define PTLCALL_STATUS_PTLSIM_ACTIVE     (1 << 8)
++
++#define PTLCALL_INTERFACE_VERSION_1      1
++
++static unsigned long long perfctr_dump_sequence[NR_CPUS];
++
++/* 64 bytes */
++struct perfctr_snapshot {
++    unsigned long long cpu;
++    unsigned long long seqid;
++    unsigned long long tsc;
++    unsigned long long pmc0;
++    unsigned long long pmc1;
++    unsigned long long retired_insn_count;
++    unsigned long long unhalted_cycle_count;
++    unsigned long long unhalted_ref_cycle_count;
++};
++
++struct perfctr_snapshot perfctr_snapshot_per_cpu[NR_CPUS];
++struct perfctr_snapshot starting_perfctr_snapshot_per_cpu[NR_CPUS];
++
++void fill_perfctr_snapshot(struct perfctr_snapshot* s) {    
++    int cpu = smp_processor_id();
++    struct cpuinfo_x86 *c = cpu_data + cpu;
++
++    rdtscll(s->tsc);
++    s->cpu = cpu;
++    s->seqid = perfctr_dump_sequence[cpu]++;    
++
++    if ((c->x86_vendor == X86_VENDOR_INTEL) && (c->x86 == 0x6) && (c->x86_model >= 0x0e)) {
++        rdmsrl(MSR_P6_PERFCTR0, s->pmc0);
++        rdmsrl(MSR_P6_PERFCTR1, s->pmc1);
++        rdmsrl(MSR_CORE_PERF_FIXED_CTR0, s->retired_insn_count);
++        rdmsrl(MSR_CORE_PERF_FIXED_CTR1, s->unhalted_cycle_count);
++        rdmsrl(MSR_CORE_PERF_FIXED_CTR2, s->unhalted_ref_cycle_count);
++    } else {
++        s->pmc0 = 0;
++        s->pmc1 = 0;
++        s->retired_insn_count = 0;
++        s->unhalted_cycle_count = 0;
++        s->unhalted_ref_cycle_count = 0;
++    }
++}
++
++static int handle_breakout_op(struct cpu_user_regs *regs) {
++    char insn[16];
++    uint64_t op = regs->eax;
++    uint64_t arg1 = regs->ecx;
++    unsigned long eip = regs->eip;
++    unsigned long rc = 0;
++
++    if ((rc = copy_from_user(insn, (char *)eip, 2)) != 0) {
++        propagate_page_fault(eip + sizeof(insn) - rc, 0);
++        return EXCRET_fault_fixed;
++    }
++
++    if ((insn[0] != 0x0f) || (insn[1] != 0x37))
++        return 0;
++
++    switch (op) {
++    case PTLCALL_VERSION: {
++        int ptlsim_active = (current->breakout.flags != 0);
++        uint64_t status = 0;
++        if (ptlsim_active) status |= PTLCALL_STATUS_PTLSIM_ACTIVE;
++        regs->eax = status;
++        regs->eip += 2;
++        return EXCRET_fault_fixed;
++    }
++    case PTLCALL_MARKER: {
++        /* Special value: print marker into hypervisor dmesg log */
++        int cpu = smp_processor_id();
++        struct perfctr_snapshot* prev = &perfctr_snapshot_per_cpu[cpu];
++        struct perfctr_snapshot* start = &starting_perfctr_snapshot_per_cpu[cpu];
++
++        struct perfctr_snapshot now;
++        fill_perfctr_snapshot(&now);
++
++        printk("Performance counter dump for domain %d vcpu %d (phys cpu %d):\n", current->domain->domain_id, current->vcpu_id, cpu);
++        printk("  rip:             0x%016llx\n", (unsigned long long)eip);
++        printk("  marker:          %18llu\n", (unsigned long long)arg1);
++        printk("  seqid:           %18llu\n", now.seqid);
++        printk("  tsc:             %18llu %16llu %16llu\n",
++               now.tsc,
++               now.tsc - prev->tsc,
++               now.tsc - start->tsc);
++        printk("  pmc0:            %18llu %16llu %16llu\n",
++               now.pmc0,
++               now.pmc0 - prev->pmc0,
++               now.pmc0 - start->pmc0);
++        printk("  pmc1:            %18llu %16llu %16llu\n",
++               now.pmc1,
++               now.pmc1 - prev->pmc1,
++               now.pmc1 - start->pmc1);
++        printk("  retired_insns:   %18llu %16llu %16llu\n",
++               now.retired_insn_count,
++               now.retired_insn_count - prev->retired_insn_count,
++               now.retired_insn_count - start->retired_insn_count);
++        printk("  unhalted_cycles: %18llu %16llu %16llu\n",
++               now.unhalted_cycle_count,
++               now.unhalted_cycle_count - prev->unhalted_cycle_count,
++               now.unhalted_cycle_count - start->unhalted_cycle_count);
++        printk("  unhalted_refs:   %18llu %16llu %16llu\n",
++               now.unhalted_ref_cycle_count,
++               now.unhalted_ref_cycle_count - prev->unhalted_ref_cycle_count,
++               now.unhalted_ref_cycle_count - start->unhalted_ref_cycle_count);
++
++        memcpy(prev, &now, sizeof(struct perfctr_snapshot));
++        if (arg1 == 0)
++            memcpy(start, &now, sizeof(struct perfctr_snapshot));
++
++        regs->eax = now.retired_insn_count;
++        regs->edx = now.unhalted_cycle_count;
++        regs->ecx = now.tsc;
++        regs->edi = now.pmc0;
++        regs->esi = now.pmc1;
++        regs->eip += 2;
++        return EXCRET_fault_fixed;
++    }
++    case PTLCALL_ENQUEUE: {
++        if (!current->breakout.flags) {
++            printk("breakout: Warning: PTLsim is not running\n");
++            regs->eax = (unsigned long long)(-ENOTCONN);
++            regs->eip += 2;
++            return EXCRET_fault_fixed;
++        }
++        
++        if (current->breakout.flags & BREAKOUT_INCREMENT_RIP) {
++            eip += current->breakout.insn_length;
++        }
++        
++        regs->eip = eip;
++        
++        if (current->breakout.flags & BREAKOUT_PAUSE_DOMAIN) {
++            /* This is the same concept as pause_for_debugger() */
++            struct domain *d = current->domain;
++            struct vcpu *v;
++            
++            /*
++             * NOTE: This does not synchronously pause the domain. The debugger
++             * must issue a PAUSEDOMAIN command to ensure that all execution
++             * has ceased and guest state is committed to memory.
++             */
++            
++            atomic_inc(&d->pause_count);
++            if ( test_and_set_bool(d->is_paused_by_controller) ) {
++                domain_unpause(d); /* race-free atomic_dec(&d->pause_count) */
++            } else {
++                /* de-schedule the other VCPUs and block the calling VCPU */
++                for_each_vcpu (d, v) vcpu_sleep_nosync(v);
++            }
++        }
++        
++        if (current->breakout.flags & BREAKOUT_NOTIFY_PORT) {
++            evtchn_send(current->breakout.notify_port);
++        }
++        
++        return EXCRET_fault_fixed;
++    }
++    default:
++        printk("breakout: unknown request %llu\n", (unsigned long long)op);
++        regs->eax = (unsigned long long)(-ENOSYS);
++        regs->eip += 2;
++        return EXCRET_fault_fixed;
++    }
++
++    return 0;
++}
++
+ asmlinkage int do_invalid_op(struct cpu_user_regs *regs)
+ {
+     struct bug_frame bug;
+@@ -648,6 +821,8 @@ asmlinkage int do_invalid_op(struct cpu_
+     if ( likely(guest_mode(regs)) )
+     {
+         if ( (rc = emulate_forced_invalid_op(regs)) != 0 )
++            return rc;
++        if ( (rc = handle_breakout_op(regs)) != 0 )
+             return rc;
+         return do_guest_trap(TRAP_invalid_op, regs, 0);
+     }
+@@ -968,6 +1143,9 @@ static int fixup_page_fault(unsigned lon
+  *  Bit 3: Reserved bit violation
+  *  Bit 4: Instruction fetch
+  */
++extern unsigned long last_exception_fixup_rip;
++extern unsigned long last_exception_fixup_cr2;
++
+ asmlinkage int do_page_fault(struct cpu_user_regs *regs)
+ {
+     unsigned long addr, fixup;
+@@ -989,6 +1167,8 @@ asmlinkage int do_page_fault(struct cpu_
+ 
+         if ( likely((fixup = search_exception_table(regs->eip)) != 0) )
+         {
++            last_exception_fixup_rip = regs->eip;
++            last_exception_fixup_cr2 = addr;
+             perfc_incr(copy_user_faults);
+             regs->eip = fixup;
+             return 0;
+@@ -1300,7 +1480,7 @@ static int emulate_privileged_op(struct 
+     /* Input/Output String instructions. */
+     if ( (opcode >= 0x6c) && (opcode <= 0x6f) )
+     {
+-        unsigned long data_base, data_limit;
++        unsigned long data_base = 0, data_limit = 0;
+ 
+         if ( rep_prefix && (rd_ad(ecx) == 0) )
+             goto done;
+@@ -1564,12 +1744,61 @@ static int emulate_privileged_op(struct 
+     goto fail;
+ 
+  twobyte_opcode:
++    opcode = insn_fetch(u8, code_base, eip, code_limit);
++
++    if ( opcode == 0x31 ) { /* RDTSC */
++        uint64_t tsc;
++        rdtscll(tsc);
++        tsc += v->tsc_timestamp_bias;
++        regs->eax = tsc & 0xFFFFFFFFULL;
++        regs->edx = (tsc >> 32) & 0xFFFFFFFFULL;
++        goto done;
++    } else if ( opcode == 0x33 ) { /* RDPMC */
++        /*
++         * Core 2 errata: if ecx == 0x8000000x, the processor
++         * is supposed to return one of the fixed function PMCs
++         * equivalent to MSRs 0x309 / 0x30a / 0x30b.
++         *
++         * Unfortunately, this doesn't work properly from
++         * user mode even if PCE is enabled in CR4.
++         */
++        uint32_t ctr = regs->ecx;
++        int cpu = smp_processor_id();
++        struct cpuinfo_x86 *c = cpu_data + cpu;
++        uint32_t msr = 0;
++
++        if ((c->x86_vendor != X86_VENDOR_INTEL) || (c->x86 != 0x6) || (c->x86_model < 0x0e))
++            goto fail;
++
++        switch (ctr) {
++        case 0:
++            msr = MSR_P6_PERFCTR0; break;
++        case 1:
++            msr = MSR_P6_PERFCTR1; break;
++        case 0x80000000:
++            msr = MSR_CORE_PERF_FIXED_CTR0; break;
++        case 0x80000001:
++            msr = MSR_CORE_PERF_FIXED_CTR1; break;
++        case 0x80000002:
++            msr = MSR_CORE_PERF_FIXED_CTR2; break;
++        default:
++            msr = 0;
++        }
++
++        if (!msr)
++            goto fail;
++
++        if ( rdmsr_safe(msr, regs->eax, regs->edx) )
++            goto fail;
++
++        goto done;
++    }
++
+     /* Two-byte opcodes only emulated from guest kernel. */
+     if ( !guest_kernel_mode(v, regs) )
+         goto fail;
+ 
+     /* Privileged (ring 0) instructions. */
+-    opcode = insn_fetch(u8, code_base, eip, code_limit);
+     if ( lock && (opcode & ~3) != 0x20 )
+         goto fail;
+     switch ( opcode )
+@@ -1674,11 +1903,7 @@ static int emulate_privileged_op(struct 
+             break;
+ 
+         case 4:
+-            if ( *reg != (read_cr4() & ~(X86_CR4_PGE|X86_CR4_PSE)) )
+-            {
+-                gdprintk(XENLOG_WARNING, "Attempt to change CR4 flags.\n");
+-                goto fail;
+-            }
++            /* Ignore attempts to write CR4 */
+             break;
+ 
+         default:
+@@ -1724,6 +1949,22 @@ static int emulate_privileged_op(struct 
+                 ((u64)regs->edx << 32) | regs->eax;
+             break;
+ #endif
++        case MSR_IA32_PERF_STATUS:
++        case MSR_IA32_PERF_CTL:
++        case MSR_IA32_MPERF:
++        case MSR_IA32_APERF: {
++            struct cpuinfo_x86 *c = cpu_data + smp_processor_id();
++
++            if ( !IS_PRIV(current->domain) )
++                goto fail;
++
++            if ((c->x86_vendor != X86_VENDOR_INTEL) || (!(test_bit(X86_FEATURE_CONSTANT_TSC, &boot_cpu_data.x86_capability))))
++                goto fail;
++
++            if ( wrmsr_safe(regs->ecx, regs->eax, regs->edx) )
++                goto fail;
++            break;
++        }
+         default:
+             if ( wrmsr_hypervisor_regs(regs->ecx, regs->eax, regs->edx) )
+                 break;
+@@ -1764,6 +2005,37 @@ static int emulate_privileged_op(struct 
+             if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
+                 goto fail;
+             break;
++        case MSR_IA32_PERF_STATUS:
++        case MSR_IA32_PERF_CTL:
++        case MSR_IA32_MPERF:
++        case MSR_IA32_APERF: {
++            struct cpuinfo_x86 *c = cpu_data + smp_processor_id();
++
++            if ( !IS_PRIV(current->domain) )
++                goto fail;
++
++            if ((c->x86_vendor != X86_VENDOR_INTEL) || (!(test_bit(X86_FEATURE_CONSTANT_TSC, &boot_cpu_data.x86_capability))))
++                goto fail;
++
++            if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
++                goto fail;
++            break;
++        }
++#ifdef CONFIG_X86_64
++            /* These are only available on Intel Core 2 chips, all of which are 64-bit: */
++        case MSR_CORE_PERF_FIXED_CTR0:
++        case MSR_CORE_PERF_FIXED_CTR1:
++        case MSR_CORE_PERF_FIXED_CTR2: {
++            struct cpuinfo_x86 *c = cpu_data + smp_processor_id();
++
++            if ((c->x86_vendor != X86_VENDOR_INTEL) || (c->x86 != 0x6) || (c->x86_model < 0x0e))
++                goto fail;
++
++            if ( rdmsr_safe(regs->ecx, regs->eax, regs->edx) )
++                goto fail;
++            break;
++        }
++#endif
+         default:
+             if ( rdmsr_hypervisor_regs(regs->ecx, &l, &h) )
+             {
+diff -r 015d9abeacfb xen/arch/x86/x86_64/entry.S
+--- a/xen/arch/x86/x86_64/entry.S	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/x86_64/entry.S	Tue Jun 26 22:21:22 2007 -0400
+@@ -366,6 +366,20 @@ ENTRY(domain_crash_synchronous)
+         call  printk
+         jmp  __domain_crash_synchronous
+ 
++.data
++ENTRY(last_exception_type)
++  .int 0
++
++ENTRY(last_exception_error_code)
++  .int 0
++
++ENTRY(last_exception_fixup_rip)
++  .quad 0
++
++ENTRY(last_exception_fixup_cr2)
++  .quad 0
++.previous
++
+         ALIGN
+ /* No special register assumptions. */
+ ENTRY(ret_from_intr)
+@@ -386,7 +400,10 @@ handle_exception_saved:
+         jz    exception_with_ints_disabled
+         sti
+ 1:      movq  %rsp,%rdi
++        movl  UREGS_error_code(%rsp),%eax
++        movl  %eax,last_exception_error_code(%rip)
+         movl  UREGS_entry_vector(%rsp),%eax
++        movl  %eax,last_exception_type(%rip)
+         leaq  exception_table(%rip),%rdx
+         GET_CURRENT(%rbx)
+         PERFC_INCR(PERFC_exceptions, %rax, %rbx)
+diff -r 015d9abeacfb xen/arch/x86/x86_64/traps.c
+--- a/xen/arch/x86/x86_64/traps.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/arch/x86/x86_64/traps.c	Tue Jun 26 22:21:57 2007 -0400
+@@ -39,6 +39,20 @@ static void print_xen_info(void)
+            debug, print_tainted(taint_str));
+ }
+ 
++#define TRAP_COUNT 20
++static char *trap_name[TRAP_COUNT] = { 
++    "divide error", "debug", "nmi", "bkpt",
++    "overflow", "bounds", "invalid opcode", "device not available",
++    "double fault",  "coprocessor segment", "invalid tss", "segment not found", 
++    "stack error", "general protection fault", "page fault", "spurious interrupt",
++    "coprocessor error", "alignment check", "machine check", "simd error"
++};
++
++extern unsigned int last_exception_type;
++extern unsigned int last_exception_error_code;
++extern unsigned long last_exception_fixup_rip;
++extern unsigned long last_exception_fixup_cr2;
++
+ void show_registers(struct cpu_user_regs *regs)
+ {
+     struct cpu_user_regs fault_regs = *regs;
+@@ -73,6 +87,10 @@ void show_registers(struct cpu_user_regs
+     }
+ 
+     print_xen_info();
++    printk("Trap: %s (%d)\n", (last_exception_type < TRAP_COUNT) ? trap_name[last_exception_type] : "Unknown", last_exception_type);
++    printk("Error code %08x\n", last_exception_error_code);
++    printk("Last fixup: rip %p, cr2 %p\n", (void*)last_exception_fixup_rip, (void*)last_exception_fixup_cr2);
++    printk("Guest VCPU flags: %lu\n", current->arch.flags);
+     printk("CPU:    %d\nRIP:    %04x:[<%016lx>]",
+            smp_processor_id(), fault_regs.cs, fault_regs.rip);
+     if ( !guest_mode(regs) )
+diff -r 015d9abeacfb xen/common/domain.c
+--- a/xen/common/domain.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/common/domain.c	Wed Jun 27 20:41:37 2007 -0400
+@@ -730,6 +730,33 @@ long do_vcpu_op(int cmd, int vcpuid, XEN
+         break;
+     }
+ 
++    case VCPUOP_set_timestamp_bias:
++    {
++        vcpu_timestamp_bias_t bias;
++        rc = -EFAULT;
++        if ( copy_from_guest(&bias, arg, 1) )
++            break;
++
++        rc = 0;
++        v->tsc_timestamp_bias = bias.tsc_timestamp_bias;
++        v->system_time_bias = bias.system_time_bias;
++        break;
++    }
++
++    case VCPUOP_get_timestamp_bias:
++    {
++        vcpu_timestamp_bias_t bias;
++        bias.tsc_timestamp_bias = v->tsc_timestamp_bias;
++        bias.system_time_bias = v->system_time_bias;
++
++        rc = -EFAULT;
++        if ( copy_to_guest(arg, &bias, 1) )
++            break;
++
++        rc = 0;
++        break;
++    }
++
+     default:
+         rc = arch_do_vcpu_op(cmd, v, arg);
+         break;
+diff -r 015d9abeacfb xen/common/domctl.c
+--- a/xen/common/domctl.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/common/domctl.c	Wed Jun 27 20:43:30 2007 -0400
+@@ -172,6 +172,127 @@ static unsigned int default_vcpu0_locati
+     return cpu;
+ }
+ 
++extern void arch_get_ext_vcpu_context(struct vcpu *v, struct vcpu_extended_context *c);
++extern int arch_finish_context_swap(struct vcpu *v, struct vcpu_guest_context *c, struct vcpu_extended_context *ext);
++
++int do_contextswap(struct domain *d, xen_domctl_contextswap_t* op) {
++    struct vcpu_guest_context *oldbuf = NULL;
++    struct vcpu_guest_context *newbuf = NULL;
++    struct shared_info *shinfobuf = NULL;
++    uint64_t phys_tsc_at_capture;
++    int rc = 0;
++    int i;
++
++    domain_pause(d);
++    rdtscll(phys_tsc_at_capture);
++
++    rc = -ENOMEM;
++    if ((oldbuf = xmalloc(struct vcpu_guest_context)) == NULL)
++        goto out;
++
++    rc = -ENOMEM;
++    if ((newbuf = xmalloc(struct vcpu_guest_context)) == NULL)
++        goto free_oldbuf;
++
++    rc = -ENOMEM;
++    if ((shinfobuf = (struct shared_info*)alloc_xenheap_page()) == NULL)
++        goto free_newbuf;
++
++    /* Exchange shared info */
++
++    rc = -EFAULT;
++    if (op->new_shared_info && copy_from_user(shinfobuf, op->new_shared_info, sizeof(shared_info_t)))
++        goto free_all;
++
++    rc = -EFAULT;
++    if (op->old_shared_info && copy_to_user(op->old_shared_info, d->shared_info, sizeof(shared_info_t)))
++        goto free_all;
++
++    if (op->new_shared_info) memcpy(d->shared_info, shinfobuf, sizeof(shared_info_t));
++
++    /* Exchange per-VCPU info */
++
++    for (i = 0; i < MAX_VIRT_CPUS; i++) {
++        struct vcpu* v = d->vcpu[i];
++        vcpu_extended_context_t oldext;
++        vcpu_extended_context_t newext;
++
++        if (!test_bit(i, &op->vcpumap)) continue;
++
++        if (!v) continue;
++
++        if (!v->is_initialised) continue;
++
++        if (op->newctx && copy_from_user(newbuf, &op->newctx[i], sizeof(struct vcpu_guest_context))) continue;
++
++        if (op->newext && copy_from_user(&newext, &op->newext[i], sizeof(struct vcpu_extended_context))) continue;
++
++        if (op->oldctx) {
++            vcpu_guest_context_u ctxptr;
++            ctxptr.nat = oldbuf;
++            arch_get_info_guest(v, ctxptr);
++            if (copy_to_user(&op->oldctx[i], oldbuf, sizeof(struct vcpu_guest_context))) continue;
++
++            memcpy(&oldext.runstate, &v->runstate, sizeof(oldext.runstate));
++            oldext.runstate.state = (v->pause_flags & (VPF_blocked | VPF_blocked_in_xen | VPF_down)) ? RUNSTATE_blocked : RUNSTATE_runnable;
++            oldext.phys_tsc_at_capture = phys_tsc_at_capture;
++            oldext.tsc_timestamp_bias = v->tsc_timestamp_bias;
++            oldext.system_time_bias = v->system_time_bias;
++            memcpy(&oldext.virq_to_evtchn, v->virq_to_evtchn, sizeof(oldext.virq_to_evtchn));
++            oldext.runstate_guest = runstate_guest(v).p;
++            oldext.nmi_addr = v->nmi_addr;
++            oldext.timer_expires = v->periodic_timer.expires;
++            oldext.timer_killed = v->periodic_timer.killed;
++            oldext.poll_timer_expires = v->poll_timer.expires;
++            oldext.poll_timer_killed = v->poll_timer.killed;
++            arch_get_ext_vcpu_context(v, &oldext);
++
++            if (op->oldext) { if (copy_to_user(&op->oldext[i], &oldext, sizeof(oldext))) continue; }
++        }
++
++        if (op->newctx) {
++            if (arch_set_info_guest(v, newbuf)) continue;
++            if (arch_finish_context_swap(v, newbuf, (op->newext ? &newext : NULL))) continue;
++        }
++
++        if (op->newext) {
++            switch (newext.runstate.state) {
++            case RUNSTATE_running:
++            case RUNSTATE_runnable:
++                /* Unblock the VCPU when we resume */
++                vcpu_unblock(v);
++                clear_bit(_VPF_blocked_in_xen, &v->pause_flags);
++                break;
++            case RUNSTATE_blocked:
++                /* It's already paused, but make sure it doesn't get */
++                /* rescheduled when we unpause the entire domain: */
++                vcpu_info(v, evtchn_upcall_mask) = 0;
++                set_bit(_VPF_blocked, &v->pause_flags);
++                if (vcpu_info(v, evtchn_upcall_pending))
++                    clear_bit(_VPF_blocked, &v->pause_flags);
++                break;
++            case RUNSTATE_offline:
++                /* No action: already blocked */
++                break;
++            }
++        }
++
++        clear_bit(i, &op->vcpumap);
++    }
++
++    rc = 0;
++  free_all:
++    free_xenheap_page(shinfobuf);
++  free_newbuf:
++    xfree(newbuf);
++  free_oldbuf:
++    xfree(oldbuf);
++  out:
++    domain_unpause(d);
++
++    return rc;
++}
++
+ long do_domctl(XEN_GUEST_HANDLE(xen_domctl_t) u_domctl)
+ {
+     long ret = 0;
+@@ -645,6 +766,18 @@ long do_domctl(XEN_GUEST_HANDLE(xen_domc
+     }
+     break;
+ 
++    case XEN_DOMCTL_contextswap:
++    {
++        struct domain *d = rcu_lock_domain_by_id(op->domain);
++        ret = -ESRCH;
++        if ( d != NULL ) {
++            ret = do_contextswap(d, &op->u.contextswap);
++            rcu_unlock_domain(d);
++        }
++        if ( copy_to_guest(u_domctl, op, 1) ) ret = -EFAULT;
++    }
++    break;
++
+     case XEN_DOMCTL_irq_permission:
+     {
+         struct domain *d;
+diff -r 015d9abeacfb xen/common/grant_table.c
+--- a/xen/common/grant_table.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/common/grant_table.c	Mon Jun 25 04:23:05 2007 -0400
+@@ -1110,7 +1110,7 @@ __gnttab_copy(
+     struct gnttab_copy *op)
+ {
+     struct domain *sd = NULL, *dd = NULL;
+-    unsigned long s_frame, d_frame;
++    unsigned long s_frame = 0, d_frame = 0;
+     char *sp, *dp;
+     s16 rc = GNTST_okay;
+     int have_d_grant = 0, have_s_grant = 0, have_s_ref = 0;
+diff -r 015d9abeacfb xen/drivers/char/console.c
+--- a/xen/drivers/char/console.c	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/drivers/char/console.c	Fri Jul 13 22:00:41 2007 -0400
+@@ -52,7 +52,7 @@ static int opt_console_to_ring;
+ static int opt_console_to_ring;
+ boolean_param("console_to_ring", opt_console_to_ring);
+ 
+-#define CONRING_SIZE 16384
++#define CONRING_SIZE 262144
+ #define CONRING_IDX_MASK(i) ((i)&(CONRING_SIZE-1))
+ static char conring[CONRING_SIZE];
+ static unsigned int conringc, conringp;
+diff -r 015d9abeacfb xen/include/asm-x86/mm.h
+--- a/xen/include/asm-x86/mm.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/asm-x86/mm.h	Mon Jun 25 04:23:05 2007 -0400
+@@ -7,6 +7,7 @@
+ #include <xen/list.h>
+ #include <asm/io.h>
+ #include <asm/uaccess.h>
++#include <asm/current.h>
+ 
+ /*
+  * Per-page-frame information.
+@@ -373,7 +374,12 @@ void audit_domains(void);
+ 
+ #endif
+ 
+-int new_guest_cr3(unsigned long pfn);
++int update_vcpu_pt_base(struct vcpu *v, unsigned long mfn, int update_cr3);
++
++static inline int new_guest_cr3(unsigned long mfn) {
++  return update_vcpu_pt_base(current, mfn, 1);
++}
++
+ void make_cr3(struct vcpu *v, unsigned long mfn);
+ void update_cr3(struct vcpu *v);
+ void propagate_page_fault(unsigned long addr, u16 error_code);
+diff -r 015d9abeacfb xen/include/asm-x86/msr.h
+--- a/xen/include/asm-x86/msr.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/asm-x86/msr.h	Mon Jun 25 03:09:10 2007 -0400
+@@ -198,6 +198,8 @@ static inline void write_efer(__u64 val)
+ 
+ #define MSR_IA32_PERF_STATUS		0x198
+ #define MSR_IA32_PERF_CTL		0x199
++#define MSR_IA32_MPERF      0xe7
++#define MSR_IA32_APERF      0xe8
+ 
+ #define MSR_IA32_THERM_CONTROL		0x19a
+ #define MSR_IA32_THERM_INTERRUPT	0x19b
+@@ -384,4 +386,13 @@ static inline void write_efer(__u64 val)
+ #define MSR_TMTA_LRTI_READOUT		0x80868018
+ #define MSR_TMTA_LRTI_VOLT_MHZ		0x8086801a
+ 
++/* Intel Core-based CPU performance counters */
++#define MSR_CORE_PERF_FIXED_CTR0	0x309
++#define MSR_CORE_PERF_FIXED_CTR1	0x30a
++#define MSR_CORE_PERF_FIXED_CTR2	0x30b
++#define MSR_CORE_PERF_FIXED_CTR_CTRL	0x38d
++#define MSR_CORE_PERF_GLOBAL_STATUS	0x38e
++#define MSR_CORE_PERF_GLOBAL_CTRL	0x38f
++#define MSR_CORE_PERF_GLOBAL_OVF_CTRL	0x390
++
+ #endif /* __ASM_MSR_H */
+diff -r 015d9abeacfb xen/include/public/domctl.h
+--- a/xen/include/public/domctl.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/public/domctl.h	Mon Jun 25 04:23:05 2007 -0400
+@@ -33,6 +33,7 @@
+ #endif
+ 
+ #include "xen.h"
++#include "vcpu.h"
+ 
+ #define XEN_DOMCTL_INTERFACE_VERSION 0x00000005
+ 
+@@ -429,6 +430,61 @@ typedef struct xen_domctl_sendtrigger xe
+ typedef struct xen_domctl_sendtrigger xen_domctl_sendtrigger_t;
+ DEFINE_XEN_GUEST_HANDLE(xen_domctl_sendtrigger_t);
+ 
++
++/* PTLsim specific */
++
++/*
++ * Extended VCPU context (PTLsim specific)
++ */
++struct vcpu_extended_context {
++    struct vcpu_runstate_info runstate;
++
++    uint64_t      phys_tsc_at_capture;
++    uint64_t      tsc_timestamp_bias;
++    uint64_t      system_time_bias;
++
++    uint16_t              virq_to_evtchn[NR_VIRQS];
++    struct vcpu_runstate_info *runstate_guest;
++    unsigned long    nmi_addr;
++
++    /* for timer_op: system time expiry value (nanoseconds since boot). */
++    uint64_t      timer_expires;      /* (v->timer.expires) */
++    int           timer_killed;       /* (v->timer.killed) */
++    uint64_t      poll_timer_expires; /* (v->timer.expires) */
++    int           poll_timer_killed;  /* (v->timer.killed) */
++
++    /* Memory management */
++    unsigned long guest_table_user;   /* (MFN) x86/64 user-space pagetable */
++    unsigned long guest_table;        /* (MFN) guest notion of cr3 */
++    unsigned long cr3;           	  /* (MA) value to install in HW CR3 */
++
++    /* I/O-port access bitmap. */
++    uint8_t *iobmp;        /* Guest kernel virtual address of the bitmap. */
++    int iobmp_limit;  /* Number of ports represented in the bitmap.  */
++    int iopl;         /* Current IOPL for this VCPU. */
++};
++typedef struct vcpu_extended_context vcpu_extended_context_t;
++
++/*
++ * Perform an atomic context swap of all VCPUs in the domain.
++ * This must be done within Xen to avoid nasty race conditions
++ * with paused domains and page tables that can crash the
++ * hypervisor. The traditional setvpucontext domctl op is
++ * only intended for use at domain startup, while contextswap
++ * can be safely used at any time.
++ */
++#define XEN_DOMCTL_contextswap 32
++struct xen_domctl_contextswap {
++    unsigned long vcpumap; /* IN/OUT */
++    struct shared_info* old_shared_info; /* OUT */
++    struct shared_info* new_shared_info; /* IN */
++    vcpu_guest_context_t* oldctx; /* OUT */
++    vcpu_guest_context_t* newctx; /* IN */
++    vcpu_extended_context_t* oldext; /* OUT */
++    vcpu_extended_context_t* newext; /* IN */
++};
++typedef struct xen_domctl_contextswap xen_domctl_contextswap_t;
++DEFINE_XEN_GUEST_HANDLE(xen_domctl_contextswap_t);
+  
+ struct xen_domctl {
+     uint32_t cmd;
+@@ -459,7 +515,9 @@ struct xen_domctl {
+         struct xen_domctl_hvmcontext        hvmcontext;
+         struct xen_domctl_address_size      address_size;
+         struct xen_domctl_sendtrigger       sendtrigger;
+-        uint8_t                             pad[128];
++        /* PTLsim specific */
++        struct xen_domctl_contextswap       contextswap;
++        uint8_t                             pad[512];
+     } u;
+ };
+ typedef struct xen_domctl xen_domctl_t;
+diff -r 015d9abeacfb xen/include/public/platform.h
+--- a/xen/include/public/platform.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/public/platform.h	Mon Jun 25 04:34:31 2007 -0400
+@@ -114,6 +114,20 @@ typedef struct xenpf_platform_quirk xenp
+ typedef struct xenpf_platform_quirk xenpf_platform_quirk_t;
+ DEFINE_XEN_GUEST_HANDLE(xenpf_platform_quirk_t);
+ 
++#define XENPF_rdmsr               40
++#define XENPF_wrmsr               41
++struct xenpf_msr {
++    /* IN variables */
++    uint32_t cpu;
++    uint32_t index;
++    /* IN/OUT variables */
++    uint64_t value;
++    /* OUT variables */
++    uint32_t rc;
++};
++typedef struct xenpf_msr xenpf_msr_t;
++DEFINE_XEN_GUEST_HANDLE(xenpf_msr_t);
++
+ #define XENPF_firmware_info       50
+ #define XEN_FW_DISK_INFO          1 /* from int 13 AH=08/41/48 */
+ #define XEN_FW_DISK_MBR_SIGNATURE 2 /* from MBR offset 0x1b8 */
+@@ -164,6 +178,7 @@ struct xen_platform_op {
+         struct xenpf_microcode_update  microcode;
+         struct xenpf_platform_quirk    platform_quirk;
+         struct xenpf_firmware_info     firmware_info;
++        struct xenpf_msr               msr;
+         uint8_t                        pad[128];
+     } u;
+ };
+diff -r 015d9abeacfb xen/include/public/vcpu.h
+--- a/xen/include/public/vcpu.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/public/vcpu.h	Mon Jun 25 04:49:06 2007 -0400
+@@ -179,6 +179,35 @@ typedef struct vcpu_register_vcpu_info v
+ typedef struct vcpu_register_vcpu_info vcpu_register_vcpu_info_t;
+ DEFINE_XEN_GUEST_HANDLE(vcpu_register_vcpu_info_t);
+ 
++/* PTLsim specific */
++#define VCPUOP_get_registered_runstate_memory_area 6
++
++/* Virtualize rdtsc and shinfo system_time to properly do time dilation */
++struct vcpu_timestamp_bias {
++    int64_t  tsc_timestamp_bias; /* virtualize rdtsc and add this value (may be negative) */
++    int64_t  system_time_bias; /* add this value to system_time field in shared_info */
++};
++typedef struct vcpu_timestamp_bias vcpu_timestamp_bias_t;
++
++#define VCPUOP_set_timestamp_bias 32
++#define VCPUOP_get_timestamp_bias 33
++
++/* Set the breakout instruction opcode and action when that instruction is executed */
++struct vcpu_breakout_insn_action {
++    uint32_t  flags;
++    char      insn[16];
++    uint32_t  insn_length;
++    uint32_t  notify_port;
++};
++
++#define BREAKOUT_PAUSE_DOMAIN  (1 << 0)
++#define BREAKOUT_NOTIFY_PORT   (1 << 1)
++#define BREAKOUT_INCREMENT_RIP (1 << 2)
++
++typedef struct vcpu_breakout_insn_action vcpu_breakout_insn_action_t;
++
++#define VCPUOP_set_breakout_insn_action 34
++
+ #endif /* __XEN_PUBLIC_VCPU_H__ */
+ 
+ /*
+diff -r 015d9abeacfb xen/include/public/xen.h
+--- a/xen/include/public/xen.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/public/xen.h	Mon Jun 25 04:23:05 2007 -0400
+@@ -232,20 +232,55 @@
+ #define MMUEXT_SET_LDT          13
+ #define MMUEXT_NEW_USER_BASEPTR 15
+ 
++/* PTLsim specific calls */
++#define MMUEXT_GET_GDT_TEMPLATE     32
++#define MMUEXT_GET_KERNEL_BASEPTR   33
++#define MMUEXT_GET_USER_BASEPTR     35
++#define MMUEXT_QUERY_PAGES          37
++
+ #ifndef __ASSEMBLY__
++
++union page_type {
++    struct {
++        /* Use 0xffffffffffffffffULL for end of list marker */
++        uint64_t mfn;
++    } in;
++    struct {
++        uint8_t type;
++        uint8_t pinned:1;
++        uint16_t type_count;
++        uint32_t total_count;
++    } out;
++};
++ 
++typedef union page_type page_type_t;
++ 
++#define PAGE_TYPE_NONE           0 /* no special uses of this page */
++#define PAGE_TYPE_L1             1 /* using this page as an L1 page table? */
++#define PAGE_TYPE_L2             2 /* using this page as an L2 page table? */
++#define PAGE_TYPE_L3             3 /* using this page as an L3 page table? */
++#define PAGE_TYPE_L4             4 /* using this page as an L4 page table? */
++#define PAGE_TYPE_GDT            5 /* using this page in a GDT? */
++#define PAGE_TYPE_LDT            6 /* using this page in an LDT? */
++#define PAGE_TYPE_WRITABLE       7 /* has writable mappings of this page? */
++#define PAGE_TYPE_INVALID_MFN  254 /* MFN is invalid */
++#define PAGE_TYPE_INACCESSIBLE 255 /* not accessible to this domain */ 
++
+ struct mmuext_op {
+     unsigned int cmd;
+     union {
+         /* [UN]PIN_TABLE, NEW_BASEPTR, NEW_USER_BASEPTR */
+         xen_pfn_t     mfn;
+-        /* INVLPG_LOCAL, INVLPG_ALL, SET_LDT */
++        /* INVLPG_LOCAL, INVLPG_ALL, SET_LDT, GET_GDT_TEMPLATE, QUERY_PAGES */
+         unsigned long linear_addr;
+     } arg1;
+     union {
+-        /* SET_LDT */
++        /* SET_LDT, QUERY_PAGES */
+         unsigned int nr_ents;
+         /* TLB_FLUSH_MULTI, INVLPG_MULTI */
+         XEN_GUEST_HANDLE_00030205(void) vcpumask;
++        /* GET_KERNEL_BASEPTR, GET_USER_BASEPTR */
++        unsigned int vcpuid;
+     } arg2;
+ };
+ typedef struct mmuext_op mmuext_op_t;
+diff -r 015d9abeacfb xen/include/xen/sched.h
+--- a/xen/include/xen/sched.h	Thu Jun 21 21:36:26 2007 +0100
++++ b/xen/include/xen/sched.h	Mon Jun 25 04:23:05 2007 -0400
+@@ -133,6 +133,12 @@ struct vcpu
+     /* Bitmask of CPUs which are holding onto this VCPU's state. */
+     cpumask_t        vcpu_dirty_cpumask;
+ 
++    /* Time dilation */
++    int64_t          tsc_timestamp_bias;
++    int64_t          system_time_bias;
++
++    vcpu_breakout_insn_action_t breakout;
++
+     struct arch_vcpu arch;
+ };
+ 

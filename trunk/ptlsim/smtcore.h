@@ -11,8 +11,8 @@
 #define _SMTCORE_H_
 
 // With these disabled, simulation is faster
-// #define ENABLE_CHECKS
-// #define ENABLE_LOGGING
+#define ENABLE_CHECKS
+#define ENABLE_LOGGING
 
 //
 // Enable SMT operation:
@@ -22,13 +22,15 @@
 // threaded mode.
 //
 
-//#define ENABLE_SMT
+#ifdef PTLSIM_HYPERVISOR
+#define ENABLE_SMT
+#endif
 
 static const int MAX_THREADS_BIT = 4; // up to 16 threads
 static const int MAX_ROB_IDX_BIT = 12; // up to 4096 ROB entries
 
 #ifdef ENABLE_SMT
-static const int MAX_THREADS_PER_CORE = 4;
+static const int MAX_THREADS_PER_CORE = 2;
 #else
 static const int MAX_THREADS_PER_CORE = 1;
 #endif
@@ -163,6 +165,7 @@ namespace SMTModel {
     {OP_set_sub,        A, ANYINT},
     {OP_set_and,        A, ANYINT},
     {OP_sel,            A, ANYINT},
+    {OP_sel_cmp,        A, ANYINT},
     // Branches
     {OP_br,             A, ANYINT},
     {OP_br_sub,         A, ANYINT},
@@ -194,6 +197,7 @@ namespace SMTModel {
     {OP_mull,           4, ANYFPU},
     {OP_mulh,           4, ANYFPU},
     {OP_mulhu,          4, ANYFPU},
+    {OP_mulhl,          4, ANYFPU},
     // Bit scans
     {OP_ctz,            3, ANYFPU},
     {OP_clz,            3, ANYFPU},
@@ -204,66 +208,70 @@ namespace SMTModel {
     // 00 = single precision, scalar (preserve high 32 bits of ra)
     // 01 = single precision, packed (two 32-bit floats)
     // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
-    {OP_addf,           6, ANYFPU},
-    {OP_subf,           6, ANYFPU},
-    {OP_mulf,           6, ANYFPU},
-    {OP_maddf,          6, ANYFPU},
-    {OP_msubf,          6, ANYFPU},
-    {OP_divf,           6, ANYFPU},
-    {OP_sqrtf,          6, ANYFPU},
-    {OP_rcpf,           6, ANYFPU},
-    {OP_rsqrtf,         6, ANYFPU},
-    {OP_minf,           4, ANYFPU},
-    {OP_maxf,           4, ANYFPU},
-    {OP_cmpf,           4, ANYFPU},
+    {OP_fadd,           6, ANYFPU},
+    {OP_fsub,           6, ANYFPU},
+    {OP_fmul,           6, ANYFPU},
+    {OP_fmadd,          6, ANYFPU},
+    {OP_fmsub,          6, ANYFPU},
+    {OP_fmsubr,         6, ANYFPU},
+    {OP_fdiv,           6, ANYFPU},
+    {OP_fsqrt,          6, ANYFPU},
+    {OP_frcp,           6, ANYFPU},
+    {OP_frsqrt,         6, ANYFPU},
+    {OP_fmin,           6, ANYFPU},
+    {OP_fmax,           6, ANYFPU},
+    {OP_fcmp,           6, ANYFPU},
     // For fcmpcc, uop.size bits have following meaning:
     // 00 = single precision ordered compare
     // 01 = single precision unordered compare
     // 10 = double precision ordered compare
     // 11 = double precision unordered compare
-    {OP_cmpccf,         4, ANYFPU},
+    {OP_fcmpcc,         4, ANYFPU},
     // and/andn/or/xor are done using integer uops
-    {OP_permf,          3, ANYFPU}, // shuffles
     // For these conversions, uop.size bits select truncation mode:
     // x0 = normal IEEE-style rounding
     // x1 = truncate to zero
-    {OP_cvtf_i2s_ins,   6, ANYFPU},
-    {OP_cvtf_i2s_p,     6, ANYFPU},
-    {OP_cvtf_i2d_lo,    6, ANYFPU},
-    {OP_cvtf_i2d_hi,    6, ANYFPU},
-    {OP_cvtf_q2s_ins,   6, ANYFPU},
-    {OP_cvtf_q2d,       6, ANYFPU},
-    {OP_cvtf_s2i,       6, ANYFPU},
-    {OP_cvtf_s2q,       6, ANYFPU},
-    {OP_cvtf_s2i_p,     6, ANYFPU},
-    {OP_cvtf_d2i,       6, ANYFPU},
-    {OP_cvtf_d2q,       6, ANYFPU},
-    {OP_cvtf_d2i_p,     6, ANYFPU},
-    {OP_cvtf_d2s_ins,   6, ANYFPU},
-    {OP_cvtf_d2s_p,     6, ANYFPU},
-    {OP_cvtf_s2d_lo,    6, ANYFPU},
-    {OP_cvtf_s2d_hi,    6, ANYFPU},
+    {OP_fcvt_i2s_ins,   6, ANYFPU},
+    {OP_fcvt_i2s_p,     6, ANYFPU},
+    {OP_fcvt_i2d_lo,    6, ANYFPU},
+    {OP_fcvt_i2d_hi,    6, ANYFPU},
+    {OP_fcvt_q2s_ins,   6, ANYFPU},
+    {OP_fcvt_q2d,       6, ANYFPU},
+    {OP_fcvt_s2i,       6, ANYFPU},
+    {OP_fcvt_s2q,       6, ANYFPU},
+    {OP_fcvt_s2i_p,     6, ANYFPU},
+    {OP_fcvt_d2i,       6, ANYFPU},
+    {OP_fcvt_d2q,       6, ANYFPU},
+    {OP_fcvt_d2i_p,     6, ANYFPU},
+    {OP_fcvt_d2s_ins,   6, ANYFPU},
+    {OP_fcvt_d2s_p,     6, ANYFPU},
+    {OP_fcvt_s2d_lo,    6, ANYFPU},
+    {OP_fcvt_s2d_hi,    6, ANYFPU},
     // Vector integer uops
     // uop.size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (i.e. same as normal ALU uops)
-    {OP_addv,           1, ANYFPU},
-    {OP_subv,           1, ANYFPU},
-    {OP_addv_us,        1, ANYFPU},
-    {OP_subv_us,        1, ANYFPU},
-    {OP_addv_ss,        1, ANYFPU},
-    {OP_subv_ss,        1, ANYFPU},
-    {OP_shlv,           1, ANYFPU},
-    {OP_shrv,           1, ANYFPU},
-    {OP_btv,            1, ANYFPU},
-    {OP_sarv,           1, ANYFPU},
-    {OP_avgv,           1, ANYFPU},
-    {OP_cmpv,           1, ANYFPU},
-    {OP_minv,           1, ANYFPU},
-    {OP_maxv,           1, ANYFPU},
-    {OP_minv_s,         1, ANYFPU},
-    {OP_maxv_s,         1, ANYFPU},
-    {OP_mullv,          4, ANYFPU},
-    {OP_mulhv,          4, ANYFPU},
-    {OP_mulhuv,         4, ANYFPU},
+    {OP_vadd,           1, ANYFPU},
+    {OP_vsub,           1, ANYFPU},
+    {OP_vadd_us,        1, ANYFPU},
+    {OP_vsub_us,        1, ANYFPU},
+    {OP_vadd_ss,        1, ANYFPU},
+    {OP_vsub_ss,        1, ANYFPU},
+    {OP_vshl,           1, ANYFPU},
+    {OP_vshr,           1, ANYFPU},
+    {OP_vbt,            1, ANYFPU},
+    {OP_vsar,           1, ANYFPU},
+    {OP_vavg,           1, ANYFPU},
+    {OP_vcmp,           1, ANYFPU},
+    {OP_vmin,           1, ANYFPU},
+    {OP_vmax,           1, ANYFPU},
+    {OP_vmin_s,         1, ANYFPU},
+    {OP_vmax_s,         1, ANYFPU},
+    {OP_vmull,          4, ANYFPU},
+    {OP_vmulh,          4, ANYFPU},
+    {OP_vmulhu,         4, ANYFPU},
+    {OP_vmaddp,         4, ANYFPU},
+    {OP_vsad,           4, ANYFPU},
+    {OP_vpack_us,       2, ANYFPU},
+    {OP_vpack_ss,       2, ANYFPU},
   };
 
 #undef A
@@ -294,7 +302,7 @@ namespace SMTModel {
   
   // Largest size of any physical register file or the store queue:
   const int MAX_PHYS_REG_FILE_SIZE = 256;
-  const int PHYS_REG_FILE_SIZE = 128;
+  const int PHYS_REG_FILE_SIZE = 256;
   const int PHYS_REG_NULL = 0;
   
   //
@@ -689,10 +697,11 @@ namespace SMTModel {
     int forward();
     int select_cluster();
     int issue();
-    void* addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
+    Waddr addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
     bool handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec);
     int issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate);
     int issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate);
+    void issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel);
     int probecache(Waddr addr, LoadStoreQueueEntry* sfra);
     void tlbwalk();
     int issuefence(LoadStoreQueueEntry& state);
@@ -1400,6 +1409,7 @@ namespace SMTModel {
     int current_basic_block_transop_index;
     bool stall_frontend;
     bool waiting_for_icache_fill;
+    Waddr waiting_for_icache_fill_physaddr;
 
     // Last block in icache we fetched into our buffer
     W64 current_icache_block;
@@ -1988,6 +1998,24 @@ struct SMTCoreStats { // rootnode:
 
     W64 width[SMTModel::COMMIT_WIDTH+1]; // histo: 0, SMTModel::COMMIT_WIDTH, 1
   } commit;
+
+  struct branchpred {
+    W64 predictions;
+    W64 updates;
+
+    // These counters are [0] = mispred, [1] = correct
+    W64 cond[2]; // label: branchpred_outcome_names
+    W64 indir[2]; // label: branchpred_outcome_names
+    W64 ret[2]; // label: branchpred_outcome_names
+    W64 summary[2]; // label: branchpred_outcome_names
+    struct ras { // node: summable
+      W64 pushes;
+      W64 overflows;
+      W64 pops;
+      W64 underflows;
+      W64 annuls;
+    } ras;
+  } branchpred;
 
   PerContextSMTStats total;
   PerContextSMTStats vcpu0;

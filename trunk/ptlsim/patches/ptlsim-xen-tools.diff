@@ -1,6 +1,6 @@
 diff -r f0ba459065d3 tools/python/xen/xend/XendCheckpoint.py
 --- a/tools/python/xen/xend/XendCheckpoint.py	Fri Nov 17 02:47:28 2006
-+++ b/tools/python/xen/xend/XendCheckpoint.py	Sun Jan  7 00:59:54 2007
++++ b/tools/python/xen/xend/XendCheckpoint.py	Sun Jan  7 00:59:46 2007
 @@ -108,7 +108,7 @@
          raise Exception, exn
  
@@ -22,7 +22,7 @@ diff -r f0ba459065d3 tools/python/xen/xend/XendCheckpoint.py
          
 diff -r f0ba459065d3 tools/python/xen/xend/XendConfig.py
 --- a/tools/python/xen/xend/XendConfig.py	Fri Nov 17 02:47:28 2006
-+++ b/tools/python/xen/xend/XendConfig.py	Sun Jan  7 00:59:54 2007
++++ b/tools/python/xen/xend/XendConfig.py	Sun Jan  7 00:59:46 2007
 @@ -154,6 +154,7 @@
      ('bootloader_args', str),
      ('features', str),
@@ -41,7 +41,7 @@ diff -r f0ba459065d3 tools/python/xen/xend/XendConfig.py
      ('cpu_cap',      lambda info: 0),
 diff -r f0ba459065d3 tools/python/xen/xend/XendDomain.py
 --- a/tools/python/xen/xend/XendDomain.py	Fri Nov 17 02:47:28 2006
-+++ b/tools/python/xen/xend/XendDomain.py	Sun Jan  7 00:59:54 2007
++++ b/tools/python/xen/xend/XendDomain.py	Sun Jan  7 00:59:46 2007
 @@ -915,7 +915,7 @@
          # !!!
          raise XendError("Unsupported")
@@ -87,7 +87,7 @@ diff -r f0ba459065d3 tools/python/xen/xend/XendDomain.py
              if not dominfo:
 diff -r f0ba459065d3 tools/python/xen/xend/XendDomainInfo.py
 --- a/tools/python/xen/xend/XendDomainInfo.py	Fri Nov 17 02:47:28 2006
-+++ b/tools/python/xen/xend/XendDomainInfo.py	Sun Jan  7 00:59:54 2007
++++ b/tools/python/xen/xend/XendDomainInfo.py	Sun Jan  7 00:59:46 2007
 @@ -89,6 +89,7 @@
      ('bootloader_args', str),
      ('features',        str),
@@ -108,7 +108,7 @@ diff -r f0ba459065d3 tools/python/xen/xend/XendDomainInfo.py
                  # persistent
 diff -r f0ba459065d3 tools/python/xen/xend/server/XMLRPCServer.py
 --- a/tools/python/xen/xend/server/XMLRPCServer.py	Fri Nov 17 02:47:28 2006
-+++ b/tools/python/xen/xend/server/XMLRPCServer.py	Sun Jan  7 00:59:54 2007
++++ b/tools/python/xen/xend/server/XMLRPCServer.py	Sun Jan  7 00:59:46 2007
 @@ -64,8 +64,8 @@
      info = XendDomain.instance().domain_create(config)
      return fixup_sxpr(info.sxpr())
@@ -122,7 +122,7 @@ diff -r f0ba459065d3 tools/python/xen/xend/server/XMLRPCServer.py
  def get_log():
 diff -r f0ba459065d3 tools/python/xen/xm/create.py
 --- a/tools/python/xen/xm/create.py	Fri Nov 17 02:47:28 2006
-+++ b/tools/python/xen/xm/create.py	Sun Jan  7 00:59:54 2007
++++ b/tools/python/xen/xm/create.py	Sun Jan  7 00:59:46 2007
 @@ -721,6 +721,8 @@
          config.append(['backend', ['tpmif']])
      if vals.localtime:
@@ -134,7 +134,7 @@ diff -r f0ba459065d3 tools/python/xen/xm/create.py
      if vals.bootloader:
 diff -r f0ba459065d3 tools/python/xen/xm/main.py
 --- a/tools/python/xen/xm/main.py	Fri Nov 17 02:47:28 2006
-+++ b/tools/python/xen/xm/main.py	Sun Jan  7 00:59:54 2007
++++ b/tools/python/xen/xm/main.py	Sun Jan  7 00:59:46 2007
 @@ -84,7 +84,7 @@
                       'Migrate a domain to another machine.'),
      'pause'       : ('<Domain>', 'Pause execution of a domain.'),

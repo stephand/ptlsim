@@ -335,19 +335,22 @@ inline int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaul
   return bytes;
 }
 
-inline void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
+static const Waddr INVALID_PHYSADDR = 0;
+
+inline Waddr Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused) {
   exception = 0;
   pteupdate = 0;
+  pteused = 0;
   pfec = 0;
 
   if unlikely (lowbits(virtaddr, sizeshift)) {
     exception = EXCEPTION_UnalignedAccess;
-    return null;
+    return INVALID_PHYSADDR;
   }
 
   if unlikely (internal) {
     // Directly mapped to PTL space:
-    return (void*)virtaddr;
+    return virtaddr;
   }
 
   AddressSpace::spat_t top = (store) ? asp.writemap : asp.readmap;
@@ -360,11 +363,17 @@ inline void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool st
     return null;
   }
 
-  return (void*)virtaddr;
+  return virtaddr;
+}
+
+static inline W64 loadphys(Waddr addr) {
+  addr = floor(signext64(addr, 48), 8);
+  W64& data = *(W64*)(Waddr)addr;
+  return data;
 }
 
 static inline W64 storemask(Waddr addr, W64 data, byte bytemask) {
-  addr = signext64(addr, 48);
+  addr = floor(signext64(addr, 48), 8);
   W64& mem = *(W64*)(Waddr)addr;
   mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
   return data;

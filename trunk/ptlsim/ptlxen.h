@@ -86,9 +86,12 @@ typedef unsigned long pte_t;
 #define PTLSIM_CTX_PAGE_VIRT_BASE (PTLSIM_VIRT_BASE + (PTLSIM_CTX_PAGE_PFN * 4096))
 #define PTLSIM_CTX_PAGE_COUNT MAX_CONTEXTS
 
-#define PTLSIM_FIRST_READ_ONLY_PAGE (PTLSIM_CTX_PAGE_PFN + PTLSIM_CTX_PAGE_COUNT)
+#define PTLSIM_ENTRYPOINT_PFN (PTLSIM_CTX_PAGE_PFN + PTLSIM_CTX_PAGE_COUNT)
+#define PTLSIM_ENTRYPOINT_RIP (PTLSIM_ENTRYPOINT_PFN * 4096)
+#define PTLSIM_FIRST_READ_ONLY_PAGE PTLSIM_ENTRYPOINT_PFN
 
 #define INVALID_MFN 0xffffffffffffffffULL
+#define INVALID_PHYSADDR 0xffffffffffffffffULL
 
 #define PTES_PER_PAGE (PAGE_SIZE / sizeof(pte_t))
 
@@ -509,6 +512,76 @@ static inline W64 ptl_virt_to_phys(void* p) {
 }
 
 //
+// Convert an MFN back to a linear PFN (to make it deterministic across runs)
+//
+static inline W64 mfn_to_linear_pfn(W64 mfn) {
+  if unlikely (mfn >= bootinfo.total_machine_pages) return INVALID_MFN;
+  const W64* m2p = (const W64*)MACH2PHYS_VIRT_START;
+  return m2p[mfn];
+}
+
+//
+// Address Space IDs (ASID)
+//
+// These are prepended to the high 4 bits of the 40-bit physical
+// address passed to simulation functions to identify the type
+// of memory we're dealing with.
+//
+static const int PHYSADDR_TYPE_SHIFT = 36;
+
+static const W64 PHYSADDR_TYPE_DRAM          = 0; // Normal DRAM
+static const W64 PHYSADDR_TYPE_RAW           = 1; // Raw MFNs (for pages granted from other domains)
+static const W64 PHYSADDR_TYPE_PTL           = 2; // PTLsim space (for microcode access)
+static const W64 PHYSADDR_TYPE_SHINFO        = 3; // Shadow shared info page (physaddr offset is zero)
+static const W64 PHYSADDR_TYPE_XEN_M2P       = 4; // Xen M2P map (offset from virtaddr
+static const W64 PHYSADDR_TYPE_COUNT         = 5;
+
+static const char* physaddr_type_names[PHYSADDR_TYPE_COUNT] = {"dram", "raw", "ptl", "shinfo", "m2p"};
+
+//
+// Take a host MFN that varies between domain invocations
+// depending on the random pages assigned to the domain,
+// and convert it to a fully deterministic simulation MFN
+// that's used in all other parts of PTLsim. This enables
+// repeatable cache behavior modeling and so on.
+//
+// Simulation MFNs are always used by Context.* methods
+// and by loadphys() and storemask().
+//
+W64 host_mfn_to_sim_mfn(W64 hostmfn);
+
+//
+// Turn a simulation MFN back into a host (physical) MFN.
+// This does the inverse transform of host_mfn_to_sim_mfn().
+//
+W64 sim_mfn_to_host_mfn(W64 simmfn);
+
+//
+// Same as above but with a page offset
+//
+static inline Waddr host_physaddr_to_sim_physaddr(Waddr hostphys) {
+  return (host_mfn_to_sim_mfn(hostphys >> 12) << 12) + lowbits(hostphys, 12);
+}
+
+static inline Waddr sim_physaddr_to_host_physaddr(Waddr simphys) {
+  return (sim_mfn_to_host_mfn(simphys >> 12) << 12) + lowbits(simphys, 12);
+}
+
+static inline int get_sim_physaddr_type(W64 physaddr) {
+  return (physaddr >> PHYSADDR_TYPE_SHIFT);
+}
+
+static inline int get_sim_mfn_type(W64 simmfn) {
+  return get_sim_physaddr_type(simmfn << 12);
+}
+
+static inline bool is_valid_user_physaddr(W64 physaddr) {
+  return
+    (get_sim_physaddr_type(physaddr) == PHYSADDR_TYPE_DRAM) &
+    (physaddr < (1ULL << PHYSADDR_TYPE_SHIFT));
+}
+
+//
 // Notice that we have carefully arranged PTLSIM_VIRT_BASE
 // to be PHYS_VIRT_BASE + (1<<40). This means that a mapped
 // physical address inside PTLsim will be in the format:
@@ -552,15 +625,6 @@ static inline int update_ptl_pte(T& dest, const T& src) {
 
 static inline Level1PTE& get_ptl_pte(void* virt) {
   return bootinfo.ptl_pagedir[ptl_virt_to_pfn(virt)];
-}
-
-//
-// Convert an MFN back to a linear PFN (to make it deterministic across runs)
-//
-static inline W64 mfn_to_linear_pfn(W64 mfn) {
-  if unlikely (mfn >= bootinfo.total_machine_pages) return 0;
-  const W64* m2p = (const W64*)MACH2PHYS_VIRT_START;
-  return m2p[mfn];
 }
 
 //
@@ -615,13 +679,13 @@ ostream& print_page_table_with_types(ostream& os, Level1PTE* ptes);
 // Page Table Walks
 //
 
-Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG);
-Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn);
+Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn, bool do_special_translations);
 void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate& update);
 
 //
 // Loads and Stores
 //
+W64 loadphys(Waddr physaddr);
 W64 storemask(Waddr physaddr, W64 data, byte bytemask);
 
 int copy_from_user_phys_prechecked(void* target, Waddr source, int bytes, Level1PTE ptelo, Level1PTE ptehi, Waddr& faultaddr);
@@ -636,10 +700,15 @@ static inline int copy_from_user_phys_prechecked(void* target, Waddr source, int
 //
 extern struct Level1PTE* phys_pagedir;
 
-static inline bool smc_isdirty(Waddr mfn) {
+static inline bool smc_isdirty_host(Waddr mfn) {
   // MFN (2^28)-1 is INVALID_MFN as stored in RIPVirtPhys:
   if unlikely (mfn >= bootinfo.total_machine_pages) return false;
   return phys_pagedir[mfn].d;
+}
+
+static inline bool smc_isdirty(Waddr simmfn) {
+  if unlikely (get_sim_mfn_type(simmfn) != PHYSADDR_TYPE_DRAM) return 0;
+  return smc_isdirty_host(sim_mfn_to_host_mfn(simmfn));
 }
 
 void smc_setdirty_internal(Level1PTE& pte, bool dirty);
@@ -651,11 +720,21 @@ static inline void smc_setdirty_value(Waddr mfn, bool dirty) {
   smc_setdirty_internal(pte, dirty);
 }
 
-static inline void smc_setdirty(Waddr mfn) {
+static inline void smc_setdirty(Waddr simmfn) {
+  if unlikely (get_sim_mfn_type(simmfn) != PHYSADDR_TYPE_DRAM) return;
+  smc_setdirty_value(sim_mfn_to_host_mfn(simmfn), 1);
+}
+
+static inline void smc_cleardirty(Waddr simmfn) {
+  if unlikely (get_sim_mfn_type(simmfn) != PHYSADDR_TYPE_DRAM) return;
+  smc_setdirty_value(sim_mfn_to_host_mfn(simmfn), 0);
+}
+
+static inline void smc_setdirty_host(Waddr mfn) {
   smc_setdirty_value(mfn, 1);
 }
 
-static inline void smc_cleardirty(Waddr mfn) {
+static inline void smc_cleardirty_host(Waddr mfn) {
   smc_setdirty_value(mfn, 0);
 }
 
@@ -680,6 +759,7 @@ void sti();
 asmlinkage void xen_event_callback(W64* regs);
 extern int real_timer_port[MAX_VIRT_CPUS];
 void events_init();
+void bring_up_secondary_vcpu(int vcpuid);
 
 //
 // Shadow Event Channels

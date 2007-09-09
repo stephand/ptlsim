@@ -10,6 +10,13 @@
 ostream& ConfigurationParserBase::printusage(const void* baseptr, ostream& os) const {
   os << "Options are:", endl;
   ConfigurationOption* option = options;
+  int maxlength = 0;
+  while (option) {
+    if likely (option->type != OPTION_TYPE_SECTION) maxlength = max(maxlength, int(strlen(option->name)));
+    option = option->next;
+  }
+
+  option = options;
   while (option) {
     void* variable = (baseptr) ? ((void*)((Waddr)baseptr + option->offset)) : null;
     if (option->type == OPTION_TYPE_SECTION) {
@@ -18,7 +25,7 @@ ostream& ConfigurationParserBase::printusage(const void* baseptr, ostream& os) c
       continue;
     }
 
-    os << "  -", padstring(option->name, -16), " ", option->description, " ";
+    os << "  -", padstring(option->name, -maxlength), " ", option->description, " ";
 
     os << "[";
     switch (option->type) {

@@ -523,13 +523,11 @@ struct XenController {
 
     cerr << "PTLsim error: cannot allocate ", ptl_page_count, " pages (", ((ptl_page_count * 4096) / 1024), " KB) for PTLsim", endl;
     cerr << "  Tried ", MAX_ATTEMPTS, " attempts but only got ", pages_so_far, " pages (", ((pages_so_far * 4096) / 1024), " KB)", endl;
+    cerr << "  Make sure no other domains are running, try to free up some memory in dom0 and try again.", endl;
     cerr << endl;
     cerr << flush;
     return false;
   }
-
-  // RIP where PTLsim is entered (by default, 0xffffff0000025000
-  W64 ptlsim_entrypoint;
 
   void prep_initial_ptlsim_context(int vcpuid, Context& ptlctx) {
     setzero(ptlctx);
@@ -548,7 +546,7 @@ struct XenController {
     
     Waddr per_vcpu_sp = ((Waddr)bootinfo->per_vcpu_stack_base) + (vcpuid * 4096) + 4096;
     ptlctx.commitarf[REG_rsp] = (vcpuid > 0) ? per_vcpu_sp : (Waddr)bootinfo->stack_top;
-    ptlctx.commitarf[REG_rip] = ptlsim_entrypoint;
+    ptlctx.commitarf[REG_rip] = PTLSIM_ENTRYPOINT_RIP;
     // start info in %rdi (arg[0]):
     ptlctx.commitarf[REG_rdi] = (Waddr)ptlmon_ptr_to_ptlcore_ptr(bootinfo);
     // vcpuid is passed in rsi so we know whether or not we're the primary VCPU:
@@ -558,7 +556,7 @@ struct XenController {
   bool inject_ptlsim(int reserved_mbytes) {
     bool DEBUG = log_ptlsim_boot;
 
-    static const int stacksize = 1048576;
+    static const int stacksize = 2048*1024;
     ptl_page_count = (reserved_mbytes * 1024*1024) / 4096;
 
     xen_domctl_t op;
@@ -876,7 +874,6 @@ struct XenController {
     if (DEBUG) cerr << "  Remap ", shared_map_page_count, " pages as read/write at ", image, " (page ", 0, ")", endl, flush;
     assert((Waddr)map_pages(ptl_mfns, shared_map_page_count, PROT_READ|PROT_WRITE, (void*)PTLSIM_PSEUDO_VIRT_BASE, MAP_FIXED) == PTLSIM_PSEUDO_VIRT_BASE);
 
-    ptlsim_entrypoint = ehdr.e_entry;
     log_buffer_base = (char*)(PTLSIM_PSEUDO_VIRT_BASE + (PTLSIM_LOGBUF_PAGE_PFN * PAGE_SIZE));
     memset(log_buffer_base, 0, PTLSIM_LOGBUF_SIZE);
 
@@ -1191,10 +1188,20 @@ struct XenController {
     mlock(ptlsim_entry_shinfo, PAGE_SIZE);
 
     foreach (i, vcpu_count) {
+      if unlikely (log_ptlsim_boot) {
+        cerr << "New VCPU ", i, " context:", endl;
+        cerr << ctx[i];
+      }
+
       // PTLsim always starts off running on all VCPUs:
       if (target_is_ptlsim) ctx[i].running = 1;
       ctx[i].saveto(newctx[i]);
       ctx[i].saveto(newext[i]);
+    }
+
+    if (target_is_ptlsim) {
+      assert(ctx[0].kernel_mode);
+      assert(newctx[0].flags & VGCF_in_kernel);
     }
 
     xen_domctl_t dom0op;
@@ -1837,8 +1844,16 @@ int main(int argc, char** argv) {
   // We need each VCPU context to be exactly one page; it was padded this way in ptlhwdef.h:
   assert(sizeof(Context) == PAGE_SIZE);
 
+  //
   // 32 MB default:
-  W64 ptlsim_reserved_mb = 32;
+  //
+  // IMPORTANT: On machines with more than ~16 GB RAM,
+  // this MUST be increased to leave enough room for
+  // PTLsim's heap and a sufficient translation cache.
+  //
+  // The -reservemem 64 option can be used to do this.
+  //
+  W64 ptlsim_reserved_mb = 128;
   const char* domain_name = null;
 
   foreach (i, argc) {

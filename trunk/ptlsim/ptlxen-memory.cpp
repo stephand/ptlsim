@@ -197,6 +197,12 @@ mfn_t phys_level3_pagedir_mfn;
 W64 phys_pagedir_mfn_count;
 
 //
+// Reverse mapping from sim MFNs to host MFNs
+//
+W64 sim_mfn_to_host_mfn_map_size = 0;
+W32* sim_mfn_to_host_mfn_map = null;
+
+//
 // Build page tables for the 1:1 mapping of physical memory.
 //
 // Since we don't know which pages a domain can access until later,
@@ -228,7 +234,12 @@ void build_physmap_page_tables() {
   // Construct L2 page tables, pointing to fill-on-demand L1 tables:
   //
   Waddr physmap_level2_page_count = ceil(physmap_level1_page_count, PTES_PER_PAGE) / PTES_PER_PAGE;
-  phys_level2_pagedir = (Level2PTE*)ptl_mm_alloc_private_pages(physmap_level2_page_count * PAGE_SIZE);
+  phys_level2_pagedir = (Level2PTE*)ptl_mm_try_alloc_private_pages(physmap_level2_page_count * PAGE_SIZE);
+  if (!phys_level2_pagedir) {
+    cerr << "phys_level2_pagedir not allocated", endl, flush;
+    ptl_mm_dump(cerr);
+    ptl_mm_validate();
+  }
 
   if (DEBUG) cerr << "  L2 page table at virt ", (void*)phys_level2_pagedir, " (", physmap_level1_page_count, " entries, ",
     physmap_level2_page_count, " pages, ", (physmap_level1_page_count * sizeof(Level1PTE)), " bytes)", endl, flush;
@@ -321,6 +332,91 @@ void build_physmap_page_tables() {
   assert(top_mfn == get_cr3_mfn());
   int physmap_slot = VirtAddr(PHYS_VIRT_BASE).lm.level4;
   assert(update_phys_pte_mfn_and_slot(top_mfn, physmap_slot, physmap_pml4_entry) == 0);
+
+  //
+  // Build P2M (sim to host) MFN mapping table
+  //
+  sim_mfn_to_host_mfn_map_size = bootinfo.max_pages;
+  sim_mfn_to_host_mfn_map = (W32*)ptl_mm_alloc_private_pages(bootinfo.max_pages * sizeof(W32));
+  foreach (i, sim_mfn_to_host_mfn_map_size) {
+    sim_mfn_to_host_mfn_map[i] = 0xffffffff;
+  }
+}
+
+#define DETERMINISTIC_PHYSADDRS
+
+//
+// Take a host MFN that varies between domain invocations
+// depending on the random pages assigned to the domain,
+// and convert it to a fully deterministic simulation MFN
+// that's used in all other parts of PTLsim. This enables
+// repeatable cache behavior modeling and so on.
+//
+// Simulation MFNs are always used by Context.* methods
+// and by loadphys() and storemask().
+//
+W64 host_mfn_to_sim_mfn(W64 hostmfn) {
+#ifdef DETERMINISTIC_PHYSADDRS
+  if unlikely (hostmfn == bootinfo.shared_info_mfn) {
+    return (PHYSADDR_TYPE_SHINFO << PHYSADDR_TYPE_SHIFT);
+  }
+
+  W64 simmfn = mfn_to_linear_pfn(hostmfn);
+  if unlikely (simmfn >= sim_mfn_to_host_mfn_map_size) {
+    logfile << "host_mfn_to_sim_mfn(", hostmfn, "): m2p sim mfn is out of range (", simmfn, " vs limit ", sim_mfn_to_host_mfn_map_size, "); caller ", getcaller(), " at cycle ", sim_cycle, endl;
+    return INVALID_MFN;
+  }
+  sim_mfn_to_host_mfn_map[simmfn] = hostmfn;
+  return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_SHIFT) | simmfn;
+  // return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_SHIFT) | (hostmfn ^ 0xffffff);
+#else
+  return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_SHIFT) | hostmfn;
+#endif
+}
+
+//
+// Turn a simulation MFN back into a host (physical) MFN.
+// This does the inverse transform of host_mfn_to_sim_mfn().
+//
+W64 sim_mfn_to_host_mfn(W64 simmfn) {
+  W64 orig_simmfn = simmfn;
+#ifdef DETERMINISTIC_PHYSADDRS
+  //int type = (simmfn >> (PHYSADDR_TYPE_SHIFT-12));
+  //simmfn = lowbits(simmfn, (PHYSADDR_TYPE_SHIFT-12));
+  int type = (simmfn >> PHYSADDR_TYPE_SHIFT);
+  simmfn = lowbits(simmfn, PHYSADDR_TYPE_SHIFT);
+  if unlikely (type == PHYSADDR_TYPE_SHINFO) {
+    return ptl_virt_to_phys(&sshinfo) >> 12;
+  }
+
+  if (type != PHYSADDR_TYPE_DRAM) logfile << "sim_mfn_to_host_mfn(", orig_simmfn, "): simmfn = ", simmfn, ", type = ", type, ", caller ", getcaller(), endl;
+  assert(type == PHYSADDR_TYPE_DRAM);
+
+  if unlikely (simmfn >= sim_mfn_to_host_mfn_map_size) {
+    logfile << "sim_mfn_to_host_mfn(", simmfn, "): p2m sim mfn is out of range (", simmfn, " vs limit ", sim_mfn_to_host_mfn_map_size, "); caller ", getcaller(), endl;
+    assert(false);
+  }
+
+  W64 hostmfn = sim_mfn_to_host_mfn_map[simmfn];
+
+  if unlikely (hostmfn >= bootinfo.total_machine_pages) {
+    logfile << "sim_mfn_to_host_mfn(", simmfn, "): reverse mapping from sim mfn ", simmfn, " to host mfn ", hostmfn, " is unknown; caller ", getcaller(), endl;
+    assert(false);
+  }
+
+  // W64 hostmfn = simmfn ^ 0xffffff;
+  // W64 hostmfn = simmfn;
+  return hostmfn;
+
+  // return mfn_to_linear_pfn(xenmfn);
+  //++MTY TODO
+#else
+  int type = (simmfn >> PHYSADDR_TYPE_SHIFT);
+  simmfn = lowbits(simmfn, PHYSADDR_TYPE_SHIFT);
+  if (type != PHYSADDR_TYPE_DRAM) logfile << "sim_mfn_to_host_mfn(", orig_simmfn, "): simmfn = ", simmfn, ", type = ", type, ", caller ", getcaller(), endl;
+  assert(type == PHYSADDR_TYPE_DRAM);
+  return simmfn;
+#endif
 }
 
 //
@@ -569,6 +665,7 @@ asmlinkage void do_page_fault(W64* regs) {
     cerr << "Registers:", endl;
     print_regs(cerr, regs);
     print_stack(cerr, regs[REG_rsp]);
+
     cerr.flush();
     logfile.flush();
     shutdown(SHUTDOWN_crash);
@@ -591,6 +688,10 @@ asmlinkage void do_page_fault(W64* regs) {
       logfile << "Registers:", endl;
       print_regs(logfile, regs);
       print_stack(logfile, regs[REG_rsp]);
+
+      PTLsimMachine* machine = PTLsimMachine::getcurrent();
+      if (machine) machine->dump_state(logfile); else logfile << "(No current machine model)", endl;
+      logfile.close();
     }
 
     logfile.flush();
@@ -709,6 +810,46 @@ ostream& print_page_table_with_types(ostream& os, Level1PTE* ptes) {
 // Page Table Walks
 //
 
+Level1PTE Context::virt_to_host_pte(W64 rawvirt) {
+  bool DEBUG = 0; // (signext64(floor(rawvirt, 4096), 48) == 0xffffffffff5f9000);
+
+  int slot = lowbits(rawvirt >> 12, log2(PTE_CACHE_SIZE));
+  if unlikely (cached_pte_virt[slot] != floor(rawvirt, PAGE_SIZE)) {
+    cached_pte_virt[slot] = floor(rawvirt, PAGE_SIZE);
+    if (DEBUG) logfile << "Doing page table walk for ", (void*)rawvirt, " into slot ", slot, " @ cycle ", sim_cycle, endl;
+    cached_pte[slot] = page_table_walk(rawvirt, cr3 >> 12);
+    if (DEBUG) logfile << "Result of page table walk for ", (void*)rawvirt, " into slot ", slot, " = ", cached_pte[slot], " @ cycle ", sim_cycle, endl;
+  } else {
+    if (DEBUG) logfile << "Already have slot ", slot, " for virt ", (void*)rawvirt, ": ", cached_pte[slot], " @ cycle ", sim_cycle, endl;
+  }
+  return cached_pte[slot];
+}
+
+Level1PTE Context::virt_to_pte(W64 rawvirt) {
+  Level1PTE pte = virt_to_host_pte(rawvirt);
+  if (!pte.p) return pte;
+  mfn_t simmfn = host_mfn_to_sim_mfn(pte.mfn);
+  pte.mfn = simmfn;
+  if unlikely (simmfn == INVALID_MFN) {
+    logfile << "virt_to_pte(", (void*)rawvirt, ") on vcpu ", vcpuid, ": pte ", pte, " => invalid mfn ", simmfn, " (called from ", getcaller(), ")", endl;
+    logfile << "Mini-TLB:", endl;
+    foreach (i, lengthof(cached_pte_virt)) {
+      logfile << "  0x", hexstring(cached_pte_virt[i], 64), " => ", cached_pte[i], endl;
+    }
+    
+    PTLsimMachine* machine = PTLsimMachine::getcurrent();
+    if (machine) machine->dump_state(logfile); else logfile << "(No current machine model)", endl;
+    
+    if (vcpuid == 0) 
+      assert(simmfn != INVALID_MFN);
+    else {
+      logfile << "Trying to fix up and continue with mfn 0", endl;
+      pte.mfn = 0;
+    }
+  }
+  return pte;
+}
+
 //
 // Walk the page table tree, accumulating the relevant permissions
 // as we go, according to x86 rules (specifically, p, rw, us, nx).
@@ -725,7 +866,9 @@ ostream& print_page_table_with_types(ostream& os, Level1PTE* ptes) {
 
 Waddr xen_m2p_map_end;
 
-Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
+Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn, bool do_special_translations) {
+  bool DEBUG = 0; // (signext64(floor(rawvirt, 4096), 48) == 0xffffffffff5f9000);
+
   VirtAddr virt(rawvirt);
   last_virtaddr_triggering_walk = rawvirt;
 
@@ -754,6 +897,8 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
     pte.a = 1; // don't try to update accessed bits again
     pte.d = 0;
 
+    if unlikely (DEBUG) logfile << "Hypervisor space translation for virt ", (void*)rawvirt, " => ", pte, endl;
+
     return pte;
   }
 
@@ -761,21 +906,31 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
     // PTLsim space is inaccessible to the guest
     Level1PTE pte = 0;
     return pte;
+
+    if unlikely (DEBUG) logfile << "PTLsim space translation for virt ", (void*)rawvirt, " => ", pte, endl;
   }
 
   Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
   Level1PTE final = (W64)level4;
+
+  if unlikely (DEBUG) logfile << "level4 PTE = ", level4, ", final = ", final, endl;
 
   if unlikely (!level4.p) return final;
   acc_bit_up_to_date = level4.a;
 
   Level3PTE& level3 = ((Level3PTE*)phys_to_mapped_virt(level4.mfn << 12))[virt.lm.level3];
   final.accum(level3);
+
+  if unlikely (DEBUG) logfile << "level3 PTE = ", level3, ", final = ", final, endl;
+
   if unlikely (!level3.p) return final;
   acc_bit_up_to_date &= level3.a;
 
   Level2PTE& level2 = ((Level2PTE*)phys_to_mapped_virt(level3.mfn << 12))[virt.lm.level2];
   final.accum(level2);
+
+  if unlikely (DEBUG) logfile << "level2 PTE = ", level2, ", final = ", final, endl;
+
   if (unlikely(!level2.p)) return final;
   acc_bit_up_to_date &= level2.a;
 
@@ -788,12 +943,17 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
     final.a = acc_bit_up_to_date;
     final.d = level2.d;
 
+    if unlikely (DEBUG) logfile << "level2 PTE = ", level2, ", final = ", final, ", page size set", endl;
+
     return final;
   }
 
   Level1PTE& level1 = ((Level1PTE*)phys_to_mapped_virt(level2.mfn << 12))[virt.lm.level1];
   final.accum(level1);
-  if unlikely (!level1.p) return final;
+  if unlikely (!level1.p) {
+    if unlikely (DEBUG) logfile << "level1 PTE = ", level1, ", final = ", final, ", not present", endl;
+    return final;
+  }
   acc_bit_up_to_date &= level1.a;
 
   final.mfn = level1.mfn;
@@ -803,106 +963,13 @@ Level1PTE page_table_walk(W64 rawvirt, W64 toplevel_mfn) {
   final.pcd = level1.pcd;
   final.a = acc_bit_up_to_date;
   final.d = level1.d;
-
-  if unlikely (final.mfn == bootinfo.shared_info_mfn) {
+#if 0
+  if unlikely ((final.mfn == bootinfo.shared_info_mfn) && do_special_translations) {
     final.mfn = (Waddr)ptl_virt_to_phys(&sshinfo) >> 12;
   }
+#endif
 
-  return final;
-}
-
-//
-// Page table walk with debugging info:
-//
-Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG) {
-  ostream& os = logfile;
-
-  VirtAddr virt(rawvirt);
-
-  bool acc_bit_up_to_date = 0;
-
-  if (DEBUG) os << "page_table_walk: rawvirt ", (void*)rawvirt, ", toplevel ", (void*)toplevel_mfn, endl, flush;
-
-  if unlikely ((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end)) {
-    //
-    // The access is inside Xen's address space. Xen will not let us even access the
-    // page table entries it injects into every top-level page table page, and we
-    // cannot map M2P pages like we do other physical pages. Because Xen does not
-    // allow its internal page tables to be mapped by guests at all, we have to
-    // special-case these virtual addresses.
-    //
-    // We cheat by biasing the returned physical address such that we have
-    // (HYPERVISOR_VIRT_START - PHYS_VIRT_BASE) + PHYS_VIRT_BASE == HYPERVISOR_VIRT_START
-    // when other parts of PTLsim use ptl_phys_to_virt to access the memory.
-    //
-    const Waddr hypervisor_space_mask = (HYPERVISOR_VIRT_END - HYPERVISOR_VIRT_START)-1;
-    Waddr pseudo_phys = (HYPERVISOR_VIRT_START - PHYS_VIRT_BASE) + (rawvirt & hypervisor_space_mask);
-
-    if (DEBUG) os << "page_table_walk: special case (inside M2P map): pseudo_phys ", (void*)pseudo_phys, endl, flush;
-
-    Level1PTE pte = 0;
-    pte.mfn = pseudo_phys >> 12;
-    pte.p = 1;
-    pte.rw = 0;
-    pte.us = 1;
-    pte.a = 1; // don't try to update accessed bits again
-    pte.d = 0;
-
-    return pte;
-  }
-
-  Level4PTE& level4 = ((Level4PTE*)phys_to_mapped_virt(toplevel_mfn << 12))[virt.lm.level4];
-  if (DEBUG) os << "  level4 @ ", &level4, " (mfn ", ((((Waddr)&level4) & 0xffffffff) >> 12), ", entry ", virt.lm.level4, ")", endl, flush;
-  Level1PTE final = (W64)level4;
-
-  if unlikely (!level4.p) return final;
-  acc_bit_up_to_date = level4.a;
-
-  Level3PTE& level3 = ((Level3PTE*)phys_to_mapped_virt(level4.mfn << 12))[virt.lm.level3];
-  if (DEBUG) os << "  level3 @ ", &level3, " (mfn ", ((((Waddr)&level3) & 0xffffffff) >> 12), ", entry ", virt.lm.level3, ")", endl, flush;
-  final.accum(level3);
-  if unlikely (!level3.p) return final;
-  acc_bit_up_to_date &= level3.a;
-
-  Level2PTE& level2 = ((Level2PTE*)phys_to_mapped_virt(level3.mfn << 12))[virt.lm.level2];
-  if (DEBUG) os << "  level2 @ ", &level2, " (mfn ", ((((Waddr)&level2) & 0xffffffff) >> 12), ", entry ", virt.lm.level2, ")", endl, flush;
-  final.accum(level2);
-  if unlikely (!level2.p) return final;
-  acc_bit_up_to_date &= level2.a;
-
-  if unlikely (level2.psz) {
-    final.mfn = level2.mfn;
-    final.pwt = level2.pwt;
-    final.pcd = level2.pcd;
-    acc_bit_up_to_date &= level2.a;
-
-    final.a = acc_bit_up_to_date;
-    final.d = level2.d;
-
-    return final;
-  }
-
-  Level1PTE& level1 = ((Level1PTE*)phys_to_mapped_virt(level2.mfn << 12))[virt.lm.level1];
-  if (DEBUG) os << "  level1 @ ", &level1, " (mfn ", ((((Waddr)&level1) & 0xffffffff) >> 12), ", entry ", virt.lm.level1, ")", endl, flush;
-  final.accum(level1);
-  if unlikely (!level1.p) return final;
-  acc_bit_up_to_date &= level1.a;
-
-  final.mfn = level1.mfn;
-  final.g = level1.g;
-  final.pat = level1.pat;
-  final.pwt = level1.pwt;
-  final.pcd = level1.pcd;
-  final.a = acc_bit_up_to_date;
-  final.d = level1.d;
-
-  if unlikely (final.mfn == bootinfo.shared_info_mfn) {
-    final.mfn = (Waddr)ptl_virt_to_phys(&sshinfo) >> 12;
-    if (DEBUG) os << "  Remap shinfo access from real mfn ", bootinfo.shared_info_mfn,
-                 " to PTLsim virtual shinfo page mfn ", final.mfn, " (virt ", &sshinfo, ")", endl, flush;
-  }
-
-  if (DEBUG) os << "  Final PTE for virt ", (void*)(Waddr)rawvirt, ": ", final, endl, flush;
+  if unlikely (DEBUG) logfile << "level1 PTE = ", level1, ", final = ", final, ", returning", " @ cycle ", sim_cycle, endl;
 
   return final;
 }
@@ -911,10 +978,9 @@ Level1PTE page_table_walk_debug(W64 rawvirt, W64 toplevel_mfn, bool DEBUG) {
 // Walk the page table, but return the physical address of the PTE itself
 // that maps the specified virtual address
 //
-Waddr Context::virt_to_pte_phys_addr(W64 rawvirt, int level) {
+Waddr virt_to_pte_phys_addr(W64 toplevel_mfn, W64 rawvirt, int level = 0) {
   static const bool DEBUG = 0;
 
-  W64 toplevel_mfn = cr3 >> 12;
   VirtAddr virt(rawvirt);
 
   if unlikely ((rawvirt >= HYPERVISOR_VIRT_START) & (rawvirt < xen_m2p_map_end)) return 0;
@@ -942,6 +1008,10 @@ Waddr Context::virt_to_pte_phys_addr(W64 rawvirt, int level) {
   return ((Waddr)&level1) - PHYS_VIRT_BASE;
 }
 
+Waddr Context::virt_to_pte_phys_addr(W64 rawvirt, int level) {
+  return host_physaddr_to_sim_physaddr(::virt_to_pte_phys_addr(cr3 >> 12, rawvirt, level));
+};
+
 int Context::virt_to_pte_span(Level1PTE* destptes, W64 virtaddr, int pagecount) {
   W64 vpn = lowbits(virtaddr, 48) >> 12;
 
@@ -951,17 +1021,20 @@ int Context::virt_to_pte_span(Level1PTE* destptes, W64 virtaddr, int pagecount) 
   if unlikely (crosses_level2_slots || (pagecount >= 512)) {
     // Slow path: crosses page table pages
     foreach (i, pagecount) {
+      // This automatically does the conversion from host -> sim:
       destptes[i] = virt_to_pte(virtaddr + (i*4096));
     }
   } else {
     // Fast path: everything is on the same page table page
-    Waddr ptes_phys_base = floor(virt_to_pte_phys_addr(virtaddr), 4096);
+    Waddr ptes_phys_base = floor(::virt_to_pte_phys_addr(cr3 >> 12, virtaddr, 0), 4096);
 
     Level1PTE* ptes = (Level1PTE*)phys_to_mapped_virt(ptes_phys_base);
     int slot = lowbits(vpn, 9);
 
     foreach (i, pagecount) {
-      destptes[i] = ptes[slot + i];
+      Level1PTE& destpte = destptes[i];
+      destpte = ptes[slot + i];
+      if likely (destpte.p) destpte.mfn = host_mfn_to_sim_mfn(destpte.mfn);
     }
   }
 
@@ -1069,42 +1142,149 @@ bool is_mfn_ptpage(mfn_t mfn) {
   return (!pte.rw);
 }
 
-W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
-  W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
-  W64 merged = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
-  mfn_t mfn = physaddr >> 12;
+W64 loadphys(Waddr physaddr) {
+  bool DEBUG = 0; // logable(6);
 
-  if unlikely (!is_mfn_mainmem(mfn)) {
-    //
-    // Physical address is inside of PTLsim: apply directly.
-    //
-    // Technically the address could also be inside of Xen,
-    // however the guest itself is literally unable to generate
-    // such an address through page tables, so we don't need
-    // to worry about that here.
-    //
-    mem = merged;
-  } else if unlikely (is_mfn_ptpage(mfn)) {
-    //
-    // MFN is read-only and could not be promoted to
-    // writable: force Xen to do the store for us
-    //
-    mmu_update_t u;
-    u.ptr = physaddr;
-    u.val = merged;
-    int rc = HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
-    if unlikely (rc) {
-      logfile << "storemask: WARNING: store to physaddr ", (void*)physaddr, " <= ", Level1PTE(data), " failed with rc ", rc, endl, flush;
-      assert(false);
-    }
-  } else {
-    mem = merged;
+  physaddr = floor(physaddr, 8);
+  W64 orig_physaddr = physaddr;
+  int type = (physaddr >> PHYSADDR_TYPE_SHIFT);
+  physaddr = lowbits(physaddr, PHYSADDR_TYPE_SHIFT);
+  W64 simmfn = bits(orig_physaddr, 12, 24);
+
+  if unlikely (DEBUG) {
+    logfile << "loadphys(", (void*)orig_physaddr, "): ", physaddr_type_names[type], ": ", "physaddr ", (void*)orig_physaddr,
+      " sim [type ", type, ", mfn ", simmfn, ", pageoffs 0x", hexstring(lowbits(orig_physaddr, 12), 12), "] => ";
   }
 
-  return data;
+  if likely (type == PHYSADDR_TYPE_DRAM) {
+    // Ordinary DRAM
+    physaddr = sim_physaddr_to_host_physaddr(physaddr);
+    W64 mfn = physaddr >> 12;
+
+    W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
+    if unlikely (DEBUG) {
+      logfile << "host [mfn ", mfn, ", pageoffs 0x", hexstring(lowbits(physaddr, 12), 12), "]; mapped ",
+        (void*)&mem, " => 0x", hexstring(mem, 64), endl;
+    }
+    return mem;
+  } else if likely (type == PHYSADDR_TYPE_PTL) {
+    // Direct access inside PTL space
+    W64& mem = *(W64*)(PTLSIM_VIRT_BASE + physaddr);
+    if unlikely (DEBUG) {
+      logfile << "PTL space ", (void*)&mem, endl;
+    }
+    return mem;
+  } else if likely (type == PHYSADDR_TYPE_SHINFO) {
+    // Shadow shared info page access
+    W64& mem = *(W64*)(W64(&sshinfo) + lowbits(physaddr, 12));
+    if unlikely (DEBUG) {
+      logfile << "shadow shinfo @ ", (void*)&mem, endl;
+    }
+    return mem;
+  } else if likely (type == PHYSADDR_TYPE_XEN_M2P) {
+    // Xen machine-to-phys map
+    W64& mem = *(W64*)(HYPERVISOR_VIRT_START + physaddr);
+    if unlikely (DEBUG) {
+      logfile << "m2p ", (void*)&mem, endl;
+    }
+    return mem;
+  } else {
+    assert(false);
+  }
 }
 
-void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused) {
+W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
+  bool DEBUG = 0; // logable(6);
+
+  physaddr = floor(physaddr, 8);
+  Waddr orig_physaddr = physaddr;
+
+  int type = (physaddr >> PHYSADDR_TYPE_SHIFT);
+  physaddr = lowbits(physaddr, PHYSADDR_TYPE_SHIFT);
+  W64 simmfn = bits(orig_physaddr, 12, 24);
+
+  if unlikely (DEBUG) {
+    logfile << "storemask(", (void*)orig_physaddr, ", ", bytemaskstring((byte*)&data, bytemask, 8), "): ",
+      physaddr_type_names[type], ": ", "physaddr ", (void*)orig_physaddr, " sim [type ", type, ", mfn ",
+      simmfn, ", pageoffs 0x", hexstring(lowbits(orig_physaddr, 12), 12), "] => ";
+  }
+
+  if likely (type == PHYSADDR_TYPE_DRAM) {
+    // Ordinary DRAM
+    physaddr = sim_physaddr_to_host_physaddr(physaddr);
+
+    W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
+    W64 merged = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+    mfn_t mfn = physaddr >> 12;
+    
+    if unlikely (!is_mfn_mainmem(mfn)) {
+      //
+      // Physical address is inside of PTLsim: apply directly.
+      //
+      // Technically the address could also be inside of Xen,
+      // however the guest itself is literally unable to generate
+      // such an address through page tables, so we don't need
+      // to worry about that here.
+      //
+      mem = merged;
+      if unlikely (DEBUG) {
+        logfile << "host [mfn ", mfn, ", pageoffs 0x", hexstring(lowbits(physaddr, 12), 12),
+          "]; mapped ", (void*)&mem, endl;
+      }
+    } else if unlikely (is_mfn_ptpage(mfn)) {
+      //
+      // MFN is read-only and could not be promoted to
+      // writable: force Xen to do the store for us
+      //
+      if unlikely (DEBUG) {
+        logfile << "host ptpage [mfn ", mfn, ", pageoffs 0x", hexstring(lowbits(physaddr, 12), 12),
+          "]; mapped ", (void*)&mem, endl;
+      }   
+
+      mmu_update_t u;
+      u.ptr = physaddr;
+      u.val = merged;
+      int rc = HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF);
+      if unlikely (rc) {
+        logfile << "storemask: WARNING: store to physaddr ", (void*)physaddr, " <= ", Level1PTE(data), " failed with rc ", rc, endl, flush;
+        assert(false);
+      }
+    } else {
+      mem = merged;
+    }
+    return data;
+  } else if likely (type == PHYSADDR_TYPE_PTL) {
+    // Direct access inside PTL space
+    W64& mem = *(W64*)(PTLSIM_VIRT_BASE + physaddr);
+    if unlikely (DEBUG) {
+      logfile << "PTL space [", &mem, "]", endl;
+    }
+    mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+    return data;
+  } else if likely (type == PHYSADDR_TYPE_SHINFO) {
+    // Shadow shared info page access
+    W64& mem = *(W64*)(W64(&sshinfo) + lowbits(physaddr, 12));
+    if unlikely (DEBUG) {
+      logfile << "shadow shinfo @ ", &mem, endl;
+    }
+    mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+    return data;
+  } else {
+    // Not possible!
+    assert(false);
+  }
+}
+
+void Context::print_tlb(ostream& os) {
+  os << "VCPU ", vcpuid, " mini-TLB:", endl;
+  foreach (i, lengthof(cached_pte_virt)) {
+    Level1PTE& pte = cached_pte[i];
+    W64 simmfn = mfn_to_linear_pfn(pte.mfn);
+    os << "  ", intstring(i, 3), ": ", (void*)cached_pte_virt[i], " -> ", pte, " (sim mfn ", simmfn, " aka sim physaddr ", (void*)(simmfn << 12), ")", endl;
+  }
+}
+
+Waddr Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused) {
   exception = 0;
   pteupdate = 0;
 
@@ -1112,7 +1292,7 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
 
   if unlikely (lowbits(virtaddr, sizeshift)) {
     exception = EXCEPTION_UnalignedAccess;
-    return null;
+    return INVALID_PHYSADDR;
   }
 
   if unlikely (internal) {
@@ -1121,11 +1301,37 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
     // We need to patch in PTLSIM_VIRT_BASE since in 32-bit
     // mode, ctx.virt_addr_mask will chop off these bits.
     //
-    return (void*)(lowbits(virtaddr, 32) | PTLSIM_VIRT_BASE);
+    return (PHYSADDR_TYPE_PTL << PHYSADDR_TYPE_SHIFT) | lowbits(virtaddr, 32);
   }
 
-  Level1PTE pte = virt_to_pte(virtaddr);
-  pteused = pte;
+  if unlikely ((virtaddr >= HYPERVISOR_VIRT_START) & (virtaddr < xen_m2p_map_end)) {
+    //
+    // The access is inside Xen's address space. Xen will not let us even access the
+    // page table entries it injects into every top-level page table page, and we
+    // cannot map M2P pages like we do other physical pages. Because Xen does not
+    // allow its internal page tables to be mapped by guests at all, we have to
+    // special-case these virtual addresses.
+    //
+    // We mark the returned physical address as part of the PHYSADDR_TYPE_XEN_M2P
+    // address space ID, which is read-only and can only be loaded.
+    //
+    const W64 hypervisor_space_mask = (HYPERVISOR_VIRT_END - HYPERVISOR_VIRT_START)-1ULL;
+    W64 physaddr = (PHYSADDR_TYPE_XEN_M2P << PHYSADDR_TYPE_SHIFT) | (virtaddr & hypervisor_space_mask);
+
+    if unlikely ((!kernel_mode) || store) {
+      // Can't access this from userspace
+      exception = (store) ? EXCEPTION_PageFaultOnWrite : EXCEPTION_PageFaultOnRead;
+      pfec.p = 1;
+      pfec.rw = store;
+      pfec.us = (!kernel_mode);
+      pteused = 0;
+      return INVALID_PHYSADDR;
+    }
+
+    return physaddr;
+  }
+
+  Level1PTE pte = virt_to_host_pte(virtaddr);
 
   bool page_not_present = (!pte.p);
   bool page_read_only = (store & (!pte.rw));
@@ -1159,19 +1365,28 @@ void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
       // we do the full protection checks. Hence we just invalidate it here:
       //
       flush_tlb_virt(virtaddr);
-      return null;
+      return INVALID_PHYSADDR;
     }
   }
 
   pteupdate.a = (!pte.a);
   pteupdate.d = (store & (!pte.d));
 
-  return pte_to_mapped_virt(virtaddr, pte);
-}
+  if unlikely (pte.mfn == bootinfo.shared_info_mfn) {
+    //
+    // Remap to our shadow shared info page
+    //
+    if (logable(6)) logfile << "Translate virt ", (void*)virtaddr, " -> mfn ", pte.mfn, " -> shinfo page", endl;
+    W64 physaddr = (PHYSADDR_TYPE_SHINFO << PHYSADDR_TYPE_SHIFT) | lowbits(virtaddr, 12);
+    pteused = pte;
+    pteused.mfn = physaddr >> 12;
+    return physaddr;
+  }
 
-void* Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception, PageFaultErrorCode& pfec, PTEUpdate& pteupdate) {
-  Level1PTE dummy;
-  return check_and_translate(virtaddr, sizeshift, store, internal, exception, pfec, pteupdate, dummy);
+  pteused = pte;
+  pteused.mfn = host_mfn_to_sim_mfn(pte.mfn);
+
+  return (pteused.mfn << 12) + lowbits(virtaddr, 12);
 }
 
 int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr, bool forexec, Level1PTE& ptelo, Level1PTE& ptehi) {
@@ -1179,7 +1394,7 @@ int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErro
 
   pfec = 0;
   ptehi = 0;
-  ptelo = virt_to_pte(source);
+  ptelo = virt_to_host_pte(source);
 
   if unlikely ((!ptelo.p) | (forexec & ptelo.nx) | ((!kernel_mode) & (!ptelo.us))) {
     faultaddr = source;
@@ -1187,6 +1402,7 @@ int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErro
     pfec.nx = forexec;
     pfec.us = (!kernel_mode);
     flush_tlb_virt(source);
+    ptelo.mfn = host_mfn_to_sim_mfn(ptelo.mfn);
     return 0;
   }
 
@@ -1197,24 +1413,27 @@ int Context::copy_from_user(void* target, Waddr source, int bytes, PageFaultErro
   pteupdate.a = 1;
 
   if unlikely (!ptelo.a) update_pte_acc_dirty(source, pteupdate);
+  ptelo.mfn = host_mfn_to_sim_mfn(ptelo.mfn);
 
   // All the bytes were on the first page
   if likely (n == bytes) return n;
 
   // Go on to second page, if present
-  ptehi = virt_to_pte(source + n);
+  ptehi = virt_to_host_pte(source + n);
   if unlikely ((!ptehi.p) | (forexec & ptehi.nx) | ((!kernel_mode) & (!ptehi.us))) {
     faultaddr = source + n;
     pfec.p = ptehi.p;
     pfec.nx = forexec;
     pfec.us = (!kernel_mode);
     flush_tlb_virt(source + n);
+    ptehi.mfn = host_mfn_to_sim_mfn(ptehi.mfn);
     return n;
   }
 
   if (!ptehi.a) update_pte_acc_dirty(source + n, pteupdate);
 
   memcpy((byte*)target + n, pte_to_mapped_virt(source + n, ptehi), bytes - n);
+  ptehi.mfn = host_mfn_to_sim_mfn(ptehi.mfn);
   n = bytes;
   return n;
 }
@@ -1226,19 +1445,20 @@ int copy_from_user_phys_prechecked(void* target, Waddr source, int bytes, Level1
   }
 
   int n = min(4096 - lowbits(source, 12), (Waddr)bytes);
-  memcpy(target, phys_to_mapped_virt((ptelo.mfn << 12) + lowbits(source, 12)), n);
+  memcpy(target, phys_to_mapped_virt((sim_mfn_to_host_mfn(ptelo.mfn) << 12) + lowbits(source, 12)), n);
 
   // All the bytes were on the first page
   if likely (n == bytes) return n;
 
   // Go on to second page, if present
   source += n;
+
   if unlikely (!ptehi.p) {
     faultaddr = source;
     return n;
   }
 
-  memcpy((byte*)target + n, phys_to_mapped_virt(ptehi.mfn << 12), bytes - n);
+  memcpy((byte*)target + n, phys_to_mapped_virt(sim_mfn_to_host_mfn(ptehi.mfn) << 12), bytes - n);
   return bytes;
 }
 
@@ -1246,7 +1466,7 @@ int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorC
   Level1PTE pte;
 
   pfec = 0;
-  pte = virt_to_pte(target);
+  pte = virt_to_host_pte(target);
   if unlikely ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
     faultaddr = target;
     pfec.p = pte.p;
@@ -1271,7 +1491,7 @@ int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorC
   }
 
   // Go on to second page, if present
-  pte = virt_to_pte(target + nlo);
+  pte = virt_to_host_pte(target + nlo);
   if unlikely ((!pte.p) | (!pte.rw) | ((!kernel_mode) & (!pte.us))) {
     faultaddr = target + nlo;
     pfec.p = pte.p;
@@ -1389,9 +1609,9 @@ W64 handle_mmu_update_hypercall(Context& ctx, mmu_update_t* reqp, W64 count, int
       // (See notes about DMA and self-modifying code for update_va_mapping)
       //++MTY FIXME We need a more intelligent mechanism to avoid constant flushing
       // as new processes are started.
-      if unlikely ((!smc_isdirty(newpte.mfn)) && (bbcache.get_page_bb_count(newpte.mfn) > 0)) {
+      if unlikely ((!smc_isdirty_host(newpte.mfn)) && (bbcache.get_page_bb_count(newpte.mfn) > 0)) {
         if (debug) logfile << "  Target mfn ", newpte.mfn, " was clean and had ", bbcache.get_page_bb_count(newpte.mfn), " cached translations; making dirty", endl;
-        smc_setdirty(newpte.mfn);
+        smc_setdirty_host(newpte.mfn);
       }
     }
     
@@ -1408,7 +1628,7 @@ W64 handle_mmu_update_hypercall(Context& ctx, mmu_update_t* reqp, W64 count, int
 }
 
 W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W64 flags, bool debug) {
-  Waddr ptephys = ctx.virt_to_pte_phys_addr(va);
+  Waddr ptephys = virt_to_pte_phys_addr(ctx.cr3 >> 12, va);
   if (!ptephys) {
     if (debug) logfile << "update_va_mapping: va ", (void*)va, " using toplevel mfn ", (ctx.cr3 >> 12), ": cannot resolve PTE address", endl, flush;
     ctx.flush_tlb_virt(va);
@@ -1457,9 +1677,9 @@ W64 handle_update_va_mapping_hypercall(Context& ctx, W64 va, Level1PTE newpte, W
     //
     //++MTY FIXME We need a more intelligent mechanism to avoid constant flushing
     // as new processes are started.      
-    if ((!smc_isdirty(targetmfn)) && (bbcache.get_page_bb_count(targetmfn) > 0)) {
+    if ((!smc_isdirty_host(targetmfn)) && (bbcache.get_page_bb_count(targetmfn) > 0)) {
       if (debug) logfile << "  Target mfn ", targetmfn, " was clean and had ", bbcache.get_page_bb_count(targetmfn), " cached translations; making dirty", endl;
-      smc_setdirty(targetmfn);
+      smc_setdirty_host(targetmfn);
     }
   }
   

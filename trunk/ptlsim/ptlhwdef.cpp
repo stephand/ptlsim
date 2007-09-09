@@ -12,8 +12,6 @@
 Context ctx alignto(4096) insection(".ctx");
 #endif
 
-extern void print_message(const char* text);
-
 const char* opclass_names[OPCLASS_COUNT] = {
   "logic", "addsub", "addsubc", "addshift", "sel", "cmp", "br.cc", "jmp", "bru", 
   "assist", "mf", "ld", "st", "ld.pre", "shiftsimple", "shift", "mul", "bitscan", "flags",  "chk", 
@@ -27,7 +25,7 @@ const char* opclass_names[OPCLASS_COUNT] = {
 const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // name, opclass, latency, fu
   {"nop",            OPCLASS_LOGIC,         opNOSIZE   },
-  {"mov",            OPCLASS_LOGIC,         opAB       }, // move or merge
+  {"mov",            OPCLASS_LOGIC,         opAB|ccB   }, // move or merge
   // Logical
   {"and",            OPCLASS_LOGIC,         opAB       },
   {"andnot",         OPCLASS_LOGIC,         opAB       },
@@ -66,10 +64,11 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"btr",            OPCLASS_LOGIC,         opAB       },
   {"btc",            OPCLASS_LOGIC,         opAB       },
   // Set and select
-  {"set",            OPCLASS_SELECT,        opABC|ccC  },
-  {"set.sub",        OPCLASS_SELECT,        opABC      },
-  {"set.and",        OPCLASS_SELECT,        opABC      },
+  {"set",            OPCLASS_SELECT,        opABC|ccAB }, // rd = rc <- (eval(ra,rb) ? 1 : 0)
+  {"set.sub",        OPCLASS_SELECT,        opABC      }, // rd = rc <- (eval(ra-rb) ? 1 : 0)
+  {"set.and",        OPCLASS_SELECT,        opABC      }, // rd = rc <- (eval(ra&rb) ? 1 : 0)
   {"sel",            OPCLASS_SELECT,        opABC|ccABC}, // rd = falsereg,truereg,condreg
+  {"sel.cmp",        OPCLASS_SELECT,        opABC|ccAB }, // rd = falsereg,truereg,intreg
   // Branches
   {"br",             OPCLASS_COND_BRANCH,   opAB|ccAB|opNOSIZE}, // branch (rcimm: 32 to 53-bit target info)
   {"br.sub",         OPCLASS_COND_BRANCH,   opAB     }, // compare and branch ("cmp" form: subtract) (rcimm: 32 to 53-bit target info)
@@ -101,6 +100,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"mull",           OPCLASS_MULTIPLY,      opAB },
   {"mulh",           OPCLASS_MULTIPLY,      opAB },
   {"mulhu",          OPCLASS_MULTIPLY,      opAB },
+  {"mulhl",          OPCLASS_MULTIPLY,      opAB },
   // Bit scans
   {"ctz",            OPCLASS_BITSCAN,       opB  },
   {"clz",            OPCLASS_BITSCAN,       opB  },
@@ -111,66 +111,70 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // 00 = single precision, scalar (preserve high 32 bits of ra)
   // 01 = single precision, packed (two 32-bit floats)
   // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
-  {"addf",           OPCLASS_FP_ALU,        opAB },
-  {"subf",           OPCLASS_FP_ALU,        opAB },
-  {"mulf",           OPCLASS_FP_ALU,        opAB },
-  {"maddf",          OPCLASS_FP_ALU,        opABC},
-  {"msubf",          OPCLASS_FP_ALU,        opABC},
-  {"divf",           OPCLASS_FP_DIVSQRT,    opAB },
-  {"sqrtf",          OPCLASS_FP_DIVSQRT,    opAB },
-  {"rcpf",           OPCLASS_FP_DIVSQRT,    opAB },
-  {"rsqrtf",         OPCLASS_FP_DIVSQRT,    opAB },
-  {"minf",           OPCLASS_FP_COMPARE,    opAB },
-  {"maxf",           OPCLASS_FP_COMPARE,    opAB },
-  {"cmpf",           OPCLASS_FP_COMPARE,    opAB },
+  {"fadd",           OPCLASS_FP_ALU,        opAB },
+  {"fsub",           OPCLASS_FP_ALU,        opAB },
+  {"fmul",           OPCLASS_FP_ALU,        opAB },
+  {"fmadd",          OPCLASS_FP_ALU,        opABC},
+  {"fmsub",          OPCLASS_FP_ALU,        opABC},
+  {"fmsubr",         OPCLASS_FP_ALU,        opABC},
+  {"fdiv",           OPCLASS_FP_DIVSQRT,    opAB },
+  {"fsqrt",          OPCLASS_FP_DIVSQRT,    opAB },
+  {"frcp",           OPCLASS_FP_DIVSQRT,    opAB },
+  {"fsqrt",          OPCLASS_FP_DIVSQRT,    opAB },
+  {"fmin",           OPCLASS_FP_COMPARE,    opAB },
+  {"fmax",           OPCLASS_FP_COMPARE,    opAB },
+  {"fcmp",           OPCLASS_FP_COMPARE,    opAB },
   // For fcmpcc, uop.size bits have following meaning:
   // 00 = single precision ordered compare
   // 01 = single precision unordered compare
   // 10 = double precision ordered compare
   // 11 = double precision unordered compare
-  {"cmpccf",         OPCLASS_FP_COMPARE,    opAB },
+  {"fcmpcc",         OPCLASS_FP_COMPARE,    opAB },
   // and/andn/or/xor are done using integer uops
-  {"permf",          OPCLASS_FP_PERMUTE,    opAB }, // shuffles
   // For these conversions, uop.size bits select truncation mode:
   // x0 = normal IEEE-style rounding
   // x1 = truncate to zero
-  {"cvtf.i2s.ins",   OPCLASS_FP_CONVERTI2F, opAB }, // one W32s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss)
-  {"cvtf.i2s.p",     OPCLASS_FP_CONVERTI2F, opB  }, // pair of W32s <rb> to pair of singles <rd> (for cvtdq2ps, cvtpi2ps)
-  {"cvtf.i2d.lo",    OPCLASS_FP_CONVERTI2F, opB  }, // low W32s in <rb> to double in <rd> (for cvtdq2pd part 1, cvtpi2pd part 1, cvtsi2sd)
-  {"cvtf.i2d.hi",    OPCLASS_FP_CONVERTI2F, opB  }, // high W32s in <rb> to double in <rd> (for cvtdq2pd part 2, cvtpi2pd part 2)
-  {"cvtf.q2s.ins",   OPCLASS_FP_CONVERTI2F, opAB }, // one W64s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss with REX.mode64 prefix)
-  {"cvtf.q2d",       OPCLASS_FP_CONVERTI2F, opAB }, // one W64s <rb> to double in <rd>, ignore <ra> (for cvtsi2sd with REX.mode64 prefix)
-  {"cvtf.s2i",       OPCLASS_FP_CONVERTF2I, opB  }, // one single <rb> to W32s in <rd> (for cvtss2si, cvttss2si)
-  {"cvtf.s2q",       OPCLASS_FP_CONVERTF2I, opB  }, // one single <rb> to W64s in <rd> (for cvtss2si, cvttss2si with REX.mode64 prefix)
-  {"cvtf.s2i.p",     OPCLASS_FP_CONVERTF2I, opB  }, // pair of singles in <rb> to pair of W32s in <rd> (for cvtps2pi, cvttps2pi, cvtps2dq, cvttps2dq)
-  {"cvtf.d2i",       OPCLASS_FP_CONVERTF2I, opB  }, // one double <rb> to W32s in <rd> (for cvtsd2si, cvttsd2si)
-  {"cvtf.d2q",       OPCLASS_FP_CONVERTF2I, opB  }, // one double <rb> to W64s in <rd> (for cvtsd2si with REX.mode64 prefix)
-  {"cvtf.d2i.p",     OPCLASS_FP_CONVERTF2I, opAB }, // pair of doubles in <ra> (high), <rb> (low) to pair of W32s in <rd> (for cvtpd2pi, cvttpd2pi, cvtpd2dq, cvttpd2dq), clear high 64 bits of dest xmm
-  {"cvtf.d2s.ins",   OPCLASS_FP_CONVERTFP,  opAB }, // double in <rb> to single, insert into low 32 bits of <ra> (for cvtsd2ss)
-  {"cvtf.d2s.p",     OPCLASS_FP_CONVERTFP,  opAB }, // pair of doubles in <ra> (high), <rb> (low) to pair of singles in <rd> (for cvtpd2ps)
-  {"cvtf.s2d.lo",    OPCLASS_FP_CONVERTFP,  opB  }, // low single in <rb> to double in <rd> (for cvtps2pd, part 1, cvtss2sd)
-  {"cvtf.s2d.hi",    OPCLASS_FP_CONVERTFP,  opB  }, // high single in <rb> to double in <rd> (for cvtps2pd, part 2)
+  {"fcvt.i2s.ins",   OPCLASS_FP_CONVERTI2F, opAB }, // one W32s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss)
+  {"fcvt.i2s.p",     OPCLASS_FP_CONVERTI2F, opB  }, // pair of W32s <rb> to pair of singles <rd> (for cvtdq2ps, cvtpi2ps)
+  {"fcvt.i2d.lo",    OPCLASS_FP_CONVERTI2F, opB  }, // low W32s in <rb> to double in <rd> (for cvtdq2pd part 1, cvtpi2pd part 1, cvtsi2sd)
+  {"fcvt.i2d.hi",    OPCLASS_FP_CONVERTI2F, opB  }, // high W32s in <rb> to double in <rd> (for cvtdq2pd part 2, cvtpi2pd part 2)
+  {"fcvt.q2s.ins",   OPCLASS_FP_CONVERTI2F, opAB }, // one W64s <rb> to single, insert into low 32 bits of <ra> (for cvtsi2ss with REX.mode64 prefix)
+  {"fcvt.q2d",       OPCLASS_FP_CONVERTI2F, opAB }, // one W64s <rb> to double in <rd>, ignore <ra> (for cvtsi2sd with REX.mode64 prefix)
+  {"fcvt.s2i",       OPCLASS_FP_CONVERTF2I, opB  }, // one single <rb> to W32s in <rd> (for cvtss2si, cvttss2si)
+  {"fcvt.s2q",       OPCLASS_FP_CONVERTF2I, opB  }, // one single <rb> to W64s in <rd> (for cvtss2si, cvttss2si with REX.mode64 prefix)
+  {"fcvt.s2i.p",     OPCLASS_FP_CONVERTF2I, opB  }, // pair of singles in <rb> to pair of W32s in <rd> (for cvtps2pi, cvttps2pi, cvtps2dq, cvttps2dq)
+  {"fcvt.d2i",       OPCLASS_FP_CONVERTF2I, opB  }, // one double <rb> to W32s in <rd> (for cvtsd2si, cvttsd2si)
+  {"fcvt.d2q",       OPCLASS_FP_CONVERTF2I, opB  }, // one double <rb> to W64s in <rd> (for cvtsd2si with REX.mode64 prefix)
+  {"fcvt.d2i.p",     OPCLASS_FP_CONVERTF2I, opAB }, // pair of doubles in <ra> (high), <rb> (low) to pair of W32s in <rd> (for cvtpd2pi, cvttpd2pi, cvtpd2dq, cvttpd2dq), clear high 64 bits of dest xmm
+  {"fcvt.d2s.ins",   OPCLASS_FP_CONVERTFP,  opAB }, // double in <rb> to single, insert into low 32 bits of <ra> (for cvtsd2ss)
+  {"fcvt.d2s.p",     OPCLASS_FP_CONVERTFP,  opAB }, // pair of doubles in <ra> (high), <rb> (low) to pair of singles in <rd> (for cvtpd2ps)
+  {"fcvt.s2d.lo",    OPCLASS_FP_CONVERTFP,  opB  }, // low single in <rb> to double in <rd> (for cvtps2pd, part 1, cvtss2sd)
+  {"fcvt.s2d.hi",    OPCLASS_FP_CONVERTFP,  opB  }, // high single in <rb> to double in <rd> (for cvtps2pd, part 2)
   // Vector integer uops
   // uop.size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (i.e. same as normal ALU uops)
-  {"addv",           OPCLASS_VEC_ALU,       opAB }, // vector add with wraparound
-  {"subv",           OPCLASS_VEC_ALU,       opAB }, // vector sub with wraparound
-  {"addv.us",        OPCLASS_VEC_ALU,       opAB }, // vector add with unsigned saturation
-  {"subv.us",        OPCLASS_VEC_ALU,       opAB }, // vector sub with unsigned saturation
-  {"addv.ss",        OPCLASS_VEC_ALU,       opAB }, // vector add with signed saturation
-  {"subv.ss",        OPCLASS_VEC_ALU,       opAB }, // vector sub with signed saturation
-  {"shlv",           OPCLASS_VEC_ALU,       opAB }, // vector shift left
-  {"shrv",           OPCLASS_VEC_ALU,       opAB }, // vector shift right
-  {"btv",            OPCLASS_VEC_ALU,       opAB }, // vector bit test (pack bit <rb> of each element in <ra> into low N bits of output)
-  {"sarv",           OPCLASS_VEC_ALU,       opAB }, // vector shift right arithmetic (sign extend)
-  {"avgv",           OPCLASS_VEC_ALU,       opAB }, // vector average ((<ra> + <rb> + 1) >> 1)
-  {"cmpv",           OPCLASS_VEC_ALU,       opAB }, // vector compare (uop.cond specifies compare type; result is all 1's for true, or all 0's for false in each element)
-  {"minv",           OPCLASS_VEC_ALU,       opAB }, // vector minimum
-  {"maxv",           OPCLASS_VEC_ALU,       opAB }, // vector maximum
-  {"minv.s",         OPCLASS_VEC_ALU,       opAB }, // vector signed minimum
-  {"maxv.s",         OPCLASS_VEC_ALU,       opAB }, // vector signed maximum
-  {"mullv",          OPCLASS_VEC_ALU,       opAB }, // multiply and keep low bits
-  {"mulhv",          OPCLASS_VEC_ALU,       opAB }, // multiply and keep high bits
-  {"mulhuv",         OPCLASS_VEC_ALU,       opAB }, // multiply and keep high bits (unsigned)
+  {"vadd",           OPCLASS_VEC_ALU,       opAB }, // vector add with wraparound
+  {"vsub",           OPCLASS_VEC_ALU,       opAB }, // vector sub with wraparound
+  {"vadd.us",        OPCLASS_VEC_ALU,       opAB }, // vector add with unsigned saturation
+  {"vsub.us",        OPCLASS_VEC_ALU,       opAB }, // vector sub with unsigned saturation
+  {"vadd.ss",        OPCLASS_VEC_ALU,       opAB }, // vector add with signed saturation
+  {"vsub.ss",        OPCLASS_VEC_ALU,       opAB }, // vector sub with signed saturation
+  {"vshl",           OPCLASS_VEC_ALU,       opAB }, // vector shift left
+  {"vshr",           OPCLASS_VEC_ALU,       opAB }, // vector shift right
+  {"vbt",            OPCLASS_VEC_ALU,       opAB }, // vector bit test (pack bit <rb> of each element in <ra> into low N bits of output)
+  {"vsar",           OPCLASS_VEC_ALU,       opAB }, // vector shift right arithmetic (sign extend)
+  {"vavg",           OPCLASS_VEC_ALU,       opAB }, // vector average ((<ra> + <rb> + 1) >> 1)
+  {"vcmp",           OPCLASS_VEC_ALU,       opAB }, // vector compare (uop.cond specifies compare type; result is all 1's for true, or all 0's for false in each element)
+  {"vmin",           OPCLASS_VEC_ALU,       opAB }, // vector minimum
+  {"vmax",           OPCLASS_VEC_ALU,       opAB }, // vector maximum
+  {"vmin.s",         OPCLASS_VEC_ALU,       opAB }, // vector signed minimum
+  {"vmax.s",         OPCLASS_VEC_ALU,       opAB }, // vector signed maximum
+  {"vmull",          OPCLASS_VEC_ALU,       opAB }, // multiply and keep low bits
+  {"vmulh",          OPCLASS_VEC_ALU,       opAB }, // multiply and keep high bits
+  {"vmulhu",         OPCLASS_VEC_ALU,       opAB }, // multiply and keep high bits (unsigned)
+  {"vmaddp",         OPCLASS_VEC_ALU,       opAB }, // multiply and add adjacent pairs (signed)
+  {"vsad",           OPCLASS_VEC_ALU,       opAB }, // sum of absolute differences
+  {"vpack.us",       OPCLASS_VEC_ALU,       opAB }, // pack larger to smaller (unsigned saturation)
+  {"vpack.ss",       OPCLASS_VEC_ALU,       opAB }, // pack larger to smaller (signed saturation)
 };
 
 const char* exception_names[EXCEPTION_COUNT] = {
@@ -186,7 +190,6 @@ const char* exception_names[EXCEPTION_COUNT] = {
   "LdStAlias",
   "CheckFailed",
   "SkipBlock",
-  "CacheLocked",
   "LFRQFull",
   "Float",
   "FloatNotAvail",
@@ -365,7 +368,7 @@ const CondCodeToFlagRegs cond_code_to_flag_regs[16] = {
 
 const char* cond_code_names[16] = { "o", "no", "c", "nc", "e", "ne", "be", "nbe", "s", "ns", "p", "np", "l", "nl", "le", "nle" };
 const char* x86_flag_names[32] = {
-  "c", "X", "p", "W", "a", "B", "z", "s", "t", "i", "d", "o", "iopl0", "iopl1", "nt", "0",
+  "c", "X", "p", "W", "a", "U", "z", "s", "t", "i", "d", "o", "iopl0", "iopl1", "nt", "B",
   "rf", "vm", "ac", "vif", "vip", "id", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31"
 };
 

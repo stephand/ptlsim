@@ -27,6 +27,8 @@
 
 int current_vcpuid();
 
+extern bool force_synchronous_streams;
+
 namespace superstl {
   //
   // String buffer
@@ -434,18 +436,49 @@ namespace superstl {
   struct padstring {
     const char* value;
     int width;
+    char pad;
 
     padstring() { }
 
-    padstring(const char* value, int width) {
+    padstring(const char* value, int width, char pad = ' ') {
       this->value = value;
       this->width = width;
+      this->pad = pad;
     }
   };
 
   stringbuf& operator <<(stringbuf& os, const padstring& s);
 
   DeclareStringBufToStream(padstring);
+
+  struct percentstring {
+    double fraction;
+    int width;
+
+    percentstring() { }
+
+    percentstring(W64s value, W64s total, int width = 7) {
+      fraction = (total) ? (double(value) / double(total)) : 0;
+      this->width = width;
+    }
+  };
+
+  static inline stringbuf& operator <<(stringbuf& os, const percentstring& ps) {
+    double f = ps.fraction * 100.;
+    W64s intpart = W64s(f);
+    W64s fracpart = clipto(W64s(((f - double(intpart)) * 100) + 0.5), W64s(0), W64s(99));
+
+    stringbuf sbfrac;
+    sbfrac << fracpart;
+
+    stringbuf sb;
+    sb << intpart, '.', padstring(sbfrac, 2, '0'), '%';
+
+    os << padstring(sb, ps.width);
+    return os;
+  }
+
+  DeclareStringBufToStream(percentstring);
 
   struct substring {
     const char* str;
@@ -666,33 +699,25 @@ namespace superstl {
   template <typename T, int size>
   struct stack {
   public:
-    int sp;
-    static const int length = size;
     T data[size];
+    int count;
+    static const int length = size;
 
-    void reset() { sp = 0; }
+    void reset() { count = 0; }
 
     stack() { reset(); }
 
     const T& operator [](int i) const { 
-#ifdef CHECK_BOUNDS
-      assert(((sp-1) - i) >= 0);
-#endif
-      return data[(sp-1) - i]; 
+      return data[i];
     }
 
     T& operator [](int i) { 
-#ifdef CHECK_BOUNDS
-      assert(((sp-1) - i) >= 0);
-#endif
-      return data[(sp-1) - i]; 
+      return data[i]; 
     }
 
     T& push() {
-#ifdef CHECK_BOUNDS
-      assert(sp < size);
-#endif
-      T& v = data[sp++];
+      if unlikely (count >= size) abort();
+      T& v = data[count++];
       return v;
     }
 
@@ -703,22 +728,23 @@ namespace superstl {
     }
 
     T& pop() {
-#ifdef CHECK_BOUNDS
-      assert(sp > 0);
-#endif
-      T& v = data[--sp];
+      if unlikely (!count) abort();
+      T& v = data[--count];
       return v;
     } 
 
-    int count() const { return sp; }
-    bool empty() const { return (count() == 0); }
-    bool full() const { return (count() == size); }
+    bool empty() const { return (count == 0); }
+    bool full() const { return (count == size); }
+
+    ostream& print(ostream& os) const {
+      foreach (i, count) { os << ((i) ? " " : ""), data[i]; }
+      return os;
+    }
   };
 
   template <typename T, int size>
   static inline ostream& operator <<(ostream& os, const stack<T, size>& st) {
-    foreach (i, st.count()) { os << ((i) ? " " : ""), st[i]; }
-    return os;
+    return st.print(os);
   }
 
   template <typename T, int size>
@@ -1182,6 +1208,130 @@ namespace superstl {
       prev->next = link;
     }
   };
+
+  template <typename T, T nulltag, int N, int Q>
+  struct FixedIntegerQueueSet {
+    T heads[Q];
+    T tails[Q];
+    T next[N];
+
+    FixedIntegerQueueSet() { reset(); }
+
+    void reset() {
+      foreach (i, Q) { heads[i] = nulltag; }
+      foreach (i, Q) { tails[i] = nulltag; }
+      foreach (i, N) { next[i] = nulltag; }
+    }
+
+    bool isnull(T tag) const {
+      return (tag == nulltag);
+    }
+
+    void add(int qid, T tag) {
+      T& head = heads[qid];
+      T& tail = tails[qid];
+
+      assert(isnull(next[tag]));
+      if likely (!isnull(tail)) next[tail] = tag;
+      tail = tag;
+      if unlikely (isnull(head)) head = tag;
+    }
+
+    void addhead(int qid, T tag) {
+      T& head = heads[qid];
+      T& tail = tails[qid];
+
+      assert(isnull(next[tag]));      
+      if unlikely (empty(qid)) {
+        head = tail = tag;
+        return;
+      }
+
+      next[tag] = head;
+      head = tag;
+    }
+
+    T dequeue(int qid) {
+      T& head = heads[qid];
+      T& tail = tails[qid];
+
+      T tag = head;
+      if unlikely (isnull(head)) return nulltag;
+      head = next[tag];
+      next[tag] = nulltag;
+      if unlikely (tail == tag) tail = nulltag;
+      return tag;
+    }
+
+    void splice_into_head(int destqid, int srcqid) {
+      if unlikely (empty(srcqid)) return;
+
+      if unlikely (empty(destqid)) {
+        swap(heads[destqid], heads[srcqid]);
+        swap(tails[destqid], tails[srcqid]);
+        return;
+      }
+
+      T& desthead = heads[destqid];
+      T& desttail = tails[destqid];
+
+      T& srchead = heads[srcqid];
+      T& srctail = tails[srcqid];
+
+      next[srctail] = desthead;
+      desthead = srchead;
+      desttail = desttail;
+      srchead = nulltag;
+      srctail = nulltag;
+    }
+
+    void splice_into_tail(int destqid, int srcqid) {
+      if unlikely (empty(srcqid)) return;
+
+      if unlikely (empty(destqid)) {
+        swap(heads[destqid], heads[srcqid]);
+        swap(tails[destqid], tails[srcqid]);
+        return;
+      }
+
+      T& desthead = heads[destqid];
+      T& desttail = tails[destqid];
+
+      T& srchead = heads[srcqid];
+      T& srctail = tails[srcqid];
+
+      next[desttail] = srchead;
+      desthead = desthead;
+      desttail = srctail;
+
+      srchead = nulltag;
+      srctail = nulltag;
+    }
+
+    bool empty(int qid) const {
+      return (isnull(heads[qid]));
+    }
+
+    ostream& print(ostream& os) const {
+      os << "FixedIntegerQueueSet<", sizeof(T), "-byte slots, ", N, " total slots, ", Q, " queues>:", endl;
+      foreach (qid, Q) {
+        if likely (empty(qid)) continue;
+        os << "  Q", intstring(qid, -3), " [ head t", intstring(heads[qid], -4), " | tail t", intstring(tails[qid], -4), " ] ->";
+        T tag = heads[qid];
+        while (!isnull(tag)) {
+          os << " t", tag;
+          tag = next[tag];
+        }
+        os << endl;
+      }
+      return os;
+    }
+  };
+
+  template <typename T, T nulltag, int N, int Q>
+  ostream& operator <<(ostream& os, FixedIntegerQueueSet<T, nulltag, N, Q> q) {
+    return q.print(os);
+  }
 
   //
   // Index References (indexrefs) work exactly like pointers but always
@@ -1773,6 +1923,14 @@ namespace superstl {
       return *this;
     }
 
+    bitvec<N> rotright(int index) const {
+      return ((*this) >> index) | ((*this) << (N - index));
+    }
+
+    bitvec<N> rotleft(int index) const {
+      return ((*this) << index) | ((*this) >> (N - index));
+    }
+
     bitvec<N>& set(size_t index) {
       this->getword(index) |= base_t::maskof(index);
       return *this;
@@ -2268,21 +2426,33 @@ namespace superstl {
     }
 
     SelfHashtable() {
+      reset();
+    }
+
+    void reset() {
       count = 0;
       foreach (i, setcount) { sets[i] = null; }
     }
 
-    void clear() {
+    void clear(bool free_after_remove = false) {
       foreach (i, setcount) {
         selflistlink* tlink = sets[i];
         while (tlink) {
           selflistlink* tnext = tlink->next;
           tlink->unlink();
+          if unlikely (free_after_remove) {
+            T* obj = LM::objof(tlink);
+            delete obj;
+          }
           tlink = tnext;
         }
         sets[i] = null;
       }
       count = 0;
+    }
+
+    void clear_and_free() {
+      clear(true);
     }
 
     T* operator ()(const K& key) {
@@ -2776,6 +2946,7 @@ namespace superstl {
       Iterator(GenericChunkList<T>& chunk) { reset(chunk); }
 
       void reset(GenericChunkList<T>* chunk) {
+        if likely (chunk) prefetch(chunk->next);
         this->chunk = chunk;
         slot = 0;
       }
@@ -2787,8 +2958,7 @@ namespace superstl {
           if unlikely (!chunk) return null;
 
           if unlikely (slot >= lengthof(chunk->list)) {
-            slot = 0;
-            chunk = chunk->next;
+            reset(chunk->next);
             continue;
           }
 
@@ -2803,6 +2973,125 @@ namespace superstl {
   template <typename T>
   ostream& operator <<(ostream& os, const GenericChunkList<T>& cl) {
     return cl.print(os);
+  }
+
+  //
+  // Searchable chunk list, comprised of N data elements,
+  // a 16-byte tag field (with N valid bytes), a 4-byte
+  // next pointer, a 2-byte valid bitmap and padding.
+  //
+  // The low 8 bits (or some other derivation) of the
+  // key of each data element are encoded into tags,
+  // so we can do vectorized single-cycle lookups
+  // against all N tags in a single cycle and quickly
+  // identify any (probably) matching entries.
+  //
+  template <typename T, int bytes = 128>
+  struct SearchableChunkList16Entry {
+    static const int N = (bytes - (16+4+2+2)) / sizeof(T);
+    vec16b tags;
+    shortptr<SearchableChunkList16Entry<T>, W32, 0> next;
+    W16 valid;
+    W16 pad;
+    T list[N];
+
+    void reset() {
+      valid = 0;
+      next = null;
+    }
+
+    SearchableChunkList16Entry() {
+      reset();
+    }
+
+    // Implemented by instantiated template:
+    byte tagof(const T& target) const;
+
+    // Implemented by instantiated template:
+    bool equal(const T& target, const T& e) const;
+
+    T* get(const T& target) {
+      W32 matches = x86_sse_maskeqb(tags, tagof(target)) & valid;
+      if likely (!matches) return null;
+      while likely (matches) {
+        int index = lsbindex32(matches);
+        matches = x86_btr(matches, W32(index));
+        T* p = &list[index];
+        if likely (equal(target, *p)) return p;
+      }
+      return null;
+    }
+
+    T* add(const T& e) {
+      T* p = get(e);
+      if unlikely (p) return p;
+      if unlikely (full()) return null;
+
+      int index = lsbindex32(~valid);
+      assert(index < lengthof(list));
+      valid = x86_bts(W32(valid), W32(index));
+      p = &list[index];
+      *p = e;
+
+      ((byte*)&tags)[index] = tagof(e);
+
+      return p;
+    }
+
+    T* remove(const T& e) {
+      T* p = get(e);
+      if unlikely (!p) return null;
+
+      int index = p - list;
+      valid = x86_btr(W32(valid), W32(index));
+
+      return p;
+    }
+
+    bool full() const { return (valid == bitmask(lengthof(list))); }
+    bool empty() const { return (valid == 0); }
+
+    ostream& print(ostream& os) const {
+      os << "SearchableChunkList16Entry<", N, " total ", sizeof(T), "-byte entries, ", bytes, "-byte chunk:", endl; 
+      os << "  Tags: ", bytemaskstring((byte*)&tags, valid, N), endl;
+      foreach (i, N) {
+        if likely (!bit(valid, i)) continue;
+        os << "  slot ", intstring(i, 2), ": ", list[i], endl;
+      }
+      return os;
+    }
+
+    struct Iterator {
+      typedef SearchableChunkList16Entry<T, bytes> chunk_t;
+      chunk_t* chunk;
+      int slot;
+
+      Iterator() { }
+
+      Iterator(chunk_t* chunk) { reset(chunk); }
+      Iterator(chunk_t& chunk) { reset(chunk); }
+
+      void reset(chunk_t* chunk) {
+        this->chunk = chunk;
+        slot = 0;
+      }
+
+      void reset(chunk_t& chunk) { reset(&chunk); }
+
+      T* next() {
+        for (;;) {
+          if unlikely (slot >= lengthof(chunk->list)) return null;
+          T* entry = &list[slot++];
+          if unlikely (!bit(valid, slot)) continue;
+          return entry;
+        }
+      }
+    };
+  };
+
+  template <typename T, int bytes>
+  ostream& operator <<(ostream& os, const SearchableChunkList16Entry<T, bytes>& chunk) {
+    return chunk.print(os);
   }
 
   //
@@ -2897,6 +3186,46 @@ namespace superstl {
         swap(p[r], p[c]);
       }
     }
+  }
+
+  template <typename T, typename Comparator>
+  int search_sorted(const T* p, int n, const T& key, const Comparator& compare = DefaultComparator<T>()) {
+    if unlikely (!n) return -1;
+
+    int lower = 0;
+    int upper = n-1;
+
+    while (lower != upper) {
+      int index = (lower + upper) / 2;
+      int dir = compare(key, p[index]);
+#if 1
+      //
+      // Branching version:
+      //
+
+      if (dir > 0) {
+        // right partition
+        if likely (index < n-1) lower = index+1;
+      } else if (dir < 0) {
+        // left partition
+        if likely (index > 0) upper = index-1;
+      } else {
+        // match
+        return index;
+      }
+#else
+      //
+      // Branch-free version (faster on some chips)
+      //
+      bool right = ((dir > 0) & (index < n-1));
+      bool left = ((dir < 0) & (index > 0));
+      lower = select(right, lower, index + 1);
+      upper = select(left, upper, index - 1);
+      if unlikely (!dir) return index;
+#endif
+    }
+
+    return (compare(key, p[lower]) == 0) ? lower : -1;
   }
 
   template <typename T, typename S>

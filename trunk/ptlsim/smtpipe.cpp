@@ -32,10 +32,14 @@
 using namespace SMTModel;
 
 void SMTCoreCacheCallbacks::icache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
-  ThreadContext* thread = core.threads[lsi.threadid];
-
-  if (logable(6)) logfile << "[vcpu ", thread->ctx.vcpuid, "] i-cache wakeup of physaddr ", (void*)(Waddr)physaddr, endl;
-  thread->waiting_for_icache_fill = 0;
+  foreach (i, core.threadcount) {
+    ThreadContext* thread = core.threads[i];
+    if unlikely (thread && thread->waiting_for_icache_fill && (floor(thread->waiting_for_icache_fill_physaddr, CacheSubsystem::L1_LINE_SIZE) == physaddr)) {
+      if (logable(6)) logfile << "[vcpu ", thread->ctx.vcpuid, "] i-cache wakeup of physaddr ", (void*)(Waddr)physaddr, endl;
+      thread->waiting_for_icache_fill = 0;
+      thread->waiting_for_icache_fill_physaddr = 0;
+    }
+  }
 }
 
 //
@@ -460,6 +464,7 @@ bool ThreadContext::fetch() {
           break;
         }
         waiting_for_icache_fill = 1;
+        waiting_for_icache_fill_physaddr = req_icache_block;
         per_context_smtcore_stats_update(threadid, fetch.stop.icache_miss++);
         break;
       }
@@ -1104,7 +1109,6 @@ bool ReorderBufferEntry::find_sources() {
   
   ThreadContext& thread = getthread();
   thread.issueq_count++;
-  assert(thread.issueq_count >= 0 && thread.issueq_count <= ISSUE_QUEUE_SIZE);
 
   assert(ok);
 

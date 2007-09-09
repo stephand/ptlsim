@@ -52,6 +52,7 @@ struct PTLstatsConfig {
   bool show_stars_in_histogram;
   
   bool percent_of_toplevel;
+  bool hide_zero_branches;
   bool slice_cumulative;
   
   bool invert_gains;
@@ -103,7 +104,8 @@ void PTLstatsConfig::reset() {
   cumulative_histogram = 0;
   show_stars_in_histogram = 1;
   
-  percent_of_toplevel = 0;
+  percent_of_toplevel = 1;
+  hide_zero_branches = 1;
   slice_cumulative = 0;
 
   invert_gains = 0;
@@ -146,7 +148,8 @@ void ConfigurationParser<PTLstatsConfig>::setup() {
   add(show_sum_of_subtrees_only,        "sum-subtrees-only",         "Show only the sum of subtrees in applicable nodes");
   add(maxdepth,                         "maxdepth",                  "Maximum tree depth");
   add(percent_digits,                   "percent-digits",            "Precision of percentage listings in digits");
-  add(percent_of_toplevel,              "percent-of-toplevel",       "Show percent relative to toplevel node, not parent node");
+  add(percent_of_toplevel,              "no-percent-of-toplevel",    "Show percent relative to immediate parent node rather than toplevel summable node");
+  add(hide_zero_branches,               "no-hide-zero-branches",     "Display branches with a total of zero");
   add(slice_cumulative,                 "slice-cumulative",          "Show slice through each snapshot without subtracting from previous");
 
   section("Graph and Histogram Options");
@@ -1134,6 +1137,7 @@ int main(int argc, char* argv[]) {
   printinfo.maxdepth = config.maxdepth;
   printinfo.percent_digits = config.percent_digits;
   printinfo.percent_of_toplevel = config.percent_of_toplevel;
+  printinfo.hide_zero_branches = config.hide_zero_branches;
   printinfo.histogram_thresh = config.histogram_thresh;
   printinfo.cumulative_histogram = config.cumulative_histogram;
   printinfo.show_stars_in_histogram = config.show_stars_in_histogram;

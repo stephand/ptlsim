@@ -321,6 +321,8 @@ W64 hostreq_spins = 0;
 
 W64s synchronous_host_call(const PTLsimHostCall& call, bool spin, bool ignorerc) {
   int vcpuid = current_vcpuid();
+  if (vcpuid != 0) asm volatile("int3");
+
   stringbuf sb;
   int rc;
   hostreq_calls++;
@@ -800,7 +802,7 @@ bool lowlevel_init_done = 0;
 asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigned int __line, const char *__function) {
   // use two stringbufs to avoid allocating any memory:
   stringbuf sb1, sb2;
-  sb1 << "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") from ", getcaller();
+  sb1 << endl, "Assert ", __assertion, " failed in ", __file, ":", __line, " (", __function, ") from ", getcaller();
   sb2 << " at ", sim_cycle, " cycles, ", total_user_insns_committed, " commits, ", iterations, " iterations", endl;
 
   if (!lowlevel_init_done) {
@@ -1966,6 +1968,7 @@ int cpu_type = CPU_TYPE_UNKNOWN;
 // using only Xen hypercalls until we can establish
 // the channel to PTLmon in domain 0. 
 //
+
 void ptlsim_init() {
   int rc;
 
@@ -2077,7 +2080,7 @@ void ptlsim_init() {
 
   xen_m2p_map_end = HYPERVISOR_VIRT_START + (bootinfo.total_machine_pages * sizeof(Waddr));
 
-  ptlsim_mfn_bitmap = (infinite_bitvec_t*)ptl_mm_alloc_private_pages(bytes_required);
+  ptlsim_mfn_bitmap = (infinite_bitvec_t*)ptl_mm_try_alloc_private_pages(bytes_required);
   memset(ptlsim_mfn_bitmap, 0, bytes_required);
 
   foreach (i, bootinfo.mfn_count) {
@@ -2089,7 +2092,7 @@ void ptlsim_init() {
   //
   // Copy GDT template page from hypervisor
   //
-  gdt_page = ptl_mm_alloc_private_page();
+  gdt_page = ptl_mm_try_alloc_private_page();
   gdt_mfn = ptl_virt_to_mfn(gdt_page);
 
   mmuext_op_t mmuextop;  
@@ -2117,6 +2120,7 @@ void ptlsim_init() {
   // domain, then switch to this page table base.
   //
   build_physmap_page_tables();
+
   inject_ptlsim_into_toplevel(get_cr3_mfn());
 
   init_uops();
@@ -2159,27 +2163,87 @@ W64 vcpu_startup_signal_bitmap = 1;
 //
 W64 vcpu_startup_complete_bitmap = 1;
 
-void wait_for_secondary_vcpus() {
-  //
-  // Figure out which VCPUs are running, then
-  // spin on vcpu_startup_complete_bitmap
-  //
+void prep_secondary_vcpu_context(int vcpuid, Context& ptlctx) {
+  bool DEBUG = 0;
 
-  W64 vcpu_up_map = 0;
+  setzero(ptlctx);
+  ptlctx.cr3 = (bootinfo.toplevel_page_table_mfn << log2(PAGE_SIZE));
+  ptlctx.kernel_ptbase_mfn = ptlctx.cr3 >> 12;
+  ptlctx.user_ptbase_mfn = ptlctx.cr3 >> 12;
+  ptlctx.kernel_mode = 1;
+  ptlctx.seg[SEGID_CS].selector = FLAT_KERNEL_CS;
+  ptlctx.seg[SEGID_DS].selector = FLAT_KERNEL_DS;
+  ptlctx.seg[SEGID_SS].selector = FLAT_KERNEL_SS;
+  ptlctx.seg[SEGID_ES].selector = FLAT_KERNEL_DS;
+  ptlctx.seg[SEGID_FS].selector = 0;
+  ptlctx.seg[SEGID_GS].selector = 0;
+  ptlctx.commitarf[REG_flags] = 0; // interrupts initially off
+  ptlctx.saved_upcall_mask = 1;
+  
+  W64 per_vcpu_sp = W64(bootinfo.per_vcpu_stack_base) + (vcpuid * 4096) + 4096;
+  ptlctx.commitarf[REG_rsp] = (vcpuid > 0) ? per_vcpu_sp : (W64)bootinfo.stack_top;
+  ptlctx.commitarf[REG_rip] = PTLSIM_ENTRYPOINT_RIP;
+  // start info in %rdi (arg[0]):
+  ptlctx.commitarf[REG_rdi] = W64(getbootinfo());
+  // vcpuid is passed in rsi so we know whether or not we're the primary VCPU:
+  ptlctx.commitarf[REG_rsi] = vcpuid;
 
-  foreach (i, contextcount) {
-    int up = HYPERVISOR_vcpu_op(VCPUOP_is_up, i, null);
-    if (up) setbit(vcpu_up_map, i);
+  if (DEBUG) {
+    cerr << "Configure secondary VCPU ", vcpuid, " with stack at ",
+      (void*)ptlctx.commitarf[REG_rsp], ", cr3 mfn ", ptlctx.kernel_ptbase_mfn, endl;
+  }
+}
+
+void bring_up_secondary_vcpu(int vcpuid) {
+  int rc = 0;
+  logfile << "Bringing up VCPU ", vcpuid, " into PTLsim redirector thread:", endl, flush;
+
+  //
+  // At this point we also need to configure the real VCPU
+  // on which PTLsim will run its interrupt redirector.
+  //
+  Context ptlctx;
+  vcpu_guest_context xenctx;
+  
+  setzero(xenctx);
+  prep_secondary_vcpu_context(vcpuid, ptlctx);
+  ptlctx.saveto(xenctx);
+  rc = HYPERVISOR_vcpu_op(VCPUOP_initialise, vcpuid, &xenctx);
+  if likely (rc >= 0) {
+    logfile << "  Initialized secondary VCPU ", vcpuid, " to run PTLsim interrupt redirector thread (rc ", rc, ")", endl;
+  } else {
+    logfile << "  Secondary VCPU ", vcpuid, " was already initialized (rc ", rc, ")", endl;
   }
 
-  barrier();
-  // Start up all secondary VCPUs
-  vcpu_startup_signal_bitmap = bitmask(contextcount);
+  if likely (!HYPERVISOR_vcpu_op(VCPUOP_is_up, vcpuid, null)) {
+    rc = HYPERVISOR_vcpu_op(VCPUOP_up, vcpuid, null);
+    logfile << "  Xen brought up VCPU ", vcpuid, " with rc = ", rc, endl;
+    assert(rc == 0);
+  }
+
+  setbit(vcpu_startup_signal_bitmap, vcpuid);
   barrier();
 
-  while (vcpu_startup_complete_bitmap != vcpu_up_map) {
+  logfile << "  Waiting for VCPU ", vcpuid, " to reach redirector barrier", endl, flush;
+
+  while (!bit(vcpu_startup_complete_bitmap, vcpuid)) {
     xen_sched_yield();
     barrier();
+  }
+
+  logfile << "  VCPU ", vcpuid, " is running", endl, flush;
+}
+
+void wait_for_secondary_vcpus() {
+  //
+  // Determine which VCPUs are already running
+  // at boot or injection time, then wait for
+  // them to synchronize on the PTLsim interrupt
+  // redirector loop.
+  //
+  foreach (i, contextcount) {
+    bool up = HYPERVISOR_vcpu_op(VCPUOP_is_up, i, null);
+    if (up) bring_up_secondary_vcpu(i);
   }
 }
 
@@ -2221,6 +2285,7 @@ void resume_from_native() {
   clear_evtchn(bootinfo.hostcall_port);
   clear_evtchn(bootinfo.upcall_port);
   barrier();
+
   //
   // Unmask everything: we want to see all interrupts so we can
   // pass them through to the guest.
@@ -2253,6 +2318,7 @@ void resume_from_native() {
   // We may have some new VCPUs that were brought online
   // during native mode:
   //
+
   wait_for_secondary_vcpus();
 }
 
@@ -2290,7 +2356,7 @@ void print_sysinfo(ostream& os) {
   print_meminfo_line(os, "Page Tables:",     bootinfo.mfn_count - bootinfo.avail_mfn_count);
   print_meminfo_line(os, "PTLsim image:",    ((Waddr)bootinfo.heap_start - PTLSIM_VIRT_BASE) / 4096);
   print_meminfo_line(os, "Heap:",            ((Waddr)bootinfo.heap_end - (Waddr)bootinfo.heap_start) / 4096);
-  print_meminfo_line(os, "Stack:",           bootinfo.stack_size / 4096);
+  print_meminfo_line(os, "Stacks:",          bootinfo.stack_size / 4096);
   os << "Interfaces:", endl;
   os << "  PTLsim page table:  ", intstring(bootinfo.toplevel_page_table_mfn, 10), endl;
   os << "  Shared info mfn:    ", intstring(bootinfo.shared_info_mfn, 10), endl;
@@ -2373,6 +2439,8 @@ char ptlcall_buf[4096];
 
 int ptlcall_while_in_native = 0;
 
+W64 marker_sequence_number = 0;
+
 // This is where we end up after issuing opcode 0x0f37 (undocumented x86 ptlcall opcode)
 void assist_ptlcall(Context& ctx) {
   W64 op = ctx.commitarf[REG_rax];
@@ -2389,9 +2457,47 @@ void assist_ptlcall(Context& ctx) {
   switch (op) {
   case PTLCALL_VERSION: {
     logfile << "PTLcall PTLCALL_VERSION: called from native mode? ", ptlcall_while_in_native, endl;
-    const char* c = (ptlcall_while_in_native) ? "-native" : "-run";
-    ptlcall_while_in_native = 0;
-    inject_upcall(c, strlen(c), 1);
+    // const char* c = (ptlcall_while_in_native) ? "-native" : "-run";
+    // ptlcall_while_in_native = 0;
+    // inject_upcall(c, strlen(c), 1);
+    rc = PTLCALL_STATUS_PTLSIM_ACTIVE;
+    break;
+  }
+  case PTLCALL_MARKER: {
+    logfile << "PTLcall PTLCALL_MARKER on vcpu ", ctx.vcpuid, ":", endl;
+    logfile << "  seqid:                    ", intstring(marker_sequence_number, 20), endl;
+    logfile << "  rip:                        0x", hexstring(ctx.commitarf[REG_rip], 64), endl;
+    logfile << "  marker:                   ", intstring(arg1, 20), endl;
+    logfile << "  tsc:                      ", intstring(sim_cycle, 20), endl;
+    logfile << "  pmc0:                     ", intstring(0, 20), endl;
+    logfile << "  pmc1:                     ", intstring(0, 20), endl;
+    logfile << "  retired_insn_count:       ", intstring(total_user_insns_committed, 20), endl;
+    logfile << "  unhalted_cycle_count:     ", intstring(unhalted_cycle_count, 20), endl;
+    logfile << "  unhalted_ref_cycle_count: ", intstring(unhalted_cycle_count, 20), endl;
+
+    stringbuf markername;
+    markername << "marker-seq-", marker_sequence_number, "-tag-", arg1;
+    capture_stats_snapshot(markername);
+
+    marker_sequence_number++;
+
+    if unlikely (marker_sequence_number == config.stop_at_marker_hits) {
+      logfile << "Stopping after marker was hit ", marker_sequence_number, " times", endl;
+      cerr << "Stopping after marker was hit ", marker_sequence_number, " times", endl;
+      bootinfo.abort_request = 1;
+    }
+
+    if unlikely (arg1 == config.stop_at_marker) {
+      logfile << "Stopping after marker ", arg1, endl;
+      cerr << "Stopping after marker ", arg1, endl;
+      bootinfo.abort_request = 1;
+    }
+
+    ctx.commitarf[REG_rdx] = unhalted_cycle_count;
+    ctx.commitarf[REG_rcx] = sim_cycle;
+    ctx.commitarf[REG_rdi] = 0; // (pmc0)
+    ctx.commitarf[REG_rsi] = 0; // (pmc1)
+    rc = total_user_insns_committed;
     break;
   }
   case PTLCALL_ENQUEUE: {
@@ -2434,6 +2540,7 @@ void assist_ptlcall(Context& ctx) {
   }
   }
 
+  ptlcall_while_in_native = 0;
   ctx.commitarf[REG_rax] = rc;
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }

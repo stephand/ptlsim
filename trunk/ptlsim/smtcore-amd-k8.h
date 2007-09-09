@@ -161,6 +161,7 @@ namespace SMTModel {
     {OP_set_sub,        1, ALU1|ALU2|ALU3},
     {OP_set_and,        1, ALU1|ALU2|ALU3},
     {OP_sel,            1, ALU1|ALU2|ALU3},
+    {OP_sel_cmp,        1, ALU1|ALU2|ALU3},
     // Branches
     {OP_br,             1, ALU1|ALU2|ALU3},
     {OP_br_sub,         1, ALU1|ALU2|ALU3},
@@ -192,6 +193,7 @@ namespace SMTModel {
     {OP_mull,           4, ALUC},
     {OP_mulh,           4, ALUC},
     {OP_mulhu,          4, ALUC},
+    {OP_mulhl,          4, ALUC},
     // Bit scans
     {OP_ctz,            4, ALUC},
     {OP_clz,            4, ALUC},
@@ -221,7 +223,6 @@ namespace SMTModel {
     // 11 = double precision unordered compare
     {OP_cmpccf,         4, FADD},
     // and/andn/or/xor are done using integer uops
-    {OP_permf,          2, FADD|FCVT}, // shuffles
     // For these conversions, uop.size bits select truncation mode:
     // x0 = normal IEEE-style rounding
     // x1 = truncate to zero
@@ -260,6 +261,10 @@ namespace SMTModel {
     {OP_mullv,          4, FMUL},
     {OP_mulhv,          4, FMUL},
     {OP_mulhuv,         4, FMUL},
+    {OP_maddpv,         4, ANYFPU},
+    {OP_sadv,           4, ANYFPU},
+    {OP_pack_us,        2, ANYFPU},
+    {OP_pack_ss,        2, ANYFPU},
   };
 
 #undef A

@@ -36,7 +36,7 @@ namespace superstl {
 
   bool odstream::open(const char* filename, bool append, int bufsize) {
     if (fd >= 0) close();
-    fd = sys_open(filename, O_RDWR | O_CREAT | ((append) ? O_APPEND : O_TRUNC), 0644);
+    fd = sys_open(filename, O_RDWR | O_CREAT | ((append) ? O_APPEND : O_TRUNC) | O_LARGEFILE, 0644);
     if (fd < 0) return false;
     buf = null;
     this->bufsize = 0;
@@ -143,8 +143,8 @@ namespace superstl {
   int odstream::write(const void* data, int count) {
     if unlikely (!ok()) return 0;
     if unlikely (!buf) {
+      return sys_write(fd, data, count);
       if (chain) chain->write(data, count);
-      return sys_write(fd, buf, count);
     }
 
     byte* p = (byte*)data;
@@ -413,11 +413,11 @@ namespace superstl {
       memcpy(os.p, s.value, len);
       os.p += len;
       width = max(width - len, 0);
-      memset(os.p, ' ', width);
+      memset(os.p, s.pad, width);
       os.p += width;
     } else {
       width = max(width - len, 0);
-      memset(os.p, ' ', width);
+      memset(os.p, s.pad, width);
       os.p += width;
       memcpy(os.p, s.value, len);
       os.p += len;
@@ -497,7 +497,7 @@ namespace superstl {
 
   bool idstream::open(const char* filename, int bufsize) {
     if (fd >= 0) close();
-    fd = sys_open(filename, O_RDONLY, 0);
+    fd = sys_open(filename, O_RDONLY | O_LARGEFILE, 0);
     error = (fd < 0);
     if (!ok()) return false;
     setbuf(bufsize);
@@ -1048,12 +1048,23 @@ const W32 CRC32::crctable[256] = {
 };
 
 ostream& operator <<(ostream& os, const vec16b& v) {
+  // Print as hex
+  byte* b = (byte*)&v;
+  for (int i = 15; i >= 0; i--) {
+    if (i < 15) os << ((i == 7) ? '.' : ' ');
+    os << hexstring(b[i], 8);
+  }
+  return os;
+
+#if 0
+  // Print as decimal:
   byte* b = (byte*)&v;
   for (int i = 0; i < 16; i++) {
     if (i) os << ' ';
     os << intstring(b[i], 3);
   }
   return os;
+#endif
 }
 
 ostream& operator ,(ostream& os, const vec16b& v) {

@@ -43,6 +43,7 @@ typedef W32 Waddr;
 #define alignto(x) __attribute__ ((aligned (x)))
 #define insection(x) __attribute__ ((section (x)))
 #define packedstruct __attribute__ ((packed))
+#define noinline __attribute__((noinline))
 
 #define unlikely(x) (__builtin_expect(!!(x), 0))
 #define likely(x) (__builtin_expect(!!(x), 1))
@@ -260,9 +261,9 @@ enum { MXCSR_ROUND_NEAREST, MXCSR_ROUND_DOWN, MXCSR_ROUND_UP, MXCSR_ROUND_TOWARD
 #define MXCSR_EXCEPTION_DISABLE_MASK 0x1f80 // OR this into mxcsr to disable all exceptions
 #define MXCSR_DEFAULT 0x1f80 // default settings (no exceptions, defaults for rounding and denormals)
 
-inline W32 x86_bsf32(W32 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W32 x86_bsf32(W32 b) { W32 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 inline W64 x86_bsf64(W64 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
-inline W32 x86_bsr32(W32 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
+inline W32 x86_bsr32(W32 b) { W32 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 inline W64 x86_bsr64(W64 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 
 template <typename T> inline bool x86_bt(T r, T b) { byte c; asm("bt %[b],%[r]; setc %[c]" : [c] "=r" (c) : [r] "r" (r), [b] "r" (b)); return c; }
@@ -285,8 +286,33 @@ template <typename T> inline bool x86_locked_btc(T& r, T b) { byte c; asm volati
 
 template <typename T> inline T bswap(T r) { asm("bswap %[r]" : [r] "+r" (r)); return r; }
 
+// Return v with groups of N bits swapped
+template <typename T, int N>
+static inline T bitswap(T v) {
+  T m =
+    (N == 1) ? T(0x5555555555555555ULL) :
+    (N == 2) ? T(0x3333333333333333ULL) :
+    (N == 4) ? T(0x0f0f0f0f0f0f0f0fULL) : 0;
+
+  return ((v & m) << N) | ((v & (~m)) >> N);
+}
+
+template <typename T>
+T reversebits(T v) {
+  v = bitswap<T, 1>(v);
+  v = bitswap<T, 2>(v);
+  v = bitswap<T, 4>(v);
+  v = bswap(v);
+  return v;
+}
+
+static inline W16 x86_sse_maskeqb(const vec16b v, byte target) { return x86_sse_pmovmskb(x86_sse_pcmpeqb(v, x86_sse_dupb(target))); }
+
 // This is a barrier for the compiler only, NOT the processor!
 #define barrier() asm volatile("": : :"memory")
+
+// Denote parallel sections for the compiler
+#define parallel
 
 template <typename T>
 static inline T xchg(T& v, T newv) {
@@ -342,6 +368,14 @@ static inline T x86_ror(T r, int n) { asm("ror %%cl,%[r]" : [r] "+q" (r) : [n] "
 
 template <typename T>
 static inline T x86_rol(T r, int n) { asm("rol %%cl,%[r]" : [r] "+q" (r) : [n] "c" ((byte)n)); return r; }
+
+#ifndef __x86_64__
+// Need to emulate this on 32-bit x86
+template <>
+static inline W64 x86_ror(W64 r, int n) {
+  return (r >> n) | (r << (64 - n));
+}
+#endif
 
 template <typename T>
 static inline T dupb(const byte b) { return T(b) * T(0x0101010101010101ULL); }
@@ -498,6 +532,12 @@ asmlinkage {
 #include <mathlib.h>
 #include <klibc.h>
 
+#ifdef PAGE_SIZE
+#undef PAGE_SIZE
+// We're on x86 or x86-64, so pages are always 4096 bytes:
+#define PAGE_SIZE 4096
+#endif
+
 // e.g., head (a, b, c) => a
 // e.g., if list = (a, b, c), head list => a
 //#define head(h, ...) (h)
@@ -537,9 +577,27 @@ template <typename T, typename A> static inline T mask(T x, A a) { return (T)(((
 template <typename T, typename A> static inline T* floorptr(T* x, A a) { return (T*)floor((Waddr)x, a); }
 template <typename T, typename A> static inline T* ceilptr(T* x, A a) { return (T*)ceil((Waddr)x, a); }
 template <typename T, typename A> static inline T* maskptr(T* x, A a) { return (T*)mask((Waddr)x, a); }
-inline W64 mux64(W64 sel, W64 v0, W64 v1) { return (sel & v1) | ((~sel) & v0); }
+static inline W64 mux64(W64 sel, W64 v0, W64 v1) { return (sel & v1) | ((~sel) & v0); }
+template <typename T> static inline T mux(T sel, T v1, T v0) { return (sel & v1) | ((~sel) & v0); }
 
 template <typename T> void swap(T& a, T& b) { T t = a;  a = b; b = t; }
+
+// #define noinline __attribute__((noinline))
+
+//
+// Force the compiler to use branchless forms:
+//
+template <typename T, typename K>
+T select(K cond, T if0, T if1) {
+  T z = if0;
+  asm("test %[cond],%[cond]; cmovnz %[if1],%[z]" : [z] "+r" (z) : [cond] "r" (cond), [if1] "rm" (if1) : "flags");
+  return z;
+}
+
+template <typename T, typename K>
+void condmove(K cond, T& v, T newv) {
+  asm("test %[cond],%[cond]; cmovnz %[newv],%[v]" : [v] "+r" (v) : [cond] "r" (cond), [newv] "rm" (newv) : "flags");
+}
 
 #define typeof __typeof__
 #define ptralign(ptr, bytes) ((typeof(ptr))((unsigned long)(ptr) & ~((bytes)-1)))
@@ -547,6 +605,9 @@ template <typename T> void swap(T& a, T& b) { T t = a;  a = b; b = t; }
 
 template <typename T>
 inline void arraycopy(T* dest, const T* source, int count) { memcpy(dest, source, count * sizeof(T)); }
+
+template <typename T, typename V>
+inline void rawcopy(T& dest, const V& source) { memcpy(&dest, &source, sizeof(T)); }
 
 // static inline float randfloat() { return ((float)rand() / RAND_MAX); }
 

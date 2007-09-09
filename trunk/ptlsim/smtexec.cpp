@@ -36,6 +36,8 @@ using namespace SMTModel;
 //
 template <int size, int operandcount>
 void IssueQueue<size, operandcount>::reset(int coreid) {
+  SMTCore& core = getcore();
+
   this->coreid = coreid;
   count = 0;
   valid = 0;
@@ -45,6 +47,12 @@ void IssueQueue<size, operandcount>::reset(int coreid) {
     tags[i].reset();
   }
   uopids.reset();
+
+  foreach (i, core.threadcount) {
+    ThreadContext* thread = core.threads[i];
+    if unlikely (!thread) continue;
+    thread->issueq_count = 0;
+  }
 }
 
 template <int size, int operandcount>
@@ -379,6 +387,8 @@ int ReorderBufferEntry::issue() {
         per_context_smtcore_stats_update(threadid, issue.result.replay++);
         return 0;
       }
+    } else if unlikely (uop.opcode == OP_ld_pre) {
+      issueprefetch(state, radata, rbdata, rcdata, uop.cachelevel);
     } else {
       if unlikely (br) {
         state.brreg.riptaken = uop.riptaken;
@@ -531,7 +541,7 @@ int ReorderBufferEntry::issue() {
 //
 // Address generation common to both loads and stores
 //
-void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul) {
+Waddr ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul) {
   Context& ctx = getthread().ctx;
 
   bool st = isstore(uop.opcode);
@@ -601,8 +611,8 @@ void* ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
   exception = 0;
 
-  void* mapped = (annul) ? null : ctx.check_and_translate(addr, uop.size, st, uop.internal, exception, pfec, pteupdate);
-  return mapped;
+  Waddr physaddr = (annul) ? INVALID_PHYSADDR : ctx.check_and_translate(addr, uop.size, st, uop.internal, exception, pfec, pteupdate);
+  return physaddr;
 }
 
 bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec) {
@@ -741,7 +751,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   PageFaultErrorCode pfec;
   bool annul;
   
-  void* mapped = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
+  Waddr physaddr = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
   if unlikely (exception) {
     return (handle_common_load_store_exceptions(state, origaddr, addr, exception, pfec)) ? ISSUE_COMPLETED : ISSUE_MISSPECULATED;
@@ -752,7 +762,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   per_context_smtcore_stats_update(threadid, dcache.store.type.internal += uop.internal);
   per_context_smtcore_stats_update(threadid, dcache.store.size[sizeshift]++);
 
-  state.physaddr = (annul) ? 0xffffffffffffffffULL : (mapped_virt_to_phys(mapped) >> 3);
+  state.physaddr = (annul) ? INVALID_PHYSADDR : (physaddr >> 3);
 
   //
   // The STQ is then searched for the most recent prior store S to same 64-bit block. If found, U's
@@ -1067,7 +1077,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   PageFaultErrorCode pfec;
   bool annul;
 
-  void* mapped = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
+  Waddr physaddr = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
   if unlikely (exception) {
     return (handle_common_load_store_exceptions(state, origaddr, addr, exception, pfec)) ? ISSUE_COMPLETED : ISSUE_MISSPECULATED;
@@ -1078,8 +1088,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   per_context_smtcore_stats_update(threadid, dcache.load.type.internal += uop.internal);
   per_context_smtcore_stats_update(threadid, dcache.load.size[sizeshift]++);
 
-  W64 physaddr = (annul) ? 0xffffffffffffffffULL : mapped_virt_to_phys(mapped);
-  state.physaddr = physaddr >> 3;
+  state.physaddr = (annul) ? INVALID_PHYSADDR : (physaddr >> 3);
 
   //
   // For simulation purposes only, load the data immediately
@@ -1087,8 +1096,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   // only arrives later, but it saves us from having to copy
   // cache lines around...
   //
-  barrier();
-  W64 data = (annul) ? 0 : *((W64*)(Waddr)floor(signext64((Waddr)mapped, 48), 8));
+  W64 data = (annul) ? 0 : loadphys(physaddr);
 
   LoadStoreQueueEntry* sfra = null;
 
@@ -1401,6 +1409,22 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   assert(thread.loads_in_this_cycle < LOAD_FU_COUNT);
   thread.load_to_store_parallel_forwarding_buffer[thread.loads_in_this_cycle++] = state.physaddr;
 
+  if unlikely (uop.internal) {
+    cycles_left = LOADLAT;
+
+    if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_HIT, this, sfra, addr);
+
+    load_store_second_phase = 1;
+    state.datavalid = 1;
+    physreg->flags &= ~FLAG_WAIT;
+    physreg->complete();
+    changestate(thread.rob_issued_list[cluster]);
+    lfrqslot = -1;
+    forward_cycle = 0;
+
+    return ISSUE_COMPLETED;
+  }
+
 #ifdef USE_TLB
   if unlikely (!core.caches.dtlb.probe(addr, threadid)) {
     //
@@ -1483,6 +1507,7 @@ int ReorderBufferEntry::probecache(Waddr addr, LoadStoreQueueEntry* sfra) {
 // Hardware page table walk state machine:
 // One execution per page table tree level (4 levels)
 //
+#ifdef PTLSIM_HYPERVISOR
 void ReorderBufferEntry::tlbwalk() {
   SMTCore& core = getcore();
   ThreadContext& thread = getthread();
@@ -1551,6 +1576,7 @@ void ThreadContext::tlbwalk() {
    rob->tlbwalk();
   }
 }
+#endif
 
 //
 // Find the newest memory fence in program order before the specified ROB,
@@ -1617,7 +1643,7 @@ int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
   state.bytemask = 0xff;
   state.datavalid = 0;
   state.addrvalid = 0;
-  state.physaddr = 0xffffffffffffffffULL;
+  state.physaddr = bitmask(48-3);
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add_load_store(EVENT_FENCE_ISSUED, this);
@@ -1627,6 +1653,34 @@ int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
   changestate(thread.rob_memory_fence_list);
 
   return ISSUE_COMPLETED;
+}
+
+void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel) {
+  SMTCore& core = getcore();
+
+  state.reg.rddata = 0;
+  state.reg.rdflags = 0;
+
+  int exception = 0;
+  Waddr addr;
+  Waddr origaddr;
+  PTEUpdate pteupdate;
+  PageFaultErrorCode pfec;
+  bool annul;
+
+  LoadStoreQueueEntry dummy;
+  setzero(dummy);
+  Waddr physaddr = addrgen(dummy, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
+
+  // Ignore bogus prefetches:
+  if unlikely (exception) return;
+
+  // Ignore unaligned prefetches (should never happen)
+  if unlikely (annul) return;
+
+  // (Stats are already updated by initiate_prefetch())
+
+  core.caches.initiate_prefetch(physaddr, cachelevel);
 }
 
 //
