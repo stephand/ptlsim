@@ -387,7 +387,7 @@ const W16 setflags_to_x86_flags[1<<3] = {
 stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   static const char* size_names[4] = {"b", "w", "d", ""};
   // e.g. addfp, addfv, addfd, xxx
-  static const char* fptype_names[4] = {"p", "v", "d", "d"};
+  static const char* fptype_names[4] = {".s", ".vs", ".d", ".d"};
 
   bool ld = isload(op.opcode);
   bool st = isstore(op.opcode);

@@ -575,10 +575,20 @@ static inline int get_sim_mfn_type(W64 simmfn) {
   return get_sim_physaddr_type(simmfn << 12);
 }
 
-static inline bool is_valid_user_physaddr(W64 physaddr) {
+static inline bool is_executable_user_physaddr(W64 physaddr) {
   return
     (get_sim_physaddr_type(physaddr) == PHYSADDR_TYPE_DRAM) &
     (physaddr < (1ULL << PHYSADDR_TYPE_SHIFT));
+}
+
+static inline bool is_readonly_physaddr(W64 physaddr) {
+  int type = get_sim_physaddr_type(physaddr);
+  return (type == PHYSADDR_TYPE_XEN_M2P);
+}
+
+static inline bool is_cacheable_physaddr(W64 physaddr) {
+  int type = get_sim_physaddr_type(physaddr);
+  return ((type == PHYSADDR_TYPE_DRAM) | (type == PHYSADDR_TYPE_PTL) | (type == PHYSADDR_TYPE_XEN_M2P));
 }
 
 //

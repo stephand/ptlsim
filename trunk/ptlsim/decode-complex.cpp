@@ -1684,7 +1684,7 @@ bool TraceDecoder::decode_complex() {
 
     int level = 2;
     prefixes &= ~PFX_LOCK;
-    operand_load(REG_temp0, ra, OP_ld_pre, level);
+    operand_load(REG_temp0, ra, OP_ld_pre, DATATYPE_INT, level);
     break;
   }
 

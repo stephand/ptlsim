@@ -1529,7 +1529,22 @@ void ReorderBufferEntry::tlbwalk() {
 
     if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_COMPLETE, this, null, virtaddr);
     core.caches.dtlb.insert(virtaddr, threadid);
-    probecache(virtaddr, null);
+
+    if unlikely (isprefetch(uop.opcode)) {
+      physreg->flags &= ~FLAG_WAIT;
+      physreg->complete();
+      changestate(thread.rob_issued_list[cluster]);
+      forward_cycle = 0;
+      int exception;
+      PageFaultErrorCode pfec;
+      PTEUpdate pteupdate;
+      Context& ctx = getthread().ctx;
+      Waddr physaddr = ctx.check_and_translate(virtaddr, 1, 0, 0, exception, pfec, pteupdate);
+      core.caches.initiate_prefetch(physaddr, uop.cachelevel);
+    } else {
+      probecache(virtaddr, null);
+    }
+
     return;
   }
 
@@ -1547,9 +1562,6 @@ void ReorderBufferEntry::tlbwalk() {
     return;
   }
 
-  cycles_left = 0;
-  changestate(thread.rob_cache_miss_list);
-
   LoadStoreInfo lsi = 0;
   lsi.threadid = thread.threadid;
   lsi.rob = index();
@@ -1557,12 +1569,19 @@ void ReorderBufferEntry::tlbwalk() {
   SFR dummysfr;
   setzero(dummysfr);
   lfrqslot = core.caches.issueload_slowpath(pteaddr, dummysfr, lsi);
-  // No LFRQ or MB slots? Try again on next cycle
+
+  //
+  // No LFRQ or MB slots? Try again on next cycle.
+  // TODO: For prefetches, we might want to drop the TLB miss!
+  //
   if (lfrqslot < 0) {
     if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_NO_LFRQ_MB, this, null, pteaddr);
     per_context_dcache_stats_update(threadid, load.tlbwalk.no_lfrq_mb++);
     return;
   }
+
+  cycles_left = 0;
+  changestate(thread.rob_cache_miss_list);
 
   if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_TLBWALK_MISS, this, null, pteaddr);
   per_context_dcache_stats_update(threadid, load.tlbwalk.L1_dcache_miss++);
@@ -1655,8 +1674,12 @@ int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
   return ISSUE_COMPLETED;
 }
 
+//
+// Issues a prefetch on the given memory address into the specified cache level.
+//
 void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel) {
   SMTCore& core = getcore();
+  ThreadContext& thread = getthread();
 
   state.reg.rddata = 0;
   state.reg.rdflags = 0;
@@ -1679,6 +1702,26 @@ void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc
   if unlikely (annul) return;
 
   // (Stats are already updated by initiate_prefetch())
+#ifdef USE_TLB
+  if unlikely (!core.caches.dtlb.probe(addr, threadid)) {
+#if 0
+    //
+    // TLB miss: Ignore this prefetch but handle the miss!
+    //
+    // Note that most x86 processors will not prefetch beyond 
+    // a TLB miss, so this is disabled by default.
+    //
+    if unlikely (config.event_log_enabled) SMTCoreEvent* event = core.eventlog.add_load_store(EVENT_LOAD_TLB_MISS, this, null, addr);
+    cycles_left = 0;
+    tlb_walk_level = thread.ctx.page_table_level_count();
+    changestate(thread.rob_tlb_miss_list);
+    per_context_dcache_stats_update(thread.threadid, load.dtlb.misses++);
+#endif
+    return;
+  }
+
+  per_context_dcache_stats_update(threadid, load.dtlb.hits++);
+#endif
 
   core.caches.initiate_prefetch(physaddr, cachelevel);
 }
