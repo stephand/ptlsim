@@ -1462,6 +1462,34 @@ int copy_from_user_phys_prechecked(void* target, Waddr source, int bytes, Level1
   return bytes;
 }
 
+template <typename T>
+T load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi) {
+  int pageoffs = lowbits(source, 12);
+  bool single_page = (pageoffs + sizeof(T)) <= 4096;
+
+  if unlikely (!ptelo.p) {
+    return 0;
+  }
+
+  if unlikely (!single_page) {
+    T dummy;
+    Waddr faultaddr;
+    copy_from_user_phys_prechecked(&dummy, source, sizeof(T), ptelo, ptehi, faultaddr);
+    return dummy;
+  }
+
+  return *(T*)phys_to_mapped_virt((sim_mfn_to_host_mfn(ptelo.mfn) << 12) + pageoffs);
+}
+
+template byte load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+template W8s load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+template W16 load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+template W16s load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+template W32 load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+template W32s load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+template W64 load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+template W64s load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+
 int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
   Level1PTE pte;
 

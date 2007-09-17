@@ -663,6 +663,28 @@ namespace superstl {
     return pp;
   }
 
+  template <class T>
+  struct range {
+    T lo, hi;
+    range() { } 
+    range(T v) { this->lo = v; this->hi = v; }
+    range(T lo, T hi) { this->lo = lo; this->hi = hi; }
+    range<T>& operator ()(T lo, T hi) { this->lo = lo; this->hi = hi; return *this; }
+    range<T>& operator ()(T v) { this->lo = v; this->hi = v; return *this; }
+    bool contains(T p) const { return ((p >= lo) && (p <= hi)); }
+    T size() const { return abs(hi - lo); }
+    bool operator &(T p) const { return contains(p); }
+    bool operator ~() const { return size(); }
+    ostream& print(ostream& os) const {
+      return os << '[', lo, ' ', hi, ']';
+    }
+  };
+  
+  template <typename T>
+  static inline ostream& operator <<(ostream& os, const range<T>& r) {
+    return r.print(os);
+  }
+
   /*
    * Simple array class with optional bounds checking
    */  
@@ -2639,6 +2661,78 @@ namespace superstl {
   template <typename K, typename T, int setcount, typename KM>
   static inline ostream& operator <<(ostream& os, const Hashtable<K, T, setcount, KM>& ht) {
     return ((Hashtable<K, T, setcount, KM>&)ht).print(os);
+  }
+
+  template <typename T, int N, int setcount>
+  struct FixedValueHashtable {
+    typedef int ptr_t;
+
+    T data[N];
+    ptr_t next[N];
+
+    ptr_t sets[setcount];
+    int count;
+
+    FixedValueHashtable() {
+      reset();
+    }
+
+    void reset() {
+      count = 0;
+      memset(sets, 0xff, sizeof(sets));
+    }
+
+    static int setof(T value) {
+      return foldbits<log2(setcount)>(value);
+    }
+
+    int lookup(T value) const {
+      int set = setof(value);
+      ptr_t slot = sets[set];
+      while (slot >= 0) {
+        if unlikely (data[slot] == value) return slot;
+        slot = next[slot];
+      }
+      return -1;
+    }
+
+    bool remaining() const { return (N - count); }
+    bool full() const { return (!remaining()); }
+    bool empty() const { return (!count); }
+
+    bool add(T value) {
+      int set = setof(value);
+      int slot = lookup(value);
+      if likely (slot >= 0) return true;
+
+      if unlikely (slot >= N) return false;
+      slot = count++;
+      data[slot] = value;
+      next[slot] = sets[set];
+      sets[set] = slot;
+      return true;
+    }
+
+    bool contains(T value) const {
+      return (lookup(value) >= 0);
+    }
+
+    inline T& operator [](int i) { return data[i]; }
+    inline T operator [](int i) const { return data[i]; }
+
+    ostream& print(ostream& os) const {
+      os << "FixedValueHashtable<", sizeof(T), "-byte data, ", N, " slots, ", setcount, " sets> containing ", count, " entries:", endl;
+      foreach (i, count) {
+        T v = data[i];
+        os << "  ", intstring(i, 4), ": ", v, endl;
+      }
+      return os;
+    }
+  };
+
+  template <typename T, int N, int setcount>
+  ostream& operator <<(ostream& os, const FixedValueHashtable<T, N, setcount>& ht) {
+    return ht.print(os);
   }
 
   template <typename T, int N>

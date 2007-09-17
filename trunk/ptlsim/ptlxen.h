@@ -567,6 +567,19 @@ static inline Waddr sim_physaddr_to_host_physaddr(Waddr simphys) {
   return (sim_mfn_to_host_mfn(simphys >> 12) << 12) + lowbits(simphys, 12);
 }
 
+template <typename T>
+T load_user_physaddr(W64 physaddr) {
+  return *(T*)phys_to_mapped_virt(sim_physaddr_to_host_physaddr(physaddr));
+}
+
+template <typename T>
+void store_user_physaddr(W64 physaddr, T value) {
+  *(T*)phys_to_mapped_virt(sim_physaddr_to_host_physaddr(physaddr)) = value;
+}
+
+template <typename T>
+T load_user_virt_prechecked(Waddr source, Level1PTE ptelo, Level1PTE ptehi);
+
 static inline int get_sim_physaddr_type(W64 physaddr) {
   return (physaddr >> PHYSADDR_TYPE_SHIFT);
 }

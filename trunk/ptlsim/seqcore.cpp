@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Sequential Core Simulator
 //
-// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -1301,7 +1301,11 @@ struct SequentialCore {
             }
             current_uuid++;
             arf[REG_rip] = chk_recovery_rip;
-            return SEQEXEC_SKIPBLOCK;
+
+            seq_total_user_insns_committed++;
+            total_user_insns_committed++;
+            user_insns++;
+            return SEQEXEC_OK;
           } else {
             arf[REG_flags] = saved_flags;
             return SEQEXEC_EXCEPTION;

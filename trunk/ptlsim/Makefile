@@ -51,7 +51,7 @@ ifdef PTLSIM_HYPERVISOR
 CFLAGS += -fpic -mno-red-zone
 endif
 
-CFLAGS += -fno-trapping-math -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
+CFLAGS += -fno-trapping-math -fno-stack-protector -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
 
 
 BASEOBJS = superstl.o config.o mathlib.o syscalls.o
@@ -68,11 +68,11 @@ else
 COMMONOBJS = linkstart.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o datastore.o injectcode-32bit.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
 
-OOOOBJS = branchpred.o dcache.o smtcore.o smtpipe.o smtexec.o 
+OOOOBJS = branchpred.o dcache.o ooocore.o ooopipe.o oooexec.o 
 OBJFILES = $(COMMONOBJS) $(OOOOBJS)
 
 COMMONINCLUDES = logic.h ptlhwdef.h decode.h seqexec.h dcache.h dcache-amd-k8.h config.h ptlsim.h datastore.h superstl.h globals.h kernel.h mm.h ptlcalls.h loader.h mathlib.h klibc.h syscalls.h ptlxen.h stats.h xen-types.h
-OOOINCLUDES = branchpred.h smtcore.h smtcore-amd-k8.h
+OOOINCLUDES = branchpred.h ooocore.h ooocore-amd-k8.h
 INCLUDEFILES = $(COMMONINCLUDES) $(OOOINCLUDES)
 
 COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-core.cpp decode-fast.cpp decode-complex.cpp decode-x87.cpp decode-sse.cpp lowlevel-64bit.S lowlevel-32bit.S linkstart.S linkend.S uopimpl.cpp dcache.cpp config.cpp datastore.cpp injectcode.cpp ptlcalls.c cpuid.cpp ptlstats.cpp klibc.cpp glibc.cpp mathlib.cpp syscalls.cpp makeusage.cpp
@@ -80,7 +80,7 @@ COMMONCPPFILES = ptlsim.cpp kernel.cpp mm.cpp superstl.cpp ptlhwdef.cpp decode-c
 ifdef PTLSIM_HYPERVISOR
 COMMONCPPFILES += lowlevel-64bit-xen.S ptlxen.cpp ptlxen-memory.cpp ptlxen-events.cpp ptlxen-common.cpp perfctrs.cpp ptlmon.cpp ptlctl.cpp
 endif
-OOOCPPFILES = smtcore.cpp smtpipe.cpp smtexec.cpp seqcore.cpp branchpred.cpp
+OOOCPPFILES = ooocore.cpp ooopipe.cpp oooexec.cpp seqcore.cpp branchpred.cpp
 
 CPPFILES = $(COMMONCPPFILES) $(OOOCPPFILES)
 
@@ -125,7 +125,7 @@ else
 	$(CC) -c $(CFLAGS) $(INCFLAGS) $(CFLAGS32BIT) -O99 -fomit-frame-pointer ptlcalls.c -o ptlcalls-32bit.o
 endif
 
-ptlsim.dst: dstbuild stats.h ptlhwdef.h smtcore.h dcache.h branchpred.h decode.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
+ptlsim.dst: dstbuild stats.h ptlhwdef.h ooocore.h dcache.h branchpred.h decode.h $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o
 	$(CC) $(CFLAGS) $(INCFLAGS) -E -C stats.h > stats.i
 	cat stats.i | ./dstbuild PTLsimStats > dstbuild.temp.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -DDSTBUILD -include stats.h dstbuild.temp.cpp $(BASEOBJS) $(STDOBJS) datastore.o ptlhwdef.o -o dstbuild.temp

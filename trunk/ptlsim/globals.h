@@ -619,19 +619,6 @@ inline bool strequal(const char* a, const char* b) {
   return (strcmp(a, b) == 0);
 }
 
-template <class T>
-class range {
-public:
-  T lo, hi;
-public:
-  range() {} 
-  range(T lo, T hi) { this->lo = lo; this->hi = hi; }
-  inline bool contains(T p) { return ((p >= lo) && (p <= hi)); }
-  inline T size() { return abs(hi - lo); }
-  inline bool operator& (T p) { return contains(p); }
-  inline bool operator~ () { return size(); }
-};
-
 template <typename T, int size> int lengthof(T (&)[size]) { return size; }
 
 extern const byte popcountlut8bit[];
@@ -849,12 +836,6 @@ inline bool modulo_ranges_intersect(int a0, int a1, int b0, int b1, int size) {
 #include <superstl.h>
 
 using namespace superstl;
-
-template <class scalar>
-static inline ostream& operator <<(ostream& os, const range<scalar>& r) {
-  os << '[' << r.lo << ' ' << r.hi << ']';
-  return os;
-}
 
 ostream& operator <<(ostream& os, const vec16b& v);
 ostream& operator ,(ostream& os, const vec16b& v);
