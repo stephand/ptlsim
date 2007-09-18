@@ -17,7 +17,7 @@
 
 #define INSIDE_SMTCORE
 #define DECLARE_STRUCTURES
-#include <smtcore.h>
+#include <ooocore.h>
 #include <stats.h>
 
 #ifndef ENABLE_CHECKS

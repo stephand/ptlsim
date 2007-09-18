@@ -16,7 +16,7 @@
 
 #define STATS_ONLY
 #include <decode.h>
-#include <smtcore.h>
+#include <ooocore.h>
 #include <dcache.h>
 #include <branchpred.h>
 #undef STATS_ONLY

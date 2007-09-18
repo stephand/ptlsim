@@ -16,7 +16,7 @@
 #include <dcache.h>
 
 #define INSIDE_SMTCORE
-#include <smtcore.h>
+#include <ooocore.h>
 #include <stats.h>
 
 #ifndef ENABLE_CHECKS
