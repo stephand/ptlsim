@@ -1,10 +1,10 @@
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// SMT Core Simulator
+// Out-of-Order Core Simulator
 // Core Pipeline Stages: Frontend, Writeback, Commit
 //
-// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #include <globals.h>
@@ -15,7 +15,7 @@
 #include <logic.h>
 #include <dcache.h>
 
-#define INSIDE_SMTCORE
+#define INSIDE_OOOCORE
 #include <ooocore.h>
 #include <stats.h>
 
@@ -29,9 +29,9 @@
 #define logable(level) (0)
 #endif
 
-using namespace SMTModel;
+using namespace OutOfOrderModel;
 
-void SMTCoreCacheCallbacks::icache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
+void OutOfOrderCoreCacheCallbacks::icache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
   foreach (i, core.threadcount) {
     ThreadContext* thread = core.threads[i];
     if unlikely (thread && thread->waiting_for_icache_fill && (floor(thread->waiting_for_icache_fill_physaddr, CacheSubsystem::L1_LINE_SIZE) == physaddr)) {
@@ -54,16 +54,16 @@ static W32 phys_reg_files_writable_by_uop(const TransOp& uop) {
 
 #ifdef UNIFIED_INT_FP_PHYS_REG_FILE
   return
-    (c & OPCLASS_STORE) ? SMTCore::PHYS_REG_FILE_MASK_ST :
-    (c & OPCLASS_BRANCH) ? SMTCore::PHYS_REG_FILE_MASK_BR :
-    SMTCore::PHYS_REG_FILE_MASK_INT;
+    (c & OPCLASS_STORE) ? OutOfOrderCore::PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? OutOfOrderCore::PHYS_REG_FILE_MASK_BR :
+    OutOfOrderCore::PHYS_REG_FILE_MASK_INT;
 #else
   return
-    (c & OPCLASS_STORE) ? SMTCore::PHYS_REG_FILE_MASK_ST :
-    (c & OPCLASS_BRANCH) ? SMTCore::PHYS_REG_FILE_MASK_BR :
-    (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? SMTCore::PHYS_REG_FILE_MASK_INT : SMTCore::PHYS_REG_FILE_MASK_FP) :
-    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_ctx)) ? SMTCore::PHYS_REG_FILE_MASK_FP :
-    SMTCore::PHYS_REG_FILE_MASK_INT;
+    (c & OPCLASS_STORE) ? OutOfOrderCore::PHYS_REG_FILE_MASK_ST :
+    (c & OPCLASS_BRANCH) ? OutOfOrderCore::PHYS_REG_FILE_MASK_BR :
+    (c & (OPCLASS_LOAD | OPCLASS_PREFETCH)) ? ((uop.datatype == DATATYPE_INT) ? OutOfOrderCore::PHYS_REG_FILE_MASK_INT : OutOfOrderCore::PHYS_REG_FILE_MASK_FP) :
+    ((c & OPCLASS_FP) | inrange((int)uop.rd, REG_xmml0, REG_xmmh15) | inrange((int)uop.rd, REG_fptos, REG_ctx)) ? OutOfOrderCore::PHYS_REG_FILE_MASK_FP :
+    OutOfOrderCore::PHYS_REG_FILE_MASK_INT;
 #endif
 }
 
@@ -89,7 +89,7 @@ void ThreadContext::annul_fetchq() {
 // state saved in ctx.commitarf.
 //
 
-void SMTCore::flush_pipeline_all() {
+void OutOfOrderCore::flush_pipeline_all() {
   // Clear per-thread state:
   foreach (i, threadcount) {
     ThreadContext* thread = threads[i];
@@ -268,7 +268,7 @@ void ThreadContext::external_to_core_state() {
 void ThreadContext::redispatch_deadlock_recovery() {
   if (logable(6)) core.dump_smt_state(logfile);
 
-  per_context_smtcore_stats_update(threadid, dispatch.redispatch.deadlock_flushes++);
+  per_context_ooocore_stats_update(threadid, dispatch.redispatch.deadlock_flushes++);
   // don't want to reset the counter for no commit in this case
   W64 previous_last_commit_at_cycle = last_commit_at_cycle;
   flush_pipeline();
@@ -299,7 +299,7 @@ void ThreadContext::redispatch_deadlock_recovery() {
   if (recovery_required) {
   rob.redispatch(noops, prevrob);
   prevrob = &rob;
-  per_context_smtcore_stats_update(threadid, dispatch.redispatch.deadlock_uops_flushed++);
+  per_context_ooocore_stats_update(threadid, dispatch.redispatch.deadlock_uops_flushed++);
   }
   }
 
@@ -335,24 +335,24 @@ static void print_fetch_bb_address_ringbuf(ostream& os) {
   }
 }
 
-int SMTCore::hash_unaligned_predictor_slot(const RIPVirtPhysBase& rvp) {
+int OutOfOrderCore::hash_unaligned_predictor_slot(const RIPVirtPhysBase& rvp) {
   W32 h = rvp.rip ^ rvp.mfnlo;
   return lowbits(h, log2(UNALIGNED_PREDICTOR_SIZE));
 }
 
-bool SMTCore::get_unaligned_hint(const RIPVirtPhysBase& rvp) const {
+bool OutOfOrderCore::get_unaligned_hint(const RIPVirtPhysBase& rvp) const {
   int slot = hash_unaligned_predictor_slot(rvp);
   return unaligned_predictor[slot];
 }
 
-void SMTCore::set_unaligned_hint(const RIPVirtPhysBase& rvp, bool value) {
+void OutOfOrderCore::set_unaligned_hint(const RIPVirtPhysBase& rvp, bool value) {
   int slot = hash_unaligned_predictor_slot(rvp);
   assert(inrange(slot, 0, UNALIGNED_PREDICTOR_SIZE));
   unaligned_predictor[slot] = value;
 }
 
 bool ThreadContext::fetch() {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   EventLog& eventlog = core.eventlog;
 
   time_this_scope(ctfetch);
@@ -360,14 +360,14 @@ bool ThreadContext::fetch() {
   int fetchcount = 0;
   int taken_branch_count = 0;
 
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
 
   if unlikely (stall_frontend) {
     if unlikely (config.event_log_enabled) {
       event = eventlog.add(EVENT_FETCH_STALLED);
       event->threadid = threadid;
     }
-    per_context_smtcore_stats_update(threadid, fetch.stop.stalled++);
+    per_context_ooocore_stats_update(threadid, fetch.stop.stalled++);
     return true;
   }
 
@@ -378,7 +378,7 @@ bool ThreadContext::fetch() {
       event->rip = fetchrip;
       event->uuid = fetch_uuid;
     }
-    per_context_smtcore_stats_update(threadid, fetch.stop.icache_miss++);
+    per_context_ooocore_stats_update(threadid, fetch.stop.icache_miss++);
     return true;
   }
 
@@ -391,7 +391,7 @@ bool ThreadContext::fetch() {
           event->uuid = fetch_uuid;
         }
       }
-      per_context_smtcore_stats_update(threadid, fetch.stop.fetchq_full++);
+      per_context_ooocore_stats_update(threadid, fetch.stop.fetchq_full++);
       break;
     }
 
@@ -433,7 +433,7 @@ bool ThreadContext::fetch() {
         event = eventlog.add(EVENT_FETCH_BOGUS_RIP, fetchrip);
         event->threadid = threadid;
       }
-      per_context_smtcore_stats_update(threadid, fetch.stop.bogus_rip++);
+      per_context_ooocore_stats_update(threadid, fetch.stop.bogus_rip++);
       //
       // Keep fetching - the decoder has injected assist microcode that
       // branches to the invalid opcode or exec page fault handler.
@@ -465,11 +465,11 @@ bool ThreadContext::fetch() {
         }
         waiting_for_icache_fill = 1;
         waiting_for_icache_fill_physaddr = req_icache_block;
-        per_context_smtcore_stats_update(threadid, fetch.stop.icache_miss++);
+        per_context_ooocore_stats_update(threadid, fetch.stop.icache_miss++);
         break;
       }
 
-      per_context_smtcore_stats_update(threadid, fetch.blocks++);
+      per_context_ooocore_stats_update(threadid, fetch.blocks++);
       current_icache_block = req_icache_block;
       per_context_dcache_stats_update(threadid, fetch.hit.L1++);
     }
@@ -511,16 +511,16 @@ bool ThreadContext::fetch() {
 
     current_basic_block_transop_index += (unaligned_ldst_buf.empty());
 
-    per_context_smtcore_stats_update(threadid, fetch.user_insns += transop.som);
+    per_context_ooocore_stats_update(threadid, fetch.user_insns += transop.som);
 
     if unlikely (isclass(transop.opcode, OPCLASS_BARRIER)) {
       // We've hit an assist: stall the frontend until we resume or redirect
       if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_ASSIST, transop);
-      per_context_smtcore_stats_update(threadid, fetch.stop.microcode_assist++);
+      per_context_ooocore_stats_update(threadid, fetch.stop.microcode_assist++);
       stall_frontend = 1;      
     }
 
-    per_context_smtcore_stats_update(threadid, fetch.uops++);
+    per_context_ooocore_stats_update(threadid, fetch.uops++);
 
     Waddr predrip = 0;
     bool redirectrip = false;
@@ -541,7 +541,7 @@ bool ThreadContext::fetch() {
       transop.predinfo.ripafter = fetchrip + transop.bytes;
       predrip = branchpred.predict(transop.predinfo, transop.predinfo.bptype, transop.predinfo.ripafter, transop.riptaken);
       redirectrip = 1;
-      per_context_smtcore_stats_update(threadid, branchpred.predictions++);
+      per_context_ooocore_stats_update(threadid, branchpred.predictions++);
     }
 
     // Set up branches so mispredicts can be calculated correctly:
@@ -562,7 +562,7 @@ bool ThreadContext::fetch() {
       transop.ripseq = predrip;
     }
 
-    per_context_smtcore_stats_update(threadid, fetch.opclass[opclassof(transop.opcode)]++);
+    per_context_ooocore_stats_update(threadid, fetch.opclass[opclassof(transop.opcode)]++);
 
     if unlikely (config.event_log_enabled) {
       event = eventlog.add(EVENT_FETCH_OK, transop);
@@ -584,7 +584,7 @@ bool ThreadContext::fetch() {
         fetchrip.update(ctx);
         if (taken) {
           fetchcount++;
-          per_context_smtcore_stats_update(threadid, fetch.stop.branch_taken++);
+          per_context_ooocore_stats_update(threadid, fetch.stop.branch_taken++);
           break;
         }
       }
@@ -593,8 +593,8 @@ bool ThreadContext::fetch() {
     fetchcount++;
   }
 
-  per_context_smtcore_stats_update(threadid, fetch.stop.full_width += (fetchcount == FETCH_WIDTH));
-  per_context_smtcore_stats_update(threadid, fetch.width[fetchcount]++);
+  per_context_ooocore_stats_update(threadid, fetch.stop.full_width += (fetchcount == FETCH_WIDTH));
+  per_context_ooocore_stats_update(threadid, fetch.width[fetchcount]++);
 
   return true;
 }
@@ -616,7 +616,7 @@ BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp
     current_basic_block = bbcache.translate(ctx, rvp);
     assert(current_basic_block);
     if unlikely (config.event_log_enabled) {
-      SMTCoreEvent* event = core.eventlog.add(EVENT_FETCH_TRANSLATE, rvp);
+      OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_FETCH_TRANSLATE, rvp);
       event->fetch.bb_uop_count = current_basic_block->count;
       event->threadid = threadid;
     }
@@ -644,7 +644,7 @@ BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp
 //
 
 void ThreadContext::rename() {
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
 
   time_this_scope(ctrename);
 
@@ -658,7 +658,7 @@ void ThreadContext::rename() {
           event->threadid = threadid;
         }
       }
-      per_context_smtcore_stats_update(threadid, frontend.status.fetchq_empty++);
+      per_context_ooocore_stats_update(threadid, frontend.status.fetchq_empty++);
       break;
     } 
 
@@ -669,7 +669,7 @@ void ThreadContext::rename() {
           event->threadid = threadid;
         }
       }
-      per_context_smtcore_stats_update(threadid, frontend.status.rob_full++);
+      per_context_ooocore_stats_update(threadid, frontend.status.rob_full++);
       break;
     }
 
@@ -693,7 +693,7 @@ void ThreadContext::rename() {
           event->threadid = threadid;
         }
       }
-      per_context_smtcore_stats_update(threadid, frontend.status.physregs_full++);
+      per_context_ooocore_stats_update(threadid, frontend.status.physregs_full++);
       break;
     }
 
@@ -703,13 +703,13 @@ void ThreadContext::rename() {
 
     if unlikely (ld && (loads_in_flight >= LDQ_SIZE)) {
       if unlikely (config.event_log_enabled) { if likely (!prepcount) core.eventlog.add(EVENT_RENAME_LDQ_FULL)->threadid = threadid; }
-      per_context_smtcore_stats_update(threadid, frontend.status.ldq_full++);
+      per_context_ooocore_stats_update(threadid, frontend.status.ldq_full++);
       break;
     }
 
     if unlikely (st && (stores_in_flight >= STQ_SIZE)) {
       if unlikely (config.event_log_enabled) { if likely (!prepcount) core.eventlog.add(EVENT_RENAME_STQ_FULL)->threadid = threadid; }
-      per_context_smtcore_stats_update(threadid, frontend.status.stq_full++);
+      per_context_ooocore_stats_update(threadid, frontend.status.stq_full++);
       break;
     }
 
@@ -718,7 +718,7 @@ void ThreadContext::rename() {
       break;
     }
 
-    per_context_smtcore_stats_update(threadid, frontend.status.complete++);
+    per_context_ooocore_stats_update(threadid, frontend.status.complete++);
 
     FetchBufferEntry& transop = *fetchq.dequeue();
     ReorderBufferEntry& rob = *ROB.alloc();
@@ -743,10 +743,10 @@ void ThreadContext::rename() {
       lsq.invalid = 0;
     }
 
-    per_context_smtcore_stats_update(threadid, frontend.alloc.reg += (!(ld|st|br)));
-    per_context_smtcore_stats_update(threadid, frontend.alloc.ldreg += ld);
-    per_context_smtcore_stats_update(threadid, frontend.alloc.sfr += st);
-    per_context_smtcore_stats_update(threadid, frontend.alloc.br += br);
+    per_context_ooocore_stats_update(threadid, frontend.alloc.reg += (!(ld|st|br)));
+    per_context_ooocore_stats_update(threadid, frontend.alloc.ldreg += ld);
+    per_context_ooocore_stats_update(threadid, frontend.alloc.sfr += st);
+    per_context_ooocore_stats_update(threadid, frontend.alloc.br += br);
 
     //
     // Rename operands:
@@ -812,7 +812,7 @@ void ThreadContext::rename() {
     //
 
     if unlikely (config.event_log_enabled) {
-      SMTCoreEvent* event = core.eventlog.add(EVENT_RENAME_OK, &rob);
+      OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_RENAME_OK, &rob);
 
       foreach (i, MAX_OPERANDS) rob.operands[i]->fill_operand_info(event->rename.opinfo[i]);
       
@@ -877,16 +877,16 @@ void ThreadContext::rename() {
     if unlikely (br) specrrt.renamed_in_this_basic_block.reset();
 #endif
 
-    per_context_smtcore_stats_update(threadid, frontend.renamed.none += ((!renamed_reg) && (!renamed_flags)));
-    per_context_smtcore_stats_update(threadid, frontend.renamed.reg += ((renamed_reg) && (!renamed_flags)));
-    per_context_smtcore_stats_update(threadid, frontend.renamed.flags += ((!renamed_reg) && (renamed_flags)));
-    per_context_smtcore_stats_update(threadid, frontend.renamed.reg_and_flags += ((renamed_reg) && (renamed_flags)));
+    per_context_ooocore_stats_update(threadid, frontend.renamed.none += ((!renamed_reg) && (!renamed_flags)));
+    per_context_ooocore_stats_update(threadid, frontend.renamed.reg += ((renamed_reg) && (!renamed_flags)));
+    per_context_ooocore_stats_update(threadid, frontend.renamed.flags += ((!renamed_reg) && (renamed_flags)));
+    per_context_ooocore_stats_update(threadid, frontend.renamed.reg_and_flags += ((renamed_reg) && (renamed_flags)));
     rob.changestate(rob_frontend_list);
 
     prepcount++;
   }
 
-  per_context_smtcore_stats_update(threadid, frontend.width[prepcount]++);
+  per_context_ooocore_stats_update(threadid, frontend.width[prepcount]++);
 }
 
 void ThreadContext::frontend() {
@@ -899,7 +899,7 @@ void ThreadContext::frontend() {
       rob->changestate(rob_ready_to_dispatch_list);
     } else {
       if unlikely (config.event_log_enabled) {
-        SMTCoreEvent* event = core.eventlog.add(EVENT_FRONTEND, rob);
+        OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_FRONTEND, rob);
         event->frontend.cycles_left = rob->cycles_left;
       }
     }
@@ -1089,7 +1089,7 @@ bool ReorderBufferEntry::find_sources() {
     }
 
     if likely (source_physreg.nonnull()) {
-      per_physregfile_stats_update(stats.smtcore.dispatch.source, source_physreg.rfid, [source_physreg.state]++);
+      per_physregfile_stats_update(stats.ooocore.dispatch.source, source_physreg.rfid, [source_physreg.state]++);
     }
   }
 
@@ -1116,7 +1116,7 @@ bool ReorderBufferEntry::find_sources() {
 }
 
 int ReorderBufferEntry::select_cluster() {
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
 
   if (MAX_CLUSTERS == 1) {
     int cluster_issue_queue_avail_count[MAX_CLUSTERS];
@@ -1168,7 +1168,7 @@ int ReorderBufferEntry::select_cluster() {
     }
   }
 
-  per_context_smtcore_stats_update(threadid, dispatch.cluster[cluster]++);
+  per_context_ooocore_stats_update(threadid, dispatch.cluster[cluster]++);
 
   if unlikely (config.event_log_enabled) event->cluster = cluster;
 
@@ -1183,7 +1183,7 @@ int ReorderBufferEntry::select_cluster() {
 int ThreadContext::dispatch() {
   time_this_scope(ctdispatch);
 
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
   ReorderBufferEntry* rob;
   foreach_list_mutable(rob_ready_to_dispatch_list, rob, entry, nextentry) {
     if unlikely (core.dispatchcount >= DISPATCH_WIDTH) break;
@@ -1248,8 +1248,8 @@ int ThreadContext::dispatch() {
     core.dispatchcount++;
   }
 
-  assert(core.dispatchcount < lengthof(stats.smtcore.dispatch.width));
-  stats.smtcore.dispatch.width[core.dispatchcount]++;
+  assert(core.dispatchcount < lengthof(stats.ooocore.dispatch.width));
+  stats.ooocore.dispatch.width[core.dispatchcount]++;
 
   if likely (core.dispatchcount) {
     dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
@@ -1369,7 +1369,7 @@ int ThreadContext::writeback(int cluster) {
 
     if likely (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
       if unlikely (config.event_log_enabled) {
-        SMTCoreEvent* event = core.eventlog.add(EVENT_WRITEBACK, rob);
+        OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_WRITEBACK, rob);
         event->writeback.data = rob->physreg->data;
         event->writeback.flags = rob->physreg->flags;
         event->writeback.consumer_count = rob->consumer_count;
@@ -1393,13 +1393,13 @@ int ThreadContext::writeback(int cluster) {
     // so we don't need to actually write anything back here.
     //
 
-    per_context_smtcore_stats_update(threadid, writeback.writebacks[rob->physreg->rfid]++);
+    per_context_ooocore_stats_update(threadid, writeback.writebacks[rob->physreg->rfid]++);
     rob->physreg->writeback();
     rob->cycles_left = -1;
     rob->changestate(rob_ready_to_commit_queue);
   }
 
-  per_cluster_stats_update(stats.smtcore.writeback.width, cluster, [core.writecount]++);
+  per_cluster_stats_update(stats.ooocore.writeback.width, cluster, [core.writecount]++);
 
   return core.writecount;
 }
@@ -1482,12 +1482,12 @@ int ThreadContext::commit() {
     foreach_list_mutable(statelist, physreg, entry, nextentry) {
       if unlikely (!physreg->referenced()) {
         if unlikely (config.event_log_enabled) {
-          SMTCoreEvent* event = core.eventlog.add(EVENT_RECLAIM_PHYSREG);
+          OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_RECLAIM_PHYSREG);
           event->physreg = physreg->index();
           event->threadid = physreg->threadid;
         }
         physreg->free();
-        stats.smtcore.commit.free_regs_recycled++;
+        stats.ooocore.commit.free_regs_recycled++;
       }
     }
   }
@@ -1511,8 +1511,8 @@ int ThreadContext::commit() {
     }
   }
 
-  assert(core.commitcount < lengthof(stats.smtcore.commit.width));
-  stats.smtcore.commit.width[core.commitcount]++;
+  assert(core.commitcount < lengthof(stats.ooocore.commit.width));
+  stats.ooocore.commit.width[core.commitcount]++;
 
   return rc;
 }
@@ -1534,7 +1534,7 @@ void ThreadContext::flush_mem_lock_release_list() {
     }
 
     if unlikely (config.event_log_enabled) {
-      SMTCoreEvent* event = core.eventlog.add(EVENT_RELEASE_MEM_LOCK);
+      OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_RELEASE_MEM_LOCK);
       event->threadid = ctx.vcpuid;
       event->loadstore.sfr.physaddr = lockaddr >> 3;
     }
@@ -1563,7 +1563,7 @@ bool rip_is_in_spinlock(W64 rip) {
 #endif
 
 int ReorderBufferEntry::commit() {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
   Context& ctx = thread.ctx;
   bool all_ready_to_commit = true;
@@ -1572,7 +1572,7 @@ int ReorderBufferEntry::commit() {
   //
   // Create an event log entry
   //
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
 
   //
   // If the uop currently at the head of the ROB is a memory fence,
@@ -1679,7 +1679,7 @@ int ReorderBufferEntry::commit() {
   all_ready_to_commit &= found_eom;
 
   if unlikely (!all_ready_to_commit) {
-    per_context_smtcore_stats_update(threadid, commit.result.none++);
+    per_context_ooocore_stats_update(threadid, commit.result.none++);
     return COMMIT_RESULT_NONE;
   }
 
@@ -1689,7 +1689,7 @@ int ReorderBufferEntry::commit() {
   bool st = isstore(uop.opcode);
   bool br = isbranch(uop.opcode);
 
-  per_context_smtcore_stats_update(threadid, commit.opclass[opclassof(uop.opcode)]++);
+  per_context_ooocore_stats_update(threadid, commit.opclass[opclassof(uop.opcode)]++);
 
   if unlikely (macro_op_has_exceptions) {
     if unlikely (config.event_log_enabled) event = core.eventlog.add_commit(EVENT_COMMIT_EXCEPTION_ACKNOWLEDGED, this);
@@ -1698,9 +1698,9 @@ int ReorderBufferEntry::commit() {
     if likely (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
       thread.chk_recovery_rip = ctx.commitarf[REG_rip] + uop.bytes;
       if unlikely (config.event_log_enabled) event->type = EVENT_COMMIT_SKIPBLOCK;
-      per_context_smtcore_stats_update(threadid, commit.result.skipblock++);
+      per_context_ooocore_stats_update(threadid, commit.result.skipblock++);
     } else {
-      per_context_smtcore_stats_update(threadid, commit.result.exception++);
+      per_context_ooocore_stats_update(threadid, commit.result.exception++);
     }
 
     return COMMIT_RESULT_EXCEPTION;
@@ -1725,7 +1725,7 @@ int ReorderBufferEntry::commit() {
     thread.smc_invalidate_pending = 1;
     thread.smc_invalidate_rvp = uop.rip;
 
-    per_context_smtcore_stats_update(threadid, commit.result.smc++);
+    per_context_ooocore_stats_update(threadid, commit.result.smc++);
     return COMMIT_RESULT_SMC;
   }
 
@@ -1758,7 +1758,7 @@ int ReorderBufferEntry::commit() {
     if unlikely (lock && (lock->vcpuid != thread.ctx.vcpuid)) {
       if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_MEM_LOCKED, this);
 
-      per_context_smtcore_stats_update(threadid, commit.result.memlocked++);
+      per_context_ooocore_stats_update(threadid, commit.result.memlocked++);
       return COMMIT_RESULT_NONE;
     }
   }
@@ -1866,8 +1866,8 @@ int ReorderBufferEntry::commit() {
     W64 flagmask = setflags_to_x86_flags[uop.setflags];
     ctx.commitarf[REG_flags] = (ctx.commitarf[REG_flags] & ~flagmask) | (physreg->flags & flagmask);
 
-    per_context_smtcore_stats_update(threadid, commit.setflags.no += (uop.setflags == 0));
-    per_context_smtcore_stats_update(threadid, commit.setflags.yes += (uop.setflags != 0));
+    per_context_ooocore_stats_update(threadid, commit.setflags.no += (uop.setflags == 0));
+    per_context_ooocore_stats_update(threadid, commit.setflags.yes += (uop.setflags != 0));
 
     if unlikely (config.event_log_enabled) event->commit.state.reg.rdflags = ctx.commitarf[REG_flags];
 
@@ -1922,16 +1922,16 @@ int ReorderBufferEntry::commit() {
 
     if unlikely (oldphysreg->referenced()) {
       oldphysreg->changestate(PHYSREG_PENDINGFREE); 
-      stats.smtcore.commit.freereg.pending++;
+      stats.ooocore.commit.freereg.pending++;
     } else  {
       oldphysreg->free();
-      stats.smtcore.commit.freereg.free++;
+      stats.ooocore.commit.freereg.free++;
     }
   }
 
   if likely (!(br|st)) {
-    int k = clipto((int)consumer_count, 0, lengthof(stats.smtcore.total.frontend.consumer_count) - 1);
-    per_context_smtcore_stats_update(threadid, frontend.consumer_count[k]++);
+    int k = clipto((int)consumer_count, 0, lengthof(stats.ooocore.total.frontend.consumer_count) - 1);
+    per_context_ooocore_stats_update(threadid, frontend.consumer_count[k]++);
   }
 
   physreg->changestate(PHYSREG_ARCH);
@@ -1966,12 +1966,12 @@ int ReorderBufferEntry::commit() {
     }
 
     thread.branchpred.update(uop.predinfo, end_of_branch_x86_insn, ctx.commitarf[REG_rip]);
-    per_context_smtcore_stats_update(threadid, branchpred.updates++);
+    per_context_ooocore_stats_update(threadid, branchpred.updates++);
   }
 
   if likely (uop.eom) {
     total_user_insns_committed++;
-    per_context_smtcore_stats_update(threadid, commit.insns++);
+    per_context_ooocore_stats_update(threadid, commit.insns++);
     thread.total_insns_committed++;
 
     stats.summary.insns++;
@@ -1979,7 +1979,7 @@ int ReorderBufferEntry::commit() {
 
   stats.summary.uops++;
   total_uops_committed++;
-  per_context_smtcore_stats_update(threadid, commit.uops++);
+  per_context_ooocore_stats_update(threadid, commit.uops++);
   thread.total_uops_committed++;
 
   bool uop_is_eom = uop.eom;
@@ -1991,7 +1991,7 @@ int ReorderBufferEntry::commit() {
 
   if unlikely (uop_is_barrier) {
     if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_COMMIT_ASSIST, RIPVirtPhys(ctx.commitarf[REG_rip]))->threadid = thread.threadid;
-    per_context_smtcore_stats_update(threadid, commit.result.barrier++);
+    per_context_ooocore_stats_update(threadid, commit.result.barrier++);
     return COMMIT_RESULT_BARRIER;
   }
 
@@ -2005,11 +2005,11 @@ int ReorderBufferEntry::commit() {
     return COMMIT_RESULT_INTERRUPT;
   }
 
-  per_context_smtcore_stats_update(threadid, commit.result.ok++);
+  per_context_ooocore_stats_update(threadid, commit.result.ok++);
   return COMMIT_RESULT_OK;
 }
 
-namespace SMTModel {
+namespace OutOfOrderModel {
   const byte archdest_is_visible[TRANSREG_COUNT] = {
     // Integer registers
     1, 1, 1, 1, 1, 1, 1, 1,

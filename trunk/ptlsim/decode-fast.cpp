@@ -824,7 +824,6 @@ bool TraceDecoder::decode_fast() {
     operand_load(REG_temp0, ra, OP_ld_pre, DATATYPE_INT, level);
     break;
   }
-
   case 0x119 ... 0x11f: {
     // Special form of NOP with ModRM form (used for padding)
     DECODE(eform, ra, v_mode);

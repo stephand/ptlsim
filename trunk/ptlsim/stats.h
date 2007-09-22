@@ -143,7 +143,7 @@ struct PTLsimStats { // rootnode:
     W64 reclaim_rounds;
   } decoder;
 
-  SMTCoreStats smtcore;
+  OutOfOrderCoreStats ooocore;
   DataCacheStats dcache;
 
 

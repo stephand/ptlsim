@@ -1,15 +1,15 @@
 // -*- c++ -*-
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// SMT Core Simulator Configuration for
+// Out-of-Order Core Simulator
 // AMD K8 (Athlon 64 / Opteron / Turion)
 //
-// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
-#ifndef _SMTCORE_H_
-#define _SMTCORE_H_
+#ifndef _OOOCORE_H_
+#define _OOOCORE_H_
 
 // With these disabled, simulation is faster
 // #define ENABLE_CHECKS
@@ -45,10 +45,10 @@ static const int MAX_THREADS_PER_CORE = 1;
 #define stop_timer(ct) (0)
 #endif
 
-#define per_context_smtcore_stats_ref(vcpuid) (*(((PerContextSMTStats*)&stats.smtcore.vcpu0) + (vcpuid)))
-#define per_context_smtcore_stats_update(vcpuid, expr) stats.smtcore.total.expr, per_context_smtcore_stats_ref(vcpuid).expr
+#define per_context_ooocore_stats_ref(vcpuid) (*(((PerContextOutOfOrderCoreStats*)&stats.ooocore.vcpu0) + (vcpuid)))
+#define per_context_ooocore_stats_update(vcpuid, expr) stats.ooocore.total.expr, per_context_ooocore_stats_ref(vcpuid).expr
 
-namespace SMTModel {
+namespace OutOfOrderModel {
   //
   // Operand formats
   //
@@ -373,10 +373,10 @@ namespace SMTModel {
   static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
   static const char* short_physreg_state_names[MAX_PHYSREG_STATE] = {"-", "free", "wait", "byps", "wrtn", "arch", "pend"};
 
-#ifdef INSIDE_SMTCORE
+#ifdef INSIDE_OOOCORE
 
-  struct SMTCore;
-  SMTCore& coreof(int coreid);
+  struct OutOfOrderCore;
+  OutOfOrderCore& coreof(int coreid);
 
   struct ReorderBufferEntry;
 
@@ -495,7 +495,7 @@ namespace SMTModel {
       return true;
     }
 
-    SMTCore& getcore() const { return coreof(coreid); }
+    OutOfOrderCore& getcore() const { return coreof(coreid); }
   };
 
   template <int size, int operandcount>
@@ -629,10 +629,10 @@ namespace SMTModel {
   //
   // ReorderBufferEntry
   struct ThreadContext;
-  struct SMTCore;
+  struct OutOfOrderCore;
   struct PhysicalRegister;
   struct LoadStoreQueueEntry;
-  struct SMTCoreEvent;
+  struct OutOfOrderCoreEvent;
   //
   // Reorder Buffer (ROB) structure, used for tracking all uops in flight.
   // This same structure is used to represent both dispatched but not yet issued 
@@ -706,7 +706,7 @@ namespace SMTModel {
     stringbuf& get_operand_info(stringbuf& sb, int operand) const;
     ostream& print_operand_info(ostream& os, int operand) const;
 
-    SMTCore& getcore() const { return coreof(coreid); }
+    OutOfOrderCore& getcore() const { return coreof(coreid); }
 
     ThreadContext& getthread() const;
     issueq_tag_t get_tag();
@@ -763,7 +763,7 @@ namespace SMTModel {
       return *this;
     }
 
-    SMTCore& getcore() const { return coreof(coreid); }
+    OutOfOrderCore& getcore() const { return coreof(coreid); }
   };
 
   static inline ostream& operator <<(ostream& os, const LoadStoreQueueEntry& lsq) {
@@ -870,7 +870,7 @@ namespace SMTModel {
 
     void fill_operand_info(PhysicalRegisterOperandInfo& opinfo);
 
-    SMTCore& getcore() const { return coreof(coreid); }
+    OutOfOrderCore& getcore() const { return coreof(coreid); }
   };
 
   ostream& operator <<(ostream& os, const PhysicalRegister& physreg);
@@ -901,7 +901,7 @@ namespace SMTModel {
     void reset(W8 threadid);
     ostream& print(ostream& os) const;
 
-    SMTCore& getcore() const { return coreof(coreid); }
+    OutOfOrderCore& getcore() const { return coreof(coreid); }
 
   private:
     void reset();
@@ -960,11 +960,11 @@ namespace SMTModel {
   extern const byte archdest_can_commit[TRANSREG_COUNT];
   extern const byte archdest_is_visible[TRANSREG_COUNT];
 
-  struct SMTMachine;
+  struct OutOfOrderMachine;
 
-  struct SMTCoreCacheCallbacks: public CacheSubsystem::PerCoreCacheCallbacks {
-    SMTCore& core;
-    SMTCoreCacheCallbacks(SMTCore& core_): core(core_) { }
+  struct OutOfOrderCoreCacheCallbacks: public CacheSubsystem::PerCoreCacheCallbacks {
+    OutOfOrderCore& core;
+    OutOfOrderCoreCacheCallbacks(OutOfOrderCore& core_): core(core_) { }
     virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
   };
@@ -1078,7 +1078,7 @@ namespace SMTModel {
   // and uuids are only 32-bits; in practice wraparound is
   // not likely to be a problem.
   //
-  struct SMTCoreEvent {
+  struct OutOfOrderCoreEvent {
     W32 cycle;
     W32 uuid;
     RIPVirtPhysBase rip;
@@ -1094,7 +1094,7 @@ namespace SMTModel {
     W8 threadid;
     W32 issueq_count;
 
-    SMTCoreEvent* fill(int type) {
+    OutOfOrderCoreEvent* fill(int type) {
       this->type = type;
       cycle = sim_cycle;
       uuid = 0;
@@ -1102,7 +1102,7 @@ namespace SMTModel {
       return this;
     }
 
-    SMTCoreEvent* fill(int type, const FetchBufferEntry& uop) {
+    OutOfOrderCoreEvent* fill(int type, const FetchBufferEntry& uop) {
       fill(type);
       uuid = uop.uuid;
       rip = uop.rip;
@@ -1111,13 +1111,13 @@ namespace SMTModel {
       return this;
     }
 
-    SMTCoreEvent* fill(int type, const RIPVirtPhys& rvp) {
+    OutOfOrderCoreEvent* fill(int type, const RIPVirtPhys& rvp) {
       fill(type);
       rip = rvp;
       return this;
     }
 
-    SMTCoreEvent* fill(int type, const ReorderBufferEntry* rob) {
+    OutOfOrderCoreEvent* fill(int type, const ReorderBufferEntry* rob) {
       fill(type, rob->uop);
       this->rob = rob->index();
       physreg = rob->physreg->index();
@@ -1129,7 +1129,7 @@ namespace SMTModel {
       return this;
     }
 
-    SMTCoreEvent* fill_commit(int type, const ReorderBufferEntry* rob) {
+    OutOfOrderCoreEvent* fill_commit(int type, const ReorderBufferEntry* rob) {
       fill(type, rob);
       if unlikely (isstore(rob->uop.opcode)) {
         commit.state.st = *rob->lsq;
@@ -1149,7 +1149,7 @@ namespace SMTModel {
       return this;
     }
 
-    SMTCoreEvent* fill_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr, Waddr virtaddr) {
+    OutOfOrderCoreEvent* fill_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr, Waddr virtaddr) {
       fill(type, rob);
       loadstore.sfr = *rob->lsq;
       loadstore.virtaddr = virtaddr;
@@ -1271,9 +1271,9 @@ namespace SMTModel {
   };
 
   struct EventLog {
-    SMTCoreEvent* start;
-    SMTCoreEvent* end;
-    SMTCoreEvent* tail;
+    OutOfOrderCoreEvent* start;
+    OutOfOrderCoreEvent* end;
+    OutOfOrderCoreEvent* tail;
     ostream* logfile;
 
     EventLog() { start = null; end = null; tail = null; logfile = null; }
@@ -1281,39 +1281,39 @@ namespace SMTModel {
     bool init(size_t bufsize);
     void reset();
 
-    SMTCoreEvent* add() {
+    OutOfOrderCoreEvent* add() {
       if unlikely (tail >= end) {
         tail = start;
         flush();
       }
-      SMTCoreEvent* event = tail;
+      OutOfOrderCoreEvent* event = tail;
       tail++;
       return event;
     }
 
     void flush(bool only_to_tail = false);
 
-    SMTCoreEvent* add(int type) {
+    OutOfOrderCoreEvent* add(int type) {
       return add()->fill(type);
     }
 
-    SMTCoreEvent* add(int type, const RIPVirtPhys& rvp) {
+    OutOfOrderCoreEvent* add(int type, const RIPVirtPhys& rvp) {
       return add()->fill(type, rvp);
     }
 
-    SMTCoreEvent* add(int type, const FetchBufferEntry& uop) {
+    OutOfOrderCoreEvent* add(int type, const FetchBufferEntry& uop) {
       return add()->fill(type, uop);
     }
 
-    SMTCoreEvent* add(int type, const ReorderBufferEntry* rob) {
+    OutOfOrderCoreEvent* add(int type, const ReorderBufferEntry* rob) {
       return add()->fill(type, rob);
     }
 
-    SMTCoreEvent* add_commit(int type, const ReorderBufferEntry* rob) {
+    OutOfOrderCoreEvent* add_commit(int type, const ReorderBufferEntry* rob) {
       return add()->fill_commit(type, rob);
     }
 
-    SMTCoreEvent* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
+    OutOfOrderCoreEvent* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
       return add()->fill_load_store(type, rob, inherit_sfr, addr);
     }
 
@@ -1344,8 +1344,8 @@ namespace SMTModel {
   static const int UNALIGNED_PREDICTOR_SIZE = 4096;
 
   struct ThreadContext {
-    SMTCore& core;
-    SMTCore& getcore() const { return core; }
+    OutOfOrderCore& core;
+    OutOfOrderCore& getcore() const { return core; }
 
     int threadid;
     Context& ctx;
@@ -1425,7 +1425,7 @@ namespace SMTModel {
     byte queued_mem_lock_release_count;
     W64 queued_mem_lock_release_list[4];
 
-    ThreadContext(SMTCore& core_, int threadid_, Context& ctx_): core(core_), threadid(threadid_), ctx(ctx_) {
+    ThreadContext(OutOfOrderCore& core_, int threadid_, Context& ctx_): core(core_), threadid(threadid_), ctx(ctx_) {
       reset();
     }
 
@@ -1466,10 +1466,10 @@ namespace SMTModel {
   //
   // checkpointed core
   //
-  struct SMTCore {
-    SMTMachine& machine;
+  struct OutOfOrderCore {
+    OutOfOrderMachine& machine;
     int coreid;
-    SMTCore& getcore() const { return coreof(coreid); }
+    OutOfOrderCore& getcore() const { return coreof(coreid); }
 
     int threadcount;
     ThreadContext* threads[MAX_THREADS_PER_CORE];
@@ -1499,7 +1499,7 @@ namespace SMTModel {
     IssueQueue<8> issueq_int3;
     IssueQueue<36> issueq_fp;
 
-#define foreach_issueq(expr) { SMTCore& core = getcore(); core.issueq_int1.expr; core.issueq_int2.expr; core.issueq_int3.expr; core.issueq_fp.expr; }
+#define foreach_issueq(expr) { OutOfOrderCore& core = getcore(); core.issueq_int1.expr; core.issueq_int2.expr; core.issueq_int3.expr; core.issueq_fp.expr; }
   
     void sched_get_all_issueq_free_slots(int* a) {
       a[0] = issueq_int1.remaining();
@@ -1537,12 +1537,12 @@ namespace SMTModel {
 #define for_each_cluster(iter) foreach (iter, MAX_CLUSTERS)
 #define for_each_operand(iter) foreach (iter, MAX_OPERANDS)
 
-    SMTCore(int coreid_, SMTMachine& machine_): coreid(coreid_), machine(machine_), cache_callbacks(*this) {
+    OutOfOrderCore(int coreid_, OutOfOrderMachine& machine_): coreid(coreid_), machine(machine_), cache_callbacks(*this) {
       threadcount = 0;
       setzero(threads);
     }
     
-    ~SMTCore(){};
+    ~OutOfOrderCore(){};
 
     // 
     // Initialize structures independent of the core parameters
@@ -1583,7 +1583,7 @@ namespace SMTModel {
     W32 fu_avail;
     ReorderBufferEntry* robs_on_fu[FU_COUNT];
     CacheSubsystem::CacheHierarchy caches;
-    SMTCoreCacheCallbacks cache_callbacks;
+    OutOfOrderCoreCacheCallbacks cache_callbacks;
 
     // Unaligned load/store predictor
     bitvec<UNALIGNED_PREDICTOR_SIZE> unaligned_predictor;
@@ -1616,10 +1616,10 @@ namespace SMTModel {
 
 #define MAX_SMT_CORES 1
 
-  struct SMTMachine: public PTLsimMachine {
-    SMTCore* cores[MAX_SMT_CORES];
+  struct OutOfOrderMachine: public PTLsimMachine {
+    OutOfOrderCore* cores[MAX_SMT_CORES];
     bitvec<MAX_CONTEXTS> stopped;
-    SMTMachine(const char* name);
+    OutOfOrderMachine(const char* name);
     virtual bool init(PTLsimConfig& config);
     virtual int run(PTLsimConfig& config);
     virtual void dump_state(ostream& os);
@@ -1675,7 +1675,7 @@ namespace SMTModel {
 
 #endif // DECLARE_STRUCTURES
 
-#endif // INSIDE_SMTCORE
+#endif // INSIDE_OOOCORE
 
   //
   // This part is used when parsing stats.h to build the
@@ -1687,7 +1687,7 @@ namespace SMTModel {
   static const char* phys_reg_file_names[PHYS_REG_FILE_COUNT] = {"int", "fp", "st", "br"};
 };
 
-struct PerContextSMTStats { // rootnode:
+struct PerContextOutOfOrderCoreStats { // rootnode:
   struct fetch {
     struct stop { // node: summable
       W64 stalled;
@@ -1700,7 +1700,7 @@ struct PerContextSMTStats { // rootnode:
       W64 full_width;
     } stop;
     W64 opclass[OPCLASS_COUNT]; // label: opclass_names
-    W64 width[SMTModel::FETCH_WIDTH+1]; // histo: 0, SMTModel::FETCH_WIDTH, 1
+    W64 width[OutOfOrderModel::FETCH_WIDTH+1]; // histo: 0, OutOfOrderModel::FETCH_WIDTH, 1
     W64 blocks;
     W64 uops;
     W64 user_insns;
@@ -1715,7 +1715,7 @@ struct PerContextSMTStats { // rootnode:
       W64 ldq_full;
       W64 stq_full;
     } status;
-    W64 width[SMTModel::FRONTEND_WIDTH+1]; // histo: 0, SMTModel::FRONTEND_WIDTH, 1
+    W64 width[OutOfOrderModel::FRONTEND_WIDTH+1]; // histo: 0, OutOfOrderModel::FRONTEND_WIDTH, 1
     struct renamed {
       W64 none;
       W64 reg;
@@ -1733,12 +1733,12 @@ struct PerContextSMTStats { // rootnode:
   } frontend;
 
   struct dispatch {
-    W64 cluster[SMTModel::MAX_CLUSTERS]; // label: SMTModel::cluster_names
+    W64 cluster[OutOfOrderModel::MAX_CLUSTERS]; // label: OutOfOrderModel::cluster_names
     struct redispatch {
       W64 trigger_uops;
       W64 deadlock_flushes;
       W64 deadlock_uops_flushed;
-      W64 dependent_uops[SMTModel::ROB_SIZE+1]; // histo: 0, SMTModel::ROB_SIZE, 1
+      W64 dependent_uops[OutOfOrderModel::ROB_SIZE+1]; // histo: 0, OutOfOrderModel::ROB_SIZE, 1
     } redispatch;
   } dispatch;
 
@@ -1758,7 +1758,7 @@ struct PerContextSMTStats { // rootnode:
   } issue;
 
   struct writeback {
-    W64 writebacks[SMTModel::PHYS_REG_FILE_COUNT]; // label: SMTModel::phys_reg_file_names
+    W64 writebacks[OutOfOrderModel::PHYS_REG_FILE_COUNT]; // label: OutOfOrderModel::phys_reg_file_names
   } writeback;
 
   struct commit {
@@ -1894,42 +1894,42 @@ struct PerContextSMTStats { // rootnode:
 };
 
 //
-// SMT Core
+// Out-of-Order Core
 //
-struct SMTCoreStats { // rootnode:
+struct OutOfOrderCoreStats { // rootnode:
   W64 cycles;
 
   struct dispatch {
     struct source { // node: summable
-      W64 integer[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
-      W64 fp[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
-      W64 st[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
-      W64 br[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 integer[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 fp[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 st[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 br[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
     } source;
-    W64 width[SMTModel::DISPATCH_WIDTH+1]; // histo: 0, SMTModel::DISPATCH_WIDTH, 1
+    W64 width[OutOfOrderModel::DISPATCH_WIDTH+1]; // histo: 0, OutOfOrderModel::DISPATCH_WIDTH, 1
   } dispatch;
 
   struct issue {
     struct source { // node: summable
-      W64 integer[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
-      W64 fp[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
-      W64 st[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
-      W64 br[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 integer[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 fp[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 st[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 br[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
     } source;
     struct width {
-      W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 int2[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 int3[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int1[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+      W64 int2[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+      W64 int3[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+      W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
     } width;
   } issue;
 
   struct writeback {
     struct width {
-      W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 int2[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 int3[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
-      W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int1[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+      W64 int2[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+      W64 int3[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+      W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
     } width;
   } writeback;
 
@@ -1941,14 +1941,14 @@ struct SMTCoreStats { // rootnode:
 
     W64 free_regs_recycled;
 
-    W64 width[SMTModel::COMMIT_WIDTH+1]; // histo: 0, SMTModel::COMMIT_WIDTH, 1
+    W64 width[OutOfOrderModel::COMMIT_WIDTH+1]; // histo: 0, OutOfOrderModel::COMMIT_WIDTH, 1
   } commit;
 
-  PerContextSMTStats total;
-  PerContextSMTStats vcpu0;
-  PerContextSMTStats vcpu1;
-  PerContextSMTStats vcpu2;
-  PerContextSMTStats vcpu3;
+  PerContextOutOfOrderCoreStats total;
+  PerContextOutOfOrderCoreStats vcpu0;
+  PerContextOutOfOrderCoreStats vcpu1;
+  PerContextOutOfOrderCoreStats vcpu2;
+  PerContextOutOfOrderCoreStats vcpu3;
 
   struct simulator {
     double total_time;
@@ -1969,4 +1969,4 @@ struct SMTCoreStats { // rootnode:
   } simulator;
 };
 
-#endif // _SMTCORE_H_
+#endif // _OOOCORE_H_

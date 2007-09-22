@@ -225,13 +225,28 @@ void MissBuffer<SIZE>::reset() {
 template <int SIZE>    
 void MissBuffer<SIZE>::reset(int threadid) {
   foreach (i, SIZE) {
-    if likely (missbufs[i].threadid == threadid) {
-      if (logable(6)) logfile << "[vcpu ", threadid, "] reset missbuf slot ", i, ": for rob", missbufs[i].rob, endl;
+    Entry& mb = missbufs[i];
+    if likely (mb.threadid == threadid) {
+      if (logable(6)) logfile << "[vcpu ", threadid, "] reset missbuf slot ", i, ": for rob", mb.rob, endl;
       assert(!freemap[i]);
-      missbufs[i].reset();
+      mb.reset();
       freemap[i] = 1;
       count--;
       assert(count >= 0);
+
+      //
+      // If multiple threads depend on the same missbuf but one thread is
+      // flushed, we'll wake up a stale LFRQ. We have to make sure after
+      // a missbuf reset, all the entries point to a valid lfrqmap.
+      //
+      if (*mb.lfrqmap) {
+        bitvec<LFRQ_SIZE> tmp_lfrqmap = mb.lfrqmap ^ hierarchy.lfrq.waiting;
+        if (*tmp_lfrqmap) {
+          if (logable(6)) logfile << "Multithread share same missbufs[", i, "] : its lfrqmap is ", mb.lfrqmap, " LFRQ waiting map ", hierarchy.lfrq.waiting, ", diff: ", tmp_lfrqmap, endl;
+          mb.lfrqmap &= ~tmp_lfrqmap;
+          if (logable(6)) logfile << "after remove stale lfrq entries, its lfrqmap is ", mb.lfrqmap, endl;
+        }
+      }
     }
   }
 }

@@ -1,10 +1,10 @@
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// SMT Core Simulator
+// Out-of-Order Core Simulator
 // Execution Pipeline Stages: Scheduling, Execution, Broadcast
 //
-// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #include <globals.h>
@@ -15,7 +15,7 @@
 #include <logic.h>
 #include <dcache.h>
 
-#define INSIDE_SMTCORE
+#define INSIDE_OOOCORE
 #include <ooocore.h>
 #include <stats.h>
 
@@ -29,14 +29,14 @@
 #define logable(level) (0)
 #endif
 
-using namespace SMTModel;
+using namespace OutOfOrderModel;
 
 //
 // Issue Queue
 //
 template <int size, int operandcount>
 void IssueQueue<size, operandcount>::reset(int coreid) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
 
   this->coreid = coreid;
   count = 0;
@@ -57,7 +57,7 @@ void IssueQueue<size, operandcount>::reset(int coreid) {
 
 template <int size, int operandcount>
 void IssueQueue<size, operandcount>::reset(int coreid, int threadid) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
 
   if unlikely (core.threadcount == 1) {
     reset(coreid);
@@ -122,7 +122,7 @@ template <int size, int operandcount>
 void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, operandcount>::tag_t sourceid, const bitvec<size>& mask, int operand) const {
   if likely (!config.event_log_enabled) return;
 
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   int threadid, rob_idx;
   decode_tag(sourceid, threadid, rob_idx);
   ThreadContext* thread = core.threads[threadid];
@@ -142,7 +142,7 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
 
     temp[slot] = 0;
 
-    SMTCoreEvent* event = core.eventlog.add(EVENT_FORWARD, source);
+    OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_FORWARD, source);
     event->forwarding.operand = operand;
     event->forwarding.forward_cycle = source->forward_cycle;
     event->forwarding.target_uuid = target->uop.uuid;
@@ -274,9 +274,9 @@ declare_issueq_templates;
 //  -1 if there was an exception and we should stop issuing this cycle
 //
 int ReorderBufferEntry::issue() {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
-  SMTCoreEvent* event = null;
+  OutOfOrderCoreEvent* event = null;
 
   W32 executable_on_fu = fuinfo[uop.opcode].fu & clusters[cluster].fu_mask & core.fu_avail;
 
@@ -287,7 +287,7 @@ int ReorderBufferEntry::issue() {
       event->issue.fu_avail = core.fu_avail;
     }
 
-    per_context_smtcore_stats_update(threadid, issue.result.no_fu++);
+    per_context_ooocore_stats_update(threadid, issue.result.no_fu++);
     //
     // When this (very rarely) happens, stop issuing uops to this cluster
     // and try again with the problem uop on the next cycle. In practice
@@ -308,7 +308,7 @@ int ReorderBufferEntry::issue() {
   //
 
   stats.summary.uops++;
-  per_context_smtcore_stats_update(threadid, issue.uops++);
+  per_context_ooocore_stats_update(threadid, issue.uops++);
 
   fu = lsbindex(executable_on_fu);
   clearbit(core.fu_avail, fu);
@@ -335,19 +335,19 @@ int ReorderBufferEntry::issue() {
   if likely (ra.nonnull()) {
     ra.get_state_list().issue_source_counter++;
     ra.all_consumers_sourced_from_bypass &= (ra.state == PHYSREG_BYPASS);
-    per_physregfile_stats_update(stats.smtcore.issue.source, ra.rfid, [ra.state]++);
+    per_physregfile_stats_update(stats.ooocore.issue.source, ra.rfid, [ra.state]++);
   }
 
   if likely ((!uop.rbimm) & (rb.nonnull())) { 
     rb.get_state_list().issue_source_counter++;
     rb.all_consumers_sourced_from_bypass &= (rb.state == PHYSREG_BYPASS);
-    per_physregfile_stats_update(stats.smtcore.issue.source, rb.rfid, [rb.state]++);
+    per_physregfile_stats_update(stats.ooocore.issue.source, rb.rfid, [rb.state]++);
   }
 
   if unlikely ((!uop.rcimm) & (rc.nonnull())) {
     rc.get_state_list().issue_source_counter++;
     rc.all_consumers_sourced_from_bypass &= (rc.state == PHYSREG_BYPASS);
-    per_physregfile_stats_update(stats.smtcore.issue.source, rc.rfid, [rc.state]++);
+    per_physregfile_stats_update(stats.ooocore.issue.source, rc.rfid, [rc.state]++);
   }
 
   bool propagated_exception = 0;
@@ -361,7 +361,7 @@ int ReorderBufferEntry::issue() {
     state.reg.rddata = EXCEPTION_Propagate;
     propagated_exception = 1;
   } else {
-    per_context_smtcore_stats_update(threadid, issue.opclass[opclassof(uop.opcode)]++);
+    per_context_ooocore_stats_update(threadid, issue.opclass[opclassof(uop.opcode)]++);
 
     if unlikely (ld|st) {
       int completed = 0;
@@ -374,17 +374,17 @@ int ReorderBufferEntry::issue() {
       }
 
       if unlikely (completed == ISSUE_MISSPECULATED) {
-        per_context_smtcore_stats_update(threadid, issue.result.misspeculated++);
+        per_context_ooocore_stats_update(threadid, issue.result.misspeculated++);
         return -1;
       } else if unlikely (completed == ISSUE_NEEDS_REFETCH) {
-        per_context_smtcore_stats_update(threadid, issue.result.refetch++);
+        per_context_ooocore_stats_update(threadid, issue.result.refetch++);
         return -1;
       }
 
       state.reg.rddata = lsq->data;
       state.reg.rdflags = (lsq->invalid << log2(FLAG_INV)) | ((!lsq->datavalid) << log2(FLAG_WAIT));
       if unlikely (completed == ISSUE_NEEDS_REPLAY) {
-        per_context_smtcore_stats_update(threadid, issue.result.replay++);
+        per_context_ooocore_stats_update(threadid, issue.result.replay++);
         return 0;
       }
     } else if unlikely (uop.opcode == OP_ld_pre) {
@@ -466,10 +466,10 @@ int ReorderBufferEntry::issue() {
       bool ret = bit(bptype, log2(BRANCH_HINT_RET));
         
       if unlikely (mispredicted) {
-        per_context_smtcore_stats_update(threadid, branchpred.cond[MISPRED] += cond);
-        per_context_smtcore_stats_update(threadid, branchpred.indir[MISPRED] += (indir & !ret));
-        per_context_smtcore_stats_update(threadid, branchpred.ret[MISPRED] += ret);
-        per_context_smtcore_stats_update(threadid, branchpred.summary[MISPRED]++);
+        per_context_ooocore_stats_update(threadid, branchpred.cond[MISPRED] += cond);
+        per_context_ooocore_stats_update(threadid, branchpred.indir[MISPRED] += (indir & !ret));
+        per_context_ooocore_stats_update(threadid, branchpred.ret[MISPRED] += ret);
+        per_context_ooocore_stats_update(threadid, branchpred.summary[MISPRED]++);
 
         W64 realrip = physreg->data;
 
@@ -518,21 +518,21 @@ int ReorderBufferEntry::issue() {
         // commit like it was predicted perfectly in the first place.
         //
         thread.reset_fetch_unit(realrip);
-        per_context_smtcore_stats_update(threadid, issue.result.branch_mispredict++);
+        per_context_ooocore_stats_update(threadid, issue.result.branch_mispredict++);
 
         return -1;
       } else {
-        per_context_smtcore_stats_update(threadid, branchpred.cond[CORRECT] += cond);
-        per_context_smtcore_stats_update(threadid, branchpred.indir[CORRECT] += (indir & !ret));
-        per_context_smtcore_stats_update(threadid, branchpred.ret[CORRECT] += ret);
-        per_context_smtcore_stats_update(threadid, branchpred.summary[CORRECT]++);
-        per_context_smtcore_stats_update(threadid, issue.result.complete++);
+        per_context_ooocore_stats_update(threadid, branchpred.cond[CORRECT] += cond);
+        per_context_ooocore_stats_update(threadid, branchpred.indir[CORRECT] += (indir & !ret));
+        per_context_ooocore_stats_update(threadid, branchpred.ret[CORRECT] += ret);
+        per_context_ooocore_stats_update(threadid, branchpred.summary[CORRECT]++);
+        per_context_ooocore_stats_update(threadid, issue.result.complete++);
       }
     } else {
-      per_context_smtcore_stats_update(threadid, issue.result.complete++);
+      per_context_ooocore_stats_update(threadid, issue.result.complete++);
     }
   } else {
-    per_context_smtcore_stats_update(threadid, issue.result.exception++);
+    per_context_ooocore_stats_update(threadid, issue.result.exception++);
   }
 
   return 1;
@@ -616,7 +616,7 @@ Waddr ReorderBufferEntry::addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, W
 }
 
 bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
 
   bool st = isstore(uop.opcode);
@@ -645,9 +645,9 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
     thread.reset_fetch_unit(recoveryrip);
 
     if unlikely (st) {
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.unaligned++);
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.unaligned++);
     } else {
-      per_context_smtcore_stats_update(threadid, dcache.load.issue.unaligned++);
+      per_context_ooocore_stats_update(threadid, dcache.load.issue.unaligned++);
     }
 
     return false;
@@ -665,15 +665,15 @@ bool ReorderBufferEntry::handle_common_load_store_exceptions(LoadStoreQueueEntry
   }
 
   if unlikely (st) {
-    per_context_smtcore_stats_update(threadid, dcache.store.issue.exception++);
+    per_context_ooocore_stats_update(threadid, dcache.store.issue.exception++);
   } else {
-    per_context_smtcore_stats_update(threadid, dcache.load.issue.exception++);
+    per_context_ooocore_stats_update(threadid, dcache.load.issue.exception++);
   }
 
   return true;
 }
 
-namespace SMTModel {
+namespace OutOfOrderModel {
   // One global interlock buffer for all VCPUs:
   MemoryInterlockBuffer interlocks;
 };
@@ -691,11 +691,11 @@ bool ReorderBufferEntry::release_mem_lock(bool forced) {
   MemoryInterlockEntry* lock = interlocks.probe(physaddr);
   assert(lock);
  
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
  
   if unlikely (config.event_log_enabled) {
-    SMTCoreEvent* event = core.eventlog.add_load_store((forced) ? EVENT_STORE_LOCK_ANNULLED : EVENT_STORE_LOCK_RELEASED, this, null, physaddr);
+    OutOfOrderCoreEvent* event = core.eventlog.add_load_store((forced) ? EVENT_STORE_LOCK_ANNULLED : EVENT_STORE_LOCK_RELEASED, this, null, physaddr);
     event->loadstore.locking_vcpuid = lock->vcpuid;
     event->loadstore.locking_uuid = lock->uuid;
     event->loadstore.locking_rob = lock->rob;
@@ -740,8 +740,8 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
 
   time_this_scope(ctissuestore);
 
-  SMTCore& core = getcore();
-  SMTCoreEvent* event;
+  OutOfOrderCore& core = getcore();
+  OutOfOrderCoreEvent* event;
 
   int sizeshift = uop.size;
   int aligntype = uop.cond;
@@ -757,10 +757,10 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
     return (handle_common_load_store_exceptions(state, origaddr, addr, exception, pfec)) ? ISSUE_COMPLETED : ISSUE_MISSPECULATED;
   }
 
-  per_context_smtcore_stats_update(threadid, dcache.store.type.aligned += ((!uop.internal) & (aligntype == LDST_ALIGN_NORMAL)));
-  per_context_smtcore_stats_update(threadid, dcache.store.type.unaligned += ((!uop.internal) & (aligntype != LDST_ALIGN_NORMAL)));
-  per_context_smtcore_stats_update(threadid, dcache.store.type.internal += uop.internal);
-  per_context_smtcore_stats_update(threadid, dcache.store.size[sizeshift]++);
+  per_context_ooocore_stats_update(threadid, dcache.store.type.aligned += ((!uop.internal) & (aligntype == LDST_ALIGN_NORMAL)));
+  per_context_ooocore_stats_update(threadid, dcache.store.type.unaligned += ((!uop.internal) & (aligntype != LDST_ALIGN_NORMAL)));
+  per_context_ooocore_stats_update(threadid, dcache.store.type.internal += uop.internal);
+  per_context_ooocore_stats_update(threadid, dcache.store.size[sizeshift]++);
 
   state.physaddr = (annul) ? INVALID_PHYSADDR : (physaddr >> 3);
 
@@ -795,7 +795,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
       if unlikely (stbuf.lfence | stbuf.sfence) continue;
 
       if (stbuf.physaddr == state.physaddr) {
-        per_context_smtcore_stats_update(threadid, dcache.load.dependency.stq_address_match++);
+        per_context_ooocore_stats_update(threadid, dcache.load.dependency.stq_address_match++);
         sfra = &stbuf;
         break;
       }
@@ -861,15 +861,15 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
     load_store_second_phase = 1;
 
     if unlikely (sfra && sfra->sfence) {
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.fence++);
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.fence++);
     } else {
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_and_data_and_data_to_store_not_ready += ((!rcready) & (sfra && (!sfra->addrvalid) & (!sfra->datavalid))));
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_and_data_to_store_not_ready += ((!rcready) & (sfra && (!sfra->addrvalid))));
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.sfr_data_and_data_to_store_not_ready += ((!rcready) & (sfra && sfra->addrvalid && (!sfra->datavalid))));
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_and_data_and_data_to_store_not_ready += ((!rcready) & (sfra && (!sfra->addrvalid) & (!sfra->datavalid))));
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_and_data_to_store_not_ready += ((!rcready) & (sfra && (!sfra->addrvalid))));
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.sfr_data_and_data_to_store_not_ready += ((!rcready) & (sfra && sfra->addrvalid && (!sfra->datavalid))));
       
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_and_data_not_ready += (rcready & (sfra && (!sfra->addrvalid) & (!sfra->datavalid))));
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_not_ready += (rcready & (sfra && ((!sfra->addrvalid) & (sfra->datavalid)))));
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.sfr_data_not_ready += (rcready & (sfra && (sfra->addrvalid & (!sfra->datavalid)))));
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_and_data_not_ready += (rcready & (sfra && (!sfra->addrvalid) & (!sfra->datavalid))));
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.sfr_addr_not_ready += (rcready & (sfra && ((!sfra->addrvalid) & (sfra->datavalid)))));
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.sfr_data_not_ready += (rcready & (sfra && (sfra->addrvalid & (!sfra->datavalid)))));
     }
 
     return ISSUE_NEEDS_REPLAY;
@@ -930,7 +930,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
 
       if unlikely (parallel_forwarding_match) {
         if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_STORE_PARALLEL_FORWARDING_MATCH, this, &ldbuf, addr);
-        per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.parallel_aliasing++);
+        per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.parallel_aliasing++);
 
         replay();
         return ISSUE_NEEDS_REPLAY;
@@ -955,7 +955,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
 
       redispatch_dependents();
 
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.ordering++);
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.ordering++);
 
       return ISSUE_MISSPECULATED;
     }
@@ -992,7 +992,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
         event->loadstore.threadid = lock->threadid;   
       }
 
-      per_context_smtcore_stats_update(threadid, dcache.store.issue.replay.interlocked++);
+      per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.interlocked++);
       replay_locked();
       return ISSUE_NEEDS_REPLAY;
     }
@@ -1027,9 +1027,9 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   state.bytemask = (sfra) ? (sfra->bytemask | bytemask) : bytemask;
   state.datavalid = 1;
 
-  per_context_smtcore_stats_update(threadid, dcache.store.forward.zero += (sfra == null));
-  per_context_smtcore_stats_update(threadid, dcache.store.forward.sfr += (sfra != null));
-  per_context_smtcore_stats_update(threadid, dcache.store.datatype[uop.datatype]++);
+  per_context_ooocore_stats_update(threadid, dcache.store.forward.zero += (sfra == null));
+  per_context_ooocore_stats_update(threadid, dcache.store.forward.sfr += (sfra != null));
+  per_context_ooocore_stats_update(threadid, dcache.store.datatype[uop.datatype]++);
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add_load_store(EVENT_STORE_ISSUED, this, sfra, addr);
@@ -1038,7 +1038,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
 
   load_store_second_phase = 1;
 
-  per_context_smtcore_stats_update(threadid, dcache.store.issue.complete++);
+  per_context_ooocore_stats_update(threadid, dcache.store.issue.complete++);
 
   return ISSUE_COMPLETED;
 }
@@ -1061,12 +1061,12 @@ static inline W64 extract_bytes(void* target, int SIZESHIFT, bool SIGNEXT) {
 int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate) {
   time_this_scope(ctissueload);
 
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
   Queue<LoadStoreQueueEntry, LSQ_SIZE>& LSQ = thread.LSQ;
   LoadStoreAliasPredictor& lsap = thread.lsap;
 
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
 
   int sizeshift = uop.size;
   int aligntype = uop.cond;
@@ -1083,10 +1083,10 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     return (handle_common_load_store_exceptions(state, origaddr, addr, exception, pfec)) ? ISSUE_COMPLETED : ISSUE_MISSPECULATED;
   }
 
-  per_context_smtcore_stats_update(threadid, dcache.load.type.aligned += ((!uop.internal) & (aligntype == LDST_ALIGN_NORMAL)));
-  per_context_smtcore_stats_update(threadid, dcache.load.type.unaligned += ((!uop.internal) & (aligntype != LDST_ALIGN_NORMAL)));
-  per_context_smtcore_stats_update(threadid, dcache.load.type.internal += uop.internal);
-  per_context_smtcore_stats_update(threadid, dcache.load.size[sizeshift]++);
+  per_context_ooocore_stats_update(threadid, dcache.load.type.aligned += ((!uop.internal) & (aligntype == LDST_ALIGN_NORMAL)));
+  per_context_ooocore_stats_update(threadid, dcache.load.type.unaligned += ((!uop.internal) & (aligntype != LDST_ALIGN_NORMAL)));
+  per_context_ooocore_stats_update(threadid, dcache.load.type.internal += uop.internal);
+  per_context_ooocore_stats_update(threadid, dcache.load.size[sizeshift]++);
 
   state.physaddr = (annul) ? INVALID_PHYSADDR : (physaddr >> 3);
 
@@ -1129,14 +1129,14 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
       if unlikely (stbuf.lfence | stbuf.sfence) continue;
 
       if (stbuf.physaddr == state.physaddr) {
-        per_context_smtcore_stats_update(threadid, dcache.load.dependency.stq_address_match++);
+        per_context_ooocore_stats_update(threadid, dcache.load.dependency.stq_address_match++);
         sfra = &stbuf;
         break;
       }
     } else {
       // Address is unknown: is it a memory fence that hasn't committed?
       if unlikely (stbuf.lfence) {
-        per_context_smtcore_stats_update(threadid, dcache.load.dependency.fence++);
+        per_context_ooocore_stats_update(threadid, dcache.load.dependency.fence++);
         sfra = &stbuf;
         break;
       }
@@ -1148,14 +1148,14 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
       // Is this load known to alias with prior stores, and therefore cannot be hoisted?
       if unlikely (load_is_known_to_alias_with_store) {
-        per_context_smtcore_stats_update(threadid, dcache.load.dependency.predicted_alias_unresolved++);
+        per_context_ooocore_stats_update(threadid, dcache.load.dependency.predicted_alias_unresolved++);
         sfra = &stbuf;
         break;
       }
     }
   }
 
-  per_context_smtcore_stats_update(threadid, dcache.load.dependency.independent += (sfra == null));
+  per_context_ooocore_stats_update(threadid, dcache.load.dependency.independent += (sfra == null));
 
   bool ready = (!sfra || (sfra && sfra->addrvalid && sfra->datavalid));
 
@@ -1198,11 +1198,11 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     }
 
     if unlikely (sfra->lfence | sfra->sfence) {
-      per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.fence++);
+      per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.fence++);
     } else {
-      per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.sfr_addr_and_data_not_ready += ((!sfra->addrvalid) & (!sfra->datavalid)));
-      per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.sfr_addr_not_ready += ((!sfra->addrvalid) & (sfra->datavalid)));
-      per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.sfr_data_not_ready += ((sfra->addrvalid) & (!sfra->datavalid)));
+      per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.sfr_addr_and_data_not_ready += ((!sfra->addrvalid) & (!sfra->datavalid)));
+      per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.sfr_addr_not_ready += ((!sfra->addrvalid) & (sfra->datavalid)));
+      per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.sfr_data_not_ready += ((sfra->addrvalid) & (!sfra->datavalid)));
     }
 
     replay();
@@ -1222,7 +1222,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     //
     if unlikely ((prevaddr != state.physaddr) && (lowbits(prevaddr, log2(CacheSubsystem::L1_DCACHE_BANKS)) == lowbits(state.physaddr, log2(CacheSubsystem::L1_DCACHE_BANKS)))) {
       if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_BANK_CONFLICT, this, null, addr);
-      per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.bank_conflict++);
+      per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.bank_conflict++);
 
       replay();
       load_store_second_phase = 1;
@@ -1237,7 +1237,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   //
   if unlikely (core.caches.lfrq_or_missbuf_full()) {
     if unlikely (config.event_log_enabled) core.eventlog.add_load_store(EVENT_LOAD_LFRQ_FULL, this, null, addr);
-    per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.missbuf_full++);
+    per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.missbuf_full++);
 
     replay();
     load_store_second_phase = 1;
@@ -1282,7 +1282,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
       assert(lock->vcpuid != thread.ctx.vcpuid);
       assert(lock->threadid != threadid);
 
-      per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.interlocked++);
+      per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.interlocked++);
       replay_locked();
       return ISSUE_NEEDS_REPLAY;
     }
@@ -1323,7 +1323,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
           core.eventlog.add_load_store(EVENT_LOAD_LOCK_OVERFLOW, this, null, addr);
         }
 
-        per_context_smtcore_stats_update(threadid, dcache.load.issue.replay.interlock_overflow++);
+        per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.interlock_overflow++);
         replay();
         return ISSUE_NEEDS_REPLAY;
       }
@@ -1392,10 +1392,10 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
   // shift is how many bits to shift the 8-bit bytemask left by within the cache line;
   bool covered = core.caches.covered_by_sfr(addr, sfra, sizeshift);
-  per_context_smtcore_stats_update(threadid, dcache.load.forward.cache += (sfra == null));
-  per_context_smtcore_stats_update(threadid, dcache.load.forward.sfr += ((sfra != null) & covered));
-  per_context_smtcore_stats_update(threadid, dcache.load.forward.sfr_and_cache += ((sfra != null) & (!covered)));
-  per_context_smtcore_stats_update(threadid, dcache.load.datatype[uop.datatype]++);
+  per_context_ooocore_stats_update(threadid, dcache.load.forward.cache += (sfra == null));
+  per_context_ooocore_stats_update(threadid, dcache.load.forward.sfr += ((sfra != null) & covered));
+  per_context_ooocore_stats_update(threadid, dcache.load.forward.sfr_and_cache += ((sfra != null) & (!covered)));
+  per_context_ooocore_stats_update(threadid, dcache.load.datatype[uop.datatype]++);
 
   //
   // NOTE: Technically the data is valid right now for simulation purposes
@@ -1449,9 +1449,9 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 // Probe the cache and initiate a miss if required
 //
 int ReorderBufferEntry::probecache(Waddr addr, LoadStoreQueueEntry* sfra) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
   int sizeshift = uop.size;
   int aligntype = uop.cond;
   bool signext = (uop.opcode == OP_ldx);
@@ -1474,12 +1474,12 @@ int ReorderBufferEntry::probecache(Waddr addr, LoadStoreQueueEntry* sfra) {
     lfrqslot = -1;
     forward_cycle = 0;
 
-    per_context_smtcore_stats_update(threadid, dcache.load.issue.complete++);
+    per_context_ooocore_stats_update(threadid, dcache.load.issue.complete++);
     per_context_dcache_stats_update(threadid, load.hit.L1++);
     return ISSUE_COMPLETED;
   }
 
-  per_context_smtcore_stats_update(threadid, dcache.load.issue.miss++);
+  per_context_ooocore_stats_update(threadid, dcache.load.issue.miss++);
 
   cycles_left = 0;
   changestate(thread.rob_cache_miss_list);
@@ -1509,9 +1509,9 @@ int ReorderBufferEntry::probecache(Waddr addr, LoadStoreQueueEntry* sfra) {
 //
 #ifdef PTLSIM_HYPERVISOR
 void ReorderBufferEntry::tlbwalk() {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
   W64 virtaddr = virtpage;
 
   if unlikely (!tlb_walk_level) {
@@ -1644,14 +1644,14 @@ LoadStoreQueueEntry* ReorderBufferEntry::find_nearest_memory_fence() {
 int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
   ThreadContext& thread = getthread();
 
-  SMTCore& core = getcore();
-  SMTCoreEvent* event;
+  OutOfOrderCore& core = getcore();
+  OutOfOrderCoreEvent* event;
 
   assert(uop.opcode == OP_mf);
 
-  per_context_smtcore_stats_update(threadid, dcache.fence.lfence += (uop.extshift == MF_TYPE_LFENCE));
-  per_context_smtcore_stats_update(threadid, dcache.fence.sfence += (uop.extshift == MF_TYPE_SFENCE));
-  per_context_smtcore_stats_update(threadid, dcache.fence.mfence += (uop.extshift == (MF_TYPE_LFENCE|MF_TYPE_SFENCE)));
+  per_context_ooocore_stats_update(threadid, dcache.fence.lfence += (uop.extshift == MF_TYPE_LFENCE));
+  per_context_ooocore_stats_update(threadid, dcache.fence.sfence += (uop.extshift == MF_TYPE_SFENCE));
+  per_context_ooocore_stats_update(threadid, dcache.fence.mfence += (uop.extshift == (MF_TYPE_LFENCE|MF_TYPE_SFENCE)));
 
   //
   // The mf uop is issued but its "data" (for dependency purposes only)
@@ -1678,7 +1678,7 @@ int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
 // Issues a prefetch on the given memory address into the specified cache level.
 //
 void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
 
   state.reg.rddata = 0;
@@ -1711,7 +1711,7 @@ void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc
     // Note that most x86 processors will not prefetch beyond 
     // a TLB miss, so this is disabled by default.
     //
-    if unlikely (config.event_log_enabled) SMTCoreEvent* event = core.eventlog.add_load_store(EVENT_LOAD_TLB_MISS, this, null, addr);
+    if unlikely (config.event_log_enabled) OutOfOrderCoreEvent* event = core.eventlog.add_load_store(EVENT_LOAD_TLB_MISS, this, null, addr);
     cycles_left = 0;
     tlb_walk_level = thread.ctx.page_table_level_count();
     changestate(thread.rob_tlb_miss_list);
@@ -1729,7 +1729,7 @@ void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc
 //
 // Data cache has delivered a load: wake up corresponding ROB/LSQ/physreg entries
 //
-void SMTCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
+void OutOfOrderCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
   int idx = lsi.rob;
   ThreadContext* thread = core.threads[lsi.threadid];
   assert(inrange(idx, 0, ROB_SIZE-1));
@@ -1811,11 +1811,11 @@ void ReorderBufferEntry::fencewakeup() {
 // a deadlock if there is not enough room in the issue queue.
 //
 void ReorderBufferEntry::replay() {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
 
   if unlikely (config.event_log_enabled) {
-    SMTCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
+    OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
     foreach (i, MAX_OPERANDS) {
       operands[i]->fill_operand_info(event->replay.opinfo[i]);
       event->replay.ready |= (operands[i]->ready()) << i;
@@ -1855,11 +1855,11 @@ void ReorderBufferEntry::replay() {
 
 
 void ReorderBufferEntry::replay_locked() {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
 
   if unlikely (config.event_log_enabled) {
-    SMTCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
+    OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
     foreach (i, MAX_OPERANDS) {
       operands[i]->fill_operand_info(event->replay.opinfo[i]);
       event->replay.ready |= (operands[i]->ready()) << i;
@@ -1906,7 +1906,7 @@ void ReorderBufferEntry::release() {
   issueq_operation_on_cluster(getcore(), cluster, release(iqslot));
   
   ThreadContext& thread = getthread();
-  SMTCore& core = thread.core;
+  OutOfOrderCore& core = thread.core;
 
   if unlikely (core.threadcount > 1) {
     if (thread.issueq_count > core.reserved_iq_entries) {
@@ -1922,7 +1922,7 @@ void ReorderBufferEntry::release() {
 //
 // Process the ready to issue queue and issue as many ROBs as possible
 //
-int SMTCore::issue(int cluster) {
+int OutOfOrderCore::issue(int cluster) {
   time_this_scope(ctissue);
 
   int issuecount = 0;
@@ -1952,7 +1952,7 @@ int SMTCore::issue(int cluster) {
     if unlikely (rc <= 0) break;
   }
 
-  per_cluster_stats_update(stats.smtcore.issue.width, cluster, [min(issuecount, MAX_ISSUE_WIDTH)]++);
+  per_cluster_stats_update(stats.ooocore.issue.width, cluster, [min(issuecount, MAX_ISSUE_WIDTH)]++);
 
   return issuecount;
 }
@@ -1975,7 +1975,7 @@ int ReorderBufferEntry::forward() {
   foreach (i, MAX_CLUSTERS) {
     if likely (!bit(targets, i)) continue;
     if unlikely (config.event_log_enabled) {
-      SMTCoreEvent* event = getcore().eventlog.add(EVENT_BROADCAST, this);
+      OutOfOrderCoreEvent* event = getcore().eventlog.add(EVENT_BROADCAST, this);
       event->forwarding.target_cluster = i;
       event->forwarding.forward_cycle = forward_cycle;
     }
@@ -2017,7 +2017,7 @@ int ReorderBufferEntry::forward() {
 //
 
 W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_rip) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
 
   ThreadContext& thread = getthread();
   BranchPredictorInterface& branchpred = thread.branchpred;
@@ -2028,7 +2028,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
   int& loads_in_flight = thread.loads_in_flight;
   int& stores_in_flight = thread.stores_in_flight;
 
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
 
   int idx;
 
@@ -2048,7 +2048,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     // The uop causing the mis-speculation was the only uop in the ROB:
     // no action is necessary (but in practice this is generally not possible)
     if unlikely (config.event_log_enabled) {
-      SMTCoreEvent* event = core.eventlog.add(EVENT_ANNUL_NO_FUTURE_UOPS, this);
+      OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_ANNUL_NO_FUTURE_UOPS, this);
       event->annul.somidx = somidx; event->annul.eomidx = eomidx;
     }
 
@@ -2221,13 +2221,13 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 //
 
 void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
 
   if(issued){
     issued = 0;
   }
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add(EVENT_REDISPATCH_EACH_ROB, this);
@@ -2236,7 +2236,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     foreach (i, MAX_OPERANDS) operands[i]->fill_operand_info(event->redispatch.opinfo[i]);
   }
 
-  per_context_smtcore_stats_update(threadid, dispatch.redispatch.trigger_uops++);
+  per_context_ooocore_stats_update(threadid, dispatch.redispatch.trigger_uops++);
 
   // Remove from issue queue, if it was already in some issue queue
   if unlikely (cluster >= 0) {
@@ -2295,7 +2295,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
 // redispatch each of them.
 //
 void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
   Queue<ReorderBufferEntry, ROB_SIZE>& ROB = thread.ROB;
 
@@ -2303,7 +2303,7 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
   depmap = 0;
   depmap[index()] = 1;
 
-  SMTCoreEvent* event;
+  OutOfOrderCoreEvent* event;
   if unlikely (config.event_log_enabled) event = core.eventlog.add(EVENT_REDISPATCH_DEPENDENTS, this);
 
   //
@@ -2352,7 +2352,7 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
   }
 
   assert(inrange(count, 1, ROB_SIZE));
-  per_context_smtcore_stats_update(threadid, dispatch.redispatch.dependent_uops[count-1]++);
+  per_context_ooocore_stats_update(threadid, dispatch.redispatch.dependent_uops[count-1]++);
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add(EVENT_REDISPATCH_DEPENDENTS_DONE, this);
@@ -2361,7 +2361,7 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
 }
 
 int ReorderBufferEntry::pseudocommit() {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
 
   ThreadContext& thread = getthread();
   RegisterRenameTable& specrrt = thread.specrrt;

@@ -2700,17 +2700,17 @@ namespace superstl {
     bool full() const { return (!remaining()); }
     bool empty() const { return (!count); }
 
-    bool add(T value) {
+    ptr_t add(T value) {
       int set = setof(value);
-      int slot = lookup(value);
-      if likely (slot >= 0) return true;
+      ptr_t slot = lookup(value);
+      if likely (slot >= 0) return slot;
 
-      if unlikely (slot >= N) return false;
+      if unlikely (slot >= N) return -1;
       slot = count++;
       data[slot] = value;
       next[slot] = sets[set];
       sets[set] = slot;
-      return true;
+      return slot;
     }
 
     bool contains(T value) const {
@@ -2719,6 +2719,8 @@ namespace superstl {
 
     inline T& operator [](int i) { return data[i]; }
     inline T operator [](int i) const { return data[i]; }
+    operator T*() const { return data; }
+    operator const T*() const { return data; }
 
     ostream& print(ostream& os) const {
       os << "FixedValueHashtable<", sizeof(T), "-byte data, ", N, " slots, ", setcount, " sets> containing ", count, " entries:", endl;

@@ -1,10 +1,10 @@
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// SMT Core Simulator
+// Out-of-Order Core Simulator
 // Core Structures
 //
-// Copyright 2003-2005 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #include <globals.h>
@@ -15,7 +15,7 @@
 #include <logic.h>
 #include <dcache.h>
 
-#define INSIDE_SMTCORE
+#define INSIDE_OOOCORE
 #define DECLARE_STRUCTURES
 #include <ooocore.h>
 #include <stats.h>
@@ -30,9 +30,9 @@
 #define logable(level) (0)
 #endif
 
-using namespace SMTModel;
+using namespace OutOfOrderModel;
 
-namespace SMTModel {
+namespace OutOfOrderModel {
   byte uop_executable_on_cluster[OP_MAX_OPCODE];
   W32 forward_at_cycle_lut[MAX_CLUSTERS][MAX_FORWARDING_LATENCY+1];
 };
@@ -146,7 +146,7 @@ void ThreadContext::init() {
   reset();
 }
 
-void SMTCore::reset() {
+void OutOfOrderCore::reset() {
   round_robin_tid = 0;
   round_robin_reg_file_offset = 0;
   caches.reset();
@@ -165,12 +165,12 @@ void SMTCore::reset() {
   foreach (i, threadcount) threads[i]->reset();
 }
 
-void SMTCore::init_generic() {
+void OutOfOrderCore::init_generic() {
   reset();
 }
 
 template <typename T> 
-static void SMTModel::print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title) {
+static void OutOfOrderModel::print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title) {
   os << title, ":", endl;
   foreach (i, lol.count) {
     StateList& list = *lol[i];
@@ -264,7 +264,7 @@ StateList& PhysicalRegister::get_state_list(int s) const {
   return getcore().physregfiles[rfid].states[s];
 }
 
-namespace SMTModel {
+namespace OutOfOrderModel {
   ostream& operator <<(ostream& os, const PhysicalRegister& physreg) {
     stringbuf sb;
     print_value_and_flags(sb, physreg.data, physreg.flags);
@@ -316,7 +316,7 @@ int ThreadContext::get_priority() const {
 //
 // Execute one cycle of the entire core state machine
 //
-bool SMTCore::runcycle() {
+bool OutOfOrderCore::runcycle() {
   bool exiting = 0;
   //
   // Detect edge triggered transition from 0->1 for
@@ -651,7 +651,7 @@ bool ReorderBufferEntry::ready_to_commit() const {
 }
 
 StateList& ReorderBufferEntry::get_ready_to_issue_list() const {
-  SMTCore& core = getcore();
+  OutOfOrderCore& core = getcore();
   ThreadContext& thread = getthread();
   return 
     isload(uop.opcode) ? thread.rob_ready_to_load_list[cluster] :
@@ -750,21 +750,6 @@ void ThreadContext::print_lsq(ostream& os) {
   }
 }
 
-/*
-void SMTCore::print_rename_tables(ostream& os) {
-  // this should be for each thread instead of whole core:
-  // for now, we just work on thread[0];
-  ThreadContext& thread = *thread_ctx[0];
-  RegisterRenameTable& specrrt = thread.specrrt;
-  RegisterRenameTable& commitrrt = thread.commitrrt;
-
-  os << "SpecRRT:", endl;
-  os << specrrt;
-  os << "CommitRRT:", endl;
-  os << commitrrt;
-}
-*/
-
 void ThreadContext::print_rename_tables(ostream& os) {
   os << "SpecRRT:", endl;
   os << specrrt;
@@ -772,7 +757,7 @@ void ThreadContext::print_rename_tables(ostream& os) {
   os << commitrrt;
 }
 
-void SMTCore::print_smt_state(ostream& os) {
+void OutOfOrderCore::print_smt_state(ostream& os) {
   os << "Print SMT statistics:", endl;
 
   foreach (i, threadcount) {
@@ -794,7 +779,7 @@ void ThreadContext::dump_smt_state(ostream& os) {
   os << flush;
 }
 
-void SMTCore::dump_smt_state(ostream& os) {
+void OutOfOrderCore::dump_smt_state(ostream& os) {
   os << "SMT common structures:", endl;
 
   print_list_of_state_lists<PhysicalRegister>(os, physreg_states, "Physical register states");
@@ -823,7 +808,7 @@ void SMTCore::dump_smt_state(ostream& os) {
 //
 // This is for debugging only.
 //
-void SMTCore::check_refcounts() {
+void OutOfOrderCore::check_refcounts() {
   // this should be for each thread instead of whole core:
   // for now, we just work on thread[0];
   ThreadContext& thread = *threads[0];
@@ -879,7 +864,7 @@ void SMTCore::check_refcounts() {
   if (errors) assert(false);
 }
 
-void SMTCore::check_rob() {
+void OutOfOrderCore::check_rob() {
   // this should be for each thread instead of whole core:
   // for now, we just work on thread[0];
   ThreadContext& thread = *threads[0];
@@ -1116,7 +1101,7 @@ void PhysicalRegister::fill_operand_info(PhysicalRegisterOperandInfo& opinfo) {
   }
 }
 
-ostream& SMTModel::operator <<(ostream& os, const PhysicalRegisterOperandInfo& opinfo) {
+ostream& OutOfOrderModel::operator <<(ostream& os, const PhysicalRegisterOperandInfo& opinfo) {
   os << "[r", opinfo.physreg, " ", short_physreg_state_names[opinfo.state], " ";
   switch (opinfo.state) {
   case PHYSREG_WAITING:
@@ -1133,8 +1118,8 @@ ostream& SMTModel::operator <<(ostream& os, const PhysicalRegisterOperandInfo& o
 
 bool EventLog::init(size_t bufsize) {
   reset();
-  size_t bytes = bufsize * sizeof(SMTCoreEvent);
-  start = (SMTCoreEvent*)ptl_mm_alloc_private_pages(bytes);
+  size_t bytes = bufsize * sizeof(OutOfOrderCoreEvent);
+  start = (OutOfOrderCoreEvent*)ptl_mm_alloc_private_pages(bytes);
   if unlikely (!start) return false;
   end = start + bufsize;
   tail = start;
@@ -1146,7 +1131,7 @@ bool EventLog::init(size_t bufsize) {
 void EventLog::reset() {
   if (!start) return;
 
-  size_t bytes = (end - start) * sizeof(SMTCoreEvent);
+  size_t bytes = (end - start) * sizeof(OutOfOrderCoreEvent);
   ptl_mm_free_private_pages(start, bytes);
   start = null;
   end = null;
@@ -1165,7 +1150,7 @@ ostream& EventLog::print(ostream& os, bool only_to_tail) {
   if (tail >= end) tail = start;
   if (tail < start) tail = end;
 
-  SMTCoreEvent* p = (only_to_tail) ? start : tail;
+  OutOfOrderCoreEvent* p = (only_to_tail) ? start : tail;
 
   W64 cycle = limits<W64>::max;
   size_t bufsize = end - start;
@@ -1194,7 +1179,7 @@ ostream& EventLog::print(ostream& os, bool only_to_tail) {
   return os;
 }
 
-ostream& SMTCoreEvent::print(ostream& os) const {
+ostream& OutOfOrderCoreEvent::print(ostream& os) const {
   bool ld = isload(uop.opcode);
   bool st = isstore(uop.opcode);
   bool br = isbranch(uop.opcode);
@@ -1232,7 +1217,7 @@ ostream& SMTCoreEvent::print(ostream& os) const {
     os << ")";
     if (uop.eom && fetch.predrip) os << " -> pred ", (void*)fetch.predrip;
     if (isload(uop.opcode) | isstore(uop.opcode)) {
-      os << "; unaligned pred slot ", SMTCore::hash_unaligned_predictor_slot(rip), " -> ", uop.unaligned;
+      os << "; unaligned pred slot ", OutOfOrderCore::hash_unaligned_predictor_slot(rip), " -> ", uop.unaligned;
     }
     break;
   }
@@ -1498,7 +1483,7 @@ ostream& SMTCoreEvent::print(ostream& os) const {
     break;
   }
   case EVENT_ALIGNMENT_FIXUP:
-    os << "algnfx", " rip ", rip, ": set unaligned bit for uop ", uop.bbindex, " (unaligned predictor slot ", SMTCore::hash_unaligned_predictor_slot(rip), ") and refetch"; break;
+    os << "algnfx", " rip ", rip, ": set unaligned bit for uop ", uop.bbindex, " (unaligned predictor slot ", OutOfOrderCore::hash_unaligned_predictor_slot(rip), ") and refetch"; break;
   case EVENT_FENCE_ISSUED:
     os << "mfence rob ", intstring(rob, -3), " lsq ", lsq, " r", intstring(physreg, -3), ": memory fence (", uop, ")"; break;
   case EVENT_ANNUL_NO_FUTURE_UOPS:
@@ -1626,7 +1611,7 @@ ostream& SMTCoreEvent::print(ostream& os) const {
         
     if unlikely (ld|st) {
       os << " [lsq ", lsq, "]";
-      os << " [upslot ", SMTCore::hash_unaligned_predictor_slot(rip), " = ", commit.ld_st_truly_unaligned, "]";
+      os << " [upslot ", OutOfOrderCore::hash_unaligned_predictor_slot(rip), " = ", commit.ld_st_truly_unaligned, "]";
     }
         
     if likely (commit.oldphysreg > 0) {
@@ -1672,7 +1657,7 @@ ostream& SMTCoreEvent::print(ostream& os) const {
   return os;
 }
 
-SMTMachine::SMTMachine(const char* name) {
+OutOfOrderMachine::OutOfOrderMachine(const char* name) {
   // Add to the list of available core types
   addmachine(name, this);
 }
@@ -1683,12 +1668,12 @@ SMTMachine::SMTMachine(const char* name) {
 // all other PTLsim subsystems are brought up.
 //
 
-bool SMTMachine::init(PTLsimConfig& config) {
+bool OutOfOrderMachine::init(PTLsimConfig& config) {
   // Note: we only create a single core for all contexts for now.
-  cores[0] = new SMTCore(0, *this);
+  cores[0] = new OutOfOrderCore(0, *this);
 
   foreach (i, contextcount) {
-    SMTCore& core = *cores[0];
+    OutOfOrderCore& core = *cores[0];
     core.threadcount++;
     ThreadContext* thread = new ThreadContext(core, i, contextof(i));
     core.threads[i] = thread;
@@ -1712,10 +1697,10 @@ bool SMTMachine::init(PTLsimConfig& config) {
 // Run the processor model, until a stopping point
 // is hit (as configured elsewhere in config).
 //
-int SMTMachine::run(PTLsimConfig& config) {
+int OutOfOrderMachine::run(PTLsimConfig& config) {
   time_this_scope(cttotal);
 
-  logfile << "Starting SMT core toplevel loop", endl, flush;
+  logfile << "Starting out-of-order core toplevel loop", endl, flush;
 
   // All VCPUs are running:
   stopped = 0;
@@ -1747,7 +1732,7 @@ int SMTMachine::run(PTLsimConfig& config) {
     update_progress();
     inject_events();
 
-    SMTCore& core =* cores[0]; // only one core for now
+    OutOfOrderCore& core =* cores[0]; // only one core for now
     int running_thread_count = 0;
     foreach (i, core.threadcount) {
       ThreadContext* thread = core.threads[i];
@@ -1771,7 +1756,7 @@ int SMTMachine::run(PTLsimConfig& config) {
     if unlikely (check_for_async_sim_break() && (!stopping)) {
       logfile << "Waiting for all VCPUs to reach stopping point, starting at cycle ", sim_cycle, endl;
       // force_logging_enabled();
-      SMTCore& core =* cores[0];
+      OutOfOrderCore& core =* cores[0];
       foreach (i, core.threadcount) core.threads[i]->stop_at_next_eom = 1;
       if (config.abort_at_end) {
         config.abort_at_end = 0;
@@ -1783,7 +1768,7 @@ int SMTMachine::run(PTLsimConfig& config) {
     }
 
     stats.summary.cycles++;
-    stats.smtcore.cycles++;
+    stats.ooocore.cycles++;
     sim_cycle++;
     unhalted_cycle_count += (running_thread_count > 0);
     iterations++;
@@ -1796,9 +1781,9 @@ int SMTMachine::run(PTLsimConfig& config) {
     if unlikely (exiting) break;
   }
 
-  logfile << "Exiting SMT mode at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
+  logfile << "Exiting out-of-order core at ", total_user_insns_committed, " commits, ", total_uops_committed, " uops and ", iterations, " iterations (cycles)", endl;
 
-  SMTCore& core =* cores[0]; /// only one core for now.
+  OutOfOrderCore& core =* cores[0]; /// only one core for now.
 
   foreach (i, core.threadcount) {
     ThreadContext* thread = core.threads[i];
@@ -1821,7 +1806,7 @@ int SMTMachine::run(PTLsimConfig& config) {
   return exiting;
 }
 
-void SMTCore::flush_tlb(Context& ctx, int threadid, bool selective, Waddr virtaddr) {
+void OutOfOrderCore::flush_tlb(Context& ctx, int threadid, bool selective, Waddr virtaddr) {
   ThreadContext& thread =* threads[threadid];
   if (logable(5)) {
     logfile << "[vcpu ", ctx.vcpuid, "] core ", coreid, ", thread ", threadid, ": Flush TLBs";
@@ -1846,27 +1831,27 @@ void SMTCore::flush_tlb(Context& ctx, int threadid, bool selective, Waddr virtad
   }
 }
 
-void SMTMachine::flush_tlb(Context& ctx) {
+void OutOfOrderMachine::flush_tlb(Context& ctx) {
   // This assumes all VCPUs are mapped as threads in a single SMT core
   int coreid = 0;
   int threadid = ctx.vcpuid;
   cores[coreid]->flush_tlb(ctx, threadid);
 }
 
-void SMTMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) {
+void OutOfOrderMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) {
   // This assumes all VCPUs are mapped as threads in a single SMT core
   int coreid = 0;
   int threadid = ctx.vcpuid;
   cores[coreid]->flush_tlb(ctx, threadid, true, virtaddr);
 }
 
-void SMTMachine::dump_state(ostream& os) {
+void OutOfOrderMachine::dump_state(ostream& os) {
   os << " dump_state include event if -ringbuf enabled: ",endl;
   //  foreach (i, contextcount) {
   foreach (i, MAX_SMT_CORES) {
     os << " dump_state for core ", i,endl,flush;
     if (!cores[i]) continue;
-    SMTCore& core =* cores[i];
+    OutOfOrderCore& core =* cores[i];
     Context& ctx = contextof(i);
     if unlikely (config.event_log_enabled) 
                   core.eventlog.print(logfile);
@@ -1893,7 +1878,7 @@ void SMTMachine::dump_state(ostream& os) {
 #endif
 }
 
-namespace SMTModel {
+namespace OutOfOrderModel {
   CycleTimer cttotal;
   CycleTimer ctfetch;
   CycleTimer ctdecode;
@@ -1909,32 +1894,32 @@ namespace SMTModel {
   CycleTimer ctcommit;
 };
 
-void SMTMachine::update_stats(PTLsimStats& stats) {
+void OutOfOrderMachine::update_stats(PTLsimStats& stats) {
   foreach (vcpuid, contextcount) {
-    PerContextSMTStats& s = per_context_smtcore_stats_ref(vcpuid);
-    s.issue.uipc = s.issue.uops / (double)stats.smtcore.cycles;
-    s.commit.uipc = (double)s.commit.uops / (double)stats.smtcore.cycles;
-    s.commit.ipc = (double)s.commit.insns / (double)stats.smtcore.cycles;
+    PerContextOutOfOrderCoreStats& s = per_context_ooocore_stats_ref(vcpuid);
+    s.issue.uipc = s.issue.uops / (double)stats.ooocore.cycles;
+    s.commit.uipc = (double)s.commit.uops / (double)stats.ooocore.cycles;
+    s.commit.ipc = (double)s.commit.insns / (double)stats.ooocore.cycles;
   }
 
-  PerContextSMTStats& s = stats.smtcore.total;
-  s.issue.uipc = s.issue.uops / (double)stats.smtcore.cycles;
-  s.commit.uipc = (double)s.commit.uops / (double)stats.smtcore.cycles;
-  s.commit.ipc = (double)s.commit.insns / (double)stats.smtcore.cycles;
+  PerContextOutOfOrderCoreStats& s = stats.ooocore.total;
+  s.issue.uipc = s.issue.uops / (double)stats.ooocore.cycles;
+  s.commit.uipc = (double)s.commit.uops / (double)stats.ooocore.cycles;
+  s.commit.ipc = (double)s.commit.insns / (double)stats.ooocore.cycles;
 
-  stats.smtcore.simulator.total_time = cttotal.seconds();
-  stats.smtcore.simulator.cputime.fetch = ctfetch.seconds();
-  stats.smtcore.simulator.cputime.decode = ctdecode.seconds();
-  stats.smtcore.simulator.cputime.rename = ctrename.seconds();
-  stats.smtcore.simulator.cputime.frontend = ctfrontend.seconds();
-  stats.smtcore.simulator.cputime.dispatch = ctdispatch.seconds();
-  stats.smtcore.simulator.cputime.issue = ctissue.seconds() - (ctissueload.seconds() + ctissuestore.seconds());
-  stats.smtcore.simulator.cputime.issueload = ctissueload.seconds();
-  stats.smtcore.simulator.cputime.issuestore = ctissuestore.seconds();
-  stats.smtcore.simulator.cputime.complete = ctcomplete.seconds();
-  stats.smtcore.simulator.cputime.transfer = cttransfer.seconds();
-  stats.smtcore.simulator.cputime.writeback = ctwriteback.seconds();
-  stats.smtcore.simulator.cputime.commit = ctcommit.seconds();
+  stats.ooocore.simulator.total_time = cttotal.seconds();
+  stats.ooocore.simulator.cputime.fetch = ctfetch.seconds();
+  stats.ooocore.simulator.cputime.decode = ctdecode.seconds();
+  stats.ooocore.simulator.cputime.rename = ctrename.seconds();
+  stats.ooocore.simulator.cputime.frontend = ctfrontend.seconds();
+  stats.ooocore.simulator.cputime.dispatch = ctdispatch.seconds();
+  stats.ooocore.simulator.cputime.issue = ctissue.seconds() - (ctissueload.seconds() + ctissuestore.seconds());
+  stats.ooocore.simulator.cputime.issueload = ctissueload.seconds();
+  stats.ooocore.simulator.cputime.issuestore = ctissuestore.seconds();
+  stats.ooocore.simulator.cputime.complete = ctcomplete.seconds();
+  stats.ooocore.simulator.cputime.transfer = cttransfer.seconds();
+  stats.ooocore.simulator.cputime.writeback = ctwriteback.seconds();
+  stats.ooocore.simulator.cputime.commit = ctcommit.seconds();
 }
 
 //
@@ -1944,9 +1929,9 @@ void SMTMachine::update_stats(PTLsimStats& stats) {
 // Typically this is in response to some infrequent event
 // like cross-modifying SMC or cache coherence deadlocks.
 //
-void SMTMachine::flush_all_pipelines() {
+void OutOfOrderMachine::flush_all_pipelines() {
   assert(cores[0]);
-  SMTCore* core = cores[0];
+  OutOfOrderCore* core = cores[0];
 
   //
   // Make sure all pipelines are flushed BEFORE
@@ -1962,8 +1947,8 @@ void SMTMachine::flush_all_pipelines() {
   }  
 }
 
-SMTMachine smtmodel("smt");
+OutOfOrderMachine smtmodel("smt");
 
-SMTCore& SMTModel::coreof(int coreid) {
+OutOfOrderCore& OutOfOrderModel::coreof(int coreid) {
   return *smtmodel.cores[coreid];
 }
