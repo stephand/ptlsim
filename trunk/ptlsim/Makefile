@@ -3,7 +3,7 @@
 # PTLsim: Cycle Accurate x86-64 Simulator
 # Makefile
 #
-# Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+# Copyright 2000-2007 Matt T. Yourst <yourst@yourst.com>
 #
 
 ifeq ($(findstring x86_64,$(MACHTYPE)),x86_64)
