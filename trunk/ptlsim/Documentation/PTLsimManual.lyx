@@ -9,8 +9,8 @@
 \language english
 \inputencoding auto
 \font_roman times
-\font_sans default
-\font_typewriter default
+\font_sans helvet
+\font_typewriter cmtt
 \font_default_family default
 \font_sc false
 \font_osf false
@@ -43,6 +43,7 @@
 \paperpagestyle default
 \tracking_changes false
 \output_changes false
+\author "" 
 \author "" 
 \end_header
 
@@ -8849,35 +8850,30 @@ Build and install
 In 
 \family typewriter
 \size footnotesize
-xen-3.1-ptlsim.hg/xen
+xen-3.1-ptlsim/xen
 \family default
 \size default
 , run 
 \family typewriter
 \size footnotesize
-make
+make.
+ 
 \family default
 \size default
-, and copy the 
+You can optionally copy the compiled Xen hypervisor (in 
 \family typewriter
 \size footnotesize
-xen
+xen/xen
 \family default
 \size default
- binary to your boot volume (typically 
-\family typewriter
-\size footnotesize
-/boot
-\family default
-\size default
- on most Linux systems).
+) somewhere else (such as wherever your kernel and initrd files are stored).
 \end_layout
 
 \begin_layout Itemize
 In 
 \family typewriter
 \size footnotesize
-xen-3.1-ptlsim.hg/tools
+xen-3.1-ptlsim/tools
 \family default
 \size default
 , run 
@@ -8977,32 +8973,33 @@ Activate
 \begin_layout Itemize
 Install the new kernel and Xen hypervisor in a manner specific to your distribut
 ion.
- While we cannot provide instructions for every distribution, on SuSE, the
- kernel (
-\family typewriter
-\size footnotesize
-/lib/modules/2.6.22.6-mtyrel-64bit-xen/linuxkernel
-\family default
-\size default
-) can be copied to 
-\family typewriter
-\size footnotesize
-/boot/vmlinuz-2.6.22.6-mtyrel-64bit-xen
-\family default
-\size default
-.
+ While we cannot provide instructions for every distribution, on SuSE, you
+ need to run mkinitrd to collect the required boot drivers like this:
 \end_layout
 
-\begin_layout Itemize
-You need to run 
-\family typewriter
+\begin_deeper
+\begin_layout LyX-Code
+
 \size footnotesize
-mkinitrd 2.6.22.6-mtyrel-64bit-xen
-\family default
-\size default
- to collect the required boot drivers.
+mkinitrd -k /lib/modules/2.6.22.6-mtyrel-64bit-xen/linux
+\newline
+         -i /lib/modules/2.6.
+22.6-mtyrel-64bit-xen/initrd
+\newline
+         -M /lib/modules/2.6.22.6-mtyrel-64bit-xen/Syste
+m.map
 \end_layout
 
+\begin_layout Standard
+
+\emph on
+IMPORTANT:
+\emph default
+ All parts of this command should be on a single line (this manual makes
+ long lines difficult to show)
+\end_layout
+
+\end_deeper
 \begin_layout Itemize
 Edit the GRUB bootloader configuration (usually in 
 \family typewriter
@@ -9020,20 +9017,27 @@ Edit the GRUB bootloader configuration (usually in
 \size footnotesize
 title Linux 2.6.22.6-mtyrel-64bit-xen
 \newline
-kernel (hd0,0)/xen console=vga lapic
+kernel (hd0,0)/project/xen-3.1-ptlsim/xen/xen
+ console=vga
 \newline
-module
- (hd0,0)/vmlinuz-2.6.22.6-mtyrel-64bit-xen rw root=/dev/...
+module (hd0,0)/lib/modules/2.6.22.6-mtyrel-64bit-xen/linux root=/dev/...
 \newline
-module (hd0,0)/initrd-2.6.22.6
--mtyrel-64bit-xen 
+mo
+dule (hd0,0)/lib/modules/2.6.22.6-mtyrel-64bit-xen/initrd
+\end_layout
+
+\begin_layout Standard
+Obviously you may need to adjust the file locations, if you're booting from
+ a different hard drive or compiled Xen in a location other than 
+\family typewriter
+\size footnotesize
+/project/xen-3.1-ptlsim
+\family default
+\size default
+.
 \end_layout
 
 \end_deeper
-\begin_layout Itemize
-You may need to run mkinitrd.
-\end_layout
-
 \end_deeper
 \begin_layout Itemize
 
