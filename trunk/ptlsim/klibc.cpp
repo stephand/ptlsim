@@ -2,7 +2,7 @@
 //
 // Standalone base libc functions suitable for in-kernel use
 //
-// Copyright 2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
 // Derived from Linux kernel and klibc
 //
 // This program is free software; it is licensed under the

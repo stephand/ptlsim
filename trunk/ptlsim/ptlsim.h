@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Simulator Structures
 //
-// Copyright 2004-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _PTLSIM_H_
@@ -188,6 +188,7 @@ struct PTLsimConfig {
   W64 insns_in_last_basic_block;
   W64 stop_at_user_insns_relative;
   W64 flush_interval;
+  bool kill_after_run;
 
 #ifdef PTLSIM_HYPERVISOR
   // Event tracing

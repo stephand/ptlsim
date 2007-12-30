@@ -3,8 +3,8 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Out-of-Order Core Simulator
 //
-// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #ifndef _OOOCORE_H_
@@ -203,6 +203,16 @@ namespace OutOfOrderModel {
     {OP_clz,            3, ANYFPU},
     {OP_ctpop,          3, ANYFPU},  
     {OP_permb,          4, ANYFPU},
+    // Integer divide and remainder step
+    {OP_div,           32, ALU0},
+    {OP_rem,           32, ALU0},
+    {OP_divs,          32, ALU0},
+    {OP_rems,          32, ALU0},
+    // Minimum and maximum
+    {OP_min,            A, ANYALU},
+    {OP_max,            A, ANYALU},
+    {OP_min_s,          A, ANYALU},
+    {OP_max_s,          A, ANYALU},
     // Floating point
     // uop.size bits have following meaning:
     // 00 = single precision, scalar (preserve high 32 bits of ra)
@@ -966,7 +976,7 @@ namespace OutOfOrderModel {
   // Lookup tables (LUTs):
   //
   struct Cluster {
-    char* name;
+    const char* name;
     W16 issue_width;
     W32 fu_mask;
   };
@@ -1473,7 +1483,7 @@ namespace OutOfOrderModel {
     void annul_fetchq();
     BasicBlock* fetch_or_translate_basic_block(const RIPVirtPhys& rvp);
     void redispatch_deadlock_recovery();
-    void flush_mem_lock_release_list();
+    void flush_mem_lock_release_list(int start = 0);
     int get_priority() const;
 
     void dump_smt_state(ostream& os);

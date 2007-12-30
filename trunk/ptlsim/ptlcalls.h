@@ -1,8 +1,9 @@
+// -*- c++ -*-
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Trigger functions 
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2004-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef __PTLCALLS_H__

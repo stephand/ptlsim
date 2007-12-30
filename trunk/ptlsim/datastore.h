@@ -2,7 +2,7 @@
 //
 // Data Store
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>

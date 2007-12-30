@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Performance counters
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>

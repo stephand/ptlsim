@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Time and interrupt management for Xen subsystem
 //
-// Copyright 2005-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -1056,7 +1056,7 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
   }
   default:
     logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;
-    assert(false);
+    break;
   }
 
   return 0;

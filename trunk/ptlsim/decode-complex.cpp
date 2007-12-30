@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Decoder for complex instructions
 //
-// Copyright 1999-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <decode.h>
@@ -1590,12 +1590,13 @@ bool TraceDecoder::decode_complex() {
       break;
     }
     default:
-      // 6, 7
+      // 6 (div), 7 (idiv)
+      /*
       ra.type = OPTYPE_REG;
       ra.reg.reg = 0; // not used
       move_reg_or_mem(ra, rd, REG_ar1);
 
-      int subop_and_size_to_assist_idx[4][4] = {
+      int subop_and_size_to_assist_idx[2][4] = {
         {ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64},
         {ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64}
       };
@@ -1604,6 +1605,70 @@ bool TraceDecoder::decode_complex() {
 
       microcode_assist(subop_and_size_to_assist_idx[modrm.reg - 6][size], ripstart, rip);
       end_of_block = 1;
+      */
+
+      ra.type = OPTYPE_REG;
+      ra.reg.reg = 0; // not used
+      move_reg_or_mem(ra, rd, REG_temp2);
+
+      int sizeshift = (rd.type == OPTYPE_REG) ? reginfo[rd.reg.reg].sizeshift : rd.mem.size;
+
+      if likely (sizeshift > 0) {
+        //
+        // Inputs:
+        // - dividend in rdx:rax
+        // - divisor in temp2
+        //
+        // Outputs:
+        // - quotient in rax
+        // - remainder in rdx
+        //
+        int divop = (modrm.reg == 6) ? OP_div : OP_divs;
+        int remop = (modrm.reg == 6) ? OP_rem : OP_rems;
+
+        this << TransOp(divop, REG_temp0, REG_rdx, REG_rax, REG_temp2, sizeshift);
+        this << TransOp(remop, REG_temp1, REG_rdx, REG_rax, REG_temp2, sizeshift);
+        this << TransOp(OP_mov, REG_rax, REG_rax, REG_temp0, REG_zero, sizeshift);
+        this << TransOp(OP_mov, REG_rdx, REG_rdx, REG_temp1, REG_zero, sizeshift);
+      } else {
+        //
+        // Byte-sized operands:
+        //
+        // Inputs:
+        // - dividend in ax
+        // - divisor in temp2
+        //
+        // Outputs:
+        // - remainder in ah
+        // - quotient in al
+        //
+
+        int divop = (modrm.reg == 6) ? OP_div : OP_divs;
+        int remop = (modrm.reg == 6) ? OP_rem : OP_rems;
+
+        // Put dividend[15:8] into temp3
+        this << TransOp(OP_maskb, REG_temp3, REG_zero, REG_rax, REG_imm, 3, 0, MaskControlInfo(0, 8, 8));
+
+        this << TransOp(divop, REG_temp0, REG_temp3, REG_rax, REG_temp2, sizeshift);
+        this << TransOp(remop, REG_temp1, REG_temp3, REG_rax, REG_temp2, sizeshift);
+
+        this << TransOp(OP_mov, REG_rax, REG_rax, REG_temp0, REG_zero, sizeshift); // quotient in %al
+        this << TransOp(OP_maskb, REG_rax, REG_rax, REG_temp1, REG_imm, 3, 0, MaskControlInfo(56, 8, 56)); // remainder in %ah
+
+        /*
+        // Byte-size divides have special semantics
+        int subop_and_size_to_assist_idx[2][4] = {
+          {ASSIST_DIV8,  ASSIST_DIV16,  ASSIST_DIV32,  ASSIST_DIV64},
+          {ASSIST_IDIV8, ASSIST_IDIV16, ASSIST_IDIV32, ASSIST_IDIV64}
+        };
+        
+        this << TransOp(OP_mov, REG_ar1, REG_zero, REG_temp2, REG_zero, 3);
+        microcode_assist(subop_and_size_to_assist_idx[modrm.reg - 6][sizeshift], ripstart, rip);
+        end_of_block = 1;
+        */
+      }
+
+      break;      
     }
     break;
   }

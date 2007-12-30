@@ -2,7 +2,7 @@
 //
 // Math Functions
 //
-// Copyright 2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2008 Matt T. Yourst <yourst@yourst.com>
 // Derived from various sources (glibc, etc)
 //
 // This program is free software; it is licensed under the

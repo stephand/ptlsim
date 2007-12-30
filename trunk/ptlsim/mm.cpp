@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Memory Management
 //
-// Copyright 2000-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>

@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Statistical Analysis Tools
 //
-// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>

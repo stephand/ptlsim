@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // PTLsim loader structures
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2004-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _LOADER_H_

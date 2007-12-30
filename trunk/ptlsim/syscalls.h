@@ -2,7 +2,7 @@
 //
 // System Calls
 //
-// Copyright 1997-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2004-2008 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.
@@ -52,7 +52,18 @@ extern "C" {
   int sys_gettimeofday(struct timeval* tv, struct timezone* tz);
   time_t sys_time(time_t* t);
   pid_t sys_wait4(pid_t pid, int *status, int options, struct rusage *rusage);
-  long sys_rt_sigaction(int sig, const struct sigaction* act, struct sigaction* oldact, size_t sigsetsize);
+
+  typedef void (*kernel_sighandler_t)(int signo, siginfo_t *si, void *context);
+
+  // From glibc sysdeps/unix/sysv/linux/kernel_sigaction.h for kernels >= 2.2.x:
+  struct kernel_sigaction {
+    kernel_sighandler_t k_sa_handler;
+    unsigned long sa_flags;
+    void (*sa_restorer) (void);
+    sigset_t sa_mask;
+  };
+
+  long sys_rt_sigaction(int sig, const struct kernel_sigaction* act, struct kernel_sigaction* oldact, size_t sigsetsize);
   int sys_getrlimit(int resource, struct rlimit* rlim);
 #ifdef __x86_64__
   W64 sys_arch_prctl(int code, void* addr);

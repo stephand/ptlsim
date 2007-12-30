@@ -3,10 +3,20 @@
 # PTLsim: Cycle Accurate x86-64 Simulator
 # Makefile
 #
-# Copyright 2000-2007 Matt T. Yourst <yourst@yourst.com>
+# Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 #
 
-ifeq ($(findstring x86_64,$(MACHTYPE)),x86_64)
+#
+# If you are running on a 64-bit distro but want to build
+# a 32-bit PTLsim binary, and your distro doesn't provide
+# the "linux32" or "32bit" uname-changing commands, you
+# will need to manually override the checks below:
+#
+ifndef MACHTYPE
+	MACHTYPE = "$(shell uname -a)"
+endif
+
+ifneq (,$(findstring x86_64,"$(MACHTYPE)"))
 __x86_64__=1
 endif
 
@@ -26,8 +36,15 @@ CC = g++
 
 GCCVER_SPECIFIC =
 
-SVNREV=`LANG=C; svn info | grep "Last Changed Rev" | cut -d " " -f4`
-SVNDATE=`LANG=C; svn info | grep "Last Changed Date" | cut -d " " -f4`
+SVNREV=$(shell svn info | grep "Last Changed Rev" | cut -d " " -f4)
+SVNDATE=$(shell svn info | grep "Last Changed Date" | cut -d " " -f4)
+
+ifeq (,$(SVNREV))
+# Subversion is either not installed or the current directory isn't a PTLsim repository:
+	SVNREV=0
+	SVNDATE=unknown
+endif
+
 INCFLAGS = -I. -DBUILDHOST="`hostname -f`" -DSVNREV="$(SVNREV)" -DSVNDATE="$(SVNDATE)"
 
 ifdef PTLSIM_HYPERVISOR
@@ -61,7 +78,7 @@ ifdef __x86_64__
 ifdef PTLSIM_HYPERVISOR
 COMMONOBJS = linkstart.o lowlevel-64bit-xen.o ptlsim.o ptlxen.o ptlxen-memory.o ptlxen-events.o ptlxen-common.o perfctrs.o mm.o superstl.o config.o mathlib.o klibc.o ptlhwdef.o datastore.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o seqcore.o ptlsim.dst.o linkend.o
 else
-COMMONOBJS = linkstart.o lowlevel-64bit.o lowlevel-32bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o datastore.o injectcode-32bit.o injectcode-64bit.o seqcore.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
+COMMONOBJS = linkstart.o lowlevel-64bit.o ptlsim.o kernel.o mm.o ptlhwdef.o decode-core.o decode-fast.o decode-complex.o decode-x87.o decode-sse.o uopimpl.o datastore.o injectcode-64bit.o seqcore.o $(BASEOBJS) klibc.o ptlsim.dst.o linkend.o
 endif
 else
 # 32-bit PTLsim32 only:
@@ -103,19 +120,16 @@ ptlstats: ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) Makefile
 ifdef __x86_64__
 injectcode-64bit.o: injectcode.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -m64 -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-64bit.o
-
-injectcode-32bit.o: injectcode.cpp
-	$(CC) $(CFLAGS) $(INCFLAGS) -m32 -O99 -fomit-frame-pointer -Wa,--32  -c injectcode.cpp -o injectcode-32bit.o
 else
 injectcode-32bit.o: injectcode.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -DPTLSIM_FORCE_32BIT_ONLY -O99 -fomit-frame-pointer -c injectcode.cpp -o injectcode-32bit.o
-endif
 
 lowlevel-32bit.o: lowlevel-32bit.S
 ifdef __x86_64__
 	$(CC) -c $(CFLAGS32BIT) $(INCFLAGS) -g -O3 -Wa,--32 lowlevel-32bit.S
 else
 	$(CC) -c $(CFLAGS32BIT) $(INCFLAGS) -g -O3 lowlevel-32bit.S
+endif
 endif
 
 ptlcalls-32bit.o: ptlcalls.c
@@ -135,12 +149,18 @@ ptlsim.dst: dstbuild stats.h ptlhwdef.h ooocore.h dcache.h branchpred.h decode.h
 makeusage: makeusage.o $(BASEOBJS) $(STDOBJS)
 	$(CC) $(CFLAGS) $(INCFLAGS) $(BASEOBJS) $(STDOBJS) makeusage.o -o makeusage
 
+ifdef __x86_64__
+DATA_OBJ_TYPE = elf64-x86-64
+else
+DATA_OBJ_TYPE = elf32-i386
+endif
+
 usage.o: makeusage Makefile
 	./makeusage > usage.txt
-	objcopy -I binary -O elf32-i386 -B i386 --rename-section .data=.usage,alloc,load,readonly,data,contents usage.txt usage.o
+	objcopy -I binary -O $(DATA_OBJ_TYPE) -B i386 --rename-section .data=.usage,alloc,load,readonly,data,contents usage.txt usage.o
 
 ptlsim.dst.o: ptlsim.dst
-	objcopy -I binary -O elf32-i386 -B i386 --rename-section .data=.dst,alloc,load,readonly,data,contents ptlsim.dst ptlsim.dst.o
+	objcopy -I binary -O $(DATA_OBJ_TYPE) -B i386 --rename-section .data=.dst,alloc,load,readonly,data,contents ptlsim.dst ptlsim.dst.o
 
 ifdef PTLSIM_HYPERVISOR
 ifdef __x86_64__
@@ -150,7 +170,7 @@ ptlxen.bin.debug: $(OBJFILES) Makefile ptlxen.lds
 
 ptlxen.bin.o: ptlxen.bin.debug Makefile
 	strip -o ptlxen.bin ptlxen.bin.debug
-	objcopy -I binary -O elf64-x86-64 -B i386 --rename-section .data=.ptlxen,alloc,load,readonly,data,contents ptlxen.bin ptlxen.bin.o
+	objcopy -I binary -O $(DATA_OBJ_TYPE) -B i386 --rename-section .data=.ptlxen,alloc,load,readonly,data,contents ptlxen.bin ptlxen.bin.o
 #	rm -f ptlxen.bin
 
 endif

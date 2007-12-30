@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Trigger functions for Fortran code
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2004-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <ptlcalls.h>

@@ -3,8 +3,8 @@
 // Out-of-Order Core Simulator
 // Core Pipeline Stages: Frontend, Writeback, Commit
 //
-// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #include <globals.h>
@@ -106,8 +106,13 @@ void ThreadContext::flush_pipeline() {
   foreach_forward(ROB, i) {
     ReorderBufferEntry& rob = ROB[i];
     rob.release_mem_lock(true);
+    //
+    // Note that we might actually flush halfway through a locked RMW
+    // instruction, but this is not as bad as in the annul case, as the
+    // store (the W-part of the RMW) will be wiped too.
+    //
     flush_mem_lock_release_list();
-    rob.physreg->reset(threadid); // free all register allocated by rob:
+    rob.physreg->reset(threadid); // free all register allocated by rob
   }
 
   // free all register in arch state:
@@ -741,6 +746,8 @@ void ThreadContext::rename() {
       lsq.datavalid = 0;
       lsq.addrvalid = 0;
       lsq.invalid = 0;
+      loads_in_flight += (st == 0);
+      stores_in_flight += (st == 1);
     }
 
     per_context_ooocore_stats_update(threadid, frontend.alloc.reg += (!(ld|st|br)));
@@ -1517,8 +1524,8 @@ int ThreadContext::commit() {
   return rc;
 }
 
-void ThreadContext::flush_mem_lock_release_list() {
-  foreach (i, queued_mem_lock_release_count) {
+void ThreadContext::flush_mem_lock_release_list(int start) {
+  for (int i = start; i < queued_mem_lock_release_count; i++) {
     W64 lockaddr = queued_mem_lock_release_list[i];
 
     MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
@@ -1542,7 +1549,7 @@ void ThreadContext::flush_mem_lock_release_list() {
     interlocks.invalidate(lockaddr);
   }
 
-  queued_mem_lock_release_count = 0;
+  queued_mem_lock_release_count = start;
 }
 
 #ifdef PTLSIM_HYPERVISOR
@@ -1596,6 +1603,12 @@ int ReorderBufferEntry::commit() {
   // required to avoid deadlock in the case where the mf
   // uop is the first uop in the macro-op. In this case,
   // its P (internal) bit must be set.
+  //
+  // Note that in order to have a flush, this must be the
+  // fence immediately after an locked RMW instruction,
+  // as the lock is just added to the flush list at the
+  // commit of the load (the R part), which will definitely
+  // happen after the commit of the preceeding fence.
   //
 
   if unlikely ((uop.opcode == OP_mf) && ready_to_commit() && (!load_store_second_phase)) {

@@ -1,7 +1,7 @@
 //
 // CPUID: print information about current CPU
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>

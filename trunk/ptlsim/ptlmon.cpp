@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // PTLxen monitor and control program running in dom0
 //
-// Copyright 2005-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -1158,7 +1158,7 @@ struct XenController {
   //
   void swap_context(bool target_is_ptlsim) {
     int rc;
-    sync();
+    // sync();
 
     if (target_is_ptlsim) {
       foreach (i, vcpu_count) {

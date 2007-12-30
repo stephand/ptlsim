@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Data Cache
 //
-// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2007 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _DCACHE_H_

@@ -2,7 +2,7 @@
 //
 // Standalone base libc functions suitable for in-kernel use
 //
-// Copyright 1997-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1997-2008 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.

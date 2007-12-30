@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Linux Kernel Interface
 //
-// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _KERNEL_H_

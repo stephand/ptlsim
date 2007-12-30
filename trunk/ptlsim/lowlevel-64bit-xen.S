@@ -2,7 +2,7 @@
  * PTLsim: Cycle Accurate x86-64 Simulator
  * Xen 64-bit low level functions
  *
- * Copyright 2005-2006 Matt T. Yourst <yourst@yourst.com>
+ * Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
  */
 
 .text
@@ -164,6 +164,13 @@ ptlsim_preinit_entry:
 .endm
 
 .macro restore_regs_and_iret HAS_ERROR_CODE
+  mov   %rax,[%rsp + 8*REG_rip]
+.if (\HAS_ERROR_CODE)
+  mov   [%rsp + (64 + 1+1 + 1)*8],%rax
+.else
+  mov   [%rsp + (64 + 1+1 + 0)*8],%rax
+.endif
+
   mov   %rax,[%rsp + 8*REG_rax]
 # mov   %rcx,[%rsp + 8*REG_rcx]
   mov   %rdx,[%rsp + 8*REG_rdx]

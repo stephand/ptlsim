@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Injected loader stub code
 //
-// Copyright 2000-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #define INLINED_SYSCALLS

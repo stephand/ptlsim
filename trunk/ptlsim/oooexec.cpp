@@ -3,8 +3,8 @@
 // Out-of-Order Core Simulator
 // Execution Pipeline Stages: Scheduling, Execution, Broadcast
 //
-// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #include <globals.h>
@@ -2027,6 +2027,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
   RegisterRenameTable& commitrrt = thread.commitrrt;
   int& loads_in_flight = thread.loads_in_flight;
   int& stores_in_flight = thread.stores_in_flight;
+  int queued_locks_before = thread.queued_mem_lock_release_count;
 
   OutOfOrderCoreEvent* event;
 
@@ -2152,8 +2153,17 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     annulrob.physreg->free();
 
     if unlikely (isclass(annulrob.uop.opcode, OPCLASS_LOAD|OPCLASS_STORE)) {
-      annulrob.release_mem_lock(true);
-      thread.flush_mem_lock_release_list();
+      //
+      // We have to be careful to not flush any locks that are about to be
+      // freed by a committing locked RMW instruction that takes more than
+      // one cycle to commit but has already declared the locks it wants
+      // to release.
+      //
+      // There are a few things we can do here: only flush if the annulrob
+      // actually held locks, and then only flush those locks (actually only
+      // a single lock) added here!
+      //
+      if (annulrob.release_mem_lock(true)) thread.flush_mem_lock_release_list(queued_locks_before);
       loads_in_flight -= (annulrob.lsq->store == 0);
       stores_in_flight -= (annulrob.lsq->store == 1);
       annulrob.lsq->reset();

@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Shared Functions and Structures
 //
-// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -45,7 +45,7 @@ void PTLsimConfig::reset() {
 #endif
 
   quiet = 0;
-  core_name = "smt";
+  core_name = "ooo";
   log_filename = "ptlsim.log";
   loglevel = 0;
   start_log_at_iteration = 0;
@@ -88,6 +88,8 @@ void PTLsimConfig::reset() {
   stop_at_user_insns_relative = infinity;
   insns_in_last_basic_block = 65536;
   flush_interval = infinity;
+  kill_after_run = 0;
+
 #ifdef PTLSIM_HYPERVISOR
   event_trace_record_filename.reset();
   event_trace_record_stop = 0;
@@ -188,6 +190,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(stop_at_user_insns_relative,  "stopinsns-rel",        "Stop after executing <stopinsns-rel> user instructions relative to start of current run");
   add(insns_in_last_basic_block,    "bbinsns",              "In final basic block, only translate <bbinsns> user instructions");
   add(flush_interval,               "flushevery",           "Flush the pipeline every N committed instructions");
+  add(kill_after_run,               "kill-after-run",       "Kill PTLsim after this run");
 
 #ifdef PTLSIM_HYPERVISOR
   // Full system only

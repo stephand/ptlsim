@@ -4,8 +4,8 @@
 // Out-of-Order Core Simulator
 // AMD K8 (Athlon 64 / Opteron / Turion)
 //
-// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #ifndef _OOOCORE_H_
@@ -199,6 +199,16 @@ namespace OutOfOrderModel {
     {OP_clz,            4, ALUC},
     {OP_ctpop,          4, ALUC},  
     {OP_permb,          2, ALUC|FCVT},
+    // Integer divide and remainder step
+    {OP_div,           32, ALUC},
+    {OP_rem,           32, ALUC},
+    {OP_divs,          32, ALUC},
+    {OP_rems,          32, ALUC},
+    // Minimum and maximum
+    {OP_min,            1, ANYALU},
+    {OP_max,            1, ANYALU},
+    {OP_min_s,          1, ANYALU},
+    {OP_max_s,          1, ANYALU},
     // Floating point
     // uop.size bits have following meaning:
     // 00 = single precision, scalar (preserve high 32 bits of ra)

@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Linux Kernel Interface
 //
-// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -806,10 +806,13 @@ struct SwitchToSimThunkCode {
   }
 } __attribute__((packed));
 
-extern "C" void inside_sim_escape_code_template_32bit();
-extern "C" void inside_sim_escape_code_template_32bit_end();
+#ifdef __x86_64__
 extern "C" void inside_sim_escape_code_template_64bit();
 extern "C" void inside_sim_escape_code_template_64bit_end();
+#else
+extern "C" void inside_sim_escape_code_template_32bit();
+extern "C" void inside_sim_escape_code_template_32bit_end();
+#endif
 
 struct InsideSimEscapeCode { 
   byte bytes[64];
@@ -817,13 +820,16 @@ struct InsideSimEscapeCode {
   void prep() {
     byte* src;
     int length;
-    if (ctx.use64) {
-      src = (byte*)&inside_sim_escape_code_template_64bit;
-      length = ((byte*)&inside_sim_escape_code_template_64bit_end) - src;
-    } else {
-      src = (byte*)&inside_sim_escape_code_template_32bit;
-      length = ((byte*)&inside_sim_escape_code_template_32bit_end) - src;
-    }
+    // Make sure PTLsim build type matches target process type:
+#ifdef __x86_64__
+    assert(ctx.use64);
+    src = (byte*)&inside_sim_escape_code_template_64bit;
+    length = ((byte*)&inside_sim_escape_code_template_64bit_end) - src;
+#else
+    assert(!ctx.use64);
+    src = (byte*)&inside_sim_escape_code_template_32bit;
+    length = ((byte*)&inside_sim_escape_code_template_32bit_end) - src;
+#endif
     assert(length <= lengthof(bytes));
     memcpy(&bytes, src, length);
   }
@@ -1489,8 +1495,11 @@ W32 read_process_memory_W32(int pid, W64 source) {
   return LO32(data);
 }
 
+#ifdef __x86_64__
 extern "C" void ptlsim_loader_thunk_64bit(LoaderInfo* info);
+#else
 extern "C" void ptlsim_loader_thunk_32bit(LoaderInfo* info);
+#endif
 
 int is_elf_64bit(const char* filename) {
   idstream is;
@@ -1573,7 +1582,19 @@ int ptlsim_inject(int argc, char** argv) {
 
   regs.rsp -= sizeof(LoaderInfo);
 
-  void* thunk_source = (void*)(x86_64_mode ? &ptlsim_loader_thunk_64bit : &ptlsim_loader_thunk_32bit);
+#ifdef __x86_64__
+  if (!x86_64_mode) {
+    cerr << "ptlsim: Error: This is a 64-bit build of PTLsim. It cannot run 32-bit processes.", endl;
+    assert(false);
+  }
+  void* thunk_source = (void*)&ptlsim_loader_thunk_64bit;
+#else
+  if (x86_64_mode) {
+    cerr << "ptlsim: Error: This is a 32-bit build of PTLsim. It cannot run 64-bit processes.", endl;
+    assert(false);
+  }
+  void* thunk_source = (void*)&ptlsim_loader_thunk_32bit;
+#endif
   int thunk_size = LOADER_THUNK_SIZE;
 
   if (DEBUG) cerr << "Saving old code (", thunk_size, " bytes) at thunk rip ", (void*)regs.rip, " in pid ", pid, endl;
@@ -1864,9 +1885,9 @@ void init_signal_callback() {
   if (!ctx.use64) return;
 #endif
 
-  struct sigaction sa;
-  memset(&sa, 0, sizeof sa);
-  sa.sa_sigaction = external_signal_callback;
+  struct kernel_sigaction sa;
+  setzero(sa);
+  sa.k_sa_handler = external_signal_callback;
   sa.sa_flags = SA_SIGINFO;
   assert(sys_rt_sigaction(SIGXCPU, &sa, NULL, sizeof(W64)) == 0);
 }
@@ -2067,7 +2088,7 @@ byte* copy_args_env_auxv(byte* destptr, const byte* origargv) {
   while (auxv->a_type != AT_NULL) {
     if ((auxv->a_type == AT_SYSINFO) || (auxv->a_type == AT_SYSINFO_EHDR)) {
       // We do not support SYSENTER-style VDSOs, so disable this:
-      logfile << "copy_args_env_auxv: Disabled 32-bit AT_SYSINFO auxv", endl;
+      // logfile << "copy_args_env_auxv: Disabled 32-bit AT_SYSINFO auxv", endl;
       destauxv->a_type = AT_IGNORE;
       auxv->a_type = AT_IGNORE;
     } else {

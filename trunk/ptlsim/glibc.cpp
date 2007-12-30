@@ -1,7 +1,7 @@
 //
 // Standard library functions only used in normal (non-embedded) programs
 //
-// Copyright 2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2006 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.

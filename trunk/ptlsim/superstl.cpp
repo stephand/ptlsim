@@ -1,7 +1,7 @@
 //
 // Super Standard Template Library
 //
-// Copyright 1997-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1997-2008 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.
@@ -337,7 +337,7 @@ namespace superstl {
     foreach (i, bs.n) {
       if (bit(bs.mask, i))
         os << hexstring(bs.bytes[i], 8);
-      else os << "XX";
+      else os << "xx";
       if (((i % bs.splitat) == (bs.splitat-1)) && (i != bs.n-1)) 
         os << endl; 
       else if (i != bs.n-1)
@@ -795,6 +795,55 @@ namespace superstl {
   }
 
   //
+  // class RandomNumberGenerator:
+  //
+  void RandomNumberGenerator::reseed(W32 seed) {
+    if unlikely (seed == 0) seed = 1; // default seed is 1
+    
+#define LCG(n) (69069 * n)
+    s1 = LCG(seed);
+    s2 = LCG(s1);
+    s3 = LCG(s2);
+#undef LCG
+    
+    // warm it up
+    foreach (i, 8) random32();
+  }
+  
+  W32 RandomNumberGenerator::random32() {
+#define TAUSWORTHE(s,a,b,c,d) ((s&c)<<d) ^ (((s <<a) ^ s)>>b)
+    
+    s1 = TAUSWORTHE(s1, 13, 19, 4294967294UL, 12);
+    s2 = TAUSWORTHE(s2, 2, 25, 4294967288UL, 4);
+    s3 = TAUSWORTHE(s3, 3, 11, 4294967280UL, 17);
+    
+    return (s1 ^ s2 ^ s3);
+  }
+  
+  W64 RandomNumberGenerator::random64() {
+    return (W64(random32()) << 32) | W64(random32());
+  }
+
+  void RandomNumberGenerator::fill(void* p, size_t count) {
+    size_t wc = count / sizeof(W32);
+    W32* wp = (W32*)p;
+    foreach (i, wc) {
+      *wp = random32();
+      wp++;
+    }
+
+    size_t loc = count % sizeof(W32);
+    if likely (!loc) return;
+
+    W32 temp = random32();
+    byte* lop = (byte*)wp;
+    foreach (i, loc) {
+      lop[i] = lowbits(temp, 8);
+      temp >>= 8;
+    }
+  }
+
+  //
   // class CycleTimer:
   //
   double CycleTimer::gethz() {
@@ -829,6 +878,229 @@ namespace superstl {
 
     return os;
   }
+
+  //
+  // x86 compatible non-excepting divide and remainder:
+  //
+  // This code is heavily modified from the Bochs version:
+  //
+  struct W128 {
+    W64 lo;
+    W64 hi;
+  };
+
+  struct W128s {
+    W64 lo;
+    W64s hi;
+  };
+
+  void long_neg(W128s& n) {
+    W64 t = n.lo;
+    n.lo = -n.lo;
+    if (t - 1 > t) --n.hi;
+    n.hi = ~n.hi;
+  }
+
+  void long_shl(W128& a) {
+    W64 c;
+    c = a.lo >> 63;
+    a.lo <<= 1;
+    a.hi <<= 1;
+    a.hi |= c;
+  }
+
+  void long_shr(W128& a) {
+    W64 c;
+    c = a.hi << 63;
+    a.hi >>= 1;
+    a.lo >>= 1;
+    a.lo |= c;
+  }
+
+  bool long_sub(W128& a, W128& b) {
+    W64 t = a.lo;
+    a.lo -= b.lo;
+    int c = (a.lo > t);
+    t = a.hi;
+    a.hi -= b.hi + c;
+    return (a.hi > t);
+  }
+
+  bool long_le(W128& a, W128& b) {
+    if (a.hi == b.hi) {
+      return (a.lo <= b.lo);
+    } else {
+      return (a.hi <= b.hi);
+    }
+  }
+
+  void long_div(W128& quotient, W64& remainder, const W128& dividend, W64 divisor) {
+    W128 d, acc, q, temp;
+    int n, c;
+
+    d.lo = divisor;
+    d.hi = 0;
+    acc.lo = dividend.lo;
+    acc.hi = dividend.hi;
+    q.lo = 0;
+    q.hi = 0;
+    n = 0;
+
+    while (long_le(d, acc) && (n < 128)) {
+      long_shl(d);
+      n++;
+    }
+
+    while (n > 0) {
+      long_shr(d);
+      long_shl(q);
+      temp.lo = acc.lo;
+      temp.hi = acc.hi;
+      c = long_sub(acc, d);
+      if (c) {
+        acc.lo = temp.lo;
+        acc.hi = temp.hi;
+      } else {
+        q.lo++;
+      }
+      n--;
+    }
+
+    remainder = acc.lo;
+    quotient.lo = q.lo;
+    quotient.hi = q.hi;
+  }
+
+  void long_idiv(W128s& quotient, W64s& remainder, W128s& dividend, W64s divisor) {
+    W128s temp = dividend;
+
+    bool dividend_was_negative = (temp.hi < 0);
+    bool divisor_was_negative = (divisor < 0);
+    if (dividend_was_negative) long_neg(temp);
+    if (divisor_was_negative) divisor = -divisor;
+
+    long_div((W128&)quotient, (W64&)remainder, (W128&)temp, divisor);
+
+    if (dividend_was_negative ^ divisor_was_negative) long_neg(quotient);
+
+    // NOTE: Bochs original code was: if (divisor_was_negative) remainder = -remainder;
+    // This is actually a bug: Intel and AMD manuals say sign of remainder is equal to sign of dividend, not divisor.
+    if (dividend_was_negative) remainder = -remainder;
+  }
+
+  template <>
+  bool div_rem(W64& quotientlo, W64& remainder, W64 dividend_hi, W64 dividend_lo, W64 divisor) {
+    W128 dividend;
+    W128 quotient;
+
+    dividend.lo = dividend_lo;
+    dividend.hi = dividend_hi;
+
+    if unlikely (!divisor) goto out;
+
+    long_div(quotient, remainder, dividend, divisor);
+    quotientlo = quotient.lo;
+
+    if unlikely (quotient.hi != 0) goto out;
+
+    return true;
+
+  out:
+    quotientlo = 0;
+    remainder = 0;
+    return false;
+  }
+
+  template <>
+  bool div_rem_s(W64& quotientlo, W64& remainder, W64 dividend_hi, W64 dividend_lo, W64 divisor) {
+    W64s op2_64, remainder_64, quotient_64l;
+    W128s dividend;
+    W128s quotient;
+
+    dividend.lo = dividend_lo;
+    dividend.hi = dividend_hi;
+
+    if unlikely (!divisor) goto out;
+
+    if unlikely ((divisor == -1) && (dividend.hi == 0x8000000000000000ULL) && (!dividend.lo)) goto out;
+
+    long_idiv(quotient, (W64s&)remainder, dividend, divisor);
+    quotientlo = quotient.lo;
+
+    if unlikely ((!(quotient.lo & 0x8000000000000000ULL) && quotient.hi != 0) ||
+                 (quotient.lo & 0x8000000000000000ULL) && quotient.hi != 0xffffffffffffffffULL) goto out;
+
+    return true;
+
+  out:
+    quotientlo = 0;
+    remainder = 0;
+    return false;
+  }
+
+  template <typename T>
+  bool div_rem(T& quotientlo, T& remainder, T dividend_hi, T dividend_lo, T divisor) {
+    static const int B = (sizeof(T) * 8);
+
+    W64 dividend = (W64(dividend_hi) << B) + dividend_lo;
+    W64 quotient;
+
+    if unlikely (divisor == 0) goto out;
+
+    quotient  = dividend / divisor;
+    remainder = T(dividend % divisor);
+    quotientlo = T(quotient);
+
+    if unlikely (quotient != quotientlo) goto out;
+
+    return true;
+
+  out:
+    quotientlo = 0;
+    remainder = 0;
+    return false;
+  }
+
+  template <typename T>
+  bool div_rem_s(T& quotientlo, T& remainder, T dividend_hi, T dividend_lo, T udivisor) {
+    static const int B = (sizeof(T) * 8);
+
+    W64s dividend = (W64(signext64(dividend_hi, B)) << B) + dividend_lo;
+    W64 quotient;
+    W64s divisor = signext64(W64(udivisor), B);
+
+    if unlikely (divisor == 0) goto out;
+
+    // check MIN_INT divided by -1 case
+    // e.g. MIN_INT for 32/16/8 = 0x8000000000000000ULL, 0x80000000ULL, 0x8000ULL
+    if unlikely ((dividend == signext64((1ULL << ((B*2) - 1)), (B*2))) && (divisor == bitmask(B))) goto out;
+
+    quotient = dividend / divisor;
+    remainder = T(dividend % divisor);
+    quotientlo = T(quotient);
+  
+    if unlikely (quotient != signext64(W64(quotientlo), B)) goto out;
+
+    return true;
+
+  out:
+    quotientlo = 0;
+    remainder = 0;
+    return false;
+  }
+
+#define decl_div_rem(T) template bool div_rem(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
+#define decl_div_rem_s(T) template bool div_rem_s(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
+
+  decl_div_rem(W8);
+  decl_div_rem(W16);
+  decl_div_rem(W32);
+  decl_div_rem(W64);
+
+  decl_div_rem_s(W8);
+  decl_div_rem_s(W16);
+  decl_div_rem_s(W32);
+  decl_div_rem_s(W64);
 
   //
   // Global streams:

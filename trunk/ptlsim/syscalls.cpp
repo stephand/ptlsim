@@ -2,7 +2,7 @@
 //
 // System Calls
 //
-// Copyright 2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
 // Derived from Linux kernel and klibc
 //
 // This program is free software; it is licensed under the
@@ -67,7 +67,7 @@ declare_syscall0(__NR_gettid, pid_t, sys_gettid);
 declare_syscall1(__NR_uname, int, sys_uname, struct utsname*, buf);
 declare_syscall3(__NR_readlink, int, sys_readlink, const char*, path, char*, buf, size_t, bufsiz);
 
-declare_syscall4(__NR_rt_sigaction, long, sys_rt_sigaction, int, sig, const struct sigaction*, act, struct sigaction*, oldact, size_t, sigsetsize);
+declare_syscall4(__NR_rt_sigaction, long, sys_rt_sigaction, int, sig, const struct kernel_sigaction*, act, struct kernel_sigaction*, oldact, size_t, sigsetsize);
 
 declare_syscall4(__NR_wait4, pid_t, sys_wait4, pid_t, pid, int*, status, int, options, struct rusage*, rusage);
 

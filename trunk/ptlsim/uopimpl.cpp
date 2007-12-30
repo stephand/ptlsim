@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Interface to uop implementations
 //
-// Copyright 2000-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -648,6 +648,80 @@ template <int genflags>
 struct x86_op_mulhu<W64, genflags> { W64 operator ()(W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags, byte& cf, byte& of) { asm("int3"); return 0; } };
 #endif
 
+template <int ptlopcode, typename T>
+void x86_div(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  T quotient, remainder;
+
+  if unlikely (!div_rem<T>(quotient, remainder, T(ra), T(rb), T(rc))) {
+    state.reg.rddata = EXCEPTION_DivideOverflow;
+    state.reg.rdflags = FLAG_INV;
+    return;
+  }
+
+  state.reg.rddata = x86_merge<T>(rb, quotient);
+  state.reg.rdflags = x86_genflags<T>(quotient);
+}
+
+template <int ptlopcode, typename T>
+void x86_rem(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  T quotient, remainder;
+
+  if unlikely (!div_rem<T>(quotient, remainder, T(ra), T(rb), T(rc))) {
+    state.reg.rddata = EXCEPTION_DivideOverflow;
+    state.reg.rdflags = FLAG_INV;
+    return;
+  }
+
+  state.reg.rddata = x86_merge<T>(ra, remainder);
+  state.reg.rdflags = x86_genflags<T>(remainder);
+}
+
+template <int ptlopcode, typename T>
+void x86_divs(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  T quotient, remainder;
+
+  if unlikely (!div_rem_s<T>(quotient, remainder, T(ra), T(rb), T(rc))) {
+    state.reg.rddata = EXCEPTION_DivideOverflow;
+    state.reg.rdflags = FLAG_INV;
+    return;
+  }
+
+  state.reg.rddata = x86_merge<T>(rb, quotient);
+  state.reg.rdflags = x86_genflags<T>(quotient);
+}
+
+template <int ptlopcode, typename T>
+void x86_rems(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  T quotient, remainder;
+
+  if unlikely (!div_rem_s<T>(quotient, remainder, T(ra), T(rb), T(rc))) {
+    state.reg.rddata = EXCEPTION_DivideOverflow;
+    state.reg.rdflags = FLAG_INV;
+    return;
+  }
+
+  state.reg.rddata = x86_merge<T>(ra, remainder);
+  state.reg.rdflags = x86_genflags<T>(remainder);
+}
+
+uopimpl_func_t implmap_div[4] = {&x86_div<OP_div, W8>, &x86_div<OP_div, W16>, &x86_div<OP_div, W32>, &x86_div<OP_div, W64>};
+uopimpl_func_t implmap_rem[4] = {&x86_rem<OP_rem, W8>, &x86_rem<OP_rem, W16>, &x86_rem<OP_rem, W32>, &x86_rem<OP_rem, W64>};
+uopimpl_func_t implmap_divs[4] = {&x86_divs<OP_divs, W8>, &x86_divs<OP_divs, W16>, &x86_divs<OP_divs, W32>, &x86_divs<OP_divs, W64>};
+uopimpl_func_t implmap_rems[4] = {&x86_rems<OP_rems, W8>, &x86_rems<OP_rems, W16>, &x86_rems<OP_rems, W32>, &x86_rems<OP_rems, W64>};
+
+template <int ptlopcode, typename T, bool compare_for_max>
+void uop_impl_min_max(IssueState& state, W64 ra, W64 rb, W64 rc, W16 raflags, W16 rbflags, W16 rcflags) {
+  T a = ra;
+  T b = rb;
+  T z = (compare_for_max) ? max(a, b) : min(a, b);
+  state.reg.rddata = x86_merge<T>(ra, z);
+  state.reg.rdflags = x86_genflags<T>(z);
+}
+
+uopimpl_func_t implmap_min[4] = {&uop_impl_min_max<OP_min, W8, 0>, &uop_impl_min_max<OP_min, W16, 0>, &uop_impl_min_max<OP_min, W32, 0>, &uop_impl_min_max<OP_min, W64, 0>};
+uopimpl_func_t implmap_max[4] = {&uop_impl_min_max<OP_max, W8, 1>, &uop_impl_min_max<OP_max, W16, 1>, &uop_impl_min_max<OP_max, W32, 1>, &uop_impl_min_max<OP_max, W64, 1>};
+uopimpl_func_t implmap_min_s[4] = {&uop_impl_min_max<OP_min, W8s, 0>, &uop_impl_min_max<OP_min, W16s, 0>, &uop_impl_min_max<OP_min, W32s, 0>, &uop_impl_min_max<OP_min, W64s, 0>};
+uopimpl_func_t implmap_max_s[4] = {&uop_impl_min_max<OP_max, W8s, 1>, &uop_impl_min_max<OP_max, W16s, 1>, &uop_impl_min_max<OP_max, W32s, 1>, &uop_impl_min_max<OP_max, W64s, 1>};
 
 //
 // Condition code evaluation
@@ -920,6 +994,7 @@ inline void uop_impl_chk_and(IssueState& state, W64 ra, W64 rb, W64 rc, W16 rafl
 make_condop_all_conds_any(OP_chk, make_condop, [1], chk, uop_impl_chk);
 make_condop_all_conds_all_sizes(chk_sub, uop_impl_chk_sub);
 make_condop_all_conds_all_sizes(chk_and, uop_impl_chk_and);
+
 
 //
 // Floating Point
@@ -1508,6 +1583,16 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
   case OP_st:
   case OP_mf:
     func = uop_impl_nop; break;
+
+  case OP_bt:
+    func = implmap_bt[size][setflags]; break;
+  case OP_bts:
+    func = implmap_bts[size][setflags]; break;
+  case OP_btr:
+    func = implmap_btr[size][setflags]; break;
+  case OP_btc:
+    func = implmap_btc[size][setflags]; break;
+
   case OP_rotl: 
     func = implmap_rotl[size][setflags]; break;
   case OP_rotr: 
@@ -1559,20 +1644,32 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
     func = implmap_mulhu[size][setflags]; break;
   case OP_mulhl:
     func = implmap_mulhl[size]; break;
-  case OP_bt:
-    func = implmap_bt[size][setflags]; break;
-  case OP_bts:
-    func = implmap_bts[size][setflags]; break;
-  case OP_btr:
-    func = implmap_btr[size][setflags]; break;
-  case OP_btc:
-    func = implmap_btc[size][setflags]; break;
+
   case OP_ctz: 
     func = implmap_ctz[size][setflags]; break;
   case OP_clz: 
     func = implmap_clz[size][setflags]; break;
+    // case OP_ctpop:
   case OP_permb:
     func = uop_impl_permb; break;
+
+  case OP_div:
+    func = implmap_div[size]; break;
+  case OP_rem:
+    func = implmap_rem[size]; break;
+  case OP_divs:
+    func = implmap_divs[size]; break;
+  case OP_rems:
+    func = implmap_rems[size]; break;
+
+  case OP_min:
+    func = implmap_min[size]; break;
+  case OP_max:
+    func = implmap_max[size]; break;
+  case OP_min_s:
+    func = implmap_min_s[size]; break;
+  case OP_max_s:
+    func = implmap_max_s[size]; break;
 
   case OP_fadd:
     func = implmap_fadd[size]; break;

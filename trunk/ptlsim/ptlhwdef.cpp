@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Hardware Definitions
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <ptlsim.h>
@@ -106,6 +106,16 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"clz",            OPCLASS_BITSCAN,       opB  },
   {"ctpop",          OPCLASS_BITSCAN,       opB  },  
   {"permb",          OPCLASS_SHIFTROT,      opABC},
+  // Integer divide and remainder step
+  {"div",            OPCLASS_MULTIPLY,      opABC}, // unsigned divide
+  {"rem",            OPCLASS_MULTIPLY,      opABC}, // unsigned divide
+  {"divs",           OPCLASS_MULTIPLY,      opABC}, // signed divide
+  {"rems",           OPCLASS_MULTIPLY,      opABC}, // signed divide
+  // Minimum and maximum
+  {"min",            OPCLASS_ADDSUB,        opAB }, // min(ra, rb)
+  {"max",            OPCLASS_ADDSUB,        opAB }, // max(ra, rb)
+  {"min.s",          OPCLASS_ADDSUB,        opAB }, // min(ra, rb) (ra and rb are signed types)
+  {"max.s",          OPCLASS_ADDSUB,        opAB }, // max(ra, rb) (ra and rb are signed types)
   // Floating point
   // uop.size bits have following meaning:
   // 00 = single precision, scalar (preserve high 32 bits of ra)
@@ -193,6 +203,7 @@ const char* exception_names[EXCEPTION_COUNT] = {
   "LFRQFull",
   "Float",
   "FloatNotAvail",
+  "DivideOverflow",
 };
 
 const char* x86_exception_names[256] = {
@@ -258,9 +269,9 @@ const char* arch_reg_names[TRANSREG_COUNT] = {
   "xmml8", "xmmh8", "xmml9", "xmmh9", "xmml10", "xmmh10", "xmml11", "xmmh11",
   "xmml12", "xmmh12", "xmml13", "xmmh13", "xmml14", "xmmh14", "xmml15", "xmmh15",
   // x87 FP/MMX
-  "fptos", "fpsw", "fptags", "fpstack", "tr4", "tr5", "trace", "ctx",
+  "fptos", "fpsw", "fptags", "fpstack", "msr", "dlptr", "trace", "ctx",
   // Special
-  "rip", "flags", "iflags", "selfrip","nextrip", "ar1", "ar2", "zero",
+  "rip", "flags", "dlend", "selfrip","nextrip", "ar1", "ar2", "zero",
   // The following are ONLY used during the translation and renaming process:
   "tr0", "tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "tr7",
   "zf", "cf", "of", "imm", "mem", "tr8", "tr9", "tr10",
@@ -392,6 +403,7 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
   bool ld = isload(op.opcode);
   bool st = isstore(op.opcode);
   bool fp = (isclass(op.opcode, OPCLASS_FP_ALU));
+  bool br = isbranch(op.opcode);
 
   stringbuf sbname;
 
@@ -406,7 +418,7 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
       sbname << '.', mf_names[op.extshift];
     }
     sbname << ((op.cond == LDST_ALIGN_LO) ? ".lo" : (op.cond == LDST_ALIGN_HI) ? ".hi" : "");
-  } else if (op.opcode == OP_mask) {
+  } else if ((op.opcode == OP_mask) || (op.opcode == OP_maskb)) {
     sbname << ((op.cond == 0) ? "" : (op.cond == 1) ? ".z" : (op.cond == 2) ? ".x" : ".???");
   }
 
@@ -620,7 +632,7 @@ stringbuf& operator <<(stringbuf& os, const SFR& sfr) {
     os << bytemaskstring((const byte*)&sfr.data, sfr.bytemask, 8), " ";
   }
 
-  os << "@ 0x", hexstring(sfr.physaddr << 3, 64), " for memid tag ", sfr.tag;
+  os << "@ 0x", hexstring(sfr.physaddr << 3, 64), " for memid tag ", intstring(sfr.tag, 3);
   return os;
 }
 

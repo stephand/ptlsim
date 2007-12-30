@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Decoder for x86 and x86-64 to PTL transops
 //
-// Copyright 1999-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -913,7 +913,7 @@ int TraceDecoder::bias_by_segreg(int basereg) {
   return basereg;
 }
 
-void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool force_seg_bias) {
+void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool force_seg_bias, bool rmw) {
   //
   // In the address generation form used by internally generated
   // uops, we need the full virtual address, including the segment base
@@ -956,6 +956,11 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     (lowbits(memref.mem.offset, memref.mem.size) != 0) |
     (!fits_in_signed_nbit(memref.mem.offset >> memref.mem.size, imm_bits));
 
+  if unlikely (opcode == OP_add) {
+    // LEA and the like are always encodable since it's just an ADD uop:
+    imm_is_not_encodable = 0;
+  }
+
   W64s offset = memref.mem.offset;
 
   bool locked = ((prefixes & PFX_LOCK) != 0);
@@ -966,17 +971,17 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     basereg = REG_zero;
     if (force_seg_bias) basereg = bias_by_segreg(basereg);
 
-    int tempreg = (memop) ? REG_temp8 : destreg;
-
-    abs_code_addr_immediate(REG_temp8, 3, Waddr(rip) + offset);
-    this << TransOp(OP_add, tempreg, REG_temp8, basereg, REG_zero, 3);
-
     if (memop) {
-      TransOp ldst(opcode, destreg, tempreg, REG_imm, srcreg, memref.mem.size, 0);
+      abs_code_addr_immediate(REG_temp8, 3, Waddr(rip) + offset);
+      TransOp ldst(opcode, destreg, REG_temp8, REG_imm, srcreg, memref.mem.size, 0);
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
+      ldst.extshift = 0;
       this << ldst;
+    } else {
+      assert(opcode == OP_add);
+      abs_code_addr_immediate(destreg, 3, Waddr(rip) + offset);
     }
   } else if (indexreg == REG_zero) {
     // [ra + imm32] or [ra]
@@ -988,9 +993,12 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     }
 
     TransOp ldst(opcode, destreg, basereg, REG_imm, srcreg, memref.mem.size, offset);
-    ldst.datatype = datatype;
-    ldst.cachelevel = cachelevel;
-    ldst.locked = locked;
+    if (memop) {
+      ldst.datatype = datatype;
+      ldst.cachelevel = cachelevel;
+      ldst.locked = locked;
+      ldst.extshift = 0; // rmw;
+    }
     this << ldst;
   } else if (offset == 0) {
     // [ra + rb*scale] or [rb*scale]
@@ -1006,14 +1014,15 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
       this << TransOp(OP_add, tempreg, basereg, indexreg, REG_zero, (memop) ? 3 : memref.mem.size);
     }
 
+    TransOp ldst(opcode, destreg, tempreg, REG_imm, srcreg, memref.mem.size, 0);
     if (memop) {
       // No need for this when we're only doing address generation:
-      TransOp ldst(opcode, destreg, tempreg, REG_imm, srcreg, memref.mem.size, 0);
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
-      this << ldst;
+      ldst.extshift = 0; // rmw;
     }
+    this << ldst;
   } else {
     // [ra + imm32 + rb*scale]
     if (force_seg_bias) basereg = bias_by_segreg(basereg);
@@ -1028,19 +1037,22 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
     addop.extshift = memref.mem.scale;
     this << addop;
     TransOp ldst(opcode, destreg, REG_temp8, REG_imm, srcreg, memref.mem.size, offset);
-    ldst.datatype = datatype;
-    ldst.cachelevel = cachelevel;
-    ldst.locked = locked;
+    if (memop) {
+      ldst.datatype = datatype;
+      ldst.cachelevel = cachelevel;
+      ldst.locked = locked;
+      ldst.extshift = 0; // rmw;
+    }
     this << ldst;
   }
 }
 
-void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel) {
-  address_generate_and_load_or_store(destreg, REG_zero, memref, opcode, datatype, cachelevel);
+void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool rmw) {
+  address_generate_and_load_or_store(destreg, REG_zero, memref, opcode, datatype, cachelevel, false, rmw);
 }
 
-void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype) {
-  address_generate_and_load_or_store(REG_mem, srcreg, memref, OP_st, datatype);
+void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype, bool rmw) {
+  address_generate_and_load_or_store(REG_mem, srcreg, memref, OP_st, datatype, 0, 0, rmw);
 }
 
 void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
@@ -1049,7 +1061,7 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
 
   if ((rd.type == OPTYPE_REG) && ((ra.type == OPTYPE_REG) || (ra.type == OPTYPE_IMM))) {
     //
-    // reg,reg
+    // reg,reg or reg,imm
     //
     prefixes &= ~PFX_LOCK; // No locking on reg,reg
     assert(rd.reg.reg >= 0 && rd.reg.reg < APR_COUNT);
@@ -1067,6 +1079,15 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
 
     int rbreg = srcreg;
     if (rahigh) { this << TransOp(OP_maskb, REG_temp3, REG_zero, srcreg, REG_imm, 3, 0, MaskControlInfo(0, 8, 8)); rbreg = REG_temp3; }
+
+    //
+    // Special case to break dependency chain for common idiom "xor X,X" => "xor zero,zero" => zero (always zero result when size >= 4 bytes)
+    //
+    if unlikely ((opcode == OP_xor) && (destreg == srcreg) && (sizeshift >= 2)) {
+      assert(!(rahigh | rdhigh));
+      rareg = REG_zero;
+      rbreg = REG_zero;
+    }
 
     if (flagsonly) {
       this << TransOp(opcode, REG_temp0, rareg, rbreg, rcreg, sizeshift, (isimm) ? ra.imm.imm : 0, 0, setflags);
@@ -1111,7 +1132,7 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
     }
   } else if ((rd.type == OPTYPE_MEM) && ((ra.type == OPTYPE_REG) || (ra.type == OPTYPE_IMM))) {
     //
-    // [mem],reg
+    // [mem],reg or [mem],imm (rmw)
     //
     assert(rd.mem.basereg >= 0 && rd.mem.basereg < APR_COUNT);
     assert(rd.mem.indexreg >= 0 && rd.mem.indexreg < APR_COUNT);
@@ -1120,7 +1141,7 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
 
     bool isimm = (ra.type == OPTYPE_IMM);
     int srcreg = (isimm) ? REG_imm : arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-    operand_load(REG_temp0, rd);
+    operand_load(REG_temp0, rd, OP_ld, 0, 0, 1);
 
     int sizeshift = rd.mem.size;
     bool rahigh = (isimm) ? 0 : reginfo[ra.reg.reg].hibyte;
@@ -1129,10 +1150,10 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
 
     if (isimm) {
       this << TransOp(opcode, REG_temp0, REG_temp0, REG_imm, rcreg, sizeshift, ra.imm.imm, 0, setflags);
-      if (!flagsonly) result_store(REG_temp0, REG_temp3, rd);
+      if (!flagsonly) result_store(REG_temp0, REG_temp3, rd, 0, 1);
     } else {
       this << TransOp(opcode, REG_temp0, REG_temp0, srcreg, rcreg, sizeshift, 0, 0, setflags);
-      if (!flagsonly) result_store(REG_temp0, REG_temp3, rd);
+      if (!flagsonly) result_store(REG_temp0, REG_temp3, rd, 0, 1);
     }
   } else if ((rd.type == OPTYPE_MEM) && (ra.type == OPTYPE_MEM)) {
     //

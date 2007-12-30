@@ -5,7 +5,7 @@
 // Faster and more optimized than stock STL implementation,
 // plus includes various customized features
 //
-// Copyright 1997-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1997-2008 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.
@@ -758,6 +758,12 @@ namespace superstl {
     bool empty() const { return (count == 0); }
     bool full() const { return (count == size); }
 
+    stack<T, size>& operator =(const stack<T, size>& stack) {
+      count = stack.count;
+      foreach (i, count) data[i] = stack.data[i];
+      return *this;
+    }
+
     ostream& print(ostream& os) const {
       foreach (i, count) { os << ((i) ? " " : ""), data[i]; }
       return os;
@@ -897,7 +903,7 @@ namespace superstl {
     W32 crc;
     
     inline W32 update(byte value) {
-      crc = crctable[(crc ^ value) & 0xff] ^ (crc >> 8);
+      crc = crctable[byte(crc ^ value)] ^ (crc >> 8);
       return crc;
     }
 
@@ -935,6 +941,17 @@ namespace superstl {
   static inline CRC32& operator ,(CRC32& crc, const T& v) {
     return crc << v;
   }
+
+  struct RandomNumberGenerator {
+    W32 s1, s2, s3;
+    
+    RandomNumberGenerator(W32 seed = 123) { reseed(seed); }
+    
+    void reseed(W32 seed);
+    W32 random32();
+    W64 random64();
+    void fill(void* p, size_t count);
+  };
 
   //
   // selflistlink class
@@ -1398,6 +1415,16 @@ namespace superstl {
     }
 
     operator T*() const { return get(); }
+
+    shortptr<T, P, base, granularity>& operator ++() {
+      (*this) = (get() + 1);
+      return *this;
+    }
+
+    shortptr<T, P, base, granularity>& operator --() {
+      (*this) = (get() - 1);
+      return *this;
+    }
   };
 
   template <typename T, typename P, Waddr base, int granularity>
@@ -2737,6 +2764,87 @@ namespace superstl {
     return ht.print(os);
   }
 
+  template <typename Tkey, typename Tdata, int N, int setcount>
+  struct FixedKeyValueHashtable {
+    typedef int ptr_t;
+
+    Tkey keys[N];
+    Tdata data[N];
+    ptr_t next[N];
+
+    ptr_t sets[setcount];
+    int count;
+
+    FixedKeyValueHashtable() {
+      reset();
+    }
+
+    void reset() {
+      count = 0;
+      memset(sets, 0xff, sizeof(sets));
+    }
+
+    static int setof(Tkey key) {
+      return foldbits<log2(setcount)>(key);
+    }
+
+    int lookup(Tkey key) const {
+      int set = setof(key);
+      ptr_t slot = sets[set];
+      while (slot >= 0) {
+        if unlikely (keys[slot] == key) return slot;
+        slot = next[slot];
+      }
+      return -1;
+    }
+
+    bool remaining() const { return (N - count); }
+    bool full() const { return (!remaining()); }
+    bool empty() const { return (!count); }
+
+    ptr_t add(Tkey key, Tdata value) {
+      int set = setof(key);
+      ptr_t slot = lookup(key);
+      if likely (slot >= 0) return slot;
+
+      if unlikely (slot >= N) return -1;
+      slot = count++;
+      keys[slot] = key;
+      data[slot] = value;
+      next[slot] = sets[set];
+      sets[set] = slot;
+      return slot;
+    }
+
+    Tdata get(Tkey key) const {
+      int slot = lookup(key);
+      if unlikely (slot < 0) return Tdata(0);
+      return data[slot];
+    }
+
+    inline Tdata operator ()(Tkey key) { return get(key); }
+
+    inline Tdata& operator [](int i) { return data[i]; }
+    inline Tdata operator [](int i) const { return data[i]; }
+    operator Tdata*() const { return data; }
+    operator const Tdata*() const { return data; }
+
+    ostream& print(ostream& os) const {
+      os << "FixedKeyValueHashtable<", sizeof(Tkey), "-byte key, ", sizeof(Tdata), "-byte data, ", N, " slots, ", setcount, " sets> containing ", count, " entries:", endl;
+      foreach (i, count) {
+        Tkey k = keys[i];
+        Tdata v = data[i];
+        os << "  ", intstring(i, 4), ": ", k, " => ", v, endl;
+      }
+      return os;
+    }
+  };
+
+  template <typename Tkey, typename Tdata, int N, int setcount>
+  ostream& operator <<(ostream& os, const FixedKeyValueHashtable<Tkey, Tdata, N, setcount>& ht) {
+    return ht.print(os);
+  }
+
   template <typename T, int N>
   struct ChunkList {
     struct Chunk;
@@ -3654,7 +3762,13 @@ namespace superstl {
       }
     }
   };
-
+  
+  //
+  // Safe divide and remainder functions that return true iff operation did not generate an exception:
+  //
+  template <typename T> bool div_rem(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
+  template <typename T> bool div_rem_s(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
+  
   template <typename T>
   struct ScopedLock {
     T& lock;

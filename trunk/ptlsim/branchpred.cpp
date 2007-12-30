@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Branch Prediction
 //
-// Copyright 2002-2005 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 //
 // This program is free software; it is licensed under the
 // GNU General Public License, Version 2.

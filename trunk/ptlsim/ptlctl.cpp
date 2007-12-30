@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Control program used inside target virtual machine
 //
-// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>

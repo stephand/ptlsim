@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Sequential Core Simulator Configuration
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2004-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _SEQCORE_H_
@@ -59,5 +59,7 @@ struct CommitRecord: public Context {
 PrintOperator(CommitRecord);
 
 int execute_sequential(Context& ctx, CommitRecord* cmtrec = null, W64 bbcount = 1, W64 insncount = limits<W64>::max);
+
+extern W64 suppress_total_user_insn_count_updates_in_seqcore;
 
 #endif // _SEQCORE_H_

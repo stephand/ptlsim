@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Interface between PTLcore and PTLmon dom0 control process
 //
-// Copyright 2005-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _PTLXEN_H_

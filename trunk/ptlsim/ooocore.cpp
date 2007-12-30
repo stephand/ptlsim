@@ -3,8 +3,8 @@
 // Out-of-Order Core Simulator
 // Core Structures
 //
-// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006-2007 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
 #include <globals.h>
@@ -1947,8 +1947,8 @@ void OutOfOrderMachine::flush_all_pipelines() {
   }  
 }
 
-OutOfOrderMachine smtmodel("smt");
+OutOfOrderMachine ooomodel("ooo");
 
 OutOfOrderCore& OutOfOrderModel::coreof(int coreid) {
-  return *smtmodel.cores[coreid];
+  return *ooomodel.cores[coreid];
 }

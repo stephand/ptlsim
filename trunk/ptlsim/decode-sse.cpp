@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Decoder for SSE/SSE2/SSE3/MMX and misc instructions
 //
-// Copyright 1999-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <decode.h>
@@ -125,10 +125,11 @@ bool TraceDecoder::decode_sse() {
     int datatype = sse_float_datatype_to_ptl_datatype[sizetype];
 
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-    int rareg;
+    int rareg = rdreg;
+    int rbreg;
 
     if (ra.type == OPTYPE_MEM) {
-      rareg = REG_temp0;
+      rbreg = REG_temp0;
       //
       // For "ss" (32-bit single-precision scalar) datatype,
       // make sure it's a ldd (32-bit load); otherwise we'll
@@ -142,16 +143,23 @@ bool TraceDecoder::decode_sse() {
         operand_load(REG_temp1, ra, OP_ld, datatype);
       }
     } else {
-      rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+      rbreg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     }
 
-    TransOp lowop(uop, rdreg+0, rdreg+0, rareg+0, REG_zero, isclass(uop, OPCLASS_LOGIC) ? 3 : sizetype);
+    // Special case dependency chain breaker: xorXX A,A => xorXX zero,zero
+    if unlikely ((uop == OP_xor) && (ra.type == OPTYPE_REG) && (rdreg == rbreg) && packed) {
+      this << TransOp(OP_xor, rdreg+0, REG_zero, REG_zero, REG_zero, 3);
+      this << TransOp(OP_xor, rdreg+1, REG_zero, REG_zero, REG_zero, 3);
+      break;
+    }
+
+    TransOp lowop(uop, rdreg+0, rareg+0, rbreg+0, REG_zero, isclass(uop, OPCLASS_LOGIC) ? 3 : sizetype);
     lowop.cond = imm.imm.imm;
     lowop.datatype = datatype;
     this << lowop;
 
     if (packed) {
-      TransOp highop(uop, rdreg+1, rdreg+1, rareg+1, REG_zero, isclass(uop, OPCLASS_LOGIC) ? 3 : sizetype);
+      TransOp highop(uop, rdreg+1, rareg+1, rbreg+1, REG_zero, isclass(uop, OPCLASS_LOGIC) ? 3 : sizetype);
       highop.cond = imm.imm.imm;
       highop.datatype = datatype;
       this << highop;
@@ -225,6 +233,13 @@ bool TraceDecoder::decode_sse() {
         operand_load(REG_temp1, ra, OP_ld, DATATYPE_VEC_128BIT);
     } else {
       rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+    }
+
+    // Special case dependency chain breaker: xorXX A,A => xorXX zero,zero
+    if unlikely ((uop == OP_xor) && (ra.type == OPTYPE_REG) && (rdreg == rareg)) {
+      this << TransOp(OP_xor, rdreg+0, REG_zero, REG_zero, REG_zero, 3);
+      this << TransOp(OP_xor, rdreg+1, REG_zero, REG_zero, REG_zero, 3);
+      break;
     }
 
     bool isshift = (uop == OP_vshr) | (uop == OP_vsar) | (uop == OP_vshl);

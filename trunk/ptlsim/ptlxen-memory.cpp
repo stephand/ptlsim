@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Memory functions for Xen subsystem
 //
-// Copyright 2005-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -2037,7 +2037,6 @@ W64 handle_grant_table_op_hypercall(Context& ctx, W64 cmd, byte* arg, W64 count,
     default: {
       if (debug) logfile << "grant_table_op: unknown op ", cmd, endl, flush;
       rc = -EINVAL;
-      assert(false);
       break;
     }
     }

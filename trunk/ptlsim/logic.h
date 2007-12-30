@@ -2,7 +2,7 @@
 //
 // Sequential Logic Primitives for C++
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _LOGIC_H_
@@ -214,8 +214,18 @@ struct FixedQueue: public array<T, SIZE> {
     return &(*this)[t];
   }
 
+  T& operator ()(int index) {
+    index = add_index_modulo(head, index, SIZE);
+    return (*this)[index];
+  }
+
+  const T& operator ()(int index) const {
+    index = add_index_modulo(head, index, SIZE);
+    return (*this)[index];
+  }
+
   ostream& print(ostream& os) const {
-    os << "Queue<", SIZE, "]: head ", head, " to tail ", tail, " (", count, " entries):", endl;
+    os << "Queue<", SIZE, ">: head ", head, " to tail ", tail, " (", count, " entries):", endl;
     foreach_forward((*this), i) {
       const T& entry = (*this)[i];
       os << "  slot ", intstring(i, 3), ": ", entry, endl;

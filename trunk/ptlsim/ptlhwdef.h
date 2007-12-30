@@ -3,7 +3,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Hardware Definitions
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #ifndef _PTLHWDEF_H
@@ -49,6 +49,14 @@
 #define COND_nl  13
 #define COND_le  14
 #define COND_nle 15
+
+#define COND_z   COND_e
+#define COND_nz  COND_ne
+
+#define COND_ae  COND_nc
+#define COND_ge  COND_nl
+
+#define COND_b   COND_c
 
 #define ARCHREG_INT_BASE 0
 #define ARCHREG_SSE_BASE 16
@@ -113,13 +121,13 @@
 #define REG_fpsw    49
 #define REG_fptags  50
 #define REG_fpstack 51
-#define REG_tr4     52
-#define REG_tr5     53
+#define REG_msr     52
+#define REG_dlptr   53
 #define REG_trace   54
 #define REG_ctx     55
 #define REG_rip     56
 #define REG_flags   57
-#define REG_iflags  58
+#define REG_dlend   58
 #define REG_selfrip 59
 #define REG_nextrip 60
 #define REG_ar1     61
@@ -181,6 +189,7 @@ enum {
   EXCEPTION_LFRQFull,
   EXCEPTION_FloatingPoint,
   EXCEPTION_FloatingPointNotAvailable,
+  EXCEPTION_DivideOverflow,
   EXCEPTION_COUNT
 };
 
@@ -946,22 +955,17 @@ enum {
 //
 // Operation Classes
 // 
-// NOTE: Even if a given opcode is not USESFLAGS, we still check all flags for FLAG_INV and FLAG_WAIT in the prescan:
-// NOTE: If an opcode is USESFLAGS, generally it is also USESRC since often RC contains the carry flag but no value.
-
-#define OPCLASS_USESFLAGS               0
-#define OPCLASS_USESRC                  0
 
 #define OPCLASS_LOGIC                   (1 << 0)
 
 #define OPCLASS_ADDSUB                  (1 << 1)
-#define OPCLASS_ADDSUBC                 ((1 << 2) | OPCLASS_USESFLAGS | OPCLASS_USESRC)
-#define OPCLASS_ADDSHIFT                ((1 << 3) | OPCLASS_USESRC)
+#define OPCLASS_ADDSUBC                 (1 << 2)
+#define OPCLASS_ADDSHIFT                (1 << 3)
 #define OPCLASS_ADD                     (OPCLASS_ADDSUB|OPCLASS_ADDSUBC|OPCLASS_ADDSHIFT)
 
-#define OPCLASS_SELECT                  ((1 << 4) | OPCLASS_USESFLAGS | OPCLASS_USESRC)
+#define OPCLASS_SELECT                  (1 << 4)
 #define OPCLASS_COMPARE                 (1 << 5)
-#define OPCLASS_COND_BRANCH             ((1 << 6) | OPCLASS_USESFLAGS)
+#define OPCLASS_COND_BRANCH             (1 << 6)
 
 #define OPCLASS_INDIR_BRANCH            (1 << 7)
 #define OPCLASS_UNCOND_BRANCH           (1 << 8)
@@ -969,20 +973,22 @@ enum {
 #define OPCLASS_BARRIER                 (OPCLASS_ASSIST)
 #define OPCLASS_BRANCH                  (OPCLASS_COND_BRANCH|OPCLASS_INDIR_BRANCH|OPCLASS_UNCOND_BRANCH|OPCLASS_ASSIST)
 
-#define OPCLASS_LOAD                    ((1 << 11) | OPCLASS_USESRC)
-#define OPCLASS_STORE                   ((1 << 12) | OPCLASS_USESRC)
+#define OPCLASS_LOAD                    (1 << 11)
+#define OPCLASS_STORE                   (1 << 12)
 #define OPCLASS_PREFETCH                (1 << 13)
 #define OPCLASS_FENCE                   ((1 << 10) | OPCLASS_STORE)
 #define OPCLASS_MEM                     (OPCLASS_LOAD|OPCLASS_STORE|OPCLASS_PREFETCH|OPCLASS_FENCE)
 
 #define OPCLASS_SIMPLE_SHIFT            (1 << 14)
-#define OPCLASS_SHIFTROT                ((1 << 15) | OPCLASS_USESFLAGS | OPCLASS_USESRC)
+#define OPCLASS_SHIFTROT                (1 << 15)
 #define OPCLASS_MULTIPLY                (1 << 16)
 #define OPCLASS_BITSCAN                 (1 << 17)
 #define OPCLASS_FLAGS                   (1 << 18)
 #define OPCLASS_CHECK                   (1 << 19)
 
 #define OPCLASS_CONDITIONAL             (OPCLASS_SELECT|OPCLASS_COND_BRANCH|OPCLASS_CHECK)
+
+#define OPCLASS_ALU_SIZE_MERGING        (OPCLASS_LOGIC|OPCLASS_ADD|OPCLASS_SELECT|OPCLASS_SIMPLE_SHIFT|OPCLASS_SHIFTROT|OPCLASS_MULTIPLY|OPCLASS_BITSCAN)
 
 #define OPCLASS_FP_ALU                  (1 << 20)
 #define OPCLASS_FP_DIVSQRT              (1 << 21)
@@ -1003,7 +1009,8 @@ enum {
 extern const char* opclass_names[OPCLASS_COUNT];
 
 //
-// Opcodes
+// Micro-operations (uops):
+// See table in ptlhwdef.cpp for details.
 //
 enum {
   OP_nop,
@@ -1088,6 +1095,16 @@ enum {
   OP_clz,
   OP_ctpop,
   OP_permb,
+  // Integer divide and remainder step
+  OP_div,
+  OP_rem,
+  OP_divs,
+  OP_rems,
+  // Minimum and maximum
+  OP_min,
+  OP_max,
+  OP_min_s,
+  OP_max_s,
   // Floating point
   OP_fadd,
   OP_fsub,
@@ -1307,7 +1324,7 @@ struct TransOpBase {
   // Index in basic block
   byte bbindex;
   // Misc info (terminal writer of targets in this insn, etc)
-  byte final_insn_in_bb:1, final_arch_in_insn:1, final_flags_in_insn:1, any_flags_in_insn:1, pad:4;
+  byte final_insn_in_bb:1, final_arch_in_insn:1, final_flags_in_insn:1, any_flags_in_insn:1, pad:3, marked:1;
   // Immediates
   W64s rbimm;
   W64s rcimm;
@@ -1440,6 +1457,7 @@ static const char* branch_type_names[8] = {
   "rep",
   "jmp"
 };
+
 
 struct BasicBlockBase {
   RIPVirtPhys rip;

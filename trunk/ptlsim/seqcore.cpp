@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Sequential Core Simulator
 //
-// Copyright 2003-2007 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -27,6 +27,8 @@
 #define logable(level) (0)
 #endif
 
+W64 suppress_total_user_insn_count_updates_in_seqcore;
+
 static const byte archreg_remap_table[TRANSREG_COUNT] = {
   REG_rax,  REG_rcx,  REG_rdx,  REG_rbx,  REG_rsp,  REG_rbp,  REG_rsi,  REG_rdi,
   REG_r8,  REG_r9,  REG_r10,  REG_r11,  REG_r12,  REG_r13,  REG_r14,  REG_r15,
@@ -37,9 +39,9 @@ static const byte archreg_remap_table[TRANSREG_COUNT] = {
   REG_xmml8,  REG_xmmh8,  REG_xmml9,  REG_xmmh9,  REG_xmml10,  REG_xmmh10,  REG_xmml11,  REG_xmmh11,
   REG_xmml12,  REG_xmmh12,  REG_xmml13,  REG_xmmh13,  REG_xmml14,  REG_xmmh14,  REG_xmml15,  REG_xmmh15,
 
-  REG_fptos,  REG_fpsw,  REG_fptags,  REG_fpstack,  REG_tr4,  REG_tr5,  REG_trace, REG_ctx,
+  REG_fptos,  REG_fpsw,  REG_fptags,  REG_fpstack,  REG_msr,  REG_dlptr,  REG_trace, REG_ctx,
 
-  REG_rip,  REG_flags,  REG_iflags, REG_selfrip, REG_nextrip, REG_ar1, REG_ar2, REG_zero,
+  REG_rip,  REG_flags,  REG_dlend, REG_selfrip, REG_nextrip, REG_ar1, REG_ar2, REG_zero,
 
   REG_temp0,  REG_temp1,  REG_temp2,  REG_temp3,  REG_temp4,  REG_temp5,  REG_temp6,  REG_temp7,
 
@@ -772,7 +774,7 @@ struct SequentialCore {
       event->loadstore.pteused = pteused;
     }
 
-    if unlikely (inrange(addr, config.log_trigger_virt_addr_start, config.log_trigger_virt_addr_end)) {
+    if unlikely (inrange(W64(addr), config.log_trigger_virt_addr_start, config.log_trigger_virt_addr_end)) {
       W64 mfn = physaddr >> 12;
       logfile << "Trigger hit for virtual address range: STORE virt ", (void*)addr, ", phys mfn ", mfn, "+0x", hexstring(addr, 12), " <= 0x", hexstring(rc, (1 << sizeshift)*8),
         " (SFR ", state, ") by insn @ rip ", (void*)arf[REG_rip], " at cycle ", sim_cycle, ", uuid ", current_uuid, ", commits ", total_user_insns_committed, endl;
@@ -894,7 +896,7 @@ struct SequentialCore {
       event->loadstore.pteused = pteused;
     }
 
-    if unlikely (inrange(addr, config.log_trigger_virt_addr_start, config.log_trigger_virt_addr_end)) {
+    if unlikely (inrange(W64(addr), config.log_trigger_virt_addr_start, config.log_trigger_virt_addr_end)) {
       W64 mfn = physaddr >> 12;
       logfile << "Trigger hit for virtual address range: LOAD virt ", (void*)addr, ", phys mfn ", mfn, "+0x", hexstring(addr, 12), " => 0x", hexstring(state.data, 64), " (SFR ", state, ") at cycle ",
         " by insn @ rip ", (void*)arf[REG_rip], " at cycle ", sim_cycle, ", uuid ", current_uuid, ", commits ", total_user_insns_committed, endl;
@@ -1303,7 +1305,7 @@ struct SequentialCore {
             arf[REG_rip] = chk_recovery_rip;
 
             seq_total_user_insns_committed++;
-            total_user_insns_committed++;
+            total_user_insns_committed += (!suppress_total_user_insn_count_updates_in_seqcore);
             user_insns++;
             return SEQEXEC_OK;
           } else {
@@ -1392,7 +1394,7 @@ struct SequentialCore {
       }
 
       seq_total_user_insns_committed += uop.eom;
-      total_user_insns_committed += uop.eom;
+      total_user_insns_committed += uop.eom && (!suppress_total_user_insn_count_updates_in_seqcore);
       user_insns += uop.eom;
       stats.summary.insns += uop.eom;
       stats.summary.uops++;
@@ -1464,7 +1466,7 @@ struct SequentialCore {
     external_to_core_state(ctx);
     int result = SEQEXEC_OK;
 
-    W64 user_insns_at_start = total_user_insns_committed;
+    W64 user_insns_at_start = seq_total_user_insns_committed;
 
     if unlikely (config.event_log_enabled && (!eventlog.start)) {
       eventlog.init(config.event_log_ring_buffer_size);
@@ -1487,9 +1489,9 @@ struct SequentialCore {
       if likely (trans.ptelo.p) smc_cleardirty(trans.ptelo.mfn);
       if likely (trans.ptehi.p) smc_cleardirty(trans.ptehi.mfn);
       
-      W64 user_insns_at_start = total_user_insns_committed;
+      W64 user_insns_at_start = seq_total_user_insns_committed;
       result = execute(&trans.bb, insncount);
-      W64 delta_insns = total_user_insns_committed - user_insns_at_start;
+      W64 delta_insns = seq_total_user_insns_committed - user_insns_at_start;
       insncount -= delta_insns;
       
       if (trans.bb.synthops) delete[] trans.bb.synthops;
@@ -1519,7 +1521,7 @@ struct SequentialCore {
     external_to_core_state(ctx);
     int result = SEQEXEC_OK;
 
-    W64 user_insns_at_start = total_user_insns_committed;
+    W64 user_insns_at_start = seq_total_user_insns_committed;
 
     foreach (i, bbcount) {
       Waddr rip = arf[REG_rip];

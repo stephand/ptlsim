@@ -2,7 +2,7 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Toplevel control and kernel interface to Xen inside the user domain
 //
-// Copyright 1999-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
 #include <globals.h>
@@ -2625,6 +2625,8 @@ int main(int argc, char** argv) {
       capture_stats_snapshot("final");
       flush_stats();
       unmap_address_space();
+
+      if (config.kill_after_run) kill = 1;
     }
 
     complete_upcall(requuid);
