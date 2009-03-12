@@ -1299,11 +1299,11 @@ W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
     return data;
   } else if likely (type == PHYSADDR_TYPE_RAW) {
     // Raw mapping used for granted pages.
+    // SD: Do we need the additional checks from the DRAM case above?
+    W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
     if unlikely (DEBUG) {
       logfile << "RAW grant mapping @ ", &mem, endl;
     }
-    // SD: Do we need the additional checks from the DRAM case above?
-    W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
     mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
     return data;
   } else {
