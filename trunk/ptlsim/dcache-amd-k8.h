@@ -75,7 +75,9 @@ namespace CacheSubsystem {
   const int MAIN_MEM_LATENCY = 100; // above and beyond L1 + L2 latency
 
   // TLBs
+#ifdef PTLSIM_HYPERVISOR
 #define USE_TLB
+#endif
   const int ITLB_SIZE = 32;
   const int DTLB_SIZE = 32;
 
@@ -279,15 +281,19 @@ namespace CacheSubsystem {
     DCACHE_L2_LINE_DEADTIME_INTERVAL, DCACHE_L2_LINE_DEADTIME_SLOTS, 
     DCACHE_L2_LINE_HITCOUNT_INTERVAL, DCACHE_L2_LINE_HITCOUNT_SLOTS> L2StatsCollectorBase;
 
+#ifdef ENABLE_L3_CACHE
   typedef HistogramAssociativeArrayStatisticsCollector<3, L3CacheLine,
     DCACHE_L3_LINE_LIFETIME_INTERVAL, DCACHE_L3_LINE_LIFETIME_SLOTS, 
     DCACHE_L3_LINE_DEADTIME_INTERVAL, DCACHE_L3_LINE_DEADTIME_SLOTS, 
     DCACHE_L3_LINE_HITCOUNT_INTERVAL, DCACHE_L3_LINE_HITCOUNT_SLOTS> L3StatsCollectorBase;
+#endif
 
   struct L1StatsCollector: public L1StatsCollectorBase { };
   struct L1IStatsCollector: public L1IStatsCollectorBase { };
   struct L2StatsCollector: public L2StatsCollectorBase { };
+#ifdef ENABLE_L3_CACHE
   struct L3StatsCollector: public L3StatsCollectorBase { };
+#endif
 
 #else
   typedef NullAssociativeArrayStatisticsCollector<W64, L1CacheLine> L1StatsCollector;
@@ -463,25 +469,12 @@ namespace CacheSubsystem {
     W32  initcycle;
     byte mask;
     byte fillL1:1, fillL2:1;
+    W8s  mbidx;
 
     inline LoadFillReq() { }
   
-    LoadFillReq(W64 addr, W64 data, byte mask, LoadStoreInfo lsi) {
-      this->addr = addr;
-      this->data = data;
-      this->mask = mask;
-      this->lsi = lsi;
-      this->lsi.threadid = lsi.threadid; 
-      this->fillL1 = 1;
-      this->fillL2 = 1;
-      this->initcycle = sim_cycle;
-    }
-
-    ostream& print(ostream& os) const {
-      os << " TH ", lsi.threadid, "  ", "0x", hexstring(data, 64), " @ ", (void*)(Waddr)addr, " -> rob ", lsi.rob;
-      os << ": shift ", lsi.sizeshift, ", signext ", lsi.signext, ", mask ", bitstring(mask, 8, true);
-      return os;
-    }
+    LoadFillReq(W64 addr, W64 data, byte mask, LoadStoreInfo lsi);
+    ostream& print(ostream& os) const;
   };
 
   static inline ostream& operator <<(ostream& os, const LoadFillReq& req) {
@@ -495,6 +488,7 @@ namespace CacheSubsystem {
     bitvec<size> waiting;                    // Waiting for the line to arrive in the L1
     bitvec<size> ready;                      // Wait to extract/signext and write into register
     LoadFillReq reqs[size];
+    int count;
 
     static const int SIZE = size;
 
@@ -509,6 +503,7 @@ namespace CacheSubsystem {
       freemap.setall();
       ready = 0;
       waiting = 0;
+      count = 0;
     }
 
     void changestate(int idx, bitvec<size>& oldstate, bitvec<size>& newstate) {
@@ -522,6 +517,10 @@ namespace CacheSubsystem {
 
     bool full() const {
       return (!freemap);
+    }
+
+    int remaining() const {
+      return (size - count);
     }
 
     void annul(int lfrqslot);
@@ -555,7 +554,7 @@ namespace CacheSubsystem {
       W16 state;
       W16 dcache:1, icache:1;    // L1I vs L1D
       W32 cycles;
-      W16 rob; // to identify which thread.
+      W16 rob;
       W8 threadid;
 
       bitvec<LFRQ_SIZE> lfrqmap;  // which LFRQ entries should this load wake up?
@@ -577,14 +576,16 @@ namespace CacheSubsystem {
     CacheHierarchy& hierarchy;
     Entry missbufs[SIZE];
     bitvec<SIZE> freemap;
-    
+    int count;
+
     void reset();
     void reset(int threadid);
     void restart();
     bool full() const { return (!freemap); }
+    int remaining() const { return (SIZE - count); }
     int find(W64 addr);
     int initiate_miss(W64 addr, bool hit_in_L2, bool icache = 0, int rob = 0xffff, int threadid = 0xfe);
-    int initiate_miss(const LoadFillReq& req, bool hit_in_L2, int rob = 0xffff);
+    int initiate_miss(LoadFillReq& req, bool hit_in_L2, int rob = 0xffff);
     void annul_lfrq(int slot);
     void annul_lfrq(int slot, int threadid);
     void clock();
@@ -621,10 +622,19 @@ namespace CacheSubsystem {
     bool probe_cache_and_sfr(W64 addr, const SFR* sfra, int sizeshift);
     bool covered_by_sfr(W64 addr, SFR* sfr, int sizeshift);
     void annul_lfrq_slot(int lfrqslot);
-    int issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi);
+    int issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi, bool& L2hit);
+
+    int issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi) {
+      bool L2hit = 0;
+      return issueload_slowpath(physaddr, sfra, lsi, L2hit);
+    }
+
+    int get_lfrq_mb(int lfrqslot) const;
+    int get_lfrq_mb_state(int lfrqslot) const;
     bool lfrq_or_missbuf_full() const { return lfrq.full() | missbuf.full(); }
 
-    W64 commitstore(const SFR& sfr, int threadid = 0xff);
+    W64 commitstore(const SFR& sfr, int threadid = 0xff, bool perform_actual_write = true);
+    W64 speculative_store(const SFR& sfr, int threadid = 0xff);
 
     void initiate_prefetch(W64 addr, int cachelevel);
 
@@ -722,10 +732,39 @@ struct DataCacheStats { // rootnode:
   } lfrq;
 
   PerContextDataCacheStats total;
+  // IMPORTANT: This list MUST be equal in length to the number of active VCPUs (at most MAX_CONTEXTS):
   PerContextDataCacheStats vcpu0;
   PerContextDataCacheStats vcpu1;
   PerContextDataCacheStats vcpu2;
   PerContextDataCacheStats vcpu3;
+  PerContextDataCacheStats vcpu4;
+  PerContextDataCacheStats vcpu5;
+  PerContextDataCacheStats vcpu6;
+  PerContextDataCacheStats vcpu7;
+  PerContextDataCacheStats vcpu8;
+  PerContextDataCacheStats vcpu9;
+  PerContextDataCacheStats vcpu10;
+  PerContextDataCacheStats vcpu11;
+  PerContextDataCacheStats vcpu12;
+  PerContextDataCacheStats vcpu13;
+  PerContextDataCacheStats vcpu14;
+  PerContextDataCacheStats vcpu15;
+  PerContextDataCacheStats vcpu16;
+  PerContextDataCacheStats vcpu17;
+  PerContextDataCacheStats vcpu18;
+  PerContextDataCacheStats vcpu19;
+  PerContextDataCacheStats vcpu20;
+  PerContextDataCacheStats vcpu21;
+  PerContextDataCacheStats vcpu22;
+  PerContextDataCacheStats vcpu23;
+  PerContextDataCacheStats vcpu24;
+  PerContextDataCacheStats vcpu25;
+  PerContextDataCacheStats vcpu26;
+  PerContextDataCacheStats vcpu27;
+  PerContextDataCacheStats vcpu28;
+  PerContextDataCacheStats vcpu29;
+  PerContextDataCacheStats vcpu30;
+  PerContextDataCacheStats vcpu31;
 };
 
 #endif // _DCACHE_H_

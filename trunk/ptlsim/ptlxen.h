@@ -527,7 +527,8 @@ static inline W64 mfn_to_linear_pfn(W64 mfn) {
 // address passed to simulation functions to identify the type
 // of memory we're dealing with.
 //
-static const int PHYSADDR_TYPE_SHIFT = 36;
+static const int PHYSADDR_TYPE_SHIFT     = 36;
+static const int PHYSADDR_TYPE_MFN_SHIFT = (PHYSADDR_TYPE_SHIFT - 12);
 
 static const W64 PHYSADDR_TYPE_DRAM          = 0; // Normal DRAM
 static const W64 PHYSADDR_TYPE_RAW           = 1; // Raw MFNs (for pages granted from other domains)
@@ -601,7 +602,8 @@ static inline bool is_readonly_physaddr(W64 physaddr) {
 
 static inline bool is_cacheable_physaddr(W64 physaddr) {
   int type = get_sim_physaddr_type(physaddr);
-  return ((type == PHYSADDR_TYPE_DRAM) | (type == PHYSADDR_TYPE_PTL) | (type == PHYSADDR_TYPE_XEN_M2P));
+  return ((type == PHYSADDR_TYPE_DRAM) | (type == PHYSADDR_TYPE_PTL) |
+          (type == PHYSADDR_TYPE_XEN_M2P) | (type == PHYSADDR_TYPE_RAW));
 }
 
 //

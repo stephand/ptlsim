@@ -113,6 +113,10 @@ void ThreadContext::flush_pipeline() {
     //
     flush_mem_lock_release_list();
     rob.physreg->reset(threadid); // free all register allocated by rob
+
+    if unlikely (config.event_log_enabled)
+      core.eventlog.add(EVENT_ANNUL_FLUSH, &rob);
+
   }
 
   // free all register in arch state:
@@ -1262,6 +1266,11 @@ int ThreadContext::dispatch() {
     dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
   } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
     dispatch_deadlock_countdown--;
+
+    /* SD: Give outstanding cache and tlb-misses a chance to tickle in first! */
+    if ( !dispatch_deadlock_countdown && (rob_cache_miss_list.count || rob_tlb_miss_list.count))
+      dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+
     if (!dispatch_deadlock_countdown) {
       redispatch_deadlock_recovery();
       dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
@@ -1275,7 +1284,7 @@ int ThreadContext::dispatch() {
 
 //
 // Issue Stage
-// (see smtexec.cpp for issue stages)
+// (see oooexec.cpp for issue stages)
 //
 
 //

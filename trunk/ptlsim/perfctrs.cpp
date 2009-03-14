@@ -152,11 +152,21 @@ enum {
   AMD_UOPS_RETIRED                            = 0xc1,
   AMD_L1D_ACCESSES                            = 0x40,
   AMD_L1D_MISSES                              = 0x41, // only counts first miss on an outstanding line
+  AMD_L1I_ACCESSES                            = 0x80,
+  AMD_L1I_MISSES                              = 0x81,
   AMD_BR_INST_RETIRED                         = 0xc2,
   AMD_BR_INST_MISPRED                         = 0xc3,
   AMD_L1_DTLB_MISS_AND_L2_DTLB_HIT            = 0x45, // relative to L1D_ACCESSES
   AMD_L1_DTLB_AND_L2_DTLB_MISS                = 0x46, // relative to L1D_ACCESSES
-  AMD_L2_CACHE_MISS                           = 0x7e  // all misses through L2 (including page walk traffic)
+  AMD_L2_CACHE_MISS                           = 0x7e,  // all misses through L2 (including page walk traffic)
+  AMD_FETCH_STALL_TOTAL                       = 0x87, // may be overlapped of the stalls below
+  AMD_RET_STACK_HITS                          = 0x88, // speculative, _DO NOT_ compare with retired branch ops!
+  AMD_DECODER_EMPTY                           = 0xD0,
+  AMD_DISPATCH_STALL_TOTAL                    = 0xD1,
+  AMD_DISPATCH_STALL_BR_MISPRED               = 0xD2,
+  AMD_DISPATCH_STALL_ROB_FULL                 = 0xD5,
+  AMD_DISPATCH_STALL_ISSUEQ_FULL              = 0xD5,
+  AMD_DISPATCH_STALL_LS_FULL                  = 0xD8
 };
 
 CounterPairConfig amd_k8_counter_config[GENERIC_PERFCTR_COUNT] = {
@@ -169,8 +179,8 @@ CounterPairConfig amd_k8_counter_config[GENERIC_PERFCTR_COUNT] = {
     {AMD_L1D_ACCESSES, 0} // total accesses (including speculative)
   }},
   {{ // GENERIC_PERFCTR_L1I_MISS_RATE
-    {0, 0}, //++MTY TODO
-    {0, 0},
+    {AMD_L1I_MISSES, 0}, // total L1D misses (including speculative)
+    {AMD_L1I_ACCESSES, 0} // total accesses (including speculative)
   }},
   {{ // GENERIC_PERFCTR_DTLB_MISS_RATE
     {AMD_L1_DTLB_AND_L2_DTLB_MISS, 0}, // or AMD_L1_DTLB_MISS_AND_L2_DTLB_HIT

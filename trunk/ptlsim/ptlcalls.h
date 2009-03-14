@@ -1,7 +1,7 @@
 // -*- c++ -*-
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// Trigger functions 
+// Trigger functions
 //
 // Copyright 2004-2008 Matt T. Yourst <yourst@yourst.com>
 //
@@ -245,7 +245,7 @@ static inline W64 ptlcall_marker(W64 marker) {
 
 static inline W64 ptlcall_capture_stats(const char* snapshot) {
   char buf[128];
-  char* commands[2] = {buf, "-run"};
+  char* commands[2] = {buf, (char*)"-run"};
 
   if (!snapshot) snapshot = "forced";
   snprintf(buf, sizeof(buf), "-snapshot-now %s", snapshot);
@@ -258,7 +258,7 @@ static inline W64 ptlcall_capture_stats(const char* snapshot) {
 // from within the domain by writing to /proc/xen/checkpoint.
 //
 // This feature is added by this Linux 2.6.20 patch:
-// ptlsim/patches/linux-2.6.20-xen-self-checkpointing.diff 
+// ptlsim/patches/linux-2.6.20-xen-self-checkpointing.diff
 //
 static inline W64 ptlcall_checkpoint(const char* name) {
   static const char command[] = "checkpoint\n";

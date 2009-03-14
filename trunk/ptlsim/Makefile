@@ -32,7 +32,7 @@ endif
 #
 # PTLSIM_HYPERVISOR=1
 
-CC = g++
+CC = g++-4.2
 
 GCCVER_SPECIFIC =
 

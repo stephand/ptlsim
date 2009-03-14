@@ -214,67 +214,70 @@ namespace OutOfOrderModel {
     // 00 = single precision, scalar (preserve high 32 bits of ra)
     // 01 = single precision, packed (two 32-bit floats)
     // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
-    {OP_addf,           4, FADD},
-    {OP_subf,           4, FADD},
-    {OP_mulf,           5, FMUL},
-    {OP_maddf,          5, FMUL},
-    {OP_msubf,          5, FMUL},
-    {OP_divf,          16, FMUL},
-    {OP_sqrtf,         19, FMUL},
-    {OP_rcpf,           4, FMUL},
-    {OP_rsqrtf,         4, FMUL},
-    {OP_minf,           3, FADD},
-    {OP_maxf,           3, FADD},
-    {OP_cmpf,           3, FADD},
+    {OP_fadd,           4, FADD},
+    {OP_fsub,           4, FADD},
+    {OP_fmul,           5, FMUL},
+    {OP_fmadd,          5, FMUL},
+    {OP_fmsub,          5, FMUL},
+    {OP_fmsubr,         5, FMUL},
+    {OP_fdiv,          16, FMUL},
+    {OP_fsqrt,         19, FMUL},
+    {OP_frcp,           4, FMUL},
+    {OP_frsqrt,         4, FMUL},
+    {OP_fmin,           3, FADD},
+    {OP_fmax,           3, FADD},
+    {OP_fcmp,           3, FADD},
     // For fcmpcc, uop.size bits have following meaning:
     // 00 = single precision ordered compare
     // 01 = single precision unordered compare
     // 10 = double precision ordered compare
     // 11 = double precision unordered compare
-    {OP_cmpccf,         4, FADD},
+    {OP_fcmpcc,         4, FADD},
     // and/andn/or/xor are done using integer uops
     // For these conversions, uop.size bits select truncation mode:
     // x0 = normal IEEE-style rounding
     // x1 = truncate to zero
-    {OP_cvtf_i2s_ins,   9, FCVT},
-    {OP_cvtf_i2s_p,     9, FCVT},
-    {OP_cvtf_i2d_lo,    9, FCVT},
-    {OP_cvtf_i2d_hi,    9, FCVT},
-    {OP_cvtf_q2s_ins,   9, FCVT},
-    {OP_cvtf_q2d,       9, FCVT},
-    {OP_cvtf_s2i,       6, FCVT},
-    {OP_cvtf_s2q,       6, FCVT},
-    {OP_cvtf_s2i_p,     6, FCVT},
-    {OP_cvtf_d2i,       6, FCVT},
-    {OP_cvtf_d2q,       6, FCVT},
-    {OP_cvtf_d2i_p,     6, FCVT},
-    {OP_cvtf_d2s_ins,   4, FCVT},
-    {OP_cvtf_d2s_p,     4, FCVT},
-    {OP_cvtf_s2d_lo,    4, FCVT},
-    {OP_cvtf_s2d_hi,    4, FCVT},
+    {OP_fcvt_i2s_ins,   9, FCVT},
+    {OP_fcvt_i2s_p,     9, FCVT},
+    {OP_fcvt_i2d_lo,    9, FCVT},
+    {OP_fcvt_i2d_hi,    9, FCVT},
+    {OP_fcvt_q2s_ins,   9, FCVT},
+    {OP_fcvt_q2d,       9, FCVT},
+    {OP_fcvt_s2i,       6, FCVT},
+    {OP_fcvt_s2q,       6, FCVT},
+    {OP_fcvt_s2i_p,     6, FCVT},
+    {OP_fcvt_d2i,       6, FCVT},
+    {OP_fcvt_d2q,       6, FCVT},
+    {OP_fcvt_d2i_p,     6, FCVT},
+    {OP_fcvt_d2s_ins,   4, FCVT},
+    {OP_fcvt_d2s_p,     4, FCVT},
+    {OP_fcvt_s2d_lo,    4, FCVT},
+    {OP_fcvt_s2d_hi,    4, FCVT},
     // Vector integer uops
     // uop.size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (i.e. same as normal ALU uops)
-    {OP_addv,           1, FADD|FMUL},
-    {OP_subv,           1, FADD|FMUL},
-    {OP_addv_us,        1, FADD|FMUL},
-    {OP_subv_us,        1, FADD|FMUL},
-    {OP_addv_ss,        1, FADD|FMUL},
-    {OP_subv_ss,        1, FADD|FMUL},
-    {OP_shlv,           1, FMUL},
-    {OP_shrv,           1, FMUL},
-    {OP_btv,            1, FMUL},
-    {OP_sarv,           1, FMUL},
-    {OP_avgv,           1, FADD},
-    {OP_cmpv,           1, FADD|FMUL},
-    {OP_minv,           1, FADD|FMUL},
-    {OP_maxv,           1, FADD|FMUL},
-    {OP_mullv,          4, FMUL},
-    {OP_mulhv,          4, FMUL},
-    {OP_mulhuv,         4, FMUL},
-    {OP_maddpv,         4, ANYFPU},
-    {OP_sadv,           4, ANYFPU},
-    {OP_pack_us,        2, ANYFPU},
-    {OP_pack_ss,        2, ANYFPU},
+    {OP_vadd,           1, FADD|FMUL},
+    {OP_vsub,           1, FADD|FMUL},
+    {OP_vadd_us,        1, FADD|FMUL},
+    {OP_vsub_us,        1, FADD|FMUL},
+    {OP_vadd_ss,        1, FADD|FMUL},
+    {OP_vsub_ss,        1, FADD|FMUL},
+    {OP_vshl,           1, FMUL},
+    {OP_vshr,           1, FMUL},
+    {OP_vbt,            1, FMUL},
+    {OP_vsar,           1, FMUL},
+    {OP_vavg,           1, FADD},
+    {OP_vcmp,           1, FADD|FMUL},
+    {OP_vmin,           1, FADD|FMUL},
+    {OP_vmax,           1, FADD|FMUL},
+    {OP_vmin_s,         1, FADD|FMUL},
+    {OP_vmax_s,         1, FADD|FMUL},
+    {OP_vmull,          4, FMUL},
+    {OP_vmulh,          4, FMUL},
+    {OP_vmulhu,         4, FMUL},
+    {OP_vmaddp,         4, ANYFPU},
+    {OP_vsad,           4, ANYFPU},
+    {OP_vpack_us,       2, ANYFPU},
+    {OP_vpack_ss,       2, ANYFPU},
   };
 
 #undef A
@@ -691,10 +694,11 @@ namespace OutOfOrderModel {
     int forward();
     int select_cluster();
     int issue();
-    void* addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
+    Waddr addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
     bool handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec);
     int issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate);
     int issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate);
+    void issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel);
     int probecache(Waddr addr, LoadStoreQueueEntry* sfra);
     void tlbwalk();
     int issuefence(LoadStoreQueueEntry& state);
@@ -959,7 +963,7 @@ namespace OutOfOrderModel {
   // Lookup tables (LUTs):
   //
   struct Cluster {
-    char* name;
+    const char* name;
     W16 issue_width;
     W32 fu_mask;
   };
@@ -1397,6 +1401,7 @@ namespace OutOfOrderModel {
     int current_basic_block_transop_index;
     bool stall_frontend;
     bool waiting_for_icache_fill;
+    Waddr waiting_for_icache_fill_physaddr;
 
     // Last block in icache we fetched into our buffer
     W64 current_icache_block;
@@ -1460,7 +1465,7 @@ namespace OutOfOrderModel {
     void annul_fetchq();
     BasicBlock* fetch_or_translate_basic_block(const RIPVirtPhys& rvp);
     void redispatch_deadlock_recovery();
-    void flush_mem_lock_release_list();
+    void flush_mem_lock_release_list(int start = 0);
     int get_priority() const;
 
     void dump_smt_state(ostream& os);
@@ -1953,6 +1958,24 @@ struct OutOfOrderCoreStats { // rootnode:
 
     W64 width[OutOfOrderModel::COMMIT_WIDTH+1]; // histo: 0, OutOfOrderModel::COMMIT_WIDTH, 1
   } commit;
+
+  struct branchpred {
+    W64 predictions;
+    W64 updates;
+
+    // These counters are [0] = mispred, [1] = correct
+    W64 cond[2]; // label: branchpred_outcome_names
+    W64 indir[2]; // label: branchpred_outcome_names
+    W64 ret[2]; // label: branchpred_outcome_names
+    W64 summary[2]; // label: branchpred_outcome_names
+    struct ras { // node: summable
+      W64 pushes;
+      W64 overflows;
+      W64 pops;
+      W64 underflows;
+      W64 annuls;
+    } ras;
+  } branchpred;
 
   PerContextOutOfOrderCoreStats total;
   PerContextOutOfOrderCoreStats vcpu0;

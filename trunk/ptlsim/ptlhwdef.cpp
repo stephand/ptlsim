@@ -575,7 +575,7 @@ char* regname(int r) {
   return (char*)temp;
 }
 
-stringbuf& nameof(stringbuf& sbname, const TransOp& uop) {
+stringbuf& nameof(stringbuf& sbname, const TransOpBase& uop) {
   static const char* size_names[4] = {"b", "w", "d", ""};
   static const char* fptype_names[4] = {"ss", "ps", "sd", "pd"};
   static const char* mask_exttype[4] = {"", "zxt", "sxt", "???"};

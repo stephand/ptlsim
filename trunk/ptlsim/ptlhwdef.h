@@ -1509,7 +1509,7 @@ ostream& operator <<(ostream& os, const BasicBlock& bb);
 //
 // Printing and information
 //
-stringbuf& nameof(stringbuf& sbname, const TransOp& uop);
+stringbuf& nameof(stringbuf& sbname, const TransOpBase& uop);
 
 char* regname(int r);
 

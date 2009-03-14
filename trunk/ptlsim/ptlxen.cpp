@@ -1037,6 +1037,14 @@ void Context::init() {
   efer.lma = 1;
   efer.nxe = 1;
   efer.ffxsr = 1;
+
+  // Bring the state representations back in sync
+  //SD NOTE: This is likely an ugly hack.
+  if (running && (runstate.state == RUNSTATE_blocked)) {
+    if (logable(1)) logfile << "[vcpu ", vcpuid, "] Faking a proper runstate transition to mark the VCPU running.", endl;
+    running = false;
+    change_runstate(RUNSTATE_running); // Will set running back to true;
+  }
 }
 
 //

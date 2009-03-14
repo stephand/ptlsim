@@ -17,6 +17,11 @@
 
 typedef W16 domid_t;
 
+asmlinkage {
+#include <xenctrl.h>
+#include <xs.h>
+};
+
 #include <xen-types.h>
 #include <xen/linux/privcmd.h>
 #include <xen/linux/evtchn.h>
@@ -24,11 +29,6 @@ typedef W16 domid_t;
 
 #define PTLSIM_IN_PTLMON
 #include <ptlxen.h>
-
-asmlinkage {
-#include <xenctrl.h>
-#include <xs.h>
-};
 
 #include <xen/io/console.h>
 

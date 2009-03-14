@@ -358,19 +358,40 @@ void build_physmap_page_tables() {
 W64 host_mfn_to_sim_mfn(W64 hostmfn) {
 #ifdef DETERMINISTIC_PHYSADDRS
   if unlikely (hostmfn == bootinfo.shared_info_mfn) {
-    return (PHYSADDR_TYPE_SHINFO << PHYSADDR_TYPE_SHIFT);
+    return (PHYSADDR_TYPE_SHINFO << PHYSADDR_TYPE_MFN_SHIFT);
   }
 
   W64 simmfn = mfn_to_linear_pfn(hostmfn);
+
+  // SD: If simmfn was not found, try RAW mapping.
+  // NOTE: This is scary, and would perhaps need more assertions and checks!
+  if unlikely ( (simmfn == INVALID_MFN) && (hostmfn <= bootinfo.total_machine_pages)) {
+    logfile << "host_mfn_to_sim_mfn(", hostmfn, " vs total machine pages ", bootinfo.total_machine_pages,
+    "): m2p sim mfn is out of range (", simmfn, " vs limit ", sim_mfn_to_host_mfn_map_size, "); caller ",
+    getcaller(), " at cycle ", sim_cycle, "=> Assuming RAW mapping for granted pages.", endl;
+
+    return (PHYSADDR_TYPE_RAW << PHYSADDR_TYPE_MFN_SHIFT) | hostmfn;
+  }
+
   if unlikely (simmfn >= sim_mfn_to_host_mfn_map_size) {
-    logfile << "host_mfn_to_sim_mfn(", hostmfn, "): m2p sim mfn is out of range (", simmfn, " vs limit ", sim_mfn_to_host_mfn_map_size, "); caller ", getcaller(), " at cycle ", sim_cycle, endl;
+    logfile << "host_mfn_to_sim_mfn(", hostmfn, " vs total machine pages ", bootinfo.total_machine_pages,
+    "): m2p sim mfn is out of range (", simmfn, " vs limit ", sim_mfn_to_host_mfn_map_size, "); caller ",
+    getcaller(), " at cycle ", sim_cycle, endl;
+
+#if(0)
+    // SD: This is a costly check to perhaps find the original mapping!
+    foreach (i, sim_mfn_to_host_mfn_map_size) {
+      if (sim_mfn_to_host_mfn_map[i] == hostmfn)
+        logfile << "Found reverse matching mapping: sim_mfn_to_host_mfn_map[", i, ",] == ", hostmfn,endl;
+    }
+#endif
     return INVALID_MFN;
   }
   sim_mfn_to_host_mfn_map[simmfn] = hostmfn;
-  return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_SHIFT) | simmfn;
+  return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_MFN_SHIFT) | simmfn;
   // return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_SHIFT) | (hostmfn ^ 0xffffff);
 #else
-  return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_SHIFT) | hostmfn;
+  return (PHYSADDR_TYPE_DRAM << PHYSADDR_TYPE_MFN_SHIFT) | hostmfn;
 #endif
 }
 
@@ -383,8 +404,8 @@ W64 sim_mfn_to_host_mfn(W64 simmfn) {
 #ifdef DETERMINISTIC_PHYSADDRS
   //int type = (simmfn >> (PHYSADDR_TYPE_SHIFT-12));
   //simmfn = lowbits(simmfn, (PHYSADDR_TYPE_SHIFT-12));
-  int type = (simmfn >> PHYSADDR_TYPE_SHIFT);
-  simmfn = lowbits(simmfn, PHYSADDR_TYPE_SHIFT);
+  int type = (simmfn >> PHYSADDR_TYPE_MFN_SHIFT);
+  simmfn = lowbits(simmfn, PHYSADDR_TYPE_MFN_SHIFT);
   if unlikely (type == PHYSADDR_TYPE_SHINFO) {
     return ptl_virt_to_phys(&sshinfo) >> 12;
   }
@@ -411,8 +432,8 @@ W64 sim_mfn_to_host_mfn(W64 simmfn) {
   // return mfn_to_linear_pfn(xenmfn);
   //++MTY TODO
 #else
-  int type = (simmfn >> PHYSADDR_TYPE_SHIFT);
-  simmfn = lowbits(simmfn, PHYSADDR_TYPE_SHIFT);
+  int type = (simmfn >> PHYSADDR_TYPE_MFN_SHIFT);
+  simmfn = lowbits(simmfn, PHYSADDR_TYPE_MFN_SHIFT);
   if (type != PHYSADDR_TYPE_DRAM) logfile << "sim_mfn_to_host_mfn(", orig_simmfn, "): simmfn = ", simmfn, ", type = ", type, ", caller ", getcaller(), endl;
   assert(type == PHYSADDR_TYPE_DRAM);
   return simmfn;
@@ -1188,6 +1209,13 @@ W64 loadphys(Waddr physaddr) {
       logfile << "m2p ", (void*)&mem, endl;
     }
     return mem;
+  } else if likely (type == PHYSADDR_TYPE_RAW) {
+    // Raw pages mapped from other domains -> we already have proper physical addresses
+    W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
+    if unlikely (DEBUG) {
+      logfile << "raw phys ", (void*)physaddr, "=> virt", (void*)&mem, endl;
+    }
+    return mem;
   } else {
     assert(false);
   }
@@ -1269,8 +1297,18 @@ W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
     }
     mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
     return data;
+  } else if likely (type == PHYSADDR_TYPE_RAW) {
+    // Raw mapping used for granted pages.
+    if unlikely (DEBUG) {
+      logfile << "RAW grant mapping @ ", &mem, endl;
+    }
+    // SD: Do we need the additional checks from the DRAM case above?
+    W64& mem = *(W64*)phys_to_mapped_virt(physaddr);
+    mem = mux64(expand_8bit_to_64bit_lut[bytemask], mem, data);
+    return data;
   } else {
     // Not possible!
+    logfile << "Unknown type ", type, " found. Physaddr ", (void*)physaddr, " orig physaddr ", (void*) orig_physaddr, endl;
     assert(false);
   }
 }
