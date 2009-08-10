@@ -375,17 +375,17 @@ int ReorderBufferEntry::issue() {
 
       if unlikely (completed == ISSUE_MISSPECULATED) {
         per_context_ooocore_stats_update(threadid, issue.result.misspeculated++);
-        return -1;
+        return ISSUE_MISSPECULATED;
       } else if unlikely (completed == ISSUE_NEEDS_REFETCH) {
         per_context_ooocore_stats_update(threadid, issue.result.refetch++);
-        return -1;
+        return ISSUE_NEEDS_REFETCH;
       }
 
       state.reg.rddata = lsq->data;
       state.reg.rdflags = (lsq->invalid << log2(FLAG_INV)) | ((!lsq->datavalid) << log2(FLAG_WAIT));
       if unlikely (completed == ISSUE_NEEDS_REPLAY) {
         per_context_ooocore_stats_update(threadid, issue.result.replay++);
-        return 0;
+        return ISSUE_NEEDS_REPLAY;
       }
     } else if unlikely (uop.opcode == OP_ld_pre) {
       issueprefetch(state, radata, rbdata, rcdata, uop.cachelevel);
@@ -535,7 +535,7 @@ int ReorderBufferEntry::issue() {
     per_context_ooocore_stats_update(threadid, issue.result.exception++);
   }
 
-  return 1;
+  return ISSUE_COMPLETED;
 }
 
 //
