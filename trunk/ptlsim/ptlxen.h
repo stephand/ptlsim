@@ -817,7 +817,7 @@ void reset_mode_switch_delta_cycles_and_insns(W64& delta_cycles, W64& delta_insn
 // Event channel and timer related hypercalls
 //
 W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debug);
-W64 handle_set_timer_op_hypercall(Context& ctx, W64 arg1, bool debug);
+W64 handle_set_timer_op_hypercall(Context& ctx, W64 arg1, bool debug, bool force_future = 0);
 W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool debug);
 W64 handle_sched_op_hypercall(Context& ctx, W64 op, void* arg, bool debug);
 

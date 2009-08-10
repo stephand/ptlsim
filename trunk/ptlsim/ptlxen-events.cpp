@@ -939,7 +939,7 @@ W64 handle_event_channel_op_hypercall(Context& ctx, int op, void* arg, bool debu
   return rc;
 }
 
-W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
+W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug, bool force_future) {
   if (timeout) {
     update_time();
 
@@ -952,7 +952,9 @@ W64 handle_set_timer_op_hypercall(Context& ctx, W64 timeout, bool debug) {
     W64 trigger_cycles_since_boot = current_cycle + delta_cycles;
 
     ctx.timer_cycle = trigger_cycles_since_boot;
-    
+
+    if (force_future && delta_nsecs < 0)
+      return -ETIME;
     //
     // If problems arise with negative timer values, force this to be a fixed timer interrupt period:
     // NOTE: the hypervisor itself now contains an equivalent workaround, so disable this: 
@@ -1050,9 +1052,14 @@ W64 handle_vcpu_op_hypercall(Context& ctx, W64 arg1, W64 arg2, W64 arg3, bool de
     return 0;
   }
   case VCPUOP_set_singleshot_timer: {
-    //++MTY TODO: add support for this newer hypercall:
-    if (debug) logfile << "vcpu_op: set singleshot timer on ", vcpuid, " not supported", endl;
-    return -ENOSYS;
+    struct vcpu_set_singleshot_timer set;
+    if (ctx.copy_from_user(&set, (Waddr)arg3, sizeof(set)) != sizeof(set))
+      return W64(-EFAULT);
+
+    return handle_set_timer_op_hypercall(ctx, set.timeout_abs_ns, true,
+        set.flags & VCPU_SSHOTTMR_future);
+    //if (debug) logfile << "vcpu_op: set singleshot timer on ", vcpuid, " not supported", endl;
+    //return -ENOSYS;
   }
   default:
     logfile << "vcpu_op ", arg1, " not implemented!", endl, flush;
