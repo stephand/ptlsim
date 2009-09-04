@@ -516,7 +516,7 @@ bool TraceDecoder::decode_sse() {
     lowop.datatype = DATATYPE_VEC_DOUBLE;
     this << lowop;
 
-    TransOp highop(uop, rdreg+1, rareg+1, rareg+1, REG_zero, 3);
+    TransOp highop(uop, rdreg+1, rareg+0, rareg+1, REG_zero, 3);
     highop.datatype = DATATYPE_VEC_DOUBLE;
     this << highop;
 
