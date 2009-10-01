@@ -100,6 +100,23 @@ void OutOfOrderCore::flush_pipeline_all() {
 }
 
 void ThreadContext::flush_pipeline() {
+  // SD: I wonder if flush_pipeline should really be able to flush halfway
+  // through a partially committed x86 instruction. This is dangerous,
+  // especially if the instruction has already partially updated
+  // architectural state.
+  if unlikely (logable(1) && rob_ready_to_commit_queue.count &&
+               !ROB.peekhead()->uop.som) {
+
+    logfile << "[vcpu ", ctx.vcpuid, "] thread ", threadid, ": Flushing through a "
+               "partially committed x86 instruction, this is likely BAD:",endl;
+
+    foreach_forward(ROB, i) {
+      ReorderBufferEntry& rob = ROB[i];
+      logfile <<"  ", rob, endl;
+      if (rob.uop.eom) break;
+    }
+  }
+
   core.caches.complete(threadid);
   annul_fetchq();
 
@@ -127,7 +144,7 @@ void ThreadContext::flush_pipeline() {
     foreach_list_mutable( list, obj, entry, nextentry) {
       n++;
       obj->reset(threadid);
-    }     
+    }
   }
 
   // free all register in arch state:
@@ -138,9 +155,9 @@ void ThreadContext::flush_pipeline() {
     foreach_list_mutable( list, obj, entry, nextentry) {
       n++;
       obj->reset(threadid);
-    }     
+    }
   }
-  
+
   reset_fetch_unit(ctx.commitarf[REG_rip]);
   rob_states.reset();
 
@@ -249,7 +266,7 @@ void ThreadContext::external_to_core_state() {
 
   //
   // Set renamable flags
-  // 
+  //
   commitrrt[REG_zf] = commitrrt[REG_flags];
   commitrrt[REG_cf] = commitrrt[REG_flags];
   commitrrt[REG_of] = commitrrt[REG_flags];
@@ -301,7 +318,7 @@ void ThreadContext::redispatch_deadlock_recovery() {
   // Only re-dispatch those uops that have not yet generated a value
   // or are guaranteed to produce a value soon without tying up resources.
   // This must occur in program order to avoid deadlock!
-  // 
+  //
   // bool recovery_required = (rob.current_state_list->flags & ROB_STATE_IN_ISSUE_QUEUE) || (rob.current_state_list == &rob_ready_to_dispatch_list);
   bool recovery_required = 1; // for now, just to be safe
 
@@ -393,9 +410,9 @@ bool ThreadContext::fetch() {
 
   while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
     if unlikely (!fetchq.remaining()) {
-      if unlikely (config.event_log_enabled) { 
+      if unlikely (config.event_log_enabled) {
         if (!fetchcount) {
-          event =  eventlog.add(EVENT_FETCH_FETCHQ_FULL); 
+          event =  eventlog.add(EVENT_FETCH_FETCHQ_FULL);
           event->threadid = threadid;
           event->uuid = fetch_uuid;
         }
@@ -422,7 +439,7 @@ bool ThreadContext::fetch() {
         }
       } else {
         // still have reserved entries left, continue fetching
-      } 
+      }
     }
 #endif
 
@@ -493,7 +510,7 @@ bool ThreadContext::fetch() {
       synthop = current_basic_block->synthops[current_basic_block_transop_index];
     }
 
-    transop.unaligned = core.get_unaligned_hint(fetchrip) && 
+    transop.unaligned = core.get_unaligned_hint(fetchrip) &&
       ((transop.opcode == OP_ld) | (transop.opcode == OP_ldx) | (transop.opcode == OP_st)) &&
       (transop.cond == LDST_ALIGN_NORMAL);
     transop.ld_st_truly_unaligned = 0;
@@ -526,7 +543,7 @@ bool ThreadContext::fetch() {
       // We've hit an assist: stall the frontend until we resume or redirect
       if unlikely (config.event_log_enabled) eventlog.add(EVENT_FETCH_ASSIST, transop);
       per_context_ooocore_stats_update(threadid, fetch.stop.microcode_assist++);
-      stall_frontend = 1;      
+      stall_frontend = 1;
     }
 
     per_context_ooocore_stats_update(threadid, fetch.uops++);
@@ -539,7 +556,7 @@ bool ThreadContext::fetch() {
 
     if (isbranch(transop.opcode)) {
       transop.predinfo.uuid = transop.uuid;
-      transop.predinfo.bptype = 
+      transop.predinfo.bptype =
         (isclass(transop.opcode, OPCLASS_COND_BRANCH) << log2(BRANCH_HINT_COND)) |
         (isclass(transop.opcode, OPCLASS_INDIR_BRANCH) << log2(BRANCH_HINT_INDIRECT)) |
         (bit(transop.extshift, log2(BRANCH_HINT_PUSH_RAS)) << log2(BRANCH_HINT_CALL)) |
@@ -608,7 +625,7 @@ bool ThreadContext::fetch() {
   return true;
 }
 
-BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp) {  
+BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp) {
   time_this_scope(ctdecode);
 
   if likely (current_basic_block) {
@@ -637,11 +654,11 @@ BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp
   // reclaim the BB while we still have a reference to it.
   //
   current_basic_block->acquire();
-  current_basic_block->use(sim_cycle);  
+  current_basic_block->use(sim_cycle);
 
   if unlikely (!current_basic_block->synthops) synth_uops_for_bb(*current_basic_block);
   assert(current_basic_block->synthops);
-  
+
   current_basic_block_transop_index = 0;
   assert(current_basic_block->rip == rvp);
 
@@ -661,20 +678,20 @@ void ThreadContext::rename() {
 
   while (prepcount < FRONTEND_WIDTH) {
     if unlikely (fetchq.empty()) {
-      if unlikely (config.event_log_enabled) { 
+      if unlikely (config.event_log_enabled) {
         if likely (!prepcount) {
-          event = core.eventlog.add(EVENT_RENAME_FETCHQ_EMPTY); 
+          event = core.eventlog.add(EVENT_RENAME_FETCHQ_EMPTY);
           event->threadid = threadid;
         }
       }
       per_context_ooocore_stats_update(threadid, frontend.status.fetchq_empty++);
       break;
-    } 
+    }
 
     if unlikely (!ROB.remaining()) {
-      if unlikely (config.event_log_enabled) { 
+      if unlikely (config.event_log_enabled) {
         if likely (!prepcount) {
-          event = core.eventlog.add(EVENT_RENAME_ROB_FULL); 
+          event = core.eventlog.add(EVENT_RENAME_ROB_FULL);
           event->threadid = threadid;
         }
       }
@@ -696,9 +713,9 @@ void ThreadContext::rename() {
     }
 
     if (phys_reg_file < 0) {
-      if unlikely (config.event_log_enabled) { 
+      if unlikely (config.event_log_enabled) {
         if likely (!prepcount) {
-          event = core.eventlog.add()->fill(EVENT_RENAME_PHYSREGS_FULL); 
+          event = core.eventlog.add()->fill(EVENT_RENAME_PHYSREGS_FULL);
           event->threadid = threadid;
         }
       }
@@ -826,7 +843,7 @@ void ThreadContext::rename() {
       OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_RENAME_OK, &rob);
 
       foreach (i, MAX_OPERANDS) rob.operands[i]->fill_operand_info(event->rename.opinfo[i]);
-      
+
       if likely (archdest_can_commit[transop.rd]) {
         event->rename.oldphys = specrrt[transop.rd]->index();
         event->rename.oldzf = specrrt[REG_zf]->index();
@@ -847,7 +864,7 @@ void ThreadContext::rename() {
       }
 
       if ((oldmapping->current_state_list == &physreg_waiting_list) |
-          (oldmapping->current_state_list == &physreg_ready_list) | 
+          (oldmapping->current_state_list == &physreg_ready_list) |
           (oldmapping->current_state_list == &physreg_written_list)) {
         oldmapping->rob->no_branches_between_renamings = specrrt.renamed_in_this_basic_block[transop.rd];
       }
@@ -914,7 +931,7 @@ void ThreadContext::frontend() {
         event->frontend.cycles_left = rob->cycles_left;
       }
     }
-    
+
     rob->cycles_left--;
   }
 }
@@ -923,7 +940,7 @@ void ThreadContext::frontend() {
 // Dispatch and Cluster Selection
 //
 static byte bit_indices_set_8bits[1<<8][8] = {
-  {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0},  
+  {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0},
   {1, 1, 1, 1, 1, 1, 1, 1}, {0, 1, 0, 1, 0, 1, 0, 1},
   {2, 2, 2, 2, 2, 2, 2, 2}, {0, 2, 0, 2, 0, 2, 0, 2},
   {1, 2, 1, 2, 1, 2, 1, 2}, {0, 1, 2, 0, 1, 2, 0, 1},
@@ -1117,7 +1134,7 @@ bool ReorderBufferEntry::find_sources() {
   bool ok;
 
   issueq_operation_on_cluster_with_result(getcore(), cluster, ok, insert(get_tag(), uopids, preready));
-  
+
   ThreadContext& thread = getthread();
   thread.issueq_count++;
 
@@ -1168,10 +1185,10 @@ int ReorderBufferEntry::select_cluster() {
     if unlikely (config.event_log_enabled) event->type = EVENT_CLUSTER_NO_CLUSTER;
     return -1;
   }
-  
+
   int n = 0;
   int cluster = find_random_set_bit(executable_on_cluster, sim_cycle);
-  
+
   foreach (i, MAX_CLUSTERS) {
     if ((cluster_operand_tally[i] > n) && bit(executable_on_cluster, i)) {
       n = cluster_operand_tally[i];
@@ -1204,7 +1221,7 @@ int ThreadContext::dispatch() {
     rob->cluster = rob->select_cluster();
 
     //
-    // An available cluster could not be found. This only happens 
+    // An available cluster could not be found. This only happens
     // when all applicable cluster issue queues are full. Since
     // we are still processing instructions in order at this point,
     // abort dispatching for this cycle.
@@ -1239,7 +1256,7 @@ int ThreadContext::dispatch() {
         }
       } else {
         // still have reserved entries left, continue dispatch
-      } 
+      }
     }
 #endif
 
@@ -1267,8 +1284,11 @@ int ThreadContext::dispatch() {
   } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
     dispatch_deadlock_countdown--;
 
-    /* SD: Give outstanding cache and tlb-misses a chance to tickle in first! */
-    if ( !dispatch_deadlock_countdown && (rob_cache_miss_list.count || rob_tlb_miss_list.count))
+    /* SD: Give outstanding cache and tlb-misses a chance to tickle in first and
+     * commit everything that is ready to do so! */
+    if ( !dispatch_deadlock_countdown &&
+         (rob_cache_miss_list.count || rob_tlb_miss_list.count ||
+          rob_ready_to_commit_queue.count) )
       dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
 
     if (!dispatch_deadlock_countdown) {
@@ -1305,7 +1325,7 @@ int ThreadContext::complete(int cluster) {
   int completecount = 0;
   ReorderBufferEntry* rob;
 
-  // 
+  //
   // Check the list of issued ROBs. If a given ROB is complete (i.e., is ready
   // for writeback and forwarding), move it to rob_completed_list.
   //
@@ -1440,7 +1460,7 @@ int ThreadContext::writeback(int cluster) {
 //   mapping of A is being logically overwritten by U2, U1's physical register R is freed.
 // - U3 finally issues, but finds that operand physical register R for U1 no longer exists.
 //
-// Additionally, in x86 processors the flags attached to a given physical register may 
+// Additionally, in x86 processors the flags attached to a given physical register may
 // be referenced by three additional rename table entries (for ZAPS, CF, OF) so simply
 // freeing the old physical register mapping when the RRT is updated doesn't work.
 //
@@ -1461,7 +1481,7 @@ int ThreadContext::writeback(int cluster) {
 // every cycle and moves physical registers to the free state only when their counters
 // become zero and they are in the pendingfree state.
 //
-// An additional complication arises for x86 since we maintain three separate rename 
+// An additional complication arises for x86 since we maintain three separate rename
 // table entries for the ZAPS, CF, OF flags in addition to the register rename table
 // entry. Therefore, each speculative RRT and commit RRT entry adds to the refcount.
 //
@@ -1476,8 +1496,8 @@ int ThreadContext::writeback(int cluster) {
 // The counter table can be updated in bulk each cycle by adding/subtracting the
 // appropriate sum or just adding zero if the corresponding register wasn't used.
 // Since there are several stages between renaming and commit, the same counter is never
-// both incremented and decremented in the same cycle, so race conditions are not an 
-// issue. 
+// both incremented and decremented in the same cycle, so race conditions are not an
+// issue.
 //
 // In real processors, the Pentium 4 uses a scheme similar to this one but uses bit
 // vectors instead. For smaller physical register files, this may be a better solution.
@@ -1509,7 +1529,7 @@ int ThreadContext::commit() {
   }
 
   //
-  // Commit ROB entries *in program order*, stopping at the first ROB that is 
+  // Commit ROB entries *in program order*, stopping at the first ROB that is
   // not ready to commit or has an exception.
   //
   int rc = COMMIT_RESULT_OK;
@@ -1628,13 +1648,13 @@ int ReorderBufferEntry::commit() {
   //
   // Each x86 instruction may be composed of multiple uops; none of the uops
   // may commit until ALL uops are ready to commit (either correctly or
-  // if one or more uops have exceptions). 
+  // if one or more uops have exceptions).
   //
   // This is accomplished by checking if the uop at the head of the ROB (next
-  // to commit) has its SOM (start of macro-op) bit set. If so, the ROB is 
+  // to commit) has its SOM (start of macro-op) bit set. If so, the ROB is
   // scanned forwards from the SOM uop to the EOM (end of macro-op) uop. If
   // all uops in this range are ready to commit and are exception-free, the
-  // SOM uop allowed to commit. 
+  // SOM uop allowed to commit.
   //
   // Any exceptions in the macro-op uop range immediately signals an exception
   // to the user code, and no part of the uop is committed. In any case,
@@ -1688,7 +1708,7 @@ int ReorderBufferEntry::commit() {
       found_eom = true;
       break;
     }
-    
+
     if likely (subrob.uop.eom) break;
   }
 
@@ -1796,7 +1816,7 @@ int ReorderBufferEntry::commit() {
   // any ld.acq uops that have not already released their lock.
   //
   // This actually unlocks the chunk(s) ONLY after ALL uops in the
-  // current macro-op have committed. This is required since the 
+  // current macro-op have committed. This is required since the
   // other threads know nothing about remote store queues: unless
   // the value is committed to the cache (where cache coherency can
   // control its use), other loads in other threads could slip in
@@ -1848,7 +1868,7 @@ int ReorderBufferEntry::commit() {
 
   assert(ctx.commitarf[REG_rip] == uop.rip);
 
-  if likely (uop.som) assert(ctx.commitarf[REG_rip] == uop.rip); 
+  if likely (uop.som) assert(ctx.commitarf[REG_rip] == uop.rip);
 
   //
   // The commit of all uops in the x86 macro-op is guaranteed to happen after this point
@@ -1943,7 +1963,7 @@ int ReorderBufferEntry::commit() {
     }
 
     if unlikely (oldphysreg->referenced()) {
-      oldphysreg->changestate(PHYSREG_PENDINGFREE); 
+      oldphysreg->changestate(PHYSREG_PENDINGFREE);
       stats.ooocore.commit.freereg.pending++;
     } else  {
       oldphysreg->free();
@@ -1973,7 +1993,7 @@ int ReorderBufferEntry::commit() {
   if unlikely (isclass(uop.opcode, OPCLASS_BRANCH)) {
     assert(uop.eom);
     //
-    // NOTE: Technically the "branch address" refers to the rip of the *next* 
+    // NOTE: Technically the "branch address" refers to the rip of the *next*
     // x86 instruction after the branch; we use this consistently since x86
     // instructions vary in length and we cannot easily calculate the next
     // instruction in sequence from within the branch predictor logic.
