@@ -1044,6 +1044,13 @@ void Context::init() {
     if (logable(1)) logfile << "[vcpu ", vcpuid, "] Faking a proper runstate transition to mark the VCPU running.", endl;
     running = false;
     change_runstate(RUNSTATE_running); // Will set running back to true;
+    assert(running == true);
+  }
+  if( !running && ( (runstate.state == RUNSTATE_running) || (runstate.state == RUNSTATE_runnable) ) ) { 
+    if (logable(1)) logfile << "[vcpu ", vcpuid, "] Faking a proper runstate transition to mark the VCPU blocked.", endl;
+    running = true;
+    change_runstate(RUNSTATE_blocked); // Will set running back to false;
+    assert(running == false);
   }
 }
 
