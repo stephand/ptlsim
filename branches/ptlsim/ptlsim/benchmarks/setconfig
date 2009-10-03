@@ -1,6 +1,0 @@
-#!/bin/sh
-# NOTE: modify this to the path of your PTLsim tree:
-for f in gcc gzip; do
-  mkdir -p ~/.ptlsim/project/ptlsim/benchmarks/$f
-  echo $@ > ~/.ptlsim/project/ptlsim/benchmarks/$f/$f.conf
-done;
