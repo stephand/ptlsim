@@ -63,6 +63,7 @@ declare_syscall0(__NR_fork, pid_t, sys_fork);
 declare_syscall3(__NR_execve, int, sys_execve, const char*, filename, const char**, argv, const char**, envp);
 
 declare_syscall0(__NR_getpid, pid_t, sys_getpid);
+declare_syscall0(__NR_getppid, pid_t, sys_getppid);
 declare_syscall0(__NR_gettid, pid_t, sys_gettid);
 declare_syscall1(__NR_uname, int, sys_uname, struct utsname*, buf);
 declare_syscall3(__NR_readlink, int, sys_readlink, const char*, path, char*, buf, size_t, bufsiz);

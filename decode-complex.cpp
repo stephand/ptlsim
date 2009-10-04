@@ -796,8 +796,33 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x61: {
-    // popa [not used by gcc]
-    MakeInvalid();
+    // popa
+    if (use64) {
+      // popa is invalid in 64-bit mode
+      MakeInvalid();
+      break;
+    }
+    EndOfDecode();
+
+    int sizeshift = (opsize_prefix) ? 1 : 2;
+    int size = (1 << sizeshift);
+    int offset = 0;
+
+#define POP(reg) \
+    this << TransOp(OP_ld, reg, REG_rsp, REG_imm, REG_zero, sizeshift, offset);
+
+    POP(REG_rdi);   offset += size;
+    POP(REG_rsi);   offset += size;
+    POP(REG_rbp);   offset += size;
+    /* skip rsp */  offset += size;
+    POP(REG_rbx);   offset += size;
+    POP(REG_rdx);   offset += size;
+    POP(REG_rcx);   offset += size;
+    POP(REG_rax);   offset += size;
+#undef POP
+
+    this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, offset);
+
     break;
   }
 

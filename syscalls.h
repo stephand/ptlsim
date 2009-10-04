@@ -35,6 +35,7 @@ extern "C" {
   int sys_execve(const char* filename, const char** argv, const char** envp);
   
   pid_t sys_gettid();
+  pid_t sys_getppid();
   pid_t sys_getpid();
   void sys_exit(int code);
   void* sys_brk(void* newbrk);

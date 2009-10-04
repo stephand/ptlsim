@@ -526,11 +526,12 @@ bool TraceDecoder::decode_fast() {
   case 0xeb: {
     bool iscall = (op == 0xe8);
     // CALL or JMP rel16/rel32/rel64
-    // near conditional branches with 8-bit displacement:
+    // near unconditional branches with 8-bit displacement:
     bool longform = (op != 0xeb);
     DECODE(iform, ra, (longform ? v_mode : b_mode));
-    bb.rip_taken = (Waddr)rip + (W64s)ra.imm.imm;
-    bb.rip_not_taken = bb.rip_taken;
+    W64 target = (Waddr)(rip + ra.imm.imm);
+    bb.rip_taken = target;
+    bb.rip_not_taken = target;
     bb.brtype = (longform) ? BRTYPE_BRU_IMM32 : BRTYPE_BRU_IMM8;
     end_of_block = true;
     EndOfDecode();
@@ -547,8 +548,8 @@ bool TraceDecoder::decode_fast() {
       this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     TransOp transop(OP_bru, REG_rip, REG_zero, REG_zero, REG_zero, 3);
     transop.extshift = (iscall) ? BRANCH_HINT_PUSH_RAS : 0;
-    transop.riptaken = (Waddr)rip + (W64s)ra.imm.imm;
-    transop.ripseq = (Waddr)rip + (W64s)ra.imm.imm;
+    transop.riptaken = target;
+    transop.ripseq = target;
     this << transop;
     break;
   }

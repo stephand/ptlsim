@@ -1,4 +1,4 @@
-#LyX 1.5.1 created this file. For more info see http://www.lyx.org/
+#LyX 1.5.2 created this file. For more info see http://www.lyx.org/
 \lyxformat 276
 \begin_document
 \begin_header
@@ -6338,9 +6338,8 @@ ptlsim
 
 \family default
 \size default
- 
 \emph on
-full-path-to-executable
+[ simulator configuration options -- ] full-path-to-executable
 \emph default
  
 \emph on
@@ -6348,91 +6347,26 @@ arguments...
 \end_layout
 
 \begin_layout Standard
-PTLsim reads configuration options for running various user programs by
- looking for a configuration file named 
-\family typewriter
-\size footnotesize
-/home/
-\emph on
-username
-\emph default
-/.ptlsim/
-\emph on
-path/to/program/executablename
-\emph default
-.conf
-\family default
-\size default
-.
- To set options for each program, you'll need to create a directory of the
- form 
-\family typewriter
-\size footnotesize
-/home/
-\emph on
-username
-\emph default
-/.ptlsim
-\family default
-\size default
- and make sub-directories under it corresponding to the full path to the
- program.
- For example, to configure 
-\family typewriter
-\size footnotesize
-/bin/ls
-\family default
-\size default
- you'll need to run "
-\family typewriter
-\size footnotesize
-mkdir /home/
-\emph on
-username
-\emph default
-/.ptlsim/bin
-\family default
-\size default
+PTLsim can be given configuration options for running various user programs
+ by placing those arguments between the ptlsim executable name and a delimiting
+ parameter 
+\begin_inset Quotes eld
+\end_inset
 
+--
 \begin_inset Quotes erd
 \end_inset
 
- and then edit "
-\family typewriter
-\size footnotesize
-/home/
-\emph on
-username
-\emph default
-/.ptlsim/bin/ls.conf
-\family default
-\size default
-" with the appropriate options.
- For example, try putting the following in 
-\family typewriter
-\size footnotesize
-ls.conf
-\family default
-\size default
- as described:
+.
+ For example, run:
 \end_layout
 
 \begin_layout Quote
 
 \family typewriter
 \size footnotesize
--logfile ptlsim.log -loglevel 9 -stats ls.stats -stopinsns 10000
-\end_layout
-
-\begin_layout Standard
-Then run:
-\end_layout
-
-\begin_layout Quote
-
-\family typewriter
-\size footnotesize
-ptlsim /bin/ls -la
+ptlsim -logfile ptlsim.log -loglevel 9 -stats ls.stats -stopinsns 10000 --
+ /bin/ls -la
 \end_layout
 
 \begin_layout Standard
@@ -6507,6 +6441,18 @@ ptlstats ls.stats
 \end_inset
 
 .
+\end_layout
+
+\begin_layout Standard
+The configuration options are optional; if omitted, PTLsim will use its
+ default settings, as in the following example:
+\end_layout
+
+\begin_layout Quote
+
+\family typewriter
+\size footnotesize
+ptlsim /bin/ls -la
 \end_layout
 
 \begin_layout Section

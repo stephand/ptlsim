@@ -1523,7 +1523,8 @@ int is_elf_64bit(const char* filename) {
 int ptlsim_inject(int argc, char** argv) {
   static const bool DEBUG = 0;
 
-  const char* filename = argv[1];
+  int filename_arg = configparser.parse(config, argc - 1, argv + 1);
+  const char* filename = argv[filename_arg];
 
   int x86_64_mode = is_elf_64bit(filename);
 
@@ -1540,7 +1541,7 @@ int ptlsim_inject(int argc, char** argv) {
     if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
-    int rc = sys_execve(filename, (const char**)argv+1, (const char**)environ);
+    int rc = sys_execve(filename, (const char**)(argv + filename_arg), (const char**)environ);
 
     if (rc < 0) {
       cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, endl, flush;
@@ -1727,7 +1728,11 @@ int ptlsim_inject(int argc, char** argv) {
   int status;
   int rc;
 
-  const char* filename = argv[1];
+  //
+  // Find the argv index of the filename to execute and its arguments:
+  //
+  int filename_arg = configparser.parse(config, argc - 1, argv + 1);
+  const char* filename = argv[filename_arg];
 
   if (!is_elf_valid(filename)) {
     cerr << "ptlsim: cannot open ", filename, endl, flush;
@@ -1742,7 +1747,7 @@ int ptlsim_inject(int argc, char** argv) {
     if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
-    int rc = sys_execve(filename, (const char**)argv+1, (const char**)environ);
+    int rc = sys_execve(filename, (const char**)(argv + filename_arg), (const char**)environ);
 
     if (rc < 0) {
       cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, ": rc = ", rc, endl, flush;
@@ -1935,52 +1940,51 @@ void collect_sysinfo(PTLsimStats& stats, int argc, char** argv) {
 int init_config(int argc, char** argv) {
   collect_sysinfo(stats, argc, argv);
 
-  char confroot[1024] = "";
-  stringbuf sb;
+  //
+  // argv[] is a suffix of the parent argv[] of length argc.
+  // If the parent has some configuration between the initial ptlsim 
+  // executable in argv[0] and the argv[X] that starts the suffix (noting 
+  // that argv[X-1] will be "--"), then send that to configparser.parse().
+  //
 
-  char* homedir = getenv("HOME");
+  pid_t parent = sys_getppid();
+  stringbuf cmdline;
+  cmdline << "/proc/", parent, "/cmdline";
 
-  const char* execname = get_full_exec_filename();
-
-  sb << (homedir ? homedir : "/etc"), "/.ptlsim", execname, ".conf";
-
-  char args[4096];
-  istream is(sb);
-  if (!is) {
-    cerr << "ptlsim: Warning: could not find '", sb, "', using defaults", endl;
+  //
+  // Load p_argc and p_argv for the parent, analogous to argc/argv
+  // /proc/<pid>/cmdline terminates each argument with a null character.
+  //
+  istream is(cmdline);
+  if (unlikely (!is)) {
+    cerr << "PTLsim error: cannot open /proc/<parent>/cmdline", endl, flush;
+    abort();
   }
 
-  const char* simname = "ptlsim";
-
+  dynarray<char*> parent_args;
+  stringbuf line;
+  
   for (;;) {
-    is >> readline(args, sizeof(args));
+    line.reset();
+    is >> line;
     if (!is) break;
-    char* p = args;
-    while (*p && (*p != '#')) p++;
-    if (*p == '#') *p = 0;
-    if (args[0]) break;
+    parent_args.push(strdup(line));
   }
-
   is.close();
+  
+  unsigned p_argc = parent_args.length;
 
-  char* ptlargs[1024];
+  //
+  // ConfigurationParser.parse() will automatically stop parsing at
+  // the first non-option (i.e. not starting with "-xxx") argument
+  // it finds (conveniently, this is always the target program name).
+  //  
+  int ptlsim_arg_count = configparser.parse(config, parent_args.length-1, parent_args+1);
 
-  ptlargs[0] = strdup(simname);
-  int ptlargc = 0;
-  char* p = args;
-  while (*p && (ptlargc < (lengthof(ptlargs)-1))) {
-    char* pbase = p;
-    while ((*p != 0) && (*p != ' ')) p++;
-    ptlargc++;
-    ptlargs[ptlargc] = strndup(pbase, p - pbase);
-    if (*p == 0) break;
-    *p++;
-    while ((*p != 0) && (*p == ' ')) p++;
-  }
+  foreach (i, parent_args.length) delete parent_args[i];
 
-  // skip the leading argv[0]; just parse the options:
-  configparser.parse(config, ptlargc, ptlargs+1);
-  handle_config_change(config, argc, argv);
+  handle_config_change(config, ptlsim_arg_count, parent_args+1);
+
   logfile << config;
 
   return 0;
