@@ -1288,7 +1288,7 @@ int ThreadContext::dispatch() {
      * commit everything that is ready to do so! */
     if ( !dispatch_deadlock_countdown &&
          (rob_cache_miss_list.count || rob_tlb_miss_list.count ||
-          rob_ready_to_commit_queue.count) )
+          ( rob_ready_to_commit_queue.count && ROB.peekhead()->ready_to_commit())) )
       dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
 
     if (!dispatch_deadlock_countdown) {
