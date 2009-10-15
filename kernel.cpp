@@ -1495,11 +1495,7 @@ W32 read_process_memory_W32(int pid, W64 source) {
   return LO32(data);
 }
 
-#ifdef __x86_64__
 extern "C" void ptlsim_loader_thunk_64bit(LoaderInfo* info);
-#else
-extern "C" void ptlsim_loader_thunk_32bit(LoaderInfo* info);
-#endif
 
 int is_elf_64bit(const char* filename) {
   idstream is;
@@ -1583,19 +1579,11 @@ int ptlsim_inject(int argc, char** argv) {
 
   regs.rsp -= sizeof(LoaderInfo);
 
-#ifdef __x86_64__
   if (!x86_64_mode) {
     cerr << "ptlsim: Error: This is a 64-bit build of PTLsim. It cannot run 32-bit processes.", endl;
     assert(false);
   }
   void* thunk_source = (void*)&ptlsim_loader_thunk_64bit;
-#else
-  if (x86_64_mode) {
-    cerr << "ptlsim: Error: This is a 32-bit build of PTLsim. It cannot run 64-bit processes.", endl;
-    assert(false);
-  }
-  void* thunk_source = (void*)&ptlsim_loader_thunk_32bit;
-#endif
   int thunk_size = LOADER_THUNK_SIZE;
 
   if (DEBUG) cerr << "Saving old code (", thunk_size, " bytes) at thunk rip ", (void*)regs.rip, " in pid ", pid, endl;
