@@ -3674,7 +3674,9 @@ namespace superstl {
     }
 
     W64 acquire() {
+#ifdef ENABLE_SPINLOCK_PROFILING
       W64 iterations = 0;
+#endif
 
       for (;;) {
         if unlikely (lock) {
