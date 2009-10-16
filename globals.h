@@ -657,7 +657,6 @@ inline int lsbindexi32(W32 n) {
 inline unsigned int lsbindex64(W64 n) { return x86_bsf64(n); }
 #else
 inline unsigned int lsbindex64(W64 n) {
-  unsigned int z;
   W32 lo = LO32(n);
   W32 hi = HI32(n);
 
@@ -690,7 +689,6 @@ inline int msbindexi32(W32 n) {
 inline unsigned int msbindex64(W64 n) { return x86_bsr64(n); }
 #else
 inline unsigned int msbindex64(W64 n) {
-  unsigned int z;
   W32 lo = LO32(n);
   W32 hi = HI32(n);
 
