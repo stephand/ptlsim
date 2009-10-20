@@ -793,6 +793,11 @@ bool TraceDecoder::decode_sse() {
       operand_load(REG_temp1, ra, OP_ld, DATATYPE_FLOAT);
     } else {
       rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+
+      if (unlikely (rareg == rdreg)) {
+        TransOp uoplo(OP_mov, REG_temp0, REG_zero, rareg, REG_zero, 3);
+        rareg = REG_temp0;
+      }
     }
 
     TransOp uoplo(OP_fcvt_s2d_lo, rdreg+0, REG_zero, rareg, REG_zero, 3); uoplo.datatype = DATATYPE_VEC_DOUBLE; this << uoplo;
