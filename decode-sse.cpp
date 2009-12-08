@@ -795,7 +795,8 @@ bool TraceDecoder::decode_sse() {
       rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
 
       if (unlikely (rareg == rdreg)) {
-        TransOp uoplo(OP_mov, REG_temp0, REG_zero, rareg, REG_zero, 3);
+        TransOp mov(OP_mov, REG_temp0, REG_zero, rareg, REG_zero, 3);
+        this << mov;
         rareg = REG_temp0;
       }
     }
