@@ -514,7 +514,10 @@ namespace CacheSubsystem {
     }
 
     void free(int lfrqslot) {
+      assert(waiting[lfrqslot]);
       changestate(lfrqslot, waiting, freemap);
+      assert(count > 0);
+      count--;
     }
 
     bool full() const {
