@@ -2111,13 +2111,13 @@ bool TraceDecoder::decode_complex() {
 
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-
+    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     /*
       
     Action:
-    - Compare rax with [mem]. 
-    - If (rax == [mem]), [mem] := ra. 
-    - Else rax := [mem]
+    - Compare rax with [mem] / reg. 
+    - If (rax == [mem] / reg), [mem] / reg := rax. 
+    - Else rax := [mem] / reg
 
     cmpxchg [mem],ra
 
@@ -2129,25 +2129,40 @@ bool TraceDecoder::decode_complex() {
     sel.ne rax = t1,rax,t0          # If (rax != [mem]), rax = [mem]
     st     [mem] = t2               # Store back selected value
 
+    cmpxchg rd,ra
+
+    becomes:
+    mov    t0 = rd                  # Load [mem]
+    cmp    t1 = rax,t0              # Compare (rax == rd) and set flags
+    sel.eq rd = t1,t0,ra            # Compute value to store back
+    sel.ne rax = t1,rax,rd          # If (rax != rd), rax = rd
+
     */
 
+#if (0) //SD: Note that there is no mandatory implicit LOCK prefix for CMPXCHG!
     if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
+#endif
+    int tmpreg = REG_temp0;
+    if likely (rd.type == OPTYPE_MEM) {
+      if (memory_fence_if_locked(0)) break;
+      tmpreg = REG_temp0;
+      rdreg  = REG_temp2;
+      operand_load(tmpreg, rd, OP_ld, 1);
+    } else {
+      this << TransOp(OP_mov, tmpreg, REG_zero, rdreg, REG_zero, sizeshift);
+    }
 
-    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
+    this << TransOp(OP_sub, REG_temp1, REG_rax, tmpreg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
 
-    operand_load(REG_temp0, rd, OP_ld, 1);
-
-    this << TransOp(OP_sub, REG_temp1, REG_rax, REG_temp0, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
-
-    TransOp selmem(OP_sel, REG_temp2, REG_temp0, rareg, REG_temp1, sizeshift);
+    TransOp selmem(OP_sel, rdreg, tmpreg, rareg, REG_temp1, sizeshift);
     selmem.cond = COND_e;
     this << selmem;
 
-    TransOp selreg(OP_sel, REG_rax, REG_rax, REG_temp0, REG_temp1, sizeshift);
+    TransOp selreg(OP_sel, REG_rax, REG_rax, tmpreg, REG_temp1, sizeshift);
     selreg.cond = COND_ne;
     this << selreg;
 
-    if likely (rd.type == OPTYPE_MEM) result_store(REG_temp2, REG_temp0, rd);
+    if likely (rd.type == OPTYPE_MEM) result_store(rdreg, REG_temp0, rd);
 
     if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
@@ -2215,7 +2230,8 @@ bool TraceDecoder::decode_complex() {
 
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-
+    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    int tmpreg = REG_temp0;    
     /*
       
     Action:
@@ -2229,22 +2245,38 @@ bool TraceDecoder::decode_complex() {
 
     ld     t0 = [mem]               # Load [mem]
     add    t1 = t0,ra               # Add temporary
+    mov    ra = t0                  # Swap back old value
     st     [mem] = t1               # Store back added value
+
+    xadd rd,ra
+
+    becomes:
+
+    mov    t0 = rd                  # Copy rd
+    add    rd = t0,ra               # Add and store in result reg
     mov    ra = t0                  # Swap back old value
 
     */
 
+#if (0)  //SD: Rubbish!
     // xadd [mem],reg is always locked:
     if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
+#endif
+    if likely (rd.type == OPTYPE_MEM) {
+      if (memory_fence_if_locked(0)) break;
+      rdreg  = REG_temp1;
+      operand_load(tmpreg, rd, OP_ld, 1);
+    } else {
+      this << TransOp(OP_mov, tmpreg, REG_zero, rdreg, REG_zero, sizeshift);
+    }
 
-    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
+    this << TransOp(OP_add, rdreg, tmpreg, rareg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
+    this << TransOp(OP_mov, rareg, rareg, tmpreg, REG_zero, sizeshift);
 
-    operand_load(REG_temp0, rd, OP_ld, 1);
-    this << TransOp(OP_add, REG_temp1, REG_temp0, rareg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
-    result_store(REG_temp1, REG_temp2, rd);
-    this << TransOp(OP_mov, rareg, rareg, REG_temp0, REG_zero, sizeshift);
-
-    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
+    if likely (rd.type == OPTYPE_MEM) {
+      result_store(rdreg, REG_temp2, rd);
+      if (memory_fence_if_locked(1)) break;
+    }
 
     break;
   }
