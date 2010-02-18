@@ -276,8 +276,10 @@ bool TraceDecoder::decode_fast() {
     // move in value
     this << TransOp(OP_mov, REG_rdx, (rashift < 2) ? REG_rdx : REG_zero, REG_temp0, REG_zero, rashift);
 
+#ifdef DIFFERENT_BEHAVIOR_FROM_HARDWARE  // Neither Intel nor AMD manuals make a reference to rax being modified, tested SD
     // zero out high bits of rax since technically both rdx and rax are modified:
     if (rashift == 2) this << TransOp(OP_mov, REG_rax, REG_zero, REG_rax, REG_zero, 2);
+#endif
     break;
   }
 
