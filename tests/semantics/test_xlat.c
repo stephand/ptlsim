@@ -13,7 +13,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA.
  *
- * Tests NEG instructions for all possible register sizes.
+ * Tests XLAT instructions for all possible address sizes.
  *
  * Author: Stephan Diestelhorst (stephan.diestelhorst@amd.com)
  * Date:   18.02.2010
