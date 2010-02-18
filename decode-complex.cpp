@@ -2266,6 +2266,7 @@ bool TraceDecoder::decode_complex() {
 
       ra.type = OPTYPE_REG;
       ra.reg.reg = 0; // get the requested mxcsr into ar1
+      ra.mem.size = 2; // always 32-bit 
       operand_load(REG_ar1, ra);
       //
       // LDMXCSR needs to flush the pipeline since future FP instructions will
