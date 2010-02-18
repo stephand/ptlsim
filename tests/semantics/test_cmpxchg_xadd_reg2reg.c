@@ -33,6 +33,15 @@ int cmpxchg_reg2reg(uint64_t test, uint64_t new, uint64_t *loc) {
         :"a"(test), "r"(new), "0"(*loc));
     return out;
 }
+uint64_t xadd_reg2reg(uint64_t new, uint64_t *loc) {
+    uint64_t out;
+    asm (
+        "xadd %1, %0  \n\t"
+        :"=r"(*loc), "=r"(out)
+        :"1"(new), "0"(*loc));
+    return out;
+}
+
 int main() {
     uint64_t test, new, old_loc, loc;
     int res;
@@ -53,6 +62,8 @@ int main() {
     res = cmpxchg_reg2reg(test, new, &loc);
     printf("CMPXCHG (%li == %li) new = %li -> %i loc = %li\n", old_loc, test, new, res, loc);
 
+    old_loc = xadd_reg2reg(new, &loc);
+    printf("XADD old_loc = %li new = %li loc = %li\n", old_loc, new, loc);
 
     return 0;
 }
