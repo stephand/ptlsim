@@ -1096,9 +1096,19 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
       if (ra_rb_imm_form) {
         this << TransOp(opcode, destreg, srcreg, REG_imm, (sizeshift >= 2) ? REG_zero : destreg, sizeshift, ra_rb_imm_form_rbimm, 0, setflags);
       } else {
-        this << TransOp(opcode, (rdhigh) ? REG_temp2 : destreg, rareg, rbreg, rcreg, sizeshift,
+        if unlikely (isnegop && (sizeshift <= 1)) {
+          // In decode-fast, neg r1 optimized to be => r1 = 0 - rd
+          // but that only works for 32 and 64 bit operands
+          // For 8 and 16 bit operands, use:
+          // t0 = 0 - rd
+          // mov rd=rd,t0
+          this << TransOp(OP_sub, REG_temp0, REG_zero, destreg, REG_zero, sizeshift, 0, 0, setflags);
+          this << TransOp(OP_mov, destreg, destreg, REG_temp0, REG_zero, sizeshift);
+        } else {
+          this << TransOp(opcode, (rdhigh) ? REG_temp2 : destreg, rareg, rbreg, rcreg, sizeshift,
                         (isimm) ? ra.imm.imm : 0, 0, setflags);
-        if (rdhigh) { this << TransOp(OP_maskb, destreg, destreg, REG_temp2, REG_imm, 3, 0, MaskControlInfo(56, 8, 56)); }
+          if (rdhigh) { this << TransOp(OP_maskb, destreg, destreg, REG_temp2, REG_imm, 3, 0, MaskControlInfo(56, 8, 56)); }
+        }
       }
     }
   } else if ((rd.type == OPTYPE_REG) && (ra.type == OPTYPE_MEM)) {
