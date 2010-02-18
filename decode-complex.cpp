@@ -1413,9 +1413,32 @@ bool TraceDecoder::decode_complex() {
 
   case 0xd7: {
     // xlat
-    // (not used by gcc)
-    MakeInvalid();
-    break;
+#if 0
+     // (not used by gcc)
+     MakeInvalid();
+#else
+    EndOfDecode();
+
+    int destreg  = REG_temp0;
+    int srcreg   = REG_rax;
+    int basereg  = bias_by_segreg(REG_rbx);
+    int indexreg = REG_temp0;
+    int tempreg  = REG_temp8;
+    
+    // Only lower 8 bit of offset matter
+    this << TransOp(OP_mov, indexreg, REG_zero, srcreg, REG_zero, 0);
+
+    this << TransOp(OP_add, tempreg, basereg, indexreg, REG_zero,
+                    (use64 ? (addrsize_prefix ? 2 : 3)
+                           : (addrsize_prefix ? 1 : 2)));
+
+    // NB: Standard OP_ld does not merge
+    this << TransOp(OP_ld, destreg, tempreg, REG_imm, REG_zero /*srcreg*/, 0);
+
+    // Merge the low 8 bits only
+    this << TransOp(OP_mov, srcreg, srcreg, destreg, REG_zero, 0);
+#endif
+    break;  
   }
 
   case 0xd8 ... 0xdf: {
