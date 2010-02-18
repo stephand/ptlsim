@@ -113,11 +113,11 @@ void assist_sysenter(Context& ctx) {
   // REG_rip is filled out for us
 }
 
-//static const char cpuid_vendor[12+1] = "GenuineIntel";
-//static const char cpuid_description[48+1] = "Intel(R) Xeon(TM) CPU 2.00 GHz                  ";
+static const char cpuid_vendor[12+1] = "GenuineIntel";
+static const char cpuid_description[48+1] = "Intel(R) Xeon(TM) CPU 2.00 GHz                  ";
 
-static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
-static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
+//static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
+//static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
 
 
 //
