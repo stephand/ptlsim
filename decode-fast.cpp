@@ -234,9 +234,8 @@ bool TraceDecoder::decode_fast() {
     EndOfDecode();
 
     int destreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-    int sizeshift = reginfo[rd.reg.reg].sizeshift;
 
-    ra.mem.size = sizeshift;
+    ra.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
 
     address_generate_and_load_or_store(destreg, REG_zero, ra, OP_add);
     break;
