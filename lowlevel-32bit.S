@@ -219,7 +219,7 @@ switch_to_native_restore_context_lowlevel:
   mov      %edi,[%edi + 8*REG_rdi]      # Restore %rdi
 
   mov      byte ptr [running_in_sim_mode],0      # store must be atomic
-  jmp      [switch_to_native_restore_context_temp_32_to_32]
+  jmp      dword ptr [switch_to_native_restore_context_temp_32_to_32]
 
 #endif
 
