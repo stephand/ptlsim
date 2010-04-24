@@ -256,7 +256,7 @@ void assist_cpuid(Context& ctx) {
   case 0: {
     // Max avail function spec and vendor ID:
     const W32* vendor = (const W32*)&cpuid_vendor;
-    rax = 1; // only one extended function
+    rax = 2; // two extended function
     rbx = vendor[0];
     rdx = vendor[1];
     rcx = vendor[2];
@@ -269,6 +269,15 @@ void assist_cpuid(Context& ctx) {
     rbx = PTLSIM_X86_MISC_INFO | (ctx.vcpuid << 24);
     rcx = PTLSIM_X86_EXT_FEATURE;
     rdx = PTLSIM_X86_FEATURE;
+    break;
+  }
+
+  case 2: {
+    // Dummy cache informations, required by glibc
+    rax = 0; // TODO
+    rbx = 0;
+    rcx = 0;
+    rdx = 0;
     break;
   }
 

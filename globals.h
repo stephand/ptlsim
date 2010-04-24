@@ -266,7 +266,7 @@ inline W64 x86_bsf64(W64 b) { W64 r = 0; asm("bsf %[b],%[r]" : [r] "+r" (r) : [b
 inline W32 x86_bsr32(W32 b) { W32 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 inline W64 x86_bsr64(W64 b) { W64 r = 0; asm("bsr %[b],%[r]" : [r] "+r" (r) : [b] "r" (b)); return r; }
 
-template <typename T> inline bool x86_bt(T r, T b) { byte c; asm("bt %[b],%[r]; setc %[c]" : [c] "=r" (c) : [r] "r" (r), [b] "r" (b)); return c; }
+template <typename T> inline bool x86_bt(T r, T b) { byte c; asm("bt %[b],%[r]; setc %[c]" : [c] "=q" (c) : [r] "r" (r), [b] "r" (b)); return c; }
 template <typename T> inline bool x86_btn(T r, T b) { byte c; asm("bt %[b],%[r]; setnc %[c]" : [c] "=r" (c) : [r] "r" (r), [b] "r" (b)); return c; }
 
 // Return the updated data; ignore the old value
@@ -371,7 +371,6 @@ static inline T x86_rol(T r, int n) { asm("rol %%cl,%[r]" : [r] "+q" (r) : [n] "
 
 #ifndef __x86_64__
 // Need to emulate this on 32-bit x86
-template <>
 static inline W64 x86_ror(W64 r, int n) {
   return (r >> n) | (r << (64 - n));
 }

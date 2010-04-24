@@ -60,7 +60,7 @@ CFLAGS = -O99 -g -fomit-frame-pointer -pipe -march=k8 -falign-functions=16 -funr
 CFLAGS32BIT = $(CFLAGS) -m32
 else
 # 32-bit PTLsim32 only, on a Pentium 4:
-CFLAGS = -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16
+CFLAGS = -m32 -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16
 # No optimizations:
 #CFLAGS = -O1 -g3 -march=pentium4 -mtune=k8 -falign-functions=16
 CFLAGS32BIT = $(CFLAGS) 
@@ -70,7 +70,8 @@ ifdef PTLSIM_HYPERVISOR
 CFLAGS += -fpic -mno-red-zone
 endif
 
-CFLAGS += -fno-trapping-math -fno-stack-protector -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -fno-stack-protector -Wreturn-type $(GCCVER_SPECIFIC)
+CFLAGS += -fno-trapping-math -fno-stack-protector -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -fno-stack-protector -Wreturn-type $(GCCVER_SPECIFIC) -D_FORTIFY_SOURCE=0
+
 
 
 BASEOBJS = superstl.o config.o mathlib.o syscalls.o
@@ -114,10 +115,10 @@ all: $(TOPLEVEL)
 	@echo "Compiled successfully..."
 
 cpuid: cpuid.o $(BASEOBJS) $(STDOBJS)
-	$(CC) -O2 cpuid.o $(BASEOBJS) $(STDOBJS) -o cpuid
+	$(CC) $(CFLAGS) -O2 cpuid.o $(BASEOBJS) $(STDOBJS) -o cpuid
 
 ptlstats: ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) Makefile
-	$(CC) -g -O2 ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) -o ptlstats
+	$(CC) $(CFLAGS) -g -O2 ptlstats.o datastore.o ptlhwdef.o $(BASEOBJS) $(STDOBJS) -o ptlstats
 
 ifdef __x86_64__
 injectcode-64bit.o: injectcode.cpp
@@ -188,11 +189,11 @@ ptlsim: $(OBJFILES) Makefile ptlsim.lds
 endif # PTLSIM_HYPERVISOR
 else
 ptlsim: $(OBJFILES) Makefile ptlsim32.lds
-	ld -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim32.lds -e ptlsim_preinit_entry `gcc -print-libgcc-file-name`
+	ld --oformat=elf32-i386 -melf_i386 -g -O2 $(OBJFILES) -o ptlsim $(LIBPERFCTR) -static --allow-multiple-definition -T ptlsim32.lds -e ptlsim_preinit_entry `gcc -m32 -print-libgcc-file-name`
 endif
 
 ptlctl: ptlctl.o $(BASEOBJS) $(STDOBJS)
-	g++ -O2 ptlctl.o $(BASEOBJS) $(STDOBJS) -o ptlctl
+	g++ $(CFLAGS) -O2 ptlctl.o $(BASEOBJS) $(STDOBJS) -o ptlctl
 
 BASEADDR = 0
 

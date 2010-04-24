@@ -86,16 +86,12 @@ Waddr get_gs_base() {
 }
 
 #else
-// We need this here because legacy x86 readily runs out of registers:
-static W32 tempsysid;
-
 // 32-bit only
 static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 arg4, W32 arg5, W32 arg6) {
   W32 rc;
-  tempsysid = sysid;
 
-  asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl tempsysid,%%eax ; int $0x80 ; pop %%ebp" : "=a" (rc) :
-                "b" (arg1), "c" (arg2), "d" (arg3), 
+  asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl %1,%%eax ; int $0x80 ; pop %%ebp" : "=a" (rc) :
+                "m" (sysid), "b" (arg1), "c" (arg2), "d" (arg3),
                 "S" (arg4), "D" (arg5), "0" (arg6));
   return rc;
 }
