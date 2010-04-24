@@ -1351,11 +1351,22 @@ int main(int argc, char* argv[]) {
       return 2;
     }
 
-    DataStoreNode* ds = reader.get(snapshot);
-    if (!ds) {
-      cerr << "ptlstats: Cannot get snapshot '", snapshot, "'", endl, endl;
-      reader.close();
-      return 1;
+    DataStoreNode* ds;
+    if (subtract_branch) {
+      ds = reader.getdelta(snapshot, subtract_branch);
+      if (!ds) {
+        cerr << "ptlstats: Cannot get delta between '", subtract_branch,
+                "' and '", snapshot, "'", endl, endl;
+        reader.close();
+        return 1;
+      }
+    } else {
+      ds = reader.get(snapshot);
+      if (!ds) {
+        cerr << "ptlstats: Cannot get snapshot '", snapshot, "'", endl, endl;
+        reader.close();
+        return 1;
+      }
     }
 
     if (config.mode_subtree) {
