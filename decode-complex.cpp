@@ -799,8 +799,32 @@ bool TraceDecoder::decode_complex() {
   switch (op) {
  
   case 0x60: {
-    // pusha [not used by gcc]
-    MakeInvalid();
+    // pusha
+    if (use64) {
+      // pusha is invalid in 64-bit mode
+      MakeInvalid();
+      break;
+    }
+    EndOfDecode();
+
+    int sizeshift = (opsize_prefix) ? 1 : 2;
+    int size = (1 << sizeshift);
+    int offset = 0;
+
+#define PUSH(reg) \
+    this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, reg, sizeshift, offset);
+
+    offset -= size;   PUSH(REG_rax);
+    offset -= size;   PUSH(REG_rcx);
+    offset -= size;   PUSH(REG_rdx);
+    offset -= size;   PUSH(REG_rbx);
+    offset -= size;   PUSH(REG_rsp);
+    offset -= size;   PUSH(REG_rbp);
+    offset -= size;   PUSH(REG_rsi);
+    offset -= size;   PUSH(REG_rdi);
+#undef PUSH
+
+    this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, -offset);
     break;
   }
 
