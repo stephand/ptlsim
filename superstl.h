@@ -2962,11 +2962,10 @@ namespace superstl {
       locator.chunk->remove(locator.index);
       elemcount--;
 
-      // The locator.chunk is actually still used
-      /*if (locator.chunk->empty()) {
+      if (locator.chunk->empty()) {
         locator.chunk->link.unlink();
         delete locator.chunk;
-      }*/
+      }
 
       return empty();
     }
