@@ -13,13 +13,12 @@
 # will need to manually override the checks below:
 #
 ifndef MACHTYPE
-	MACHTYPE = "$(shell uname -a)"
+	MACHTYPE = "$(shell uname -m)"
 endif
 
 ifneq (,$(findstring x86_64,"$(MACHTYPE)"))
-__x86_64__=1
+	__x86_64__=1
 endif
-
 #
 # Build PTLsim/X full system simulator:
 #

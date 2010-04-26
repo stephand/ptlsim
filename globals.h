@@ -371,7 +371,10 @@ static inline T x86_rol(T r, int n) { asm("rol %%cl,%[r]" : [r] "+q" (r) : [n] "
 
 #ifndef __x86_64__
 // Need to emulate this on 32-bit x86
-static inline W64 x86_ror(W64 r, int n) {
+// Throws "explicit template specialization cannot have a storage class" in gcc 4.4.1 (probably 4.3+).
+// Fix as per http://gcc.gnu.org/gcc-4.3/porting_to.html
+//static inline W64 x86_ror(W64 r, int n) {
+inline W64 x86_ror(W64 r, int n) {
   return (r >> n) | (r << (64 - n));
 }
 #endif
