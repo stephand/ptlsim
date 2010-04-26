@@ -598,11 +598,17 @@ bool TraceDecoder::decode_sse() {
     int rareg;
 
     if (ra.type == OPTYPE_MEM) {
-      ra.mem.size = (rex.mode64) ? 3 : 2;
+      ra.mem.size = 3;
       operand_load(REG_temp0, ra, OP_ld);
       rareg = REG_temp0;
     } else {
       rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+
+      if (unlikely (rareg == rdreg)) {
+        TransOp mov(OP_mov, REG_temp0, REG_zero, rareg, REG_zero, 3);
+        this << mov;
+        rareg = REG_temp0;
+      }
     }
 
     TransOp uoplo(OP_fcvt_i2d_lo, rdreg+0, REG_zero, rareg, REG_zero, 3); uoplo.datatype = DATATYPE_VEC_DOUBLE; this << uoplo;
