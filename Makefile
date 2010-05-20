@@ -29,7 +29,7 @@ endif
 # but can still run 32-bit code and guest operating
 # systems. See the manual and FAQ for details.
 #
-PTLSIM_HYPERVISOR=1
+# PTLSIM_HYPERVISOR=1
 
 # For GCC versions > 4.2 install version 4.2 and uncomment the following line:
 # CC = g++-4.2
