@@ -1540,7 +1540,7 @@ void ReorderBufferEntry::tlbwalk() {
       PTEUpdate pteupdate;
       Context& ctx = getthread().ctx;
       Waddr physaddr = ctx.check_and_translate(virtaddr, 1, 0, 0, exception, pfec, pteupdate);
-      core.caches.initiate_prefetch(physaddr, uop.cachelevel);
+      core.caches.initiate_prefetch(physaddr, uop.cachelevel, threadid);
     } else {
       probecache(virtaddr, null);
     }

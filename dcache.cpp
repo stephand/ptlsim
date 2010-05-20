@@ -239,6 +239,7 @@ void MissBuffer<SIZE>::reset(int threadid) {
       // flushed, we'll wake up a stale LFRQ. We have to make sure after
       // a missbuf reset, all the entries point to a valid lfrqmap.
       //
+      // NOTE SD: mb.lfrqmap should be zero by now (mb.reset() above)
       if (*mb.lfrqmap) {
         bitvec<LFRQ_SIZE> tmp_lfrqmap = mb.lfrqmap ^ hierarchy.lfrq.waiting;
         if (*tmp_lfrqmap) {
@@ -638,7 +639,7 @@ void CacheHierarchy::annul_lfrq_slot(int lfrqslot) {
 //
 static const int PREFETCH_STOPS_AT_L2 = 0;
   
-void CacheHierarchy::initiate_prefetch(W64 addr, int cachelevel) {
+void CacheHierarchy::initiate_prefetch(W64 addr, int cachelevel, int threadid) {
   static const bool DEBUG = 0;
 
   addr = floor(addr, L1_LINE_SIZE);
@@ -659,7 +660,7 @@ void CacheHierarchy::initiate_prefetch(W64 addr, int cachelevel) {
     
   if (DEBUG) logfile << "Prefetch requested for ", (void*)(Waddr)addr, " to cache level ", cachelevel, endl;
     
-  missbuf.initiate_miss(addr, L2line);
+  missbuf.initiate_miss(addr, L2line, false, 0xffff, threadid);
   stats.dcache.prefetch.required++;
 }
 

@@ -641,7 +641,7 @@ namespace CacheSubsystem {
     W64 commitstore(const SFR& sfr, int threadid = 0xff, bool perform_actual_write = true);
     W64 speculative_store(const SFR& sfr, int threadid = 0xff);
 
-    void initiate_prefetch(W64 addr, int cachelevel);
+    void initiate_prefetch(W64 addr, int cachelevel, int threadid = 0xfe);
 
     bool probe_icache(Waddr virtaddr, Waddr physaddr);
     int initiate_icache_miss(W64 addr, int rob = 0xffff, int threadid = 0xff);
