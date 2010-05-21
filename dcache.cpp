@@ -226,6 +226,8 @@ template <int SIZE>
 void MissBuffer<SIZE>::reset(int threadid) {
   foreach (i, SIZE) {
     Entry& mb = missbufs[i];
+    // NOTE SD: This check is broken. A MBE may be shared by LFRQs from different threads.
+#if (0)
     if likely (mb.threadid == threadid) {
       if (logable(6)) logfile << "[vcpu ", threadid, "] reset missbuf slot ", i, ": for rob", mb.rob, endl;
       assert(!freemap[i]);
@@ -247,8 +249,33 @@ void MissBuffer<SIZE>::reset(int threadid) {
           mb.lfrqmap &= ~tmp_lfrqmap;
           if (logable(6)) logfile << "after remove stale lfrq entries, its lfrqmap is ", mb.lfrqmap, endl;
         }
+        // NB SD: This is the same as mb.lfrqmap &= hierarchy.lfrq.waiting; which actually makes sense :)
       }
     }
+#endif
+    if (freemap[i]) continue;
+
+    if (logable(6)) logfile << "Adjusting LFR wakeups for missbuf[", i, "] : before lfrqmap is ", mb.lfrqmap, endl;
+    for (size_t l = mb.lfrqmap.lsb(-1); l != -1; l = mb.lfrqmap.nextlsb(l, -1)) {
+      // Go through all associated LFRs and check their thread ID
+      // NOTE: This could also be done in LFRQ::reset or through several
+      //       assumptions about the waiting bitmap, as above.
+      const LoadFillReq &lfr = hierarchy.lfrq.reqs[l];
+      if (lfr.lsi.threadid == threadid)
+        mb.lfrqmap[l] = 0;
+    }
+    if (logable(6)) logfile << "Adjusting LFR wakeups for missbuf[", i, "] : after  lfrqmap is ", mb.lfrqmap, endl;
+
+    if likely (!mb.lfrqmap && (mb.threadid == threadid)) {
+      // Drop empty MBEs that had only wakeups for the flushed thread
+      if (logable(6)) logfile << "[vcpu ", threadid, "] reset missbuf slot ", i, ": for rob", mb.rob, endl;
+      assert(!freemap[i]);
+      mb.reset();
+      freemap[i] = 1;
+      count--;
+      assert(count >= 0);
+    }
+
   }
 }
 
@@ -282,6 +309,9 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
 
   int idx = find(addr);
 
+  // NOTE SD: This is a fundamental question here: can MBEs be shared by two threads?
+  //          Care has to betaken with respect to reset / annullment if so.
+  //          Further note that prefetches and store commits have their own bogus thread IDs
   // if unlikely (idx >= 0 && threadid == missbufs[idx].threadid) {
   if unlikely (idx >= 0) {
     // Handle case where dcache miss is already in progress but some 
@@ -365,7 +395,7 @@ int MissBuffer<SIZE>::initiate_miss(LoadFillReq& req, bool hit_in_L2, int rob) {
   Entry& missbuf = missbufs[mbidx];
   missbuf.lfrqmap[lfrqslot] = 1;
   hierarchy.lfrq[lfrqslot].mbidx = mbidx;
-  // missbuf.threadid = req.lsi.threadid;
+  // missbuf.threadid = req.lsi.threadid;       //NOTE SD: Multiple threads can share the same MBE
 
   return lfrqslot;
 }
@@ -660,7 +690,7 @@ void CacheHierarchy::initiate_prefetch(W64 addr, int cachelevel, int threadid) {
     
   if (DEBUG) logfile << "Prefetch requested for ", (void*)(Waddr)addr, " to cache level ", cachelevel, endl;
     
-  missbuf.initiate_miss(addr, L2line, false, 0xffff, threadid);
+  missbuf.initiate_miss(addr, L2line, false /*, 0xffff, threadid*/); // NB: no threadid -> default bogus threadid -> not flushed on pipeline flush
   stats.dcache.prefetch.required++;
 }
 
