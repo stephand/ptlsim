@@ -280,6 +280,8 @@ enum {
   ASSIST_IDIV32,
   ASSIST_IDIV64,
   // x87
+  ASSIST_X87_FIST,
+  ASSIST_X87_FLDCW,
   ASSIST_X87_FPREM,
   ASSIST_X87_FYL2XP1,
   ASSIST_X87_FSQRT,
@@ -358,6 +360,8 @@ static const char* assist_names[ASSIST_COUNT] = {
   "idiv<W32>",
   "idiv<W64>",
   // x87
+  "x87_fist",
+  "x87_fldcw",
   "x87_fprem",
   "x87_fyl2xp1",
   "x87_fsqrt",
@@ -428,6 +432,8 @@ void assist_gp_fault(Context& ctx);
 template <typename T> void assist_div(Context& ctx);
 template <typename T> void assist_idiv(Context& ctx);
 // x87
+void assist_x87_fist(Context& ctx);
+void assist_x87_fldcw(Context& ctx);
 void assist_x87_fprem(Context& ctx);
 void assist_x87_fyl2xp1(Context& ctx);
 void assist_x87_fsqrt(Context& ctx);

@@ -13,8 +13,66 @@
 
 #define FP_STACK_MASK 0x3f
 
+void assist_x87_fist(Context& ctx) {
+  W64& tos = ctx.commitarf[REG_fptos];
+  W64 target_addr = ctx.commitarf[REG_ar1];
+  int size = ctx.commitarf[REG_ar2] >> 1;
+  W64 pop = ctx.commitarf[REG_ar2] & 0x1;
+  W64 st0 = ctx.fpstack[tos >> 3];
+  SSEType st0u(st0);
+  W16 oldfpcw = cpu_get_fpcw();
+
+  cpu_set_fpcw(ctx.fpcw);
+  asm("fldl %0\n\t"
+      "fistpll %0\n\t"
+      :"+m"(st0u.d));
+  cpu_set_fpcw(oldfpcw);
+
+  PageFaultErrorCode pfec;
+  Waddr faultaddr;
+  int bytes = ctx.copy_to_user(target_addr, &st0u.w64, size, pfec, faultaddr);
+
+  if (bytes < size) {
+    ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
+    ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
+    return;
+  }
+  if (pop)
+    tos = (tos +8) & FP_STACK_MASK;
+
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_x87_fldcw(Context& ctx) {
+  W16 new_fpcw = (W16)ctx.fpcw;
+  cpu_set_fpcw(new_fpcw);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
 void assist_x87_fprem(Context& ctx) {
-  assert(false);
+  W64& tos = ctx.commitarf[REG_fptos];
+  W64& st0 = ctx.fpstack[tos >> 3];
+  W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
+  SSEType st0u(st0); SSEType st1u(st1);
+
+  X87StatusWord fpsw;
+  asm("fldl %[st1]\n"
+      "fldl %[st0]\n"
+      "fprem\n"
+      "fstsw %%ax\n"
+      "fstpl %[st0]\n"
+      "ffree %%st(0)\n"
+      "fincstp\n"
+      : [st0] "+m" (st0u.d),
+              "=a" (*(W16*)&fpsw)
+      : [st1]  "m" (st1u.d));
+  st0 = st0u.w64;
+
+  X87StatusWord* sw = (X87StatusWord*) &ctx.commitarf[REG_fpsw];
+  sw->c0 = fpsw.c0;
+  sw->c1 = fpsw.c1;
+  sw->c2 = fpsw.c2;
+  sw->c3 = fpsw.c3;
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
@@ -543,9 +601,22 @@ bool TraceDecoder::decode_x87() {
       DECODE(eform, rd, q_mode);
       EndOfDecode();
       x87_load_stack(REG_temp0, REG_fptos);
-      this << TransOp(OP_fcvt_d2q, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x651) ? 3 : 2);
-      result_store(REG_temp0, REG_temp1, rd, DATATYPE_DOUBLE);
-      x87_pop_stack();
+      if (op == 0x651) {
+        this << TransOp(OP_fcvt_d2q, REG_temp0, REG_zero, REG_temp0,
+                                     REG_zero, 3);
+        result_store(REG_temp0, REG_temp1, rd, DATATYPE_DOUBLE);
+        x87_pop_stack();
+      } else {
+        /* REG_ar1 is the target address
+         * REG_ar2 contains the pop bit and operand size
+         */
+        address_generate_and_load_or_store(REG_ar1, REG_zero, rd,
+                                           OP_add, 0, 0, true);
+
+        immediate(REG_ar2, 3, (8<<1) | 0x1);
+        microcode_assist(ASSIST_X87_FIST, ripstart, rip);
+        end_of_block = 1;
+      } 
     }
     break;
   }
@@ -665,6 +736,8 @@ bool TraceDecoder::decode_x87() {
       EndOfDecode();
       operand_load(REG_temp1, ra, OP_ld);
       TransOp stp(OP_st, REG_mem, REG_ctx, REG_imm, REG_temp1, 1, offsetof_(Context, fpcw)); stp.internal = 1; this << stp;
+      microcode_assist(ASSIST_X87_FLDCW, ripstart, rip);
+      end_of_block = 1;
     }
     break;
   }
@@ -685,7 +758,6 @@ bool TraceDecoder::decode_x87() {
           ASSIST_X87_FRNDINT, ASSIST_X87_FSCALE, ASSIST_X87_FSIN, ASSIST_X87_FCOS
         };
 
-        if (x87op == 0) MakeInvalid(); // we don't support very old fprem form
         microcode_assist(x87op_to_assist_idx[x87op], ripstart, rip);
         end_of_block = 1;
       }
@@ -725,12 +797,31 @@ bool TraceDecoder::decode_x87() {
     DECODE(eform, rd, w_mode);
     EndOfDecode();
     x87_load_stack(REG_temp0, REG_fptos);
-    this << TransOp(OP_fcvt_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (op == 0x671) ? 1 : 0);
-    result_store(REG_temp0, REG_temp1, rd);
+    if (op == 0x671) {
+      this << TransOp(OP_fcvt_d2i, REG_temp0, REG_zero, REG_temp0,
+                                   REG_zero, (op == 0x671) ? 1 : 0);
+      result_store(REG_temp0, REG_temp1, rd);
 
-    int x87op = modrm.rm;
-    if ((x87op == 1) | (x87op == 3)) {
-      x87_pop_stack();
+      int x87op = modrm.rm;
+      if ((x87op == 1) | (x87op == 3))
+        x87_pop_stack();
+    } else {
+      /* REG_ar1 is the target address
+       * REG_ar2 contains the pop bit and operand size
+       */
+      int old_size = rd.mem.size;
+      rd.mem.size = 3;
+      address_generate_and_load_or_store(REG_ar1, REG_zero, rd, OP_add, 0, 0, true);
+      rd.mem.size = old_size;
+
+      int x87op = modrm.rm;
+      if ((x87op == 1) | (x87op == 3))
+        immediate(REG_ar2, 3, (2<<1) | 0x1);
+      else
+        immediate(REG_ar2, 3,  2<<1);
+
+      microcode_assist(ASSIST_X87_FIST,ripstart,rip);
+      end_of_block = 1;
     }
     break;
   }
@@ -918,17 +1009,34 @@ bool TraceDecoder::decode_x87() {
       case 1:   // fisttp w32
       case 2:   // fist w32
       case 3: { // fistp w32
-        x87_load_stack(REG_temp0, REG_fptos);
-        this << TransOp(OP_fcvt_d2i, REG_temp0, REG_zero, REG_temp0, REG_zero, (x87op == 1));
-        result_store(REG_temp0, REG_temp1, rd);
+        if (x87op == 1) {
+          x87_load_stack(REG_temp0, REG_fptos);
+          this << TransOp(OP_fcvt_d2i, REG_temp0, REG_zero, REG_temp0,
+                                                  REG_zero, (x87op == 1));
+          result_store(REG_temp0, REG_temp1, rd);
 
-        if ((x87op == 1) | (x87op == 3)) {
-          x87_pop_stack();
+          if ((x87op == 1) | (x87op == 3))
+            x87_pop_stack();
+        } else {
+          /* REG_ar1 is the target address
+           * REG_ar2 contains the pop bit and operand size
+           */
+          int old_size = rd.mem.size;
+          rd.mem.size = 3;
+          address_generate_and_load_or_store(REG_ar1, REG_zero, rd,
+                                             OP_add, 0, 0, true);
+          rd.mem.size = old_size;
+
+          if ((x87op == 1) | (x87op == 3))
+            immediate(REG_ar2, 3, (4<<1) | 0x1);
+          else
+            immediate(REG_ar2, 3,  4<<1);
+
+          microcode_assist(ASSIST_X87_FIST, ripstart, rip);
+          end_of_block = 1;
         }
-
-        break;
-      }
-      }
+      } // case
+      } // switch
     }
     break;
   }

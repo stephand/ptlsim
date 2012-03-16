@@ -58,6 +58,8 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_idiv<W32>,
   assist_idiv<W64>,
   // x87
+  assist_x87_fist,
+  assist_x87_fldcw,
   assist_x87_fprem,
   assist_x87_fyl2xp1,
   assist_x87_fsqrt,
