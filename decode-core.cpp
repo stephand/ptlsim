@@ -2117,6 +2117,12 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   return bb;
 }
 
+#ifdef __x86_64__
+# define MAX_RIP 0xffffffffffffffffULL
+#else
+# define MAX_RIP 0xffffffffU
+#endif
+
 //
 // Translate one basic block, just to get the uops: do not
 // allocate an entry in the BB cache and do not add the BB
@@ -2126,7 +2132,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
 // This function does not allocate any memory.
 //
 void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Waddr rip) {
-  if unlikely ((rip == config.start_log_at_rip) && (rip != 0xffffffffffffffffULL)) {
+  if unlikely ((rip == config.start_log_at_rip) && (rip != MAX_RIP)) {
     config.start_log_at_iteration = 0;
     logenable = 1;
   }
@@ -2161,7 +2167,7 @@ void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Wad
 }
 
 BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
-  if unlikely ((rip == config.start_log_at_rip) && (rip != 0xffffffffffffffffULL)) {
+  if unlikely ((rip == config.start_log_at_rip) && (rip != MAX_RIP)) {
     config.start_log_at_iteration = 0;
     logenable = 1;
   }
@@ -2186,6 +2192,8 @@ BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
 
   return bb;
 }
+
+#undef MAX_RIP
 
 ostream& BasicBlockCache::print(ostream& os) {
   dynarray<BasicBlock*> bblist;
