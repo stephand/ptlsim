@@ -1756,7 +1756,7 @@ int ReorderBufferEntry::commit() {
   // becomes visible after the store has committed.
   //
   bool page_crossing = ((lowbits(uop.rip.rip, 12) + (uop.bytes-1)) >> 12);
-  if unlikely (smc_isdirty(uop.rip.mfnlo) | (page_crossing && smc_isdirty(uop.rip.mfnhi))) {
+  if unlikely (uop.eom && (smc_isdirty(uop.rip.mfnlo) | (page_crossing && smc_isdirty(uop.rip.mfnhi)))) {
     if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_SMC_DETECTED, this);
 
     //
@@ -1768,7 +1768,7 @@ int ReorderBufferEntry::commit() {
     thread.smc_invalidate_rvp = uop.rip;
 
     per_context_ooocore_stats_update(threadid, commit.result.smc++);
-    return COMMIT_RESULT_SMC;
+    // Let this uop commit to prevent livelock!
   }
 
   assert(ready_to_commit());
@@ -2030,6 +2030,9 @@ int ReorderBufferEntry::commit() {
   changestate(thread.rob_free_list);
   reset();
   thread.ROB.commit(*this);
+
+  if unlikely (thread.smc_invalidate_pending)
+    return COMMIT_RESULT_SMC;
 
   if unlikely (uop_is_barrier) {
     if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_COMMIT_ASSIST, RIPVirtPhys(ctx.commitarf[REG_rip]))->threadid = thread.threadid;
