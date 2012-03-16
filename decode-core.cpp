@@ -903,7 +903,7 @@ int TraceDecoder::bias_by_segreg(int basereg) {
 
     assert(segid >= 0);
 
-    int varoffs = offsetof(Context, seg[segid].base);
+    int varoffs = offsetof_(Context, seg[segid].base);
 
     TransOp ldp(OP_ld, REG_temp6, REG_ctx, REG_imm, REG_zero, 3, varoffs); ldp.internal = 1; this << ldp;
     this << TransOp(OP_add, REG_temp6, REG_temp6, basereg, REG_zero, 3);

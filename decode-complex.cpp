@@ -997,7 +997,7 @@ bool TraceDecoder::decode_complex() {
     if (modrm.reg >= 6) MakeInvalid();
 
     int rdreg = (rd.type == OPTYPE_MEM) ? REG_temp0 : arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-    TransOp ldp(OP_ld, rdreg, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, seg[modrm.reg].selector)); ldp.internal = 1; this << ldp;
+    TransOp ldp(OP_ld, rdreg, REG_ctx, REG_imm, REG_zero, 1, offsetof_(Context, seg[modrm.reg].selector)); ldp.internal = 1; this << ldp;
 
     prefixes &= ~PFX_LOCK;
     if (rd.type == OPTYPE_MEM) result_store(rdreg, REG_temp5, rd);
@@ -1103,7 +1103,7 @@ bool TraceDecoder::decode_complex() {
       this << TransOp(OP_movccr, REG_temp0, REG_zero, REG_temp0, REG_zero, 3);
     }
 
-    TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 2, offsetof(Context, internal_eflags)); ldp.internal = 1; this << ldp;
+    TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 2, offsetof_(Context, internal_eflags)); ldp.internal = 1; this << ldp;
     this << TransOp(OP_or, REG_temp1, REG_temp1, REG_temp0, REG_zero, 2); // merge in standard flags
 
     this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, 3, size);
@@ -2369,7 +2369,7 @@ bool TraceDecoder::decode_complex() {
       EndOfDecode();
       is_sse = 1;
 
-      TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, mxcsr)); ldp.internal = 1; this << ldp;
+      TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof_(Context, mxcsr)); ldp.internal = 1; this << ldp;
       result_store(REG_temp1, REG_temp0, rd);
       break;
     }

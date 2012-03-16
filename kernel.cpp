@@ -480,6 +480,7 @@ Waddr stack_max_addr;
  *
  */
 
+#undef  MAP_STACK
 #define MAP_STACK   MAP_GROWSDOWN
 #define MAP_ZERO    0x01000000
 #define MAP_HEAP    0x02000000
@@ -552,7 +553,7 @@ int mqueryall(MemoryMapExtent* startmap, size_t count) {
     int devminor = 0;
     W64 inode = 0;
 
-    int n = sscanf(s, "%lx-%lx %c%c%c%c %llx %x:%x %lld", &start, &stop, &rperm, &wperm, &xperm, &private_or_shared, &offset, &devmajor, &devminor, &inode);
+    int n = sscanf(s, "%lx-%lx %c%c%c%c %llx %x:%x %lld", (unsigned long*) &start, (unsigned long*) &stop, &rperm, &wperm, &xperm, &private_or_shared, &offset, &devmajor, &devminor, &inode);
 
     if (n != 10) {
       cout << "Warning: /proc/self/maps not in proper format (n = ", n, ")", endl, flush;

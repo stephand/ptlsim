@@ -664,7 +664,7 @@ bool TraceDecoder::decode_x87() {
       DECODE(eform, ra, w_mode);
       EndOfDecode();
       operand_load(REG_temp1, ra, OP_ld);
-      TransOp stp(OP_st, REG_mem, REG_ctx, REG_imm, REG_temp1, 1, offsetof(Context, fpcw)); stp.internal = 1; this << stp;
+      TransOp stp(OP_st, REG_mem, REG_ctx, REG_imm, REG_temp1, 1, offsetof_(Context, fpcw)); stp.internal = 1; this << stp;
     }
     break;
   }
@@ -693,7 +693,7 @@ bool TraceDecoder::decode_x87() {
       // fnstcw
       DECODE(eform, rd, w_mode);
       EndOfDecode();
-      TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof(Context, fpcw)); ldp.internal = 1; this << ldp;
+      TransOp ldp(OP_ld, REG_temp1, REG_ctx, REG_imm, REG_zero, 1, offsetof_(Context, fpcw)); ldp.internal = 1; this << ldp;
       result_store(REG_temp1, REG_temp0, rd);
     }
     break;

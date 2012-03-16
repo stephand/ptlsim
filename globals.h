@@ -116,8 +116,8 @@ template <typename T> struct ispointer_t<T*> { static const bool pointer = 1; };
 
 // Null pointer to the specified object type, for computing field offsets
 template <typename T> static inline T* nullptr() { return (T*)(Waddr)0; }
-#define offsetof(T, field) ((Waddr)(&(nullptr<T>()->field)) - ((Waddr)nullptr<T>()))
-#define baseof(T, field, ptr) ((T*)(((byte*)(ptr)) - offsetof(T, field)))
+#define offsetof_(T, field) ((Waddr)(&(nullptr<T>()->field)) - ((Waddr)nullptr<T>()))
+#define baseof(T, field, ptr) ((T*)(((byte*)(ptr)) - offsetof_(T, field)))
 // Restricted (non-aliased) pointers:
 #define noalias __restrict__
 
