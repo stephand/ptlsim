@@ -1721,7 +1721,7 @@ int ptlsim_inject(int argc, char** argv) {
   //
   // Find the argv index of the filename to execute and its arguments:
   //
-  int filename_arg = configparser.parse(config, argc - 1, argv + 1) + 1;
+  int filename_arg = 1 + configparser.parse(config, argc - 1, argv + 1);
 
   const char* filename = argv[filename_arg];
 
@@ -1970,7 +1970,7 @@ int init_config(int argc, char** argv) {
   // the first non-option (i.e. not starting with "-xxx") argument
   // it finds (conveniently, this is always the target program name).
   //  
-  int ptlsim_arg_count = configparser.parse(config, p_argc-1, parent_args+1) + 1;
+  int ptlsim_arg_count = 1 + configparser.parse(config, p_argc-1, parent_args+1);
 
   handle_config_change(config, ptlsim_arg_count, parent_args+1);
 

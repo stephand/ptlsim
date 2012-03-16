@@ -65,7 +65,7 @@ int ConfigurationParserBase::parse(void* baseptr, int argc, char* argv[]) {
       i++;
       bool found = false;
 
-      if (!strcmp(name, "-"))
+      if (0 == strcmp(name, "-"))
         return i;
 
       ConfigurationOption* option = options;

@@ -907,7 +907,7 @@ namespace superstl {
       return crc;
     }
 
-    inline W32 update(byte* data, int count) {
+    inline W32 update(byte* data, unsigned count) {
       foreach (i, count) {
         update(data[i]);
       }
@@ -3674,7 +3674,9 @@ namespace superstl {
     }
 
     W64 acquire() {
+#ifdef ENABLE_SPINLOCK_PROFILING
       W64 iterations = 0;
+#endif
 
       for (;;) {
         if unlikely (lock) {
