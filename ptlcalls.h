@@ -72,7 +72,7 @@ enum {
 };
 
 // Put at start of address space where nothing normally goes
-#define PTLSIM_THUNK_PAGE 0x1000
+#define PTLSIM_THUNK_PAGE 0x10000
 
 #define PTLSIM_THUNK_MAGIC 0x34366d69734c5450ULL
 

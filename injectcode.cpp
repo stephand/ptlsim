@@ -81,7 +81,7 @@ void* syscall_mmap(void* start, size_t length, int prot, int flags, int fd, unsi
 
 extern "C" void ptlsim_loader_thunk_name(LoaderInfo* info);
 
-#define PTLSIM_THUNK_PAGE 0x1000
+#define PTLSIM_THUNK_PAGE 0x10000
 
 #ifdef PTLSIM_FORCE_32BIT_ONLY
 typedef Elf32_Ehdr PTLsim_Elf_Ehdr;
