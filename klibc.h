@@ -54,5 +54,6 @@ int format_float(char* buf, int bufsize, double v, int precision = 6, int pad = 
 //
 
 void call_global_constuctors();
-
+#undef RAND_MAX
+#define RAND_MAX (32767)
 #endif // _BASELIBC_H

@@ -3,6 +3,8 @@
 // Decoder for simple x86 instructions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <decode.h>
@@ -216,6 +218,9 @@ bool TraceDecoder::decode_fast() {
 
   case 0x88 ... 0x8b: {
     // moves
+    /* Handle LOCKed loads with ASF! */
+    if (prefixes & PFX_LOCK) return false;
+
     int bytemode = bit(op, 0) ? v_mode : b_mode;
     switch (bit(op, 1)) {
     case 0: DECODE(eform, rd, bytemode); DECODE(gform, ra, bytemode); break;
@@ -526,12 +531,11 @@ bool TraceDecoder::decode_fast() {
   case 0xeb: {
     bool iscall = (op == 0xe8);
     // CALL or JMP rel16/rel32/rel64
-    // near unconditional branches with 8-bit displacement:
+    // near conditional branches with 8-bit displacement:
     bool longform = (op != 0xeb);
     DECODE(iform, ra, (longform ? v_mode : b_mode));
-    W64 target = (Waddr)(rip + ra.imm.imm);
-    bb.rip_taken = target;
-    bb.rip_not_taken = target;
+    bb.rip_taken = (Waddr)rip + (W64s)ra.imm.imm;
+    bb.rip_not_taken = bb.rip_taken;
     bb.brtype = (longform) ? BRTYPE_BRU_IMM32 : BRTYPE_BRU_IMM8;
     end_of_block = true;
     EndOfDecode();
@@ -548,8 +552,8 @@ bool TraceDecoder::decode_fast() {
       this << TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU);
     TransOp transop(OP_bru, REG_rip, REG_zero, REG_zero, REG_zero, 3);
     transop.extshift = (iscall) ? BRANCH_HINT_PUSH_RAS : 0;
-    transop.riptaken = target;
-    transop.ripseq = target;
+    transop.riptaken = (Waddr)rip + (W64s)ra.imm.imm;
+    transop.ripseq = (Waddr)rip + (W64s)ra.imm.imm;
     this << transop;
     break;
   }

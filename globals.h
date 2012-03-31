@@ -532,11 +532,15 @@ asmlinkage {
 #include <mathlib.h>
 #include <klibc.h>
 
+#ifdef PAGE_SHIFT
+#undef PAGE_SHIFT
+#endif
 #ifdef PAGE_SIZE
 #undef PAGE_SIZE
-// We're on x86 or x86-64, so pages are always 4096 bytes:
-#define PAGE_SIZE 4096
 #endif
+// We're on x86 or x86-64, so pages are always 4096 bytes:
+#define PAGE_SHIFT (12)
+#define PAGE_SIZE (1 << (PAGE_SHIFT))
 
 // e.g., head (a, b, c) => a
 // e.g., if list = (a, b, c), head list => a

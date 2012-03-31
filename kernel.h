@@ -380,6 +380,10 @@ static inline W64 storemask(Waddr addr, W64 data, byte bytemask) {
   return data;
 }
 
+static inline W64 storephys(Waddr physaddr, W64 data) {
+  return storemask(physaddr, data, 0xff);
+}
+
 // In userspace PTLsim, virtual == physical:
 inline RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
   use64 = ctx.use64;

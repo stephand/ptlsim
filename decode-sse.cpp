@@ -3,6 +3,8 @@
 // Decoder for SSE/SSE2/SSE3/MMX and misc instructions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <decode.h>
@@ -14,7 +16,6 @@ bool TraceDecoder::decode_sse() {
   DecodedOperand ra;
 
   is_sse = 1;
-  prefixes &= ~PFX_LOCK;
 
   switch (op) {
     /*
@@ -516,7 +517,7 @@ bool TraceDecoder::decode_sse() {
     lowop.datatype = DATATYPE_VEC_DOUBLE;
     this << lowop;
 
-    TransOp highop(uop, rdreg+1, rareg+0, rareg+1, REG_zero, 3);
+    TransOp highop(uop, rdreg+1, rareg+1, rareg+1, REG_zero, 3);
     highop.datatype = DATATYPE_VEC_DOUBLE;
     this << highop;
 
@@ -818,12 +819,15 @@ bool TraceDecoder::decode_sse() {
     break;
   }
 
+  case 0x56f: // movdqa load
+  case 0x26f: { // movdqu load
+    /* Let decode_asf handle LOCKed movdqa and movdqu */
+    if (prefixes & PFX_LOCK) return false;
   case 0x328: // movaps load 
   case 0x528: // movapd load
   case 0x310: // movups load
   case 0x510: // movupd load
-  case 0x56f: // movdqa load
-  case 0x26f: { // movdqu load
+
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
     EndOfDecode();
@@ -844,15 +848,17 @@ bool TraceDecoder::decode_sse() {
     break;
   }
 
+  case 0x57f: // movdqa store
+  case 0x27f: { // movdqu store
+    /* Let decode_asf handle LOCKed movdqa and movdqu */
+    if (prefixes & PFX_LOCK) return false;
   case 0x329: // movaps store
   case 0x529: // movapd store
   case 0x311: // movups store
   case 0x511: // movupd store
-  case 0x57f: // movdqa store
-  case 0x27f: // movdqu store
   case 0x5e7: // movntdq store
   case 0x52b: // movntpd store
-  case 0x32b: { // movntps store
+  case 0x32b: // movntps store
     DECODE(eform, rd, x_mode);
     DECODE(gform, ra, x_mode);
     EndOfDecode();
@@ -1214,6 +1220,9 @@ bool TraceDecoder::decode_sse() {
   }
 
   case 0x56e: { // movd xmm,rm32/rm64
+    /* Let decode_asf handle the locked verisons of movd xmm,rm32/rm64 */
+    if (prefixes & PFX_LOCK) return false;
+
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, v_mode);
     EndOfDecode();
@@ -1249,6 +1258,9 @@ bool TraceDecoder::decode_sse() {
   }
 
   case 0x27e: { // movq xmm,xmmlo|mem64 with zero extension
+    /* Let decode_asf handle the locked verisons of movq xmm,xmmlo|mem64 */
+    if (prefixes & PFX_LOCK) return false;
+
     DECODE(gform, rd, x_mode);
     DECODE(eform, ra, x_mode);
     EndOfDecode();

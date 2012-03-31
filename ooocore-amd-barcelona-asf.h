@@ -1,12 +1,34 @@
 // -*- c++ -*-
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// Out-of-Order Core Simulator
-// AMD K8 (Athlon 64 / Opteron / Turion)
+// Out-of-Order Core Simulator Configuration for
+// AMD Fam. 0x10 (Barcelona) with Experimental AMD64 ASF Extension
 //
-// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
 //
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+// 02110-1301, USA.
+//
+// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
+//
+
+#include <branchpred.h>
+#ifdef ENABLE_ASF
+#include <asf.h>
+#endif
 
 //
 // Enable SMT operation:
@@ -16,7 +38,7 @@
 // threaded mode.
 //
 
-// #define ENABLE_SMT
+//#define ENABLE_SMT
 
 static const int MAX_THREADS_BIT = 4; // up to 16 threads
 static const int MAX_ROB_IDX_BIT = 12; // up to 4096 ROB entries
@@ -51,22 +73,28 @@ namespace OutOfOrderModel {
   static const int RC = 2;
   static const int RS = 3; // (for stores only)
 
+  // SD: In order to reduce the effect of clever dispatching decisions, I have
+  // implemented a separate LSU, which might more acurately model the actually
+  // separate LSU in K8, which is only driven by _three_ AGUs.
+//#define SEPARATE_LSU
+
   //
   // Uop to functional unit mappings
   //
-  static const int FU_COUNT = 9;
-  static const int LOADLAT = 3;
+  static const int FU_COUNT = 7 + 3;
+  static const int LOADLAT  = 3;
 
   enum {
     FU_ALU1       = (1 << 0),
     FU_ALUC       = (1 << 1),
     FU_ALU2       = (1 << 2),
-    FU_LSU1       = (1 << 3),
-    FU_ALU3       = (1 << 4),
-    FU_LSU2       = (1 << 5),
-    FU_FADD       = (1 << 6),
-    FU_FMUL       = (1 << 7),
-    FU_FCVT       = (1 << 8),
+    FU_ALU3       = (1 << 3),
+    FU_FADD       = (1 << 4),
+    FU_FMUL       = (1 << 5),
+    FU_FCVT       = (1 << 6),
+    FU_LSU01      = (1 << 7), // SD: not used, see below
+    FU_LSU02      = (1 << 8),
+    FU_LSU03      = (1 << 9),
   };
 
   static const int LOAD_FU_COUNT = 2;
@@ -75,12 +103,13 @@ namespace OutOfOrderModel {
     "alu1",
     "aluc",
     "alu2",
-    "lsu1",
     "alu3",
-    "lsu2",
     "fadd",
     "fmul",
     "fcvt",
+    "lsu1",
+    "lsu2",
+    "lsu3",
   };
 
   //
@@ -90,8 +119,7 @@ namespace OutOfOrderModel {
 #define ALU2 FU_ALU2
 #define ALU3 FU_ALU3
 #define ALUC FU_ALUC
-#define LSU1 FU_LSU1
-#define LSU2 FU_LSU2
+#define LSU  FU_LSU01|FU_LSU02|FU_LSU03
 #define FADD FU_FADD
 #define FMUL FU_FMUL
 #define FCVT FU_FCVT
@@ -99,9 +127,9 @@ namespace OutOfOrderModel {
 #define L LOADLAT
 
   struct FunctionalUnitInfo {
-    byte opcode;   // Must match definition in ptlhwdef.h and ptlhwdef.cpp! 
+    byte opcode;   // Must match definition in ptlhwdef.h and ptlhwdef.cpp!
     byte latency;  // Latency in cycles, assuming ideal bypass
-    W16  fu;       // Map of functional units on which this uop can issue
+    W32  fu;       // Map of functional units on which this uop can issue
   };
 
   //
@@ -110,7 +138,7 @@ namespace OutOfOrderModel {
   //
   const FunctionalUnitInfo fuinfo[OP_MAX_OPCODE] = {
     // name, latency, fumask
-    {OP_nop,            1, ALU1|ALU2|ALU3|ALUC|LSU1|LSU2|FADD|FMUL|FCVT},
+    {OP_nop,            1, ALU1|ALU2|ALU3|ALUC|LSU|FADD|FMUL|FCVT},
     {OP_mov,            1, ALU1|ALU2|ALU3|FADD|FMUL},
     // Logical
     {OP_and,            1, ALU1|ALU2|ALU3|FADD|FMUL},
@@ -168,20 +196,20 @@ namespace OutOfOrderModel {
     {OP_chk_sub,        1, ALU1|ALU2|ALU3},
     {OP_chk_and,        1, ALU1|ALU2|ALU3},
     // Loads and stores
-    {OP_ld,             3, LSU1|LSU2},
-    {OP_ldx,            3, LSU1|LSU2},
-    {OP_ld_pre,         1, LSU1     },
-    {OP_st,             1, LSU1|LSU2},
-    {OP_mf,             1, LSU1     },
+    {OP_ld,             L, LSU},
+    {OP_ldx,            L, LSU},
+    {OP_ld_pre,         1, LSU     },
+    {OP_st,             1, LSU},
+    {OP_mf,             1, LSU     },
     // Shifts, rotates and complex masking
     {OP_shl,            1, ALU1|ALU2|ALU3},
     {OP_shr,            1, ALU1|ALU2|ALU3},
     {OP_mask,           1, ALU1|ALU2|ALU3},
     {OP_sar,            1, ALU1|ALU2|ALU3},
-    {OP_rotl,           1, ALU1|ALU2|ALU3},  
-    {OP_rotr,           1, ALU1|ALU2|ALU3},   
+    {OP_rotl,           1, ALU1|ALU2|ALU3},
+    {OP_rotr,           1, ALU1|ALU2|ALU3},
     {OP_rotcl,          1, ALU1|ALU2|ALU3},
-    {OP_rotcr,          1, ALU1|ALU2|ALU3},  
+    {OP_rotcr,          1, ALU1|ALU2|ALU3},
     // Multiplication
     {OP_mull,           4, ALUC},
     {OP_mulh,           4, ALUC},
@@ -190,7 +218,7 @@ namespace OutOfOrderModel {
     // Bit scans
     {OP_ctz,            4, ALUC},
     {OP_clz,            4, ALUC},
-    {OP_ctpop,          4, ALUC},  
+    {OP_ctpop,          4, ALUC},
     {OP_permb,          2, ALUC|FCVT},
     // Integer divide and remainder step
     {OP_div,           32, ALUC},
@@ -209,7 +237,7 @@ namespace OutOfOrderModel {
     // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
     {OP_fadd,           4, FADD},
     {OP_fsub,           4, FADD},
-    {OP_fmul,           5, FMUL},
+    {OP_fmul,           4, FMUL},
     {OP_fmadd,          5, FMUL},
     {OP_fmsub,          5, FMUL},
     {OP_fmsubr,         5, FMUL},
@@ -271,11 +299,16 @@ namespace OutOfOrderModel {
     {OP_vsad,           4, FADD|FMUL},
     {OP_vpack_us,       2, FADD|FMUL},
     {OP_vpack_ss,       2, FADD|FMUL},
+#ifdef ENABLE_ASF
+    {OP_spec,           A, ALU1|ALU2|ALU3},
+    {OP_com,            A, ALU1|ALU2|ALU3},
+    {OP_val,            A, ALU1|ALU2|ALU3},
+    {OP_rel,            A, ALU1|ALU2|ALU3},
+#endif
   };
 
 #undef A
 #undef L
-#undef F
 
 #undef ALU0
 #undef ALU1
@@ -285,25 +318,24 @@ namespace OutOfOrderModel {
 #undef LDU1
 #undef FPU0
 #undef FPU1
-#undef L
 
 #undef ANYALU
 #undef ANYLDU
 #undef ANYSTU
 #undef ANYFPU
 #undef ANYINT
-  
+
   //
   // Global limits
   //
-  
+
   const int MAX_ISSUE_WIDTH = 6;
 
   // Largest size of any physical register file or the store queue:
   const int MAX_PHYS_REG_FILE_SIZE = 128;
   const int PHYS_REG_FILE_SIZE = 128;
   const int PHYS_REG_NULL = 0;
-  
+
   //
   // IMPORTANT! If you change this to be greater than 256, you MUST
   // #define BIG_ROB below to use the correct associative search logic
@@ -314,13 +346,13 @@ namespace OutOfOrderModel {
 #define BIG_ROB
 
   const int ROB_SIZE = 72;
-  
+
   // Maximum number of branches in the pipeline at any given time
   const int MAX_BRANCHES_IN_FLIGHT = 24;
 
   // Set this to combine the integer and FP phys reg files:
   // #define UNIFIED_INT_FP_PHYS_REG_FILE
-  
+
 #ifdef UNIFIED_INT_FP_PHYS_REG_FILE
   // unified, br, st
   const int PHYS_REG_FILE_COUNT = 3;
@@ -328,7 +360,7 @@ namespace OutOfOrderModel {
   // int, fp, br, st
   const int PHYS_REG_FILE_COUNT = 4;
 #endif
-  
+
   //
   // Load and Store Queues
   //
@@ -339,7 +371,7 @@ namespace OutOfOrderModel {
   // Fetch
   //
   const int FETCH_QUEUE_SIZE = 36;
-  const int FETCH_WIDTH = 3;
+  const int FETCH_WIDTH = 3; //This is actually 3 AMD64 ops...
 
   //
   // Frontend (Rename and Decode)
@@ -351,7 +383,9 @@ namespace OutOfOrderModel {
   // Dispatch
   //
   const int DISPATCH_WIDTH = 3;
-
+  // Use SD's experimental penalty based dispatcher. Looks better, but not
+  // thoroughly tested! Blame him (as usual) if sth fails!
+#define PENALTY_DISPATCHER
   //
   // Writeback
   //
@@ -370,16 +404,20 @@ namespace OutOfOrderModel {
 #define MULTI_IQ
 
 #ifdef ENABLE_SMT
-#error AMD K8 microarchitecture does not support SMT
+#error AMD Familiy 0x10 microarchitecture does not support SMT
 #endif
 
+#ifndef SEPARATE_LSU
   const int MAX_CLUSTERS = 4;
+#else
+  const int MAX_CLUSTERS = 5;
+#endif
 
   enum { PHYSREG_NONE, PHYSREG_FREE, PHYSREG_WAITING, PHYSREG_BYPASS, PHYSREG_WRITTEN, PHYSREG_ARCH, PHYSREG_PENDINGFREE, MAX_PHYSREG_STATE };
   static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
   static const char* short_physreg_state_names[MAX_PHYSREG_STATE] = {"-", "free", "wait", "byps", "wrtn", "arch", "pend"};
 
-#ifdef INSIDE_OOOCORE
+//#ifdef INSIDE_OOOCORE
 
   struct OutOfOrderCore;
   OutOfOrderCore& coreof(int coreid);
@@ -428,8 +466,8 @@ namespace OutOfOrderModel {
     int reserved_entries;
 
     void set_reserved_entries(int num) { reserved_entries = num; }
-    bool reset_shared_entries() { 
-      shared_entries = size - reserved_entries; 
+    bool reset_shared_entries() {
+      shared_entries = size - reserved_entries;
       return true;
     }
     bool alloc_reserved_entry() {
@@ -441,7 +479,7 @@ namespace OutOfOrderModel {
       assert(shared_entries < size - reserved_entries);
       shared_entries++;
       return true;
-    }    
+    }
     bool shared_empty() {
       return (shared_entries == 0);
     }
@@ -553,7 +591,7 @@ namespace OutOfOrderModel {
 
     void init(const char* name, ListOfStateLists& lol, W32 flags = 0);
 
-    StateList(const char* name, ListOfStateLists& lol, W32 flags = 0) {  
+    StateList(const char* name, ListOfStateLists& lol, W32 flags = 0) {
       init(name, lol, flags);
     }
 
@@ -570,7 +608,7 @@ namespace OutOfOrderModel {
         return null;
       count--;
       assert(count >=0);
-      selfqueuelink* obj = removehead(); 
+      selfqueuelink* obj = removehead();
       return obj;
     }
 
@@ -601,7 +639,7 @@ namespace OutOfOrderModel {
     void checkvalid();
   };
 
-  template <typename T> 
+  template <typename T>
   static void print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title);
 
   //
@@ -626,7 +664,7 @@ namespace OutOfOrderModel {
     void validate() { }
 
     FetchBufferEntry() { }
-    
+
     FetchBufferEntry(const TransOp& transop) {
       *((TransOp*)this) = transop;
     }
@@ -639,9 +677,10 @@ namespace OutOfOrderModel {
   struct PhysicalRegister;
   struct LoadStoreQueueEntry;
   struct OutOfOrderCoreEvent;
+  struct LLBLine;
   //
   // Reorder Buffer (ROB) structure, used for tracking all uops in flight.
-  // This same structure is used to represent both dispatched but not yet issued 
+  // This same structure is used to represent both dispatched but not yet issued
   // uops as well as issued uops.
   //
   struct ReorderBufferEntry: public selfqueuelink {
@@ -686,12 +725,13 @@ namespace OutOfOrderModel {
     bool find_sources();
     int forward();
     int select_cluster();
+    int select_cluster_penalty();
     int issue();
     Waddr addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
     bool handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec);
     int issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate);
     int issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate);
-    void issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel);
+    void issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel, PTEUpdate& pteupdate);
     int probecache(Waddr addr, LoadStoreQueueEntry* sfra);
     void tlbwalk();
     int issuefence(LoadStoreQueueEntry& state);
@@ -705,7 +745,8 @@ namespace OutOfOrderModel {
     int pseudocommit();
     void redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob);
     void redispatch_dependents(bool inclusive = true);
-    void loadwakeup();
+    void loadwakeup(bool retry);
+    bool reprobe_load();
     void fencewakeup();
     LoadStoreQueueEntry* find_nearest_memory_fence();
     bool release_mem_lock(bool forced = false);
@@ -717,6 +758,11 @@ namespace OutOfOrderModel {
 
     ThreadContext& getthread() const;
     issueq_tag_t get_tag();
+
+#ifdef ENABLE_ASF
+    // ASF-related things
+    LLBLine* llbline;
+#endif
   };
 
   void decode_tag(issueq_tag_t tag, int& threadid, int& idx) {
@@ -732,10 +778,10 @@ namespace OutOfOrderModel {
   //
   // Load/Store Queue
   //
-#define LSQ_SIZE 44 // K8 uses a unified LSQ
+#define LSQ_SIZE 44 // Fam. 0x10 uses a unified LSQ
 
   // Define this to allow speculative issue of loads before unresolved stores
-  // #define SMT_ENABLE_LOAD_HOISTING // (K8 does not support this)
+//#define SMT_ENABLE_LOAD_HOISTING // (Fam. 0x10 does not support this)
 
   struct LoadStoreQueueEntry: public SFR {
     ReorderBufferEntry* rob;
@@ -762,7 +808,7 @@ namespace OutOfOrderModel {
     }
 
     void validate() { entry_valid = 1; }
-  
+
     ostream& print(ostream& os) const;
 
     LoadStoreQueueEntry& operator =(const SFR& sfr) {
@@ -792,7 +838,7 @@ namespace OutOfOrderModel {
   //
   // Physical Register File
   //
- 
+
   struct PhysicalRegister: public selfqueuelink {
     ReorderBufferEntry* rob;
     W64 data;
@@ -845,7 +891,7 @@ namespace OutOfOrderModel {
     void complete() { changestate(PHYSREG_BYPASS); }
     void writeback() { changestate(PHYSREG_WRITTEN); }
 
-    void free() {      
+    void free() {
       changestate(PHYSREG_FREE);
       rob = 0;
       refcount = 0;
@@ -903,7 +949,7 @@ namespace OutOfOrderModel {
 
     void init(const char* name, int coreid, int rfid, int size);
     bool remaining() const { return (!states[PHYSREG_FREE].empty()); }
-   
+
     PhysicalRegister* alloc(W8 threadid, int r = -1);
     void reset(W8 threadid);
     ostream& print(ostream& os) const;
@@ -940,13 +986,14 @@ namespace OutOfOrderModel {
   };
 
   enum {
-    COMMIT_RESULT_NONE = 0,   // no instructions committed: some uops not ready
-    COMMIT_RESULT_OK = 1,     // committed
+    COMMIT_RESULT_NONE = 0,      // no instructions committed: some uops not ready
+    COMMIT_RESULT_OK = 1,        // committed
     COMMIT_RESULT_EXCEPTION = 2, // exception
-    COMMIT_RESULT_BARRIER = 3,// barrier; branch to microcode (brp uop)
-    COMMIT_RESULT_SMC = 4,    // self modifying code detected
+    COMMIT_RESULT_BARRIER = 3,   // barrier; branch to microcode (brp uop)
+    COMMIT_RESULT_SMC = 4,       // self modifying code detected
     COMMIT_RESULT_INTERRUPT = 5, // interrupt pending
-    COMMIT_RESULT_STOP = 6    // stop processor model (shutdown)
+    COMMIT_RESULT_STOP = 6,      // stop processor model (shutdown)
+    COMMIT_RESULT_OK_FLUSH = 7,  // commit was okay, but we need to flush the pipeline
   };
 
   // Branch predictor outcomes:
@@ -972,7 +1019,7 @@ namespace OutOfOrderModel {
   struct OutOfOrderCoreCacheCallbacks: public CacheSubsystem::PerCoreCacheCallbacks {
     OutOfOrderCore& core;
     OutOfOrderCoreCacheCallbacks(OutOfOrderCore& core_): core(core_) { }
-    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
+    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr, bool retry);
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
   };
 
@@ -983,17 +1030,19 @@ namespace OutOfOrderModel {
     W8 threadid;
 
     void reset() { uuid = 0; rob = 0; vcpuid = 0; threadid = 0;}
- 
+
     ostream& print(ostream& os, W64 physaddr) const {
       os << "phys ", (void*)physaddr, ": vcpu ", vcpuid, ", threadid ", threadid, ", uuid ", uuid, ", rob ", rob;
       return os;
     }
   };
- 
-  struct MemoryInterlockBuffer: public LockableAssociativeArray<W64, MemoryInterlockEntry, 16, 4, 8> { };
- 
+
+  struct MemoryInterlockBuffer: public LockableAssociativeArray<W64, MemoryInterlockEntry, 16, 4, CacheSubsystem::L1_LINE_SIZE> {
+
+  };
+
   extern MemoryInterlockBuffer interlocks;
- 
+
   //
   // Event Tracing
   //
@@ -1101,6 +1150,7 @@ namespace OutOfOrderModel {
     W8 threadid;
     W32 issueq_count;
 
+    // NOTE: Some of these fields are filled later directly :-/
     OutOfOrderCoreEvent* fill(int type) {
       this->type = type;
       cycle = sim_cycle;
@@ -1158,7 +1208,7 @@ namespace OutOfOrderModel {
 
     OutOfOrderCoreEvent* fill_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr, Waddr virtaddr) {
       fill(type, rob);
-      loadstore.sfr = *rob->lsq;
+      if likely (rob->lsq) loadstore.sfr = *rob->lsq;
       loadstore.virtaddr = virtaddr;
       loadstore.load_store_second_phase = rob->load_store_second_phase;
       loadstore.inherit_sfr_used = (inherit_sfr != null);
@@ -1211,11 +1261,11 @@ namespace OutOfOrderModel {
         byte ready;
       } replay;
       struct {
-        W64 virtaddr; 
+        W64 virtaddr;
         W64 data_to_store;
         SFR sfr;
         SFR inherit_sfr;
-        W64 inherit_sfr_uuid;        
+        W64 inherit_sfr_uuid;
         W64 inherit_sfr_rip;
         W16 inherit_sfr_lsq;
         W16 inherit_sfr_rob;
@@ -1263,7 +1313,7 @@ namespace OutOfOrderModel {
       } writeback;
       struct {
         IssueState state;
-        byte taken:1, predtaken:1, ld_st_truly_unaligned:1;
+        byte taken:1, predtaken:1, ld_st_truly_unaligned:1,krn:1;
         PTEUpdateBase pteupdate;
         W16s oldphysreg;
         W16 oldphysreg_refcount;
@@ -1277,55 +1327,70 @@ namespace OutOfOrderModel {
     ostream& print(ostream& os) const;
   };
 
-  struct EventLog {
-    OutOfOrderCoreEvent* start;
-    OutOfOrderCoreEvent* end;
-    OutOfOrderCoreEvent* tail;
+  template <class T>
+  struct GenericEventLog {
+    T*  start;
+    T*  end;
+    T*  tail;
+    int coreid;
     ostream* logfile;
 
-    EventLog() { start = null; end = null; tail = null; logfile = null; }
+    GenericEventLog(int coreid_) :coreid(coreid_) { start = null; end = null; tail = null; logfile = null; }
 
     bool init(size_t bufsize);
     void reset();
 
-    OutOfOrderCoreEvent* add() {
+    T* add() {
       if unlikely (tail >= end) {
         tail = start;
         flush();
       }
-      OutOfOrderCoreEvent* event = tail;
+      T* event = tail;
       tail++;
       return event;
     }
 
     void flush(bool only_to_tail = false);
 
-    OutOfOrderCoreEvent* add(int type) {
+    T* add(int type) {
       return add()->fill(type);
     }
 
-    OutOfOrderCoreEvent* add(int type, const RIPVirtPhys& rvp) {
+    T* add(int type, const RIPVirtPhys& rvp) {
       return add()->fill(type, rvp);
     }
 
-    OutOfOrderCoreEvent* add(int type, const FetchBufferEntry& uop) {
+    T* add(int type, const FetchBufferEntry& uop) {
       return add()->fill(type, uop);
     }
 
-    OutOfOrderCoreEvent* add(int type, const ReorderBufferEntry* rob) {
+    T* add(int type, const ReorderBufferEntry* rob) {
       return add()->fill(type, rob);
     }
 
-    OutOfOrderCoreEvent* add_commit(int type, const ReorderBufferEntry* rob) {
-      return add()->fill_commit(type, rob);
+    T* add_commit(int type, const ReorderBufferEntry* rob) {
+      T* n = add();
+      n->fill_commit(type, rob);
+      return n;
     }
 
-    OutOfOrderCoreEvent* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
+    T* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
       return add()->fill_load_store(type, rob, inherit_sfr, addr);
     }
 
     ostream& print(ostream& os, bool only_to_tail = false);
   };
+
+
+  struct OutOfOrderCoreBinaryEvent : OutOfOrderCoreEvent {
+    W8 coreid;
+    OutOfOrderCoreBinaryEvent(W8 coreid_) : OutOfOrderCoreEvent(),
+      coreid(coreid_) {}
+    ostream& print_binary(ostream& os, W8 coreid) const;
+  };
+  ostream& operator<<(ostream& os, const OutOfOrderCoreBinaryEvent& e );
+
+  typedef GenericEventLog<OutOfOrderCoreEvent> EventLog;
 
   struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 8> { };
 
@@ -1335,16 +1400,25 @@ namespace OutOfOrderModel {
     ROB_STATE_PRE_READY_TO_DISPATCH = (1 << 2)
   };
 
+#ifndef SEPARATE_LSU
 #define InitClusteredROBList(name, description, flags) \
   name[0](description "-int0", rob_states, flags); \
   name[1](description "-int1", rob_states, flags); \
-  name[2](description "-ld", rob_states, flags); \
-  name[3](description "-fp", rob_states, flags)
+  name[2](description "-int2", rob_states, flags); \
+  name[3](description "-fp", rob_states, flags);
+#else
+#define InitClusteredROBList(name, description, flags) \
+  name[0](description "-int0", rob_states, flags); \
+  name[1](description "-int1", rob_states, flags); \
+  name[2](description "-int2", rob_states, flags); \
+  name[3](description "-fp", rob_states, flags);   \
+  name[4](description "-ld", rob_states, flags);
+#endif
 
   static const int ISSUE_QUEUE_SIZE = 16;
 
   // How many bytes of x86 code to fetch into decode buffer at once
-  static const int ICACHE_FETCH_GRANULARITY = 16;
+  static const int ICACHE_FETCH_GRANULARITY = 32;
   // Deadlock timeout: if nothing dispatches for this many cycles, flush the pipeline
   static const int DISPATCH_DEADLOCK_COUNTDOWN_CYCLES = 256;
   // Size of unaligned predictor Bloom filter
@@ -1393,6 +1467,7 @@ namespace OutOfOrderModel {
     BasicBlock* current_basic_block;
     int current_basic_block_transop_index;
     bool stall_frontend;
+    bool stall_on_eom;
     bool waiting_for_icache_fill;
     Waddr waiting_for_icache_fill_physaddr;
 
@@ -1420,7 +1495,7 @@ namespace OutOfOrderModel {
     // statistics:
     W64 total_uops_committed;
     W64 total_insns_committed;
-    int dispatch_deadlock_countdown;    
+    int dispatch_deadlock_countdown;
     int issueq_count;
 
     //
@@ -1433,8 +1508,11 @@ namespace OutOfOrderModel {
     byte queued_mem_lock_release_count;
     W64 queued_mem_lock_release_list[4];
 
-    ThreadContext(OutOfOrderCore& core_, int threadid_, Context& ctx_): core(core_), threadid(threadid_), ctx(ctx_) {
+    ThreadContext(OutOfOrderCore& core_, int threadid_, Context& ctx_) :
+      core(core_), threadid(threadid_), ctx(ctx_), locked_line_buffer(*this),
+      asf_context(&locked_line_buffer, core), asf_pipeline_intercept(&asf_context, &locked_line_buffer, this) {
       reset();
+      ctx_.asf_context = &asf_context;
     }
 
     int commit();
@@ -1451,7 +1529,7 @@ namespace OutOfOrderModel {
     bool handle_exception();
     bool handle_interrupt();
     void reset_fetch_unit(W64 realrip);
-    void flush_pipeline();
+    bool flush_pipeline();
     void invalidate_smc();
     void external_to_core_state();
     void core_to_external_state() { }
@@ -1469,6 +1547,13 @@ namespace OutOfOrderModel {
 
     void reset();
     void init();
+
+#ifdef ENABLE_ASF
+    // ASF
+    ASFContext           asf_context;
+    ASFPipelineIntercept asf_pipeline_intercept;
+    LockedLineBuffer     locked_line_buffer;
+#endif
   };
 
   //
@@ -1500,22 +1585,34 @@ namespace OutOfOrderModel {
     int reserved_iq_entries;
 #define declare_issueq_templates \
     template struct IssueQueue<8>; \
-    template struct IssueQueue<36>
+    template struct IssueQueue<36>;\
+    template struct IssueQueue<12>;
 
     IssueQueue<8> issueq_int1;
     IssueQueue<8> issueq_int2;
     IssueQueue<8> issueq_int3;
     IssueQueue<36> issueq_fp;
+#ifdef SEPARATE_LSU
+    IssueQueue<12> issueq_ld;
+#endif
 
-#define foreach_issueq(expr) { OutOfOrderCore& core = getcore(); core.issueq_int1.expr; core.issueq_int2.expr; core.issueq_int3.expr; core.issueq_fp.expr; }
-  
+#ifndef SEPARATE_LSU
+#define foreach_issueq(expr) { OutOfOrderCore& core = getcore(); core.issueq_int1.expr; core.issueq_int2.expr; core.issueq_int3.expr; core.issueq_fp.expr;}
+#else
+#define foreach_issueq(expr) { OutOfOrderCore& core = getcore(); core.issueq_int1.expr; core.issueq_int2.expr; core.issueq_int3.expr; core.issueq_fp.expr; core.issueq_ld.expr;}
+#endif
+
     void sched_get_all_issueq_free_slots(int* a) {
       a[0] = issueq_int1.remaining();
       a[1] = issueq_int2.remaining();
       a[2] = issueq_int3.remaining();
       a[3] = issueq_fp.remaining();
+#ifdef SEPARATE_LSU
+      a[4] = issueq_ld.remaining();
+#endif
     }
 
+#ifndef SEPARATE_LSU
 #define issueq_operation_on_cluster_with_result(core, cluster, rc, expr) \
   switch (cluster) { \
   case 0: rc = core.issueq_int1.expr; break; \
@@ -1531,6 +1628,25 @@ namespace OutOfOrderModel {
   case 2: prefix.int3 expr; break; \
   case 3: prefix.fp expr; break; \
   }
+#else //#ifndef SEPARATE_LSU
+#define issueq_operation_on_cluster_with_result(core, cluster, rc, expr) \
+    switch (cluster) { \
+    case 0: rc = core.issueq_int1.expr; break; \
+    case 1: rc = core.issueq_int2.expr; break; \
+    case 2: rc = core.issueq_int3.expr; break; \
+    case 3: rc = core.issueq_fp.expr; break; \
+    case 4: rc = core.issueq_ld.expr; break; \
+  }
+
+#define per_cluster_stats_update(prefix, cluster, expr) \
+    switch (cluster) { \
+    case 0: prefix.int1 expr; break; \
+    case 1: prefix.int2 expr; break; \
+    case 2: prefix.int3 expr; break; \
+    case 3: prefix.fp expr; break; \
+    case 4: prefix.ld expr; break; \
+  }
+#endif //#ifndef SEPARATE_LSU
 
 #define per_physregfile_stats_update(prefix, rfid, expr) \
   switch (rfid) { \
@@ -1545,14 +1661,16 @@ namespace OutOfOrderModel {
 #define for_each_cluster(iter) foreach (iter, MAX_CLUSTERS)
 #define for_each_operand(iter) foreach (iter, MAX_OPERANDS)
 
-    OutOfOrderCore(int coreid_, OutOfOrderMachine& machine_): coreid(coreid_), machine(machine_), cache_callbacks(*this) {
+    OutOfOrderCore(int coreid_, OutOfOrderMachine& machine_): coreid(coreid_),
+      machine(machine_), cache_callbacks(*this), caches(coreid_),
+      eventlog(coreid_) {
       threadcount = 0;
       setzero(threads);
     }
-    
+
     ~OutOfOrderCore(){};
 
-    // 
+    //
     // Initialize structures independent of the core parameters
     //
     void init_generic();
@@ -1578,7 +1696,7 @@ namespace OutOfOrderModel {
 
     enum { PHYS_REG_FILE_INT, PHYS_REG_FILE_FP, PHYS_REG_FILE_ST, PHYS_REG_FILE_BR };
 
-    enum {  
+    enum {
       PHYS_REG_FILE_MASK_INT = (1 << 0),
       PHYS_REG_FILE_MASK_FP  = (1 << 1),
       PHYS_REG_FILE_MASK_ST  = (1 << 2),
@@ -1620,12 +1738,14 @@ namespace OutOfOrderModel {
     void print_smt_state(ostream& os);
     void check_refcounts();
     void check_rob();
+
   };
 
-#define MAX_SMT_CORES 32
+  #define MAX_SMT_CORES 32
 
   struct OutOfOrderMachine: public PTLsimMachine {
     OutOfOrderCore* cores[MAX_SMT_CORES];
+    int corecount;
     bitvec<MAX_CONTEXTS> stopped;
     OutOfOrderMachine(const char* name);
     virtual bool init(PTLsimConfig& config);
@@ -1658,32 +1778,61 @@ namespace OutOfOrderModel {
   // no extra cycle. The floating point cluster is two cycles from everything else.
   //
 
-  const Cluster clusters[MAX_CLUSTERS] = {
-    {"int1",  2, (FU_ALU1|FU_ALUC)},
-    {"int2",  2, (FU_ALU2|FU_LSU1)},
-    {"int3",  2, (FU_ALU3|FU_LSU2)},
+#ifndef SEPARATE_LSU
+  extern const Cluster clusters[MAX_CLUSTERS] = {
+    {"int1",  2, (FU_ALU1|FU_ALUC/*|FU_LSU01*/)},  //TODO: Adding LSU01 requires additional checking of max loads / cycle!
+    {"int2",  2, (FU_ALU2|FU_LSU02)},              //      as K8/GH only allows two simultaneous accesses to L1D.
+    {"int3",  2, (FU_ALU3|FU_LSU03)},              //      also see the SEPARATE_LSU version below!
     {"fp",    3, (FU_FADD|FU_FMUL|FU_FCVT)},
   };
-
-  const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
-    // I0 I1 I2 FP <-to
-    {0, 0, 0, 2}, // from I0
-    {0, 0, 0, 2}, // from I1
-    {0, 0, 0, 2}, // from I2
-    {2, 2, 2, 0}, // from FP
+  extern const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
+    // I0 I1 I2 FP  <-to
+    {  0, 0, 0, 2}, // from I0
+    {  0, 0, 0, 2}, // from I1
+    {  0, 0, 0, 2}, // from I2
+    {  2, 2, 2, 0}, // from FP
   };
 
-  const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
+  extern const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
     // I1 I2 I3 FP <-to
-    {2, 2, 2, 1}, // from I1
-    {2, 2, 2, 1}, // from I2
-    {2, 2, 2, 2}, // from I3
-    {1, 1, 1, 2}, // from FP
+    {  2, 2, 2, 1}, // from I1
+    {  2, 2, 2, 1}, // from I2
+    {  2, 2, 2, 2}, // from I3
+    {  1, 1, 1, 2}, // from FP
+  };
+#else //#ifndef SEPARATE_LSU
+  extern const Cluster clusters[MAX_CLUSTERS] = {
+    {"int1",  2, (FU_ALU1|FU_ALUC)},
+    {"int2",  1, (FU_ALU2)},
+    {"int3",  1, (FU_ALU3)},
+    {"fp",    3, (FU_FADD|FU_FMUL|FU_FCVT)},
+    {"ld",    2, (FU_LSU01|FU_LSU02)},
+  };
+  extern const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
+    // I0 I1 I2 FP LD <-to
+    {  0, 0, 0, 2, 0}, // from I0
+    {  0, 0, 0, 2, 0}, // from I1
+    {  0, 0, 0, 2, 0}, // from I2
+    {  2, 2, 2, 0, 2}, // from FP
+    {  0, 0, 0, 2, 0}, // from LD
   };
 
-#endif // DECLARE_STRUCTURES
+  extern const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
+    // I1 I2 I3 FP LD<-to
+    {  2, 2, 2, 1, 2}, // from I1
+    {  2, 2, 2, 1, 2}, // from I2
+    {  2, 2, 2, 2, 2}, // from I3
+    {  1, 1, 1, 2, 1}, // from FP
+    {  2, 2, 2, 1, 2}, // from LD
+  };
+#endif //#ifndef SEPARATE_LSU
+#else //#ifdef DECLARE_STRUCTURES
+  extern const Cluster clusters[MAX_CLUSTERS];
+  extern const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS];
+  extern const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS];
+#endif // #ifdef DECLARE_STRUCTURES
 
-#endif // INSIDE_OOOCORE
+//#endif // INSIDE_OOOCORE
 
   //
   // This part is used when parsing stats.h to build the
@@ -1837,7 +1986,7 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
         W64 sfr;
         W64 sfr_and_cache;
       } forward;
-        
+
       struct dependency { // node: summable
         W64 independent;
         W64 predicted_alias_unresolved;
@@ -1845,13 +1994,13 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
         W64 stq_address_not_ready;
         W64 fence;
       } dependency;
-        
+
       struct type { // node: summable
         W64 aligned;
         W64 unaligned;
         W64 internal;
       } type;
-        
+
       W64 size[4]; // label: sizeshift_names
 
       W64 datatype[DATATYPE_COUNT]; // label: datatype_names
@@ -1881,13 +2030,13 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
         W64 zero;
         W64 sfr;
       } forward;
-        
+
       struct type { // node: summable
         W64 aligned;
         W64 unaligned;
         W64 internal;
       } type;
-        
+
       W64 size[4]; // label: sizeshift_names
 
       W64 datatype[DATATYPE_COUNT]; // label: datatype_names
@@ -1902,7 +2051,7 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
 };
 
 //
-// Out-of-Order Core
+// SMT Core
 //
 struct OutOfOrderCoreStats { // rootnode:
   W64 cycles;
@@ -1929,6 +2078,9 @@ struct OutOfOrderCoreStats { // rootnode:
       W64 int2[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
       W64 int3[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
       W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+#ifdef SEPARATE_LSU
+      W64 ld[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+#endif
     } width;
   } issue;
 
@@ -1938,6 +2090,9 @@ struct OutOfOrderCoreStats { // rootnode:
       W64 int2[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
       W64 int3[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
       W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+#ifdef SEPARATE_LSU
+      W64 ld[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+#endif
     } width;
   } writeback;
 
@@ -1975,6 +2130,10 @@ struct OutOfOrderCoreStats { // rootnode:
   PerContextOutOfOrderCoreStats vcpu1;
   PerContextOutOfOrderCoreStats vcpu2;
   PerContextOutOfOrderCoreStats vcpu3;
+  PerContextOutOfOrderCoreStats vcpu4;
+  PerContextOutOfOrderCoreStats vcpu5;
+  PerContextOutOfOrderCoreStats vcpu6;
+  PerContextOutOfOrderCoreStats vcpu7;
 
   struct simulator {
     double total_time;

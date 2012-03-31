@@ -23,6 +23,7 @@ ConfigurationParser<PTLsimConfig> configparser;
 PTLsimStats stats;
 
 ostream logfile;
+ostream commitlogfile;
 bool logenable = 0;
 W64 sim_cycle = 0;
 W64 unhalted_cycle_count = 0;
@@ -47,6 +48,7 @@ void PTLsimConfig::reset() {
   quiet = 0;
   core_name = "ooo";
   log_filename = "ptlsim.log";
+  //commitlog_filename = "";
   loglevel = 0;
   start_log_at_iteration = 0;
   start_log_at_rip = INVALIDRIP;
@@ -147,6 +149,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(quiet,                        "quiet",                "Do not print PTLsim system information banner");
   add(log_filename,                 "logfile",              "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
   add(loglevel,                     "loglevel",             "Log level (0 to 99)");
+  add(commitlog_filename,           "commitlog",            "Commit-Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
   add(start_log_at_iteration,       "startlog",             "Start logging after iteration <startlog>");
   add(start_log_at_rip,             "startlogrip",          "Start logging after first translation of basic block starting at rip");
   add(log_on_console,               "consolelog",           "Replicate log file messages to console");
@@ -302,16 +305,17 @@ void print_usage(int argc, char** argv) {
 
 stringbuf current_stats_filename;
 stringbuf current_log_filename;
+stringbuf current_commitlog_filename;
 stringbuf current_bbcache_dump_filename;
 
-void backup_and_reopen_logfile() {
-  if (config.log_filename) {
+void backup_and_reopen_logfile(stringbuf& name, ostream& logfile) {
+  if (name) {
     if (logfile) logfile.close();
     stringbuf oldname;
-    oldname << config.log_filename, ".backup";
+    oldname << name, ".backup";
     sys_unlink(oldname);
-    sys_rename(config.log_filename, oldname);
-    logfile.open(config.log_filename);
+    sys_rename(name, oldname);
+    logfile.open(name);
   }
 }
 
@@ -361,8 +365,13 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
 
   if (config.log_filename.set() && (config.log_filename != current_log_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    backup_and_reopen_logfile();
+    backup_and_reopen_logfile(config.log_filename, logfile);
     current_log_filename = config.log_filename;
+  }
+  if (config.commitlog_filename.set() && (config.commitlog_filename != current_commitlog_filename)) {
+    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
+    backup_and_reopen_logfile(config.commitlog_filename, commitlogfile);
+    current_commitlog_filename = config.commitlog_filename;
   }
 
   logfile.setchain((config.log_on_console) ? &cout : null);
@@ -587,6 +596,7 @@ bool simulate(const char* machinename) {
 
   logfile << sb, flush;
   cerr << sb, flush;
+  if(!config.commitlog_filename.empty()) commitlogfile << flush;
 
   if (config.dumpcode_filename.set()) {
     byte insnbuf[256];

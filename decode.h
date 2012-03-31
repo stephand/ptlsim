@@ -4,6 +4,8 @@
 // Decoder for x86 and x86-64 to PTL uops
 //
 // Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #ifndef _DECODE_H_
@@ -12,6 +14,10 @@
 #include <globals.h>
 #include <ptlsim.h>
 #include <datastore.h>
+
+#ifdef ENABLE_ASF
+#define DECODE_XOP
+#endif
 
 struct RexByte { 
   // a.k.a., b, x, r, w
@@ -36,6 +42,23 @@ struct SIBByte {
   operator byte() const { return (*((byte*)this)); }
 };
 
+#ifdef DECODE_XOP
+struct XopByte2 {
+  // !R.!X.!B.mmmmm
+  byte xopmapselect:5, extbaseinv:1, extindexinv:1, extreginv:1; // (lowest bit first in bit field)
+  XopByte2() { }
+  XopByte2(const byte& b) { *((byte*)this) = b; }
+  operator byte() const { return (*((byte*)this)); }
+};
+struct XopByte3 {
+  // W.vvvv.L.pp
+  byte opex:2, veclen:1, vreg:4, mode64:1; // (lowest bit first in bit field)
+  XopByte3() { }
+  XopByte3(const byte& b) { *((byte*)this) = b; }
+  operator byte() const { return (*((byte*)this)); }
+};
+#endif
+
 static const int PFX_REPZ      = (1 << 0);
 static const int PFX_REPNZ     = (1 << 1);
 static const int PFX_LOCK      = (1 << 2);
@@ -49,7 +72,13 @@ static const int PFX_DATA      = (1 << 9);
 static const int PFX_ADDR      = (1 << 10);
 static const int PFX_REX       = (1 << 11);
 static const int PFX_FWAIT     = (1 << 12);
+#ifdef DECODE_XOP
+static const int PFX_XOP1      = (1 << 13);
+static const int PFX_count     = 14;
+#else
 static const int PFX_count     = 13;
+#endif
+
 
 extern const char* prefix_names[PFX_count];
 
@@ -166,6 +195,10 @@ struct TraceDecoder {
   W32 prefixes;
   ModRMByte modrm;
   RexByte rex;
+#ifdef DECODE_XOP
+  XopByte2 xop2;
+  XopByte3 xop3;
+#endif
   W64 user_insn_count;
   bool last_flags_update_was_atomic;
   bool invalid;
@@ -201,8 +234,8 @@ struct TraceDecoder {
   void immediate(int rdreg, int sizeshift, W64s imm, bool issigned = true);
   void abs_code_addr_immediate(int rdreg, int sizeshift, W64 imm);
   int bias_by_segreg(int basereg);
-  void address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype = DATATYPE_INT, int cachelevel = 0, bool force_seg_bias = false, bool rmw = false);
-  void operand_load(int destreg, const DecodedOperand& memref, int loadop = OP_ld, int datatype = 0, int cachelevel = 0, bool rmw = false);
+  void address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype = DATATYPE_INT, int cachelevel = 0, bool force_seg_bias = false, bool invalidating = false, bool rmw = false);
+  void operand_load(int destreg, const DecodedOperand& memref, int loadop = OP_ld, int datatype = 0, int cachelevel = 0, bool invalidating = false, bool rmw = false);
   void result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype = 0, bool rmw = false);
   void alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
                       bool flagsonly = false, bool isnegop = false, bool ra_rb_imm_form = false, W64s ra_rb_imm_form_rbimm = 0);
@@ -227,6 +260,13 @@ struct TraceDecoder {
   bool decode_complex();
   bool decode_sse();
   bool decode_x87();
+#ifdef ENABLE_ASF
+  bool decode_asf();
+#endif
+#ifdef DECODE_XOP
+  bool decode_xop();
+#endif
+  void scan_transb_and_flag_asf(byte opcode);
 
   typedef int rep_and_size_to_assist_t[3][4];
 
@@ -265,6 +305,7 @@ enum {
 
 #define MakeInvalid() { invalid |= true; EndOfDecode(); }
 
+// NOTE: Keep these ordered, as asf.cpp relies on ranges staying intact.
 enum {
   // Forced assists based on decode context
   ASSIST_INVALID_OPCODE,
@@ -331,7 +372,10 @@ enum {
   // Interrupts and I/O
   ASSIST_IOPORT_IN,
   ASSIST_IOPORT_OUT,
-  ASSIST_COUNT,
+#ifdef ENABLE_ASF
+  ASSIST_ASF_ABORT,
+#endif
+  ASSIST_COUNT
 };
 
 
@@ -409,6 +453,9 @@ static const char* assist_names[ASSIST_COUNT] = {
   // I/O and legacy
   "ioport_in",
   "ioport_out",
+#ifdef ENABLE_ASF
+  "asf_abort",
+#endif
 };
 
 int propagate_exception_during_assist(Context& ctx, byte exception, W32 errorcode, Waddr virtaddr = 0, bool intN = 0);
@@ -479,7 +526,9 @@ void assist_write_debug_reg(Context& ctx);
 // I/O and legacy
 void assist_ioport_in(Context& ctx);
 void assist_ioport_out(Context& ctx);
-
+#ifdef ENABLE_ASF
+void assist_asf_abort(Context& ctx);
+#endif
 //
 // Global functions
 //

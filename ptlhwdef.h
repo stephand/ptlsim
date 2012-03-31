@@ -4,6 +4,8 @@
 // Hardware Definitions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #ifndef _PTLHWDEF_H
@@ -169,7 +171,9 @@
 extern W64 sim_cycle;
 #include <logic.h>
 #include <config.h>
-
+#ifdef ENABLE_ASF
+class ASFContext;
+#endif
 //
 // Exceptions:
 // These are PTL internal exceptions, NOT x86 exceptions:
@@ -184,12 +188,15 @@ enum {
   EXCEPTION_PageFaultOnExec,
   EXCEPTION_StoreStoreAliasing,
   EXCEPTION_LoadStoreAliasing,
+  EXCEPTION_RetryLoad,
   EXCEPTION_CheckFailed,
   EXCEPTION_SkipBlock,
   EXCEPTION_LFRQFull,
   EXCEPTION_FloatingPoint,
   EXCEPTION_FloatingPointNotAvailable,
   EXCEPTION_DivideOverflow,
+  EXCEPTION_ASF_Abort,
+  EXCEPTION_ASF_Testing, /*S.D.*/
   EXCEPTION_COUNT
 };
 
@@ -198,8 +205,10 @@ static const int MAX_BB_X86_INSNS = 60;
 static const int MAX_BB_UOPS = 63;
 static const int MAX_BB_PER_PAGE = 4096;
 
-static const int MAX_TRANSOPS_PER_USER_INSN = 16;
-
+/* BLAME S.D.!
+ *static const int MAX_TRANSOPS_PER_USER_INSN = 16;
+ */
+static const int MAX_TRANSOPS_PER_USER_INSN = 32;
 extern const char* exception_names[EXCEPTION_COUNT];
 
 static inline const char* exception_name(W64 exception) {
@@ -835,6 +844,10 @@ struct ContextBase {
   byte running;
 #endif
 
+#ifdef ENABLE_ASF
+  ASFContext* asf_context;
+#endif
+
   inline void reset() {
     setzero(commitarf);
 #ifdef PTLSIM_HYPERVISOR
@@ -1002,7 +1015,9 @@ enum {
 
 #define OPCLASS_VEC_ALU                 (1 << 27)
 
-#define OPCLASS_COUNT                   28
+#define OPCLASS_ASF                     (1 << 28)
+
+#define OPCLASS_COUNT                   29
 
 #define OPCLASS_USECOND                 (OPCLASS_COND_BRANCH|OPCLASS_SELECT|OPCLASS_CHECK)
 
@@ -1161,6 +1176,13 @@ enum {
   OP_vsad,
   OP_vpack_us,
   OP_vpack_ss,
+#ifdef ENABLE_ASF
+  // ASF
+  OP_spec,
+  OP_com,
+  OP_val,
+  OP_rel,
+#endif
   OP_MAX_OPCODE,
 };
 
@@ -1205,6 +1227,7 @@ inline bool isstore(int opcode) { return isclass(opcode, OPCLASS_STORE); }
 inline bool iscondbranch(int opcode) { return isclass(opcode, OPCLASS_COND_BRANCH|OPCLASS_INDIR_BRANCH); }
 inline bool isbranch(int opcode) { return isclass(opcode, OPCLASS_BRANCH); }
 inline bool isbarrier(int opcode) { return isclass(opcode, OPCLASS_BARRIER); }
+inline bool isasf(int opcode) { return isclass(opcode, OPCLASS_ASF); }
 inline const char* nameof(int opcode) { return (opcode < OP_MAX_OPCODE) ? opinfo[opcode].name : "INVALID"; }
 
 union MaskControlInfo {
@@ -1324,7 +1347,9 @@ struct TransOpBase {
   // Index in basic block
   byte bbindex;
   // Misc info (terminal writer of targets in this insn, etc)
-  byte final_insn_in_bb:1, final_arch_in_insn:1, final_flags_in_insn:1, any_flags_in_insn:1, pad:3, marked:1;
+  // SD-TODO-MERGE: What is the marked flag used for?
+  // Nothing! => Request on ML
+  byte final_insn_in_bb:1, final_arch_in_insn:1, final_flags_in_insn:1, any_flags_in_insn:1, is_asf:1, invalidating: 1, pad:1, marked:1;
   // Immediates
   W64s rbimm;
   W64s rcimm;

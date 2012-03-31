@@ -3,6 +3,8 @@
 // Linux Kernel Interface
 //
 // Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <globals.h>
@@ -1113,6 +1115,25 @@ void handle_syscall_64bit() {
 #endif
     break;
   }
+
+// Verbosity for debugging futex-related issues
+#if (0)
+  case __NR_futex: {
+    // S.D.: Mask the sys_futex / futex_wait to immediatelly return zero. This turns any futex based
+    // lock into a spinlock, which should not make any difference in terms of correctness. It seems
+    // like the split core model has some problems regarding futex wakeup. THis is (hopefully) a quick
+    // hack.
+    if ((arg2 & 127) == 0 /* FUTEX_WAIT*/) {
+      logfile << "handle_syscall: sys_futex/FUTEX_WAIT on futex ", (void*)arg1, " masked!",endl;
+      ctx.commitarf[REG_rax] = 0;
+    } else 
+      ctx.commitarf[REG_rax] = do_syscall_64bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
+    break;
+  }
+#endif
+  case __NR_clone: {
+    //TODO: Handle the clone syscall by spawning of another VCPU.
+  }
   default:
     ctx.commitarf[REG_rax] = do_syscall_64bit(syscallid, arg1, arg2, arg3, arg4, arg5, arg6);
     break;
@@ -1523,8 +1544,7 @@ int is_elf_64bit(const char* filename) {
 int ptlsim_inject(int argc, char** argv) {
   static const bool DEBUG = 0;
 
-  int filename_arg = configparser.parse(config, argc - 1, argv + 1);
-  const char* filename = argv[filename_arg];
+  const char* filename = argv[1];
 
   int x86_64_mode = is_elf_64bit(filename);
 
@@ -1541,7 +1561,7 @@ int ptlsim_inject(int argc, char** argv) {
     if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
-    int rc = sys_execve(filename, (const char**)(argv + filename_arg), (const char**)environ);
+    int rc = sys_execve(filename, (const char**)argv+1, (const char**)environ);
 
     if (rc < 0) {
       cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, endl, flush;
@@ -1728,11 +1748,7 @@ int ptlsim_inject(int argc, char** argv) {
   int status;
   int rc;
 
-  //
-  // Find the argv index of the filename to execute and its arguments:
-  //
-  int filename_arg = configparser.parse(config, argc - 1, argv + 1);
-  const char* filename = argv[filename_arg];
+  const char* filename = argv[1];
 
   if (!is_elf_valid(filename)) {
     cerr << "ptlsim: cannot open ", filename, endl, flush;
@@ -1747,7 +1763,7 @@ int ptlsim_inject(int argc, char** argv) {
     if (DEBUG) cerr << "ptlsim[", sys_gettid(), "]: Executing ", filename, endl, flush;
     sys_ptrace(PTRACE_TRACEME, 0, 0, 0);
     // Child process stops after execve() below:
-    int rc = sys_execve(filename, (const char**)(argv + filename_arg), (const char**)environ);
+    int rc = sys_execve(filename, (const char**)argv+1, (const char**)environ);
 
     if (rc < 0) {
       cerr << "ptlsim: rc ", rc, ": unable to exec ", filename, ": rc = ", rc, endl, flush;
@@ -1880,6 +1896,7 @@ extern "C" void external_signal_callback(int sig, siginfo_t* si, void* contextp)
     break;
   }
   default:
+    /*S.D.*/ cerr << "Received signal ", si->si_signo," ignoring it!", endl, flush;
     if (logfile) logfile << "Warning: unknown signal ", si->si_signo, "; ignoring", endl, flush; break;
   }
 }
@@ -1895,6 +1912,11 @@ void init_signal_callback() {
   sa.k_sa_handler = external_signal_callback;
   sa.sa_flags = SA_SIGINFO;
   assert(sys_rt_sigaction(SIGXCPU, &sa, NULL, sizeof(W64)) == 0);
+
+  /*S.D.: try to fetch all signals within PTLsim!*/
+  sa.sa_flags = SA_SIGINFO;
+  assert(sys_rt_sigaction(SIGUSR1, &sa, NULL, sizeof(W64)) == 0);
+
 }
 
 bool check_for_async_sim_break() {
@@ -1940,51 +1962,52 @@ void collect_sysinfo(PTLsimStats& stats, int argc, char** argv) {
 int init_config(int argc, char** argv) {
   collect_sysinfo(stats, argc, argv);
 
-  //
-  // argv[] is a suffix of the parent argv[] of length argc.
-  // If the parent has some configuration between the initial ptlsim 
-  // executable in argv[0] and the argv[X] that starts the suffix (noting 
-  // that argv[X-1] will be "--"), then send that to configparser.parse().
-  //
+  char confroot[1024] = "";
+  stringbuf sb;
 
-  pid_t parent = sys_getppid();
-  stringbuf cmdline;
-  cmdline << "/proc/", parent, "/cmdline";
+  char* homedir = getenv("HOME");
 
-  //
-  // Load p_argc and p_argv for the parent, analogous to argc/argv
-  // /proc/<pid>/cmdline terminates each argument with a null character.
-  //
-  istream is(cmdline);
-  if (unlikely (!is)) {
-    cerr << "PTLsim error: cannot open /proc/<parent>/cmdline", endl, flush;
-    abort();
+  const char* execname = get_full_exec_filename();
+
+  sb << (homedir ? homedir : "/etc"), "/.ptlsim", execname, ".conf";
+
+  char args[4096];
+  istream is(sb);
+  if (!is) {
+    cerr << "ptlsim: Warning: could not find '", sb, "', using defaults", endl;
   }
 
-  dynarray<char*> parent_args;
-  stringbuf line;
+  const char* simname = "ptlsim";
   
   for (;;) {
-    line.reset();
-    is >> line;
+    is >> readline(args, sizeof(args));
     if (!is) break;
-    parent_args.push(strdup(line));
+    char* p = args;
+    while (*p && (*p != '#')) p++;
+    if (*p == '#') *p = 0;
+    if (args[0]) break;
   }
-  is.close();
   
-  unsigned p_argc = parent_args.length;
+  is.close();
 
-  //
-  // ConfigurationParser.parse() will automatically stop parsing at
-  // the first non-option (i.e. not starting with "-xxx") argument
-  // it finds (conveniently, this is always the target program name).
-  //  
-  int ptlsim_arg_count = configparser.parse(config, parent_args.length-1, parent_args+1);
+  char* ptlargs[1024];
 
-  foreach (i, parent_args.length) delete parent_args[i];
+  ptlargs[0] = strdup(simname);
+  int ptlargc = 0;
+  char* p = args;
+  while (*p && (ptlargc < (lengthof(ptlargs)-1))) {
+    char* pbase = p;
+    while ((*p != 0) && (*p != ' ')) p++;
+    ptlargc++;
+    ptlargs[ptlargc] = strndup(pbase, p - pbase);
+    if (*p == 0) break;
+    *p++;
+    while ((*p != 0) && (*p == ' ')) p++;
+  }
 
-  handle_config_change(config, ptlsim_arg_count, parent_args+1);
-
+  // skip the leading argv[0]; just parse the options:
+  configparser.parse(config, ptlargc, ptlargs+1);
+  handle_config_change(config, argc, argv);
   logfile << config;
 
   return 0;

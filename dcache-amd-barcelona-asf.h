@@ -3,16 +3,43 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Data Cache
 //
-// Copyright 2007 Matt T. Yourst <yourst@yourst.com>
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+// 02110-1301, USA.
+//
+// Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
+/**
+ * Enables cross core cache invalidation and cross core cache forwarding.
+ * Only has effect with a proper SMP model, ie. you have to _disable_
+ * ENABLE_SMT.
+ */
+#define POOR_MANS_MESI
 #include <ptlsim.h>
 //#include <datastore.h>
-
+#define MAX_HIERARCHIES 8
 struct LoadStoreInfo {
   W16 rob;
   W8  threadid;
+#ifdef ENABLE_ASF_CACHE_BASED
+  W8  sizeshift:2, aligntype:2, sfrused:1, internal:1, signext:1, asf_spec:1;
+#else
   W8  sizeshift:2, aligntype:2, sfrused:1, internal:1, signext:1, pad1:1;
+#endif
   W32 pad32;
   RawDataAccessors(LoadStoreInfo, W64);
 };
@@ -35,48 +62,70 @@ namespace CacheSubsystem {
 
   //#define CACHE_ALWAYS_HITS
   //#define L2_ALWAYS_HITS
-  
+
   // 64 KB L1 at 3 cycles
   const int L1_LINE_SIZE = 64;
   const int L1_SET_COUNT = 512;
   const int L1_WAY_COUNT = 2;
-
 #define ENFORCE_L1_DCACHE_BANK_CONFLICTS
-  const int L1_DCACHE_BANKS = 8; // 8 banks x 8 bytes/bank = 64 bytes/line
+  const int L1_DCACHE_BANKS    =  8; // 8x16 byte = 128 bytes > linesize! -> not all lines can interfere w/ each other
+  const int L1_DCACHE_BANKSIZE = 16;
+#define L1_VIRTUALLY_INDEXED
+  // With virtually indexed caches a single memory location could be present
+  // twice in the cache, at different virtual indices. If this option below is
+  // defined, the cache will ensure that such aliases are detected and removed.
+  // This is not strictly necessary for PTLsim, as data is still consistent and
+  // checking for aliases costs a significant amount of time!
+#define L1_ENFORCE_VIRTUAL_ALIASING
 
   // 64 KB L1I
   const int L1I_LINE_SIZE = 64;
   const int L1I_SET_COUNT = 512;
   const int L1I_WAY_COUNT = 2;
 
-  // 1024 KB L2 at 8 cycles (11 total cycles)
+  // 512 KB L2 at 9 cycles (specs) total (+L1 and issue) ~15 cycles (measured!)
+  // TODO: Exclusive, victim-cache!
   const int L2_LINE_SIZE = 64;
-  const int L2_SET_COUNT = 1024;
+  const int L2_SET_COUNT = 512;
   const int L2_WAY_COUNT = 16;
-  const int L2_LATENCY   = 8; // don't include the extra wakeup cycle (waiting->ready state transition) in the LFRQ
+  const int L2_LATENCY   = 13; // don't include the extra wakeup cycle (waiting->ready state transition) in the LFRQ
 
-  //#define ENABLE_L3_CACHE
+  // TODO: Share this between cores on the same die!
+  // TODO: This is also a victim cache :-/ and has some sharing features!
+#define ENABLE_L3_CACHE
 #ifdef ENABLE_L3_CACHE
-  // 2 MB L3 cache (4096 sets, 16 ways) with 64-byte lines, latency 16 cycles
+  // 2 MB L3 cache (4096 sets, 16 ways) with 64-byte lines, TODO: latency?
   const int L3_SET_COUNT = 1024;
   const int L3_WAY_COUNT = 16;
   const int L3_LINE_SIZE = 128;
-  const int L3_LATENCY   = 12;
+  const int L3_LATENCY   = 35;
 #endif
-
   // Load Fill Request Queue (maximum number of missed loads)
-  const int LFRQ_SIZE = 32;
+  const int LFRQ_SIZE = 63;
 
   // Allow up to 16 outstanding lines in the L2 awaiting service:
   const int MISSBUF_COUNT = 16;
-  const int MAIN_MEM_LATENCY = 100; // above and beyond L1 + L2 latency
+  const int MAIN_MEM_LATENCY = 160;
 
+  const int CROSS_CACHE_LATENCY = 100;
   // TLBs
 #ifdef PTLSIM_HYPERVISOR
 #define USE_TLB
+#define USE_L2_TLB
 #endif
+
+  // NOTE: This is L1 TLBs!
   const int ITLB_SIZE = 32;
-  const int DTLB_SIZE = 32;
+  const int DTLB_SIZE = 48;
+  // L2 i-TLB 512 4k entries, 4-way set associative
+  const int L2_ITLB_SET_COUNT = 128;
+  const int L2_ITLB_WAY_COUNT = 4;
+  const int L2_ITLB_LATENCY   = 4;
+  // L2 i-TLB 512 4k entries, 4-way set associative (ignore 2MB entries)
+  const int L2_DTLB_SET_COUNT = 128;
+  const int L2_DTLB_WAY_COUNT = 4;
+  const int L2_DTLB_LATENCY   = 4;
+
 
 //#define ISSUE_LOAD_STORE_DEBUG
 //#define CHECK_LOADS_AND_STORES
@@ -175,6 +224,31 @@ namespace CacheSubsystem {
     return line.print(os, 0);
   }
 
+#ifdef ENABLE_ASF_CACHE_BASED
+  template <int linesize>
+  struct CacheLineWithValidMaskSpecRead : CacheLineWithValidMask<linesize> {
+    typedef CacheLineWithValidMask<linesize> base_t;
+    bool sr() const { return sr_; }
+    void clear_sr() {sr_ = false; }
+    void set_sr()   {sr_ = true; }
+    void reset() { base_t::reset(); sr_ = false; }
+    void invalidate() { reset(); }
+    void fill(W64 tag, const bitvec<linesize>& valid, bool spec_read) {
+      base_t::fill(tag, valid);
+      sr_ |= spec_read;
+    }
+    ostream& print(ostream& os, W64 tag) const;
+    private:
+	  bool sr_;
+  };
+
+  template <int linesize>
+  static inline ostream& operator <<(ostream& os, const CacheLineWithValidMaskSpecRead<linesize>& line) {
+    return line.print(os, 0);
+  }
+  typedef CacheLineWithValidMaskSpecRead<L1_LINE_SIZE> L1CacheLineSpecRead;
+#endif
+
   typedef CacheLineWithValidMask<L1_LINE_SIZE> L1CacheLine;
   typedef CacheLine<L1I_LINE_SIZE> L1ICacheLine;
   typedef CacheLineWithValidMask<L2_LINE_SIZE> L2CacheLine;
@@ -241,7 +315,7 @@ namespace CacheSubsystem {
       filled(line, newtag);
     }
 
-    static void probed(V& line, W64 tag, int way, bool hit) { 
+    static void probed(V& line, W64 tag, int way, bool hit) {
       if (logable(6) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": probe(", (void*)tag, "): ", (hit ? "HIT" : "miss"), " way ", way, ": hitcount ", line.hitcount, ", filltime ", line.filltime, ", lasttime ", line.lasttime, " (line addr ", &line, ")", endl;
       if (hit) {
         line.hitcount++;
@@ -264,24 +338,24 @@ namespace CacheSubsystem {
   };
 
   typedef HistogramAssociativeArrayStatisticsCollector<0, L1CacheLine,
-    DCACHE_L1_LINE_LIFETIME_INTERVAL, DCACHE_L1_LINE_LIFETIME_SLOTS, 
-    DCACHE_L1_LINE_DEADTIME_INTERVAL, DCACHE_L1_LINE_DEADTIME_SLOTS, 
+    DCACHE_L1_LINE_LIFETIME_INTERVAL, DCACHE_L1_LINE_LIFETIME_SLOTS,
+    DCACHE_L1_LINE_DEADTIME_INTERVAL, DCACHE_L1_LINE_DEADTIME_SLOTS,
     DCACHE_L1_LINE_HITCOUNT_INTERVAL, DCACHE_L1_LINE_HITCOUNT_SLOTS> L1StatsCollectorBase;
 
   typedef HistogramAssociativeArrayStatisticsCollector<1, L1ICacheLine,
-    DCACHE_L1I_LINE_LIFETIME_INTERVAL, DCACHE_L1I_LINE_LIFETIME_SLOTS, 
-    DCACHE_L1I_LINE_DEADTIME_INTERVAL, DCACHE_L1I_LINE_DEADTIME_SLOTS, 
+    DCACHE_L1I_LINE_LIFETIME_INTERVAL, DCACHE_L1I_LINE_LIFETIME_SLOTS,
+    DCACHE_L1I_LINE_DEADTIME_INTERVAL, DCACHE_L1I_LINE_DEADTIME_SLOTS,
     DCACHE_L1I_LINE_HITCOUNT_INTERVAL, DCACHE_L1I_LINE_HITCOUNT_SLOTS> L1IStatsCollectorBase;
 
   typedef HistogramAssociativeArrayStatisticsCollector<2, L2CacheLine,
-    DCACHE_L2_LINE_LIFETIME_INTERVAL, DCACHE_L2_LINE_LIFETIME_SLOTS, 
-    DCACHE_L2_LINE_DEADTIME_INTERVAL, DCACHE_L2_LINE_DEADTIME_SLOTS, 
+    DCACHE_L2_LINE_LIFETIME_INTERVAL, DCACHE_L2_LINE_LIFETIME_SLOTS,
+    DCACHE_L2_LINE_DEADTIME_INTERVAL, DCACHE_L2_LINE_DEADTIME_SLOTS,
     DCACHE_L2_LINE_HITCOUNT_INTERVAL, DCACHE_L2_LINE_HITCOUNT_SLOTS> L2StatsCollectorBase;
 
 #ifdef ENABLE_L3_CACHE
   typedef HistogramAssociativeArrayStatisticsCollector<3, L3CacheLine,
-    DCACHE_L3_LINE_LIFETIME_INTERVAL, DCACHE_L3_LINE_LIFETIME_SLOTS, 
-    DCACHE_L3_LINE_DEADTIME_INTERVAL, DCACHE_L3_LINE_DEADTIME_SLOTS, 
+    DCACHE_L3_LINE_LIFETIME_INTERVAL, DCACHE_L3_LINE_LIFETIME_SLOTS,
+    DCACHE_L3_LINE_DEADTIME_INTERVAL, DCACHE_L3_LINE_DEADTIME_SLOTS,
     DCACHE_L3_LINE_HITCOUNT_INTERVAL, DCACHE_L3_LINE_HITCOUNT_SLOTS> L3StatsCollectorBase;
 #endif
 
@@ -299,27 +373,177 @@ namespace CacheSubsystem {
 #ifdef ENABLE_L3_CACHE
   typedef NullAssociativeArrayStatisticsCollector<W64, L3CacheLine> L3StatsCollector;
 #endif
+#ifdef ENABLE_ASF_CACHE_BASED
+  typedef NullAssociativeArrayStatisticsCollector<W64, L1CacheLineSpecRead> L1StatsCollectorSpecRead;
 #endif
+#endif  // TRACK_LINE_USAGE
 
-  template <typename V, int setcount, int waycount, int linesize, typename stats = NullAssociativeArrayStatisticsCollector<W64, V> > 
-  struct DataCache: public AssociativeArray<W64, V, setcount, waycount, linesize, stats> {
-    typedef AssociativeArray<W64, V, setcount, waycount, linesize, stats> base_t;
+  template <typename CacheTrait>
+  struct DataCache: protected CacheTrait::assoc {
+    typedef typename CacheTrait::assoc base_t;
+    typedef typename CacheTrait::T T;
+    typedef typename CacheTrait::V V;
+    enum {
+      linesize = CacheTrait::linesize,
+      setcount = CacheTrait::setcount,
+      waycount = CacheTrait::waycount
+    };
     void clearstats() {
 #ifdef TRACK_LINE_USAGE
-      foreach (set, L1_SET_COUNT) {
+      foreach (set, setcount) {
         foreach (way, waycount) {
           base_t::sets[set][way].clearstats();
         }
       }
 #endif
     }
+
+    V* probe(T physaddr, T ign) { return probe(physaddr); }
+    V* probe(T physaddr) {
+      V* res =  base_t::probe(physaddr);
+      return res;
+    }
+
+    V* select(T physaddr, T ign) { return select(physaddr); }
+    V* select(T physaddr) {
+      T dummy;
+      return base_t::select(physaddr);
+    }
+
+    void invalidate(T physaddr, T ign) { return invalidate(physaddr); }
+    void invalidate(T physaddr) {
+      base_t::invalidate(physaddr);
+    }
+
+    W64 tagof(T a) { return base_t::tagof(a); }
+    void reset() { base_t::reset(); }
   };
 
-  struct L1Cache: public DataCache<L1CacheLine, L1_SET_COUNT, L1_WAY_COUNT, L1_LINE_SIZE, L1StatsCollector> {
-    L1CacheLine* validate(W64 addr, const bitvec<L1_LINE_SIZE>& valid) {
-      addr = tagof(addr);
-      L1CacheLine* line = select(addr);
-      line->fill(addr, valid);
+  template <typename CacheTrait>
+  struct VirtIdxDataCache: protected CacheTrait::assoc {
+    typedef typename CacheTrait::assoc base_t;
+    typedef typename CacheTrait::T T;
+    typedef typename CacheTrait::V V;
+    enum {
+      linesize = CacheTrait::linesize,
+      setcount = CacheTrait::setcount,
+      waycount = CacheTrait::waycount
+    };
+    void clearstats() {
+#ifdef TRACK_LINE_USAGE
+      foreach (set, setcount) {
+        foreach (way, waycount) {
+          base_t::sets[set][way].clearstats();
+        }
+      }
+#endif
+    }
+    /**
+     * Probing virtually indexed caches.
+     * @param physaddr Physical addres of data to be probed for.
+     * @param virtaddr Virtual address of probed item.
+     */
+    V* probe(T physaddr, T virtaddr) {
+      assert(floor(lowbits(physaddr,PAGE_SHIFT), (int)linesize)
+          == floor(lowbits(virtaddr,PAGE_SHIFT), (int)linesize));
+
+      V* res =  base_t::sets[base_t::setof(virtaddr)].probe(base_t::tagof(physaddr));
+      return res;
+    }
+
+    /**
+     * Selecting virtually indexed caches, care has to be taken to prevent
+     * aliasing! Simple handling here: On a cache miss, probe the other aliases
+     * and evict them if present.
+     * @param physaddr Physical addres of data to be probed for.
+     * @param virtaddr Virtual address of probed item.
+     */
+    V* select(T physaddr, T virtaddr) {
+      assert(floor(lowbits(physaddr,PAGE_SHIFT), (int)linesize)
+          == floor(lowbits(virtaddr,PAGE_SHIFT), (int)linesize));
+
+#ifdef L1_ENFORCE_VIRTUAL_ALIASING
+      V* res = probe(physaddr, virtaddr);
+      if likely (res) return res;
+
+      /* SD: Nothing found, remove potential aliases.
+         Aliasing happens in the bits which are part of the index and the
+         virtual page number. */
+      const int naliases = (setcount*linesize) >> PAGE_SHIFT;
+      if (!naliases) return res;
+      int this_alias = (virtaddr >> PAGE_SHIFT) & (naliases - 1);
+
+      /* SD: Find all _other_ aliases and remove them */
+      int aliasset;
+      foreach (i, naliases) {
+        if (i == this_alias) continue;
+        aliasset = base_t::setof((i << PAGE_SHIFT) | lowbits(virtaddr, PAGE_SHIFT));
+        base_t::sets[aliasset].invalidate(base_t::tagof(physaddr));
+      }
+#endif
+      T dummy;
+      return base_t::sets[base_t::setof(virtaddr)].select(base_t::tagof(physaddr), dummy);
+    }
+
+    /**
+     * Invalidating virtually indexed caches.
+     * @param physaddr Physical addres of data to be invalidated.
+     * @param virtaddr Virtual address of data to be invalidated.
+     */
+    void invalidate(T physaddr, T virtaddr) {
+      assert(floor(lowbits(physaddr,PAGE_SHIFT), (int)linesize)
+          == floor(lowbits(virtaddr,PAGE_SHIFT), (int)linesize));
+#ifdef L1_ENFORCE_VIRTUAL_ALIASING
+      const int naliases = (setcount*linesize) >> PAGE_SHIFT;
+      if (!naliases) {
+         base_t::sets[base_t::setof(virtaddr)].invalidate(base_t::tagof(physaddr));
+        return;
+      }
+      /* SD: Find all aliases & invalidate them, if they have the same physaddr. */
+      int aliasset;
+      foreach (i, naliases) {
+        aliasset = base_t::setof((i << PAGE_SHIFT) | lowbits(virtaddr, PAGE_SHIFT));
+        base_t::sets[aliasset].invalidate(base_t::tagof(physaddr));
+      }
+#else
+      base_t::sets[base_t::setof(virtaddr)].invalidate(base_t::tagof(physaddr));
+#endif
+    }
+
+    W64 tagof(T a) { return base_t::tagof(a); }
+    void reset() { base_t::reset(); }
+  };
+
+  /* Combines all relevant template parameters for a cache into one, in
+   * order to reduce duplication. */
+  template <typename V_, int setcount_, int waycount_, int linesize_,
+    typename stats_ = NullAssociativeArrayStatisticsCollector<W64, V_> >
+  struct DefaultCacheTrait {
+    typedef W64    T;
+    typedef V_     V;
+    typedef stats_ stats;
+    enum {linesize = linesize_, setcount = setcount_, waycount = waycount_};
+    //typedef LockableAssociativeArray<T, V, setcount, waycount, linesize, stats> base;
+    typedef AssociativeArray<T, V, setcount, waycount, linesize, stats> assoc;
+    //typedef NotifyAssociativeWrapper<LockableAssociativeArray<T, V, setcount,
+    //  waycount, linesize, stats>, T, V > base;
+    //typedef NotifyAssociativeWrapper<AssociativeArray<T, V, setcount,
+    //  waycount, linesize, stats>, T, V > base;
+  };
+
+#ifdef L1_VIRTUALLY_INDEXED
+  typedef VirtIdxDataCache<DefaultCacheTrait<L1CacheLine, L1_SET_COUNT,
+    L1_WAY_COUNT, L1_LINE_SIZE, L1StatsCollector> > L1CacheBase;
+#else
+  typedef DataCache<DefaultCacheTrait<L1CacheLine, L1_SET_COUNT, L1_WAY_COUNT,
+    L1_LINE_SIZE, L1StatsCollector> > L1CacheBase;
+#endif
+
+  struct L1Cache: public L1CacheBase {
+    L1CacheLine* validate(W64 physaddr, W64 virtaddr, const bitvec<L1_LINE_SIZE>& valid) {
+      L1CacheLine* line = select(physaddr, virtaddr);
+
+      line->fill(tagof(physaddr), valid);
       return line;
     }
   };
@@ -328,11 +552,112 @@ namespace CacheSubsystem {
     return os;
   }
 
+#ifdef ENABLE_ASF_CACHE_BASED
+  // This L1 cache has additional "speculative read" bits for each cache-line,
+  // that can be set by ASF-loads. It also uses the notification wrapper around
+  // the cache, ensuring proper information.
+  // The cache furthermore provides an interface to query whether it is still
+  // consistent.
+  template <typename V, int setcount, int waycount, int linesize,
+    typename stats = NullAssociativeArrayStatisticsCollector<W64, V> >
+  struct ASFCacheTrait : DefaultCacheTrait<V, setcount, waycount, linesize, stats> {
+    typedef DefaultCacheTrait<V, setcount, waycount, linesize, stats> base_t;
+    typedef NotifyAssociativeWrapper<typename base_t::assoc, W64, V> assoc;
+  };
+
+#ifdef L1_VIRTUALLY_INDEXED
+  typedef VirtIdxDataCache<ASFCacheTrait<L1CacheLineSpecRead, L1_SET_COUNT,
+    L1_WAY_COUNT, L1_LINE_SIZE, L1StatsCollector> > L1CacheSpecBase;
+#else
+  typedef DataCache<ASFCacheTrait<L1CacheLineSpecRead, L1_SET_COUNT,
+    L1_WAY_COUNT, L1_LINE_SIZE, L1StatsCollector> > L1CacheSpecBase;
+#endif
+
+  class L1CacheSpecRead : public L1CacheSpecBase {
+    typedef L1CacheSpecBase base_t;
+    typedef base_t::base_t  NotifyAssociativeWrapper;
+    typedef NotifyAssociativeWrapper::LineNotify LineNotify;
+    typedef NotifyAssociativeWrapper::Notify     Notify;
+  private:
+    bool evicted_spec_line;
+    bool invalidated_spec_line;
+    bool in_spec_region;
+
+    void flash_clear_spec_bits() {
+      base_t::iterator it = base_t::begin();
+      for (; it != base_t::end(); ++it)
+        (*it).clear_sr();
+    }
+
+    void reset_spec_state() {
+      flash_clear_spec_bits();
+      evicted_spec_line     = false;
+      invalidated_spec_line = false;
+    }
+
+    static void callback_evict(void *data, L1CacheLineSpecRead *line, W64 physaddr) {
+      assert(line);
+      if (logable(5)) logfile << __FILE__,__LINE__, " CB: Line ", line->sr() ? "spec ":"", line, " evicted, physaddr: ",(void*) physaddr, endl;
+      if likely (!line->sr()) return;
+
+      L1CacheSpecRead *cache = (L1CacheSpecRead*)data;
+      assert(cache->in_spec_region);
+      cache->evicted_spec_line = true;
+      line->clear_sr();
+    }
+    static void callback_inv(void *data, L1CacheLineSpecRead *line, W64 physaddr) {
+      assert(line);
+      if (logable(5)) logfile << __FILE__,__LINE__, " CB: Line ", line->sr() ? "spec ":"", line, " invalidated, physaddr: ",(void*) physaddr, endl;
+      if likely (!line->sr()) return;
+
+      L1CacheSpecRead *cache = (L1CacheSpecRead*)data;
+      assert(cache->in_spec_region);
+      cache->invalidated_spec_line = true;
+      line->clear_sr();
+    }
+    static void callback_reset(void *cache) {
+      if (logable(5)) logfile << __FILE__,__LINE__," CB: Cache reset. ", endl;
+      ((L1CacheSpecRead*)cache)->evicted_spec_line = true;
+    }
+
+  public:
+    L1CacheLineSpecRead* validate(W64 physaddr, W64 virtaddr, const bitvec<L1_LINE_SIZE>& valid, bool spec_read) {
+      L1CacheLineSpecRead* line = select(physaddr, virtaddr);
+      assert(line);
+      line->fill(tagof(physaddr), valid, spec_read);
+      return line;
+    }
+    void reset() {
+      base_t::reset();
+      evicted_spec_line     = false;
+      invalidated_spec_line = false;
+      in_spec_region        = false;
+    }
+    L1CacheSpecRead() {
+      reset();
+      NotifyAssociativeWrapper::set_notifications((void*)this, &callback_evict,
+          &callback_inv, NULL, &callback_reset);
+    }
+
+    // TODO: Interface for ASF storage!
+    // TODO: Optimisation: Switch on call-backs only when inside spec-region!
+    void start() { reset_spec_state(); in_spec_region = true; };
+    void commit() { assert(in_spec_region); reset_spec_state(); in_spec_region = false; };
+    void abort()  { assert(in_spec_region); reset_spec_state(); in_spec_region = false; };
+    bool consistency_error() const { return invalidated_spec_line; }
+    bool capacity_error() const { return evicted_spec_line; }
+  };
+
+  static inline ostream& operator <<(ostream& os, const L1CacheSpecRead& cache) {
+    return os;
+  }
+#endif
+
   //
   // L1 instruction cache
   //
 
-  struct L1ICache: public DataCache<L1ICacheLine, L1I_SET_COUNT, L1I_WAY_COUNT, L1I_LINE_SIZE, L1IStatsCollector> {
+  struct L1ICache: public DataCache<DefaultCacheTrait<L1ICacheLine, L1I_SET_COUNT, L1I_WAY_COUNT, L1I_LINE_SIZE, L1IStatsCollector> >{
     L1ICacheLine* validate(W64 addr, const bitvec<L1I_LINE_SIZE>& valid) {
       addr = tagof(addr);
       L1ICacheLine* line = select(addr);
@@ -349,7 +674,7 @@ namespace CacheSubsystem {
   // L2 cache
   //
 
-  typedef DataCache<L2CacheLine, L2_SET_COUNT, L2_WAY_COUNT, L2_LINE_SIZE, L2StatsCollector> L2CacheBase;
+  typedef DataCache<DefaultCacheTrait<L2CacheLine, L2_SET_COUNT, L2_WAY_COUNT, L2_LINE_SIZE, L2StatsCollector> >L2CacheBase;
 
   struct L2Cache: public L2CacheBase {
     void validate(W64 addr) {
@@ -369,7 +694,7 @@ namespace CacheSubsystem {
     return line.print(os, 0);
   }
 
-  struct L3Cache: public DataCache<L3CacheLine, L3_SET_COUNT, L3_WAY_COUNT, L3_LINE_SIZE, L3StatsCollector> {
+  struct L3Cache: public DataCache<DefaultCacheTrait<L3CacheLine, L3_SET_COUNT, L3_WAY_COUNT, L3_LINE_SIZE, L3StatsCollector> >{
     L3CacheLine* validate(W64 addr) {
       W64 oldaddr;
       L3CacheLine* line = select(addr, oldaddr);
@@ -393,34 +718,36 @@ namespace CacheSubsystem {
   // virtual addresses are 48 bits, so 48 - 12 (2^12 bytes per page)
   // is 36 bits.
   //
-  template <int tlbid, int size>
-  struct TranslationLookasideBuffer: public FullyAssociativeTagsNbitOneHot<size, 40> {
-    typedef FullyAssociativeTagsNbitOneHot<size, 40> base_t;
-    TranslationLookasideBuffer(): base_t() { }
+  template <int tlbid, int setcount, int waycount>
+  struct TranslationLookasideBuffer {
+    typedef FullyAssociativeTagsNbitOneHot<waycount, 40> Set;
+    Set sets[setcount];
 
-    void reset() {
-      base_t::reset();
-    }
+    TranslationLookasideBuffer() { reset(); }
+
+    void reset() { foreach (set, setcount) sets[set].reset(); }
 
     // Get the 40-bit TLB tag (36 bit virtual page ID plus 4 bit threadid)
     static W64 tagof(W64 addr, W64 threadid) {
       return bits(addr, 12, 36) | (threadid << 36);
     }
+    static int setof(W64 addr) { return lowbits(addr, log2(setcount)); }
 
     bool probe(W64 addr, int threadid = 0) {
       W64 tag = tagof(addr, threadid);
-      return (base_t::probe(tag) >= 0);
+      return (sets[setof(addr)].probe(tag) >= 0);
     }
 
     bool insert(W64 addr, int threadid = 0) {
       addr = floor(addr, PAGE_SIZE);
       W64 tag = tagof(addr, threadid);
+      W64 set = setof(addr);
       W64 oldtag;
-      int way = base_t::select(tag, oldtag);
+      int way = sets[set].select(tag, oldtag);
       W64 oldaddr = lowbits(oldtag, 36) << 12;
       if (logable(6)) {
-        logfile << "TLB insertion of virt page ", (void*)(Waddr)addr, " (virt addr ", 
-          (void*)(Waddr)(addr), ") into way ", way, ": ",
+        logfile << "TLB insertion of virt page ", (void*)(Waddr)addr, " (virt addr ",
+          (void*)(Waddr)(addr), ") into set ", set, " way ", way, ": ",
           ((oldtag != tag) ? "evicted old entry" : "already present"), endl;
       }
       return (oldtag != tag);
@@ -428,39 +755,54 @@ namespace CacheSubsystem {
 
     int flush_all() {
       reset();
-      return size;
+      return setcount * waycount;
     }
 
     int flush_thread(W64 threadid) {
       W64 tag = threadid << 36;
       W64 tagmask = 0xfULL << 36;
-      bitvec<size> slotmask = base_t::masked_match(tag, tagmask);
-      int n = slotmask.popcount();
-      base_t::masked_invalidate(slotmask);
+      int n;
+      foreach (set, setcount) {
+        bitvec<waycount> slotmask = sets[set].masked_match(tag, tagmask);
+        n += slotmask.popcount();
+        sets[set].masked_invalidate(slotmask);
+      }
       return n;
     }
 
     int flush_virt(Waddr virtaddr, W64 threadid) {
-      return invalidate(tagof(virtaddr, threadid));
+      return sets[setof(virtaddr)].invalidate(tagof(virtaddr, threadid));
+    }
+
+    ostream& print(ostream& os) const {
+      os << "TLB<", setcount, " sets, ", waycount, " ways>:", endl;
+      foreach (set, setcount) {
+        os << "  Set ", set, ":", endl;
+        os << sets[set];
+      }
+      return os;
     }
   };
 
-  template <int tlbid, int size>
-  static inline ostream& operator <<(ostream& os, const TranslationLookasideBuffer<tlbid, size>& tlb) {
+  template <int tlbid, int setcount, int waycount>
+  static inline ostream& operator <<(ostream& os, const TranslationLookasideBuffer<tlbid, setcount, waycount>& tlb) {
     return tlb.print(os);
   }
 
-  typedef TranslationLookasideBuffer<0, DTLB_SIZE> DTLB;
-  typedef TranslationLookasideBuffer<1, ITLB_SIZE> ITLB;
+  typedef TranslationLookasideBuffer<0, 1, DTLB_SIZE> DTLB;
+  typedef TranslationLookasideBuffer<1, 1, ITLB_SIZE> ITLB;
+  typedef TranslationLookasideBuffer<0, L2_DTLB_SET_COUNT, L2_DTLB_WAY_COUNT> L2_DTLB;
+  typedef TranslationLookasideBuffer<1, L2_ITLB_SET_COUNT, L2_ITLB_WAY_COUNT> L2_ITLB;
 
   struct CacheHierarchy;
 
   //
   // Load fill request queue (LFRQ) contains any requests for outstanding
-  // loads from both the L2 or L1. 
+  // loads from both the L2 or L1.
   //
   struct LoadFillReq {
     W64 addr;       // physical address
+    W64 virtaddr;   // virtual address for virtually indexed caches
     W64 data;       // data already known so far (e.g. from SFR)
     LoadStoreInfo lsi;
     W32  initcycle;
@@ -469,7 +811,7 @@ namespace CacheSubsystem {
     W8s  mbidx;
 
     inline LoadFillReq() { }
-  
+
     LoadFillReq(W64 addr, W64 virtaddr, W64 data, byte mask, LoadStoreInfo lsi);
     ostream& print(ostream& os) const;
   };
@@ -484,6 +826,7 @@ namespace CacheSubsystem {
     bitvec<size> freemap;                    // Slot is free
     bitvec<size> waiting;                    // Waiting for the line to arrive in the L1
     bitvec<size> ready;                      // Wait to extract/signext and write into register
+    bitvec<size> retry;                      // Needs to be retried by the OP
     LoadFillReq reqs[size];
     int count;
 
@@ -499,6 +842,7 @@ namespace CacheSubsystem {
     void reset() {
       freemap.setall();
       ready = 0;
+      retry = 0;
       waiting = 0;
       count = 0;
     }
@@ -521,12 +865,14 @@ namespace CacheSubsystem {
     }
 
     void annul(int lfrqslot);
-
+#ifdef ENABLE_ASF_CACHE_BASED
+    void annul_asf_spec_lfr(int mbidx, int lfrqslot);
+#endif
     void restart();
 
     int add(const LoadFillReq& req);
 
-    void wakeup(W64 address, const bitvec<LFRQ_SIZE>& lfrqmask);
+    void wakeup(W64 address, const bitvec<LFRQ_SIZE>& lfrqmask, bool need_retry = false);
 
     void clock();
 
@@ -541,15 +887,20 @@ namespace CacheSubsystem {
     return lfrq.print(os);
   }
 
-  enum { STATE_IDLE, STATE_DELIVER_TO_L3, STATE_DELIVER_TO_L2, STATE_DELIVER_TO_L1 };
-  static const char* missbuf_state_names[] = {"idle", "mem->L3", "L3->L2", "L2->L1"};
+  enum { STATE_IDLE, STATE_DELIVER_TO_L3, STATE_DELIVER_TO_L2, STATE_DELIVER_TO_L1, STATE_INVALIDATED};
+  static const char* missbuf_state_names[] = {"idle", "mem->L3", "L3->L2", "L2->L1", "invalid"};
 
   template <int SIZE>
   struct MissBuffer {
     struct Entry {
       W64 addr;     // physical line address we are waiting for
+      W64 virtaddr; // virtual line address we are waiting for, for virtually indexed caches
       W16 state;
+#ifdef ENABLE_ASF_CACHE_BASED
+      W16 dcache:1, icache:1, asf_spec:1;
+#else
       W16 dcache:1, icache:1;    // L1I vs L1D
+#endif
       W32 cycles;
       W16 rob;
       W8 threadid;
@@ -558,12 +909,16 @@ namespace CacheSubsystem {
       void reset() {
         lfrqmap = 0;
         addr = 0xffffffffffffffffULL;
+        virtaddr = 0xffffffffffffffffULL;
         state = STATE_IDLE;
         cycles = 0;
         icache = 0;
         dcache = 0;
         rob = 0xffff;
         threadid = 0xff;
+#ifdef ENABLE_ASF_CACHE_BASED
+        asf_spec = 0;
+#endif
       }
     };
 
@@ -581,12 +936,12 @@ namespace CacheSubsystem {
     bool full() const { return (!freemap); }
     int remaining() const { return (SIZE - count); }
     int find(W64 addr);
-    int initiate_miss(W64 addr, bool hit_in_L2, bool icache = 0, int rob = 0xffff, int threadid = 0xfe);
+    int initiate_miss(W64 addr, W64 virtaddr, bool hit_in_L2, bool icache = 0, int rob = 0xffff, int threadid = 0xfe);
     int initiate_miss(LoadFillReq& req, bool hit_in_L2, int rob = 0xffff);
     void annul_lfrq(int slot);
     void annul_lfrq(int slot, int threadid);
     void clock();
-
+    void external_probe(W64 physaddr, bool inv);
     ostream& print(ostream& os) const;
   };
 
@@ -596,14 +951,51 @@ namespace CacheSubsystem {
   }
 
   struct PerCoreCacheCallbacks {
-    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
+    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr, bool retry);
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
+  };
+
+  //
+  // Prefetcher
+  //
+  // States for the PrefetchEntry
+  enum { PE_INIT, PE_TRANSIENT, PE_STEADY, PE_NOPRED };
+  #define PE_MAX_AHEAD (7)
+  struct PrefetchEntry {
+    W64  state:2, lastaddr:48, ahead:3, target_ahead: 3;
+    W16s stride;
+    void reset() {
+      state        = PE_INIT;
+      lastaddr     = 0;
+      stride       = 0;
+      ahead        = 0;
+      target_ahead = 0;
+    }
+    ostream& print(ostream& os, W64 tag) const;
+  };
+  static inline ostream& operator <<(ostream& os, const PrefetchEntry& line) {
+    return line.print(os, 0);
+  }
+
+  template <int entries>
+  struct Prefetcher : public FullyAssociativeArray<W64, struct PrefetchEntry, entries> {
+    typedef FullyAssociativeArray<W64, struct PrefetchEntry, entries> base_t;
+    CacheHierarchy& hier;
+
+    Prefetcher(CacheHierarchy& h):hier(h) { }
+    void update(W64 loadrip, W64 loadtargetphys);
+    W64 get_next_prefetch(W64 loadrip, bool& havemore);
+    void adjust_look_ahead(W64 loadrip, W64 loadtargetphys, bool l1hit);
   };
 
   struct CacheHierarchy {
     LoadFillReqQueue<LFRQ_SIZE> lfrq;
     MissBuffer<MISSBUF_COUNT> missbuf;
+#ifdef ENABLE_ASF_CACHE_BASED
+    L1CacheSpecRead L1;
+#else
     L1Cache L1;
+#endif
     L1ICache L1I;
     L2Cache L2;
 #ifdef ENABLE_L3_CACHE
@@ -611,12 +1003,26 @@ namespace CacheSubsystem {
 #endif
     DTLB dtlb;
     ITLB itlb;
+#ifdef USE_L2_TLB
+    L2_DTLB l2dtlb;
+    L2_ITLB l2itlb;
+#endif
+
+    byte coreid;
+    static CacheHierarchy* hierarchies[];
 
     PerCoreCacheCallbacks* callback;
 
-    CacheHierarchy(): lfrq(*this), missbuf(*this) { callback = null; }
 
-    bool probe_cache_and_sfr(W64 addr, const SFR* sfra, int sizeshift);
+    CacheHierarchy(int coreid_ = 0): lfrq(*this), missbuf(*this), coreid(coreid_)
+    {
+      callback = null;
+      assert ((0 <= coreid_) && (coreid_ < MAX_HIERARCHIES));
+      CacheHierarchy::hierarchies[coreid_] = this;
+    }
+
+    bool probe_cache_and_sfr(W64 physaddr, W64 virtaddr, const SFR* sfra, int sizeshift);
+    bool probe_cache_and_sfr(W64 physaddr, const SFR* sfra, int sizeshift);
     bool covered_by_sfr(W64 addr, SFR* sfr, int sizeshift);
     void annul_lfrq_slot(int lfrqslot);
     int issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo lsi, bool& L2hit);
@@ -636,10 +1042,15 @@ namespace CacheSubsystem {
     int get_lfrq_mb_state(int lfrqslot) const;
     bool lfrq_or_missbuf_full() const { return lfrq.full() | missbuf.full(); }
 
-    W64 commitstore(const SFR& sfr, int threadid = 0xff, bool perform_actual_write = true);
-    W64 speculative_store(const SFR& sfr, int threadid = 0xff);
+#ifdef POOR_MANS_MESI
+    bool probe_other_caches(W64 addr, W64 virtaddr, bool inv);
+    bool external_probe(W64 addr, W64 virtaddr, bool inv);
+#endif
 
-    void initiate_prefetch(W64 addr, int cachelevel);
+    W64 commitstore(const SFR& sfr, W64 virtaddr, bool internal = false, int threadid = 0xff, bool perform_actual_write = true);
+    W64 speculative_store(const SFR& sfr, W64 virtaddr, int threadid = 0xff);
+
+    void initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating = false);
 
     bool probe_icache(Waddr virtaddr, Waddr physaddr);
     int initiate_icache_miss(W64 addr, int rob = 0xffff, int threadid = 0xff);
@@ -661,9 +1072,10 @@ struct PerContextDataCacheStats { // rootnode:
       W64 L3;
       W64 mem;
     } hit;
-        
+
     struct dtlb { // node: summable
-      W64 hits;
+      W64 l1hits;
+      W64 l2hits;
       W64 misses;
     } dtlb;
 
@@ -673,7 +1085,7 @@ struct PerContextDataCacheStats { // rootnode:
       W64 no_lfrq_mb;
     } tlbwalk;
   } load;
- 
+
   struct fetch {
     struct hit { // node: summable
       W64 L1;
@@ -681,7 +1093,7 @@ struct PerContextDataCacheStats { // rootnode:
       W64 L3;
       W64 mem;
     } hit;
-    
+
     struct itlb { // node: summable
       W64 hits;
       W64 misses;
@@ -690,10 +1102,10 @@ struct PerContextDataCacheStats { // rootnode:
     struct tlbwalk { // node: summable
       W64 L1_dcache_hit;
       W64 L1_dcache_miss;
-      W64 no_lfrq_mb;      
+      W64 no_lfrq_mb;
     } tlbwalk;
   } fetch;
-  
+
   struct store {
     W64 prefetches;
   } store;

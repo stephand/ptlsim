@@ -871,6 +871,40 @@ struct AssociativeArray {
     }
     return os;
   }
+
+  class iterator {
+  private:
+    int s, w;
+    Set *sets;
+    bool at_end() {return ((s == setcount) && (w == 0 )); }
+
+  public:
+    V& operator*() { return sets[s][w]; }
+    iterator& operator++() {
+      if (at_end()) return *this;
+      ++w;
+      if (w == waycount) { ++s; w = 0; }
+      return *this;
+    }
+    bool operator==(const iterator& other) const {
+      return ((sets == other.sets) && (s == other.s) && (w == other.w));
+    }
+    bool operator!=(const iterator& other) const {
+      return !(*this == other);
+    }
+    iterator& to_end() {
+      s = setcount; w = 0;
+      return *this;
+    }
+    iterator(Set* sets_) : s(0), w(0), sets(sets_) {}
+    ostream& print(ostream& os) const {
+      os << "Set: ", s, "/", setcount, " Way: ", w, "/", waycount;
+      return os;
+    }
+  };
+  iterator begin() { return iterator(sets); }
+  iterator end() { return iterator(sets).to_end(); }
+
 };
 
 template <typename T, typename V, int size, int ways, int linesize>
@@ -1147,7 +1181,7 @@ struct LockableFullyAssociativeArray {
 
   int unlock(T tag) {
     int way = tags.probe(tag);
-    if (way < 0) return;
+    if (way < 0) return -1;
     unlock_way(way);
     if (tags.islocked(way)) stats::unlocked(data[way], tags[way], way);
     return way;
@@ -1226,6 +1260,10 @@ struct LockableAssociativeArray {
 
   V* select_and_lock(T addr) { bool dummy; return select_and_lock(addr, dummy); }
 
+  V* unlock(T addr) {
+    return sets[setof(addr)].unlock(tagof(addr));
+  }
+
   ostream& print(ostream& os) const {
     os << "LockableAssociativeArray<", setcount, " sets, ", waycount, " ways, ", linesize, "-byte lines>:", endl;
     foreach (set, setcount) {
@@ -1240,6 +1278,136 @@ template <typename T, typename V, int size, int ways, int linesize>
 ostream& operator <<(ostream& os, const LockableAssociativeArray<T, V, size, ways, linesize>& aa) {
   return aa.print(os);
 }
+
+template <class B, class T, class V>
+class NotifyAssociativeWrapper : private B {
+public:
+  typedef B base_t;
+  typedef typename base_t::Set Set;
+  typedef void (*LineNotify)(void*, V*, T);
+  typedef void (*Notify)(void*);
+
+  class iterator {
+  private:
+    typename B::iterator base_it;
+  public:
+    V& operator*() { return *base_it; }
+    iterator& operator++() { ++base_it; return *this;}
+    bool operator==(const iterator& other) const { return (base_it == other.base_it); }
+    bool operator!=(const iterator& other) const { return (base_it != other.base_it); }
+    iterator(typename B::iterator b) : base_it(b) {}
+    ostream& print(ostream& os) const { return base_it.print(os); }
+  };
+  iterator begin() { return iterator(base_t::begin()); }
+  iterator end() { return iterator(base_t::end()); }
+
+  class NotifyingSet {
+  private:
+    Set &set;
+    void *notify_data;
+    LineNotify notify_evict, notify_inv, notify_probe;
+  public:
+    NotifyingSet(Set &s, void* d, LineNotify e, LineNotify i, LineNotify p) :
+      set(s), notify_data(d), notify_evict(e), notify_inv(i), notify_probe(p) {}
+
+    /* These functions cause notifications */
+    int invalidate(T tag) {
+      V *l = set.probe(tag);
+      if (notify_inv && l) notify_inv(notify_data, l, tag);
+      return set.invalidate(tag);
+    }
+    V* probe(T tag)  {
+      V *l = set.probe(tag);
+      if (notify_probe && l) notify_probe(notify_data, l, tag);
+      return l;
+    }
+    V* select(T tag) {
+      T dummy;
+      return select(tag, dummy);
+    }
+    V* select(T tag, T &oldtag) {
+      V *l = set.select(tag, oldtag);
+      if (tag == oldtag) { if (notify_probe) notify_probe(notify_data, l, oldtag); }
+      else               { if (notify_evict) notify_evict(notify_data, l, oldtag); }
+      return l;
+    }
+    // TODO: Add proxies for other functions used
+  };
+  /* This wrapper class allow direct access to the sets of the original
+   * container structure. By overloading the array subscript, it essentially
+   * adds the NotifyingSet class as an interposer. */
+  class NotifyingSets {
+  private:
+    Set *sets;
+    void* notify_data;
+    LineNotify notify_evict, notify_inv, notify_probe;
+  public:
+    NotifyingSets(Set *s, void* d, LineNotify e, LineNotify i, LineNotify p) :
+      sets(s), notify_data(d), notify_evict(e), notify_inv(i), notify_probe(p) {}
+
+    NotifyingSet operator[](int i) {
+      return NotifyingSet(sets[i], notify_data, notify_evict, notify_inv, notify_probe);
+    }
+    void set_notifications(void* data, LineNotify evict_line, LineNotify invalidate_line,
+        LineNotify probe_line) {
+      notify_data  = data;
+      notify_evict = evict_line;
+      notify_inv   = invalidate_line;
+      notify_probe = probe_line;
+    }
+  };
+
+  NotifyingSets sets;
+
+  NotifyAssociativeWrapper() :
+    notify_data(NULL), notify_evict(NULL), notify_inv(NULL), notify_probe(NULL),
+    notify_reset(NULL), sets(base_t::sets, notify_data, notify_evict, notify_inv, notify_probe) {}
+  NotifyAssociativeWrapper(void* data, LineNotify evict_line, LineNotify invalidate_line,
+      LineNotify probe_line, Notify reset_cache) :
+    notify_data(data), notify_evict(evict_line), notify_inv(invalidate_line),
+    notify_probe(probe_line), notify_reset(reset_cache),
+    sets(base_t::sets, notify_data, notify_evict, notify_inv, notify_probe) {}
+
+  void set_notifications(void* data, LineNotify evict_line, LineNotify invalidate_line,
+      LineNotify probe_line, Notify reset_cache) {
+    sets.set_notifications(data, evict_line, invalidate_line, probe_line);
+    notify_data  = data;
+    notify_evict = evict_line;
+    notify_inv   = invalidate_line;
+    notify_probe = probe_line;
+    notify_reset = reset_cache;
+  }
+  int setof(T addr) const { return base_t::setof(addr); }
+  T   tagof(T addr) const { return base_t::tagof(addr); }
+
+  /* These functions cause notifications. */
+  V* select(T addr) {
+    T oldaddr;
+    V *l = base_t::select(addr, oldaddr);
+    if (addr == oldaddr) { if (notify_probe) notify_probe(notify_data, l, oldaddr); }
+    else                 { if (notify_evict) notify_evict(notify_data, l, oldaddr); }
+    return l;
+  }
+  void invalidate(T addr) {
+    V *l = base_t::probe(addr);
+    if (notify_inv && l) notify_inv(notify_data, l, addr);
+    base_t::invalidate(addr);
+  }
+  V* probe(T addr)  {
+    V *l = base_t::probe(addr);
+    if (notify_probe && l) notify_probe(notify_data, l, addr);
+    return l;
+  }
+  void reset() {
+    if (notify_reset) notify_reset(notify_data);
+    base_t::reset();
+  }
+  // TODO: Add proxies for other functions used
+private:
+  void*      notify_data;
+  LineNotify notify_evict, notify_inv, notify_probe;
+  Notify     notify_reset;
+};
 
 template <typename T, int setcount, int linesize>
 struct DefaultCacheIndexingFunction {

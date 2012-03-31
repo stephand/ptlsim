@@ -3,6 +3,8 @@
 // Decoder for x86 and x86-64 to PTL transops
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <globals.h>
@@ -109,6 +111,9 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   // I/O and legacy
   assist_ioport_in,
   assist_ioport_out,
+#ifdef ENABLE_ASF
+  assist_asf_abort,
+#endif
 };
 
 int assist_index(assist_func_t assist) {
@@ -157,6 +162,7 @@ void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
   ag.cond = 0;
   ag.eom = 0;
   ag.internal = 0;
+  ag.is_asf = 0; // SD: The address generation is not ASF related.
   ag.unaligned = 0;
   ag.rd = REG_temp9;
   ag.rc = REG_zero;
@@ -211,7 +217,11 @@ static const W16 prefix_map_x86_64[256] = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, PFX_FS, PFX_GS, PFX_DATA, PFX_ADDR, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+#ifdef DECODE_XOP
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, PFX_XOP1,
+#else
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+#endif
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, PFX_FWAIT, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -230,7 +240,11 @@ static const W16 prefix_map_x86[256] = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, PFX_FS, PFX_GS, PFX_DATA, PFX_ADDR, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+#ifdef DECODE_XOP
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, PFX_XOP1,
+#else
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+#endif
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, PFX_FWAIT, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -240,7 +254,11 @@ static const W16 prefix_map_x86[256] = {
   PFX_LOCK, 0, PFX_REPNZ, PFX_REPZ, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
 
-const char* prefix_names[PFX_count] = {"repz", "repnz", "lock", "cs", "ss", "ds", "es", "fs", "gs", "datasz", "addrsz", "rex", "fwait"};
+const char* prefix_names[PFX_count] = {"repz", "repnz", "lock", "cs", "ss", "ds", "es", "fs", "gs", "datasz", "addrsz", "rex", "fwait",
+#ifdef DECODE_XOP
+    "xop1",
+#endif
+    };
 
 const char* uniform_arch_reg_names[APR_COUNT] = {
   // 64-bit
@@ -333,6 +351,31 @@ static const byte onebyte_has_modrm[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
 };
 
+#ifdef DECODE_XOP
+// TODO: Complete this table for proper XOP decoding
+static const byte xop_has_modrm[256] = {
+  /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
+  /*       -------------------------------        */
+  /* 00 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,1, /* 00 */
+  /* 10 */ _,_,1,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 10 */
+  /* 20 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 20 */
+  /* 30 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 30 */
+  /* 40 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 40 */
+  /* 50 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 50 */
+  /* 60 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 60 */
+  /* 70 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 70 */
+  /* 80 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 80 */
+  /* 90 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* 90 */
+  /* a0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* a0 */
+  /* b0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* b0 */
+  /* c0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* c0 */
+  /* d0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* d0 */
+  /* e0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_, /* e0 */
+  /* f0 */ _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_  /* f0 */
+  /*       -------------------------------        */
+  /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
+};
+#endif
 static const byte twobyte_has_modrm[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
@@ -913,7 +956,7 @@ int TraceDecoder::bias_by_segreg(int basereg) {
   return basereg;
 }
 
-void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool force_seg_bias, bool rmw) {
+void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool force_seg_bias, bool invalidating, bool rmw) {
   //
   // In the address generation form used by internally generated
   // uops, we need the full virtual address, including the segment base
@@ -977,6 +1020,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
+      ldst.invalidating = invalidating;
       ldst.extshift = 0;
       this << ldst;
     } else {
@@ -997,6 +1041,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
+      ldst.invalidating = invalidating;
       ldst.extshift = 0; // rmw;
     }
     this << ldst;
@@ -1021,6 +1066,7 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
       ldst.extshift = 0; // rmw;
+      ldst.invalidating = invalidating;
     }
     this << ldst;
   } else {
@@ -1041,18 +1087,19 @@ void TraceDecoder::address_generate_and_load_or_store(int destreg, int srcreg, c
       ldst.datatype = datatype;
       ldst.cachelevel = cachelevel;
       ldst.locked = locked;
+      ldst.invalidating = invalidating;
       ldst.extshift = 0; // rmw;
     }
     this << ldst;
   }
 }
 
-void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool rmw) {
-  address_generate_and_load_or_store(destreg, REG_zero, memref, opcode, datatype, cachelevel, false, rmw);
+void TraceDecoder::operand_load(int destreg, const DecodedOperand& memref, int opcode, int datatype, int cachelevel, bool invalidating, bool rmw) {
+  address_generate_and_load_or_store(destreg, REG_zero, memref, opcode, datatype, cachelevel, false, invalidating, rmw);
 }
 
 void TraceDecoder::result_store(int srcreg, int tempreg, const DecodedOperand& memref, int datatype, bool rmw) {
-  address_generate_and_load_or_store(REG_mem, srcreg, memref, OP_st, datatype, 0, 0, rmw);
+  address_generate_and_load_or_store(REG_mem, srcreg, memref, OP_st, datatype, 0, false, true, rmw);
 }
 
 void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const DecodedOperand& ra, W32 setflags, int rcreg, 
@@ -1141,7 +1188,8 @@ void TraceDecoder::alu_reg_or_mem(int opcode, const DecodedOperand& rd, const De
 
     bool isimm = (ra.type == OPTYPE_IMM);
     int srcreg = (isimm) ? REG_imm : arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-    operand_load(REG_temp0, rd, OP_ld, 0, 0, 1);
+    // Loads of RMW instructions invalidate in other caches (read for ownership), if they produce a result!
+    operand_load(REG_temp0, rd, OP_ld, 0, 0, !flagsonly, 1);
 
     int sizeshift = rd.mem.size;
     bool rahigh = (isimm) ? 0 : reginfo[ra.reg.reg].hibyte;
@@ -1321,6 +1369,13 @@ void TraceDecoder::decode_prefixes() {
       rex = 0;
       prefixes &= ~PFX_REX;
     }
+#ifdef DECODE_XOP
+    if (prefix == PFX_XOP1) {
+      // Check that this is not a 'pop' instruction -- by peeking ahead
+      if (XopByte2(insnbytes[byteoffset+1]).xopmapselect < 8)
+        break;
+    }
+#endif
     prefixes |= prefix;
     if (prefix == PFX_REX) { rex = b; }
     byteoffset++; rip++;
@@ -1858,9 +1913,25 @@ bool TraceDecoder::translate() {
 
   if (prefixes & PFX_ADDR) addrsize_prefix = 1;
 
+#ifdef DECODE_XOP
+  bool xop = false;
+  if (prefixes & PFX_XOP1) {
+    xop2 = XopByte2(fetch1());
+    xop3 = XopByte3(fetch1());
+    xop  = true;
+  }
+#endif
+
   bool uses_sse = 0;
   op = fetch1();
   bool need_modrm = onebyte_has_modrm[op];
+#ifdef DECODE_XOP
+  if (xop) {
+    need_modrm = xop_has_modrm[op];
+    op |= 0x700;
+  }
+#endif
+
   if (op == 0x0f) {
     op = fetch1();
     need_modrm = twobyte_has_modrm[op];
@@ -1933,10 +2004,19 @@ bool TraceDecoder::translate() {
   case 6:
     stats.decoder.x86_decode_type[DECODE_TYPE_X87]++;
     rc = decode_x87(); break;
+#ifdef DECODE_XOP
+  case 7:
+    stats.decoder.x86_decode_type[DECODE_TYPE_SSE]++;
+    rc = decode_xop(); break;
+#endif
   default: {
     assert(false);
   }
   } // switch
+
+  /* check for possible ASF-Instructions */
+  bool isasf = ((rc == 0) & (!invalid));
+  if (isasf) rc = decode_asf();
 
   if (!rc) return rc;
 

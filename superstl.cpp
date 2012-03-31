@@ -714,7 +714,7 @@ namespace superstl {
       char c;
       bool ok = getc(c);
 
-      if ((!ok) | (c == '\n') | (c == '\r') | (c == '\0')) {
+      if ((!ok) | (c == '\n') | (c == '\r')) {
         v[i] = 0;
         return i;
       }
@@ -733,7 +733,7 @@ namespace superstl {
       char c;
       bool ok = getc(c);
 
-      if ((!ok) | (c == '\n') | (c == '\r') | (c == '\0')) return sb.size();
+      if ((!ok) | (c == '\n') | (c == '\r')) return sb.size();
 
       sb << c;
     }

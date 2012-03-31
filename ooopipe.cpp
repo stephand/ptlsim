@@ -5,6 +5,8 @@
 //
 // Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 // Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <globals.h>
@@ -93,13 +95,13 @@ void OutOfOrderCore::flush_pipeline_all() {
   // Clear per-thread state:
   foreach (i, threadcount) {
     ThreadContext* thread = threads[i];
-    thread->flush_pipeline();
+    assert(thread->flush_pipeline());
   }
   // Clear out everything global:
   setzero(robs_on_fu);
 }
 
-void ThreadContext::flush_pipeline() {
+bool ThreadContext::flush_pipeline() {
   // SD: I wonder if flush_pipeline should really be able to flush halfway
   // through a partially committed x86 instruction. This is dangerous,
   // especially if the instruction has already partially updated
@@ -115,6 +117,7 @@ void ThreadContext::flush_pipeline() {
       logfile <<"  ", rob, endl;
       if (rob.uop.eom) break;
     }
+	//return false;
   }
 
   core.caches.complete(threadid);
@@ -178,6 +181,7 @@ void ThreadContext::flush_pipeline() {
   dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
   last_commit_at_cycle = sim_cycle;
   external_to_core_state();
+  return true;
 }
 
 //
@@ -192,7 +196,9 @@ void ThreadContext::reset_fetch_unit(W64 realrip) {
 
   fetchrip = realrip;
   fetchrip.update(ctx);
+
   stall_frontend = 0;
+  stall_on_eom   = 0;
   waiting_for_icache_fill = 0;
   fetchq.reset();
   current_basic_block_transop_index = 0;
@@ -297,7 +303,7 @@ void ThreadContext::redispatch_deadlock_recovery() {
   per_context_ooocore_stats_update(threadid, dispatch.redispatch.deadlock_flushes++);
   // don't want to reset the counter for no commit in this case
   W64 previous_last_commit_at_cycle = last_commit_at_cycle;
-  flush_pipeline();
+  assert(flush_pipeline());
   last_commit_at_cycle = previous_last_commit_at_cycle; /// so we can exit after no commit after deadlock recovery a few times in a roll
   logfile << "[vcpu ", ctx.vcpuid, "] thread ", threadid, ": reset thread.last_commit_at_cycle to be before redispatch_deadlock_recovery() ", previous_last_commit_at_cycle, endl;
   /*
@@ -408,7 +414,7 @@ bool ThreadContext::fetch() {
     return true;
   }
 
-  while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0)) {
+  while ((fetchcount < FETCH_WIDTH) && (taken_branch_count == 0) && !stall_frontend) {
     if unlikely (!fetchq.remaining()) {
       if unlikely (config.event_log_enabled) {
         if (!fetchcount) {
@@ -545,6 +551,9 @@ bool ThreadContext::fetch() {
       per_context_ooocore_stats_update(threadid, fetch.stop.microcode_assist++);
       stall_frontend = 1;
     }
+
+    // SD: Try w/o the pipeline stalls!
+    if unlikely (stall_on_eom && transop.eom) {stall_frontend = true; stall_on_eom = false;}
 
     per_context_ooocore_stats_update(threadid, fetch.uops++);
 
@@ -727,6 +736,9 @@ void ThreadContext::rename() {
     bool st = isstore(fetchbuf.opcode);
     bool br = isbranch(fetchbuf.opcode);
 
+#ifdef ENABLE_ASF
+    ld |= (fetchbuf.opcode == OP_rel);
+#endif
     if unlikely (ld && (loads_in_flight >= LDQ_SIZE)) {
       if unlikely (config.event_log_enabled) { if likely (!prepcount) core.eventlog.add(EVENT_RENAME_LDQ_FULL)->threadid = threadid; }
       per_context_ooocore_stats_update(threadid, frontend.status.ldq_full++);
@@ -1143,6 +1155,97 @@ bool ReorderBufferEntry::find_sources() {
   return operands_still_needed;
 }
 
+// SD: This is an attempt at an improved dispatcher
+int ReorderBufferEntry::select_cluster_penalty() {
+  OutOfOrderCoreEvent* event;
+  OutOfOrderCore& core = getcore();
+  ThreadContext& thread = getthread();
+
+  if (MAX_CLUSTERS == 1) {
+    int cluster_issue_queue_avail_count[MAX_CLUSTERS];
+    getcore().sched_get_all_issueq_free_slots(cluster_issue_queue_avail_count);
+    return (cluster_issue_queue_avail_count[0] > 0) ? 0 : -1;
+  }
+
+  W32 executable_on_cluster = executable_on_cluster_mask;
+
+  static const int F = 8;   //fixed point arithmetic
+  int cluster_operand_penalty[MAX_CLUSTERS];
+  foreach (i, MAX_CLUSTERS) { cluster_operand_penalty[i] = 0; }
+
+  // SD: Instead of computing bonusses to run on the same cluster as one of the
+  //     operands, we will compute penalties which correspond to distances
+  //     between us and the operand.
+  foreach (i, MAX_OPERANDS) {
+    PhysicalRegister& r = *operands[i];
+    if ((&r) && ((r.state == PHYSREG_WAITING) || (r.state == PHYSREG_BYPASS)) && (r.rob->cluster >= 0))
+      foreach (c, MAX_CLUSTERS)
+        cluster_operand_penalty[c] += intercluster_latency_map[r.rob->cluster][c] << F;
+  }
+  // and then also take the FUs into account. Try to spread the uops evenly
+  // amongst them!
+  ReorderBufferEntry* rob;
+  foreach (c, MAX_CLUSTERS) {
+    foreach_list_mutable(thread.rob_dispatched_list[c], rob, entry, nextentry) {
+      // SD: The idea is to minimise the collision probability of uops when
+      //     assuming random selection if multiple FUs are available in a
+      //     cluster.
+      W32 FU_can     = fuinfo[rob->uop.opcode].fu & clusters[c].fu_mask;
+      W32 FU_can_we  = fuinfo[uop.opcode].fu      & clusters[c].fu_mask;
+      W32 FU_overlap = FU_can & FU_can_we;
+      if unlikely(FU_overlap)
+        cluster_operand_penalty[c] += (F * popcount(FU_overlap)) /
+                                      (popcount(FU_can) * popcount(FU_can_we));
+    }
+  }
+
+  assert(executable_on_cluster);
+
+  // If a given cluster's issue queue is full, try another cluster:
+  int cluster_issue_queue_avail_count[MAX_CLUSTERS];
+  W32 cluster_issue_queue_avail_mask = 0;
+
+  getcore().sched_get_all_issueq_free_slots(cluster_issue_queue_avail_count);
+
+  foreach (i, MAX_CLUSTERS) {
+    cluster_issue_queue_avail_mask |= ((cluster_issue_queue_avail_count[i] > 0) << i);
+  }
+
+  executable_on_cluster &= cluster_issue_queue_avail_mask;
+
+  if unlikely (config.event_log_enabled) {
+    event = getcore().eventlog.add(EVENT_CLUSTER_OK, this);
+    event->select_cluster.allowed_clusters = executable_on_cluster_mask;
+    foreach (i, MAX_CLUSTERS) event->select_cluster.iq_avail[i] = cluster_issue_queue_avail_count[i];
+  }
+
+  if unlikely (!executable_on_cluster) {
+    if unlikely (config.event_log_enabled) event->type = EVENT_CLUSTER_NO_CLUSTER;
+    return -1;
+  }
+
+  int n = 0;
+  // SD: Using the sim_cycle as a source of randomness is utterly stupid,
+  //     because it can put two similar uops on the same cluster, whereas
+  //     spreading them might be much more usefull!
+  int ticker = sim_cycle*DISPATCH_WIDTH + core.dispatchcount;
+  int cluster = find_random_set_bit(executable_on_cluster, ticker);
+  n = cluster_operand_penalty[cluster];
+  foreach (i, MAX_CLUSTERS) {
+    if ((cluster_operand_penalty[i] < n) && bit(executable_on_cluster, i)) {
+      n = cluster_operand_penalty[i];
+      cluster = i;
+    }
+  }
+
+  per_context_ooocore_stats_update(threadid, dispatch.cluster[cluster]++);
+
+  if unlikely (config.event_log_enabled) event->cluster = cluster;
+
+  return cluster;
+
+}
+
 int ReorderBufferEntry::select_cluster() {
   OutOfOrderCoreEvent* event;
 
@@ -1218,8 +1321,11 @@ int ThreadContext::dispatch() {
 
     // All operands start out as valid, then get put on wait queues if they are not actually ready.
 
+#ifndef PENALTY_DISPATCHER
     rob->cluster = rob->select_cluster();
-
+#else
+    rob->cluster = rob->select_cluster_penalty();
+#endif
     //
     // An available cluster could not be found. This only happens
     // when all applicable cluster issue queues are full. Since
@@ -1284,12 +1390,24 @@ int ThreadContext::dispatch() {
   } else if unlikely (!rob_ready_to_dispatch_list.empty()) {
     dispatch_deadlock_countdown--;
 
-    /* SD: Give outstanding cache and tlb-misses a chance to tickle in first and
-     * commit everything that is ready to do so! */
+    /* SD: Give outstanding cache and tlb-misses a chance to tickle in first */
     if ( !dispatch_deadlock_countdown &&
-         (rob_cache_miss_list.count || rob_tlb_miss_list.count ||
-          ( rob_ready_to_commit_queue.count && ROB.peekhead()->ready_to_commit())) )
+         (rob_cache_miss_list.count || rob_tlb_miss_list.count ))
       dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+
+    /* and commit everything that is ready to do so! */
+    if ( !dispatch_deadlock_countdown && rob_ready_to_commit_queue.count) {
+      bool head_x86_ready = true;
+      /* Check if the *full* x86 instruction can actually commit */
+      foreach_forward(ROB, i) {
+        if (!ROB[i].ready_to_commit()) {
+          head_x86_ready = false;
+          break;
+        }
+        if (ROB[i].uop.eom) break;
+      }
+      if (head_x86_ready) dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+    }
 
     if (!dispatch_deadlock_countdown) {
       redispatch_deadlock_recovery();
@@ -1335,6 +1453,9 @@ int ThreadContext::complete(int cluster) {
     if unlikely (rob->cycles_left <= 0) {
       if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_COMPLETE, rob);
       rob->changestate(rob_completed_list[cluster]);
+      // SD: Make the register ready here, instead of at issue time. This should be more correct!
+      //     Together with the 0 cycle fwd = bypass fix elsewhere, this works as expected!
+      rob->physreg->flags &= ~FLAG_WAIT;
       rob->physreg->complete();
       rob->forward_cycle = 0;
       rob->fu = 0;
@@ -1534,6 +1655,11 @@ int ThreadContext::commit() {
   //
   int rc = COMMIT_RESULT_OK;
 
+#ifdef ENABLE_ASF
+  rc = asf_pipeline_intercept.pre_commit(ctx, rc);
+  if unlikely (rc != COMMIT_RESULT_OK ) return rc;
+#endif
+
   foreach_forward(ROB, i) {
     ReorderBufferEntry& rob = ROB[i];
 
@@ -1637,7 +1763,7 @@ int ReorderBufferEntry::commit() {
   // fence immediately after an locked RMW instruction,
   // as the lock is just added to the flush list at the
   // commit of the load (the R part), which will definitely
-  // happen after the commit of the preceeding fence.
+  // happen after the commit of the preceding fence.
   //
 
   if unlikely ((uop.opcode == OP_mf) && ready_to_commit() && (!load_store_second_phase)) {
@@ -1682,6 +1808,11 @@ int ReorderBufferEntry::commit() {
 #endif
 
     if unlikely (subrob.physreg->flags & FLAG_INV) {
+      // The load was invalidated by another core while being in-flight
+      if unlikely (subrob.physreg->data == EXCEPTION_RetryLoad) {
+        assert("SD: EXCEPTION_RetryLoad should not be used for now!");
+      }
+
       //
       // The exception is definitely going to happen, since the
       // excepting instruction is at the head of the ROB. However,
@@ -1728,6 +1859,9 @@ int ReorderBufferEntry::commit() {
   PhysicalRegister* oldphysreg = thread.commitrrt[uop.rd];
 
   bool ld = isload(uop.opcode);
+#ifdef ENABLE_ASF
+  ld  |= (uop.opcode == OP_rel);
+#endif
   bool st = isstore(uop.opcode);
   bool br = isbranch(uop.opcode);
 
@@ -1870,9 +2004,21 @@ int ReorderBufferEntry::commit() {
 
   if likely (uop.som) assert(ctx.commitarf[REG_rip] == uop.rip);
 
+#ifdef ENABLE_ASF
+  if (uop.is_asf)
+    if (!thread.asf_pipeline_intercept.commit(ctx, *this))
+      return COMMIT_RESULT_NONE;
+#endif
+
   //
   // The commit of all uops in the x86 macro-op is guaranteed to happen after this point
   //
+  if unlikely (config.commitlog_filename) {
+    OutOfOrderCoreBinaryEvent e(coreid);
+    e.fill_commit(EVENT_COMMIT_OK, this);
+    commitlogfile << e;
+  }
+
   if unlikely (config.event_log_enabled) event = core.eventlog.add_commit(EVENT_COMMIT_OK, this);
 
   if unlikely (config.event_log_enabled) {
@@ -1901,7 +2047,14 @@ int ReorderBufferEntry::commit() {
       assert(!isbranch(uop.opcode));
       ctx.commitarf[REG_rip] += uop.bytes;
     }
-    if unlikely (config.event_log_enabled) event->commit.target_rip = ctx.commitarf[REG_rip];
+    if unlikely (config.event_log_enabled) {
+      event->commit.target_rip = ctx.commitarf[REG_rip];
+#ifdef PTLSIM_HYPERVISOR
+      event->commit.krn = ctx.kernel_mode;
+#else
+      event->commit.krn = false;
+#endif
+    }
   }
 
   if likely ((!ld) & (!st) & (!uop.nouserflags)) {
@@ -1934,7 +2087,11 @@ int ReorderBufferEntry::commit() {
     Waddr mfn = (lsq->physaddr << 3) >> 12;
     smc_setdirty(mfn);
 
-    if (lsq->bytemask) assert(core.caches.commitstore(*lsq, thread.threadid) == 0);
+#ifdef ENABLE_ASF
+    W64 dummy_merge;
+    thread.asf_pipeline_intercept.issue_probe_and_merge(lsq->physaddr << 3, true, dummy_merge);
+#endif
+    if (lsq->bytemask) assert(core.caches.commitstore(*lsq, virtpage, uop.internal, thread.threadid) == 0);
   }
 
   if unlikely (pteupdate) {

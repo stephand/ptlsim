@@ -20,6 +20,10 @@
 #include <config.h>
 #include <datastore.h>
 
+//#define CORE_GENERIC
+//#define CORE_AMD_K8
+#define CORE_AMD_BARCELONA_ASF
+
 extern W64 sim_cycle;
 extern W64 unhalted_cycle_count;
 extern W64 total_uops_committed;
@@ -115,6 +119,7 @@ struct PTLsimStats;
 void print_banner(ostream& os, const PTLsimStats& stats, int argc = 0, char** argv = null);
 
 extern ostream logfile;
+extern ostream commitlogfile;
 extern W64 user_insn_commits;
 extern W64 iterations;
 extern W64 total_uops_executed;
@@ -143,6 +148,7 @@ struct PTLsimConfig {
   // Logging
   bool quiet;
   stringbuf log_filename;
+  stringbuf commitlog_filename;
   W64 loglevel;
   W64 start_log_at_iteration;
   W64 start_log_at_rip;

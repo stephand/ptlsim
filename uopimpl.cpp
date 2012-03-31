@@ -1582,6 +1582,13 @@ uopimpl_func_t get_synthcode_for_uop(int op, int size, bool setflags, int cond, 
   case OP_ld_pre:
   case OP_st:
   case OP_mf:
+#ifdef ENABLE_ASF
+  /* ASF instructions too ;) */
+  case OP_com:
+  case OP_spec:
+  case OP_rel:
+  case OP_val:
+#endif
     func = uop_impl_nop; break;
 
   case OP_bt:

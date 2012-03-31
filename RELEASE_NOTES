@@ -1,0 +1,183 @@
+               PTLsim-ASF 239.asf.2.0 
+	       Release Notes
+
+               Stephan Diestelhorst
+	       AMD Operating System Research Center
+
+	       March 2010
+
+Overview
+========
+
+PTLsim is a near-cycle-accurate AMD64 simulator with in-order and
+out-of-order execution-core models.
+
+PTLsim-ASF is a version of PTLsim that implements an experimental
+extension of them AMD64 architecture: the Advanced Synchronization
+Facility (ASF).
+
+A proper specification of ASF has been proposed, please find the
+proposal at:
+  http://developer.amd.com/CPU/ASF/Pages/default.aspx
+
+Please find more information on ASF and PTLsim on the following web
+site:
+  http://www.amd64.org/research/multi-and-manycore-systems.html
+
+
+Disclaimer
+==========
+
+PTLsim-ASF introduces support for the experimental ASF extension.  AMD
+provides this implementation of ASF without any intent and commitment
+to release such functionality in any future microprocessor product.
+
+Furthermore, the experimental status of this extension manifests in
+the possibility that functionality, implementation, and interface of
+ASF may change in the future and deviate from previous versions (such
+as the one presented in the publication cited above).
+
+Having said that, you are welcome and invited to experiment with the
+Advanced Synchronization Facility and to let us know if you have any
+suggestions for improvement, discover bugs, and for any other
+comments.  Use the contact provided at the end of this document.
+
+We would also be glad to learn about interesting uses of ASF.  If you
+want to refer to ASF in a publication, please use the paper cited
+above.
+
+While the simulation core of PTLsim-ASF has been tweaked to behave
+similar to a AMD Opteron(tm) family 10h (Barcelona) processor, this
+model is not accurate, neither in functionality, performance, nor
+internal implementation.  Do not use this model to assess, project, or
+derive any properties of a real AMD Opteron(tm) processor.
+
+
+License
+=======
+
+PTLsim-ASF is released under GPLv2.  See LICENSE for details.
+
+
+Changes to baseline PTLsim-239
+==============================
+
+PTLsim-ASF contains the following enhancements over the baseline
+PTLsim release:
+
+* An implementation of ASF in the out-of-order core model:
+
+  * This implementation uses a separate buffer (called the Locked Line
+    Buffer, LLB) with fixed size (ASF_MAX_LINES) to provide tracking
+    of atomicity and maintaining backup copies of speculatively
+    modified cache-lines.
+
+  * In addition to using the dedicated LLB, this implementation also
+    features experimental tracking of unmodified speculative lines
+    through the L1 cache. This extension can be used by uncommenting
+    ENABLE_ASF_CACHE_BASED in config.h. Please note that this mode
+    _does not have a minimum capacity guarantee_ as specified in the
+    specification proposal above. Furthermore does the RELEASE
+    instruction not work with data managed by the L1 cache.
+
+* Support for simulating multicore configurations with a simple
+  cache-coherence performance model
+
+* Updated microarchitecture for AMD Opteron(tm) processors (family
+  10h, Barcelona core)
+
+* Various bugfixes back-ported from current PTLsim releases
+
+
+Configuration
+=============
+
+The following configurations are known to work:
+
+* Out-of-order core model "asfooo" with ASF and multicore support
+
+  This core is a modification of PTLsim's original "ooocore"
+  simulation core with extensions to simulate a true multicore system.
+  The core has been tested in full-system simulation mode only (using
+  PTLsim/X), as it relies on support for multithreaded simulation
+  which is not available in the user-space version of PTLsim.
+
+  The modified core still resides in the ooo*.{h,cpp} files, but has
+  been renamed to "asfooo" and replaces the original "ooo" core.  Use
+  "-core asfooo -run" as parameters to PTLsim/X to make use of this
+  core model.
+
+  In contrast to the original "ooo" simulation model, this enhanced
+  version contains multiple truly independent cores that do not
+  compete for functional units or ROB entries, and each core has a
+  private cache hierarchy.
+
+  These cache hierarchies are kept coherent with a simplified
+  coherence protocol that models first-order performance effects of
+  coherent caches.
+
+* In-order core model "seq" without ASF support
+
+  The sequential in-order simulation core "seq" has not been changed
+  and is still present in the release.  It can be used for fast
+  forwarding into the simulation, but care has to be taken as it does
+  not have support for ASF.
+
+
+Usage
+=====
+
+In order to use ASF from within C / C++, include asf-highlevel.h (in
+the root of the package) which provides convenient wrappers around the
+ASF primitives for loading, for prefetching values, and to start and
+end ASF speculative regions.  Refer to the specification proposal
+above for details on ASF primitives and example code.
+
+Due to special treatment of the frame-pointer register within GCC (it
+cannot be clobbered), two different flavours of the macro for the
+SPECULATE instruction exist.  If you want to compile your application
+with _enabled_ frame pointers, specify "-DASF_PUSH
+-fno-omit-frame-pointer" on GCC's command-line.  If you want to
+_disable_ frame pointers, use "-DASF_STACK -fomit-frame-pointer".
+
+This behaviour is an artifact of GCC not directly supporting ASF and
+its inability to clobber RBP, even if frame pointers are disabled.  As
+ASF does not restore any of the GPRs (except the stack pointer) after
+an abort, RBP has to be saved on the stack manually.  The SPECULATE
+macros hence expect a local 64-bit storage on the stack that should be
+declared as follows: "volatile unsigned long spec_state;".
+
+Please note that the ASF extension is only supported for 64-bit
+applications.  Support for (legacy) 32-bit environments is not tested
+and will likely result in fancy errors anywhere in the tool chain.
+
+
+Known issues
+============
+
+* PTLsim/X sometimes crashes when rapidly switching between
+  native-execution mode and simulation mode.  The workaround is to
+  avoid switching back from simulation mode to native-execution mode,
+  or to resort to user-mode-only support.
+  Note that this is an issue introduced by the original PTLsim version.
+
+* This modification to PTLsim is based on a recent release (GIT 239)
+  of PTLsim.
+  Improvements after that particular GIT version are not in this
+  release, we are currently working on integrating ASF more closely
+  with the upstream tree.
+
+* Several micro-architectural features are not modelled perfectly by
+  upstream PTLsim. We are aware of several inaccuracies of PTLsim and
+  currently work on improving upstream PTLsim.
+
+Contact
+=======
+
+This version of PTLsim is maintained by
+Stephan Diestelhorst (AMD OSRC) stephan.diestelhorst@amd.com
+
+Any question specific to the extensions of PTLsim-ASF should be
+directed to him.  The general PTLsim mailing list for general PTLsim
+questions is ptlsim-devel@ptlsim.org.  Its archives can be found at:
+http://www.ptlsim.org/pipermail/ptlsim-devel/

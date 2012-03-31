@@ -712,6 +712,7 @@ void page_table_acc_dirty_update(W64 rawvirt, W64 toplevel_mfn, const PTEUpdate&
 //
 W64 loadphys(Waddr physaddr);
 W64 storemask(Waddr physaddr, W64 data, byte bytemask);
+W64 storephys(Waddr physaddr, W64 data);
 
 int copy_from_user_phys_prechecked(void* target, Waddr source, int bytes, Level1PTE ptelo, Level1PTE ptehi, Waddr& faultaddr);
 

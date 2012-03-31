@@ -3,12 +3,35 @@
 // PTLsim: Cycle Accurate x86-64 Simulator
 // Data Cache
 //
-// Copyright 2007 Matt T. Yourst <yourst@yourst.com>
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+// 02110-1301, USA.
+//
+// Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
+/**
+ * Enables cross core cache invalidation and cross core cache forwarding.
+ * Only has effect with a proper SMP model, ie. you have to _disable_
+ * ENABLE_SMT.
+ */
+#define POOR_MANS_MESI
 #include <ptlsim.h>
 //#include <datastore.h>
-
+#define MAX_HIERARCHIES 8
 struct LoadStoreInfo {
   W16 rob;
   W8  threadid;
@@ -35,42 +58,45 @@ namespace CacheSubsystem {
 
   //#define CACHE_ALWAYS_HITS
   //#define L2_ALWAYS_HITS
-  
-  // 64 KB L1 at 3 cycles
-  const int L1_LINE_SIZE = 64;
-  const int L1_SET_COUNT = 512;
-  const int L1_WAY_COUNT = 2;
 
-#define ENFORCE_L1_DCACHE_BANK_CONFLICTS
+  // 16 KB L1 at 2 cycles       // increase to 32 KB to match Core 2
+  const int L1_LINE_SIZE = 64;
+  const int L1_SET_COUNT = 64;
+  const int L1_WAY_COUNT = 4;
+  // #define ENFORCE_L1_DCACHE_BANK_CONFLICTS
   const int L1_DCACHE_BANKS = 8; // 8 banks x 8 bytes/bank = 64 bytes/line
 
-  // 64 KB L1I
+  // 32 KB L1I
   const int L1I_LINE_SIZE = 64;
-  const int L1I_SET_COUNT = 512;
-  const int L1I_WAY_COUNT = 2;
+  const int L1I_SET_COUNT = 128;
+  const int L1I_WAY_COUNT = 4;
 
-  // 1024 KB L2 at 8 cycles (11 total cycles)
+  // 256 KB L2 at 6 cycles
   const int L2_LINE_SIZE = 64;
-  const int L2_SET_COUNT = 1024;
+  const int L2_SET_COUNT = 256; // 256 KB
   const int L2_WAY_COUNT = 16;
-  const int L2_LATENCY   = 8; // don't include the extra wakeup cycle (waiting->ready state transition) in the LFRQ
+  const int L2_LATENCY   = 5; // don't include the extra wakeup cycle (waiting->ready state transition) in the LFRQ
 
-  //#define ENABLE_L3_CACHE
+#define ENABLE_L3_CACHE
 #ifdef ENABLE_L3_CACHE
-  // 2 MB L3 cache (4096 sets, 16 ways) with 64-byte lines, latency 16 cycles
-  const int L3_SET_COUNT = 1024;
-  const int L3_WAY_COUNT = 16;
-  const int L3_LINE_SIZE = 128;
-  const int L3_LATENCY   = 12;
+  // 4 MB L3 cache (2048 sets, 32 ways) with 64-byte lines, latency 16 cycles
+  const int L3_SET_COUNT = 2048;
+  const int L3_WAY_COUNT = 32;
+  const int L3_LINE_SIZE = 64;
+  const int L3_LATENCY   = 8; // Core 2 Duo 2.0 GHz has 14 cycle total L2 latency
 #endif
-
   // Load Fill Request Queue (maximum number of missed loads)
-  const int LFRQ_SIZE = 32;
+  // const int LFRQ_SIZE = 63;
+  const int LFRQ_SIZE = 64;
 
-  // Allow up to 16 outstanding lines in the L2 awaiting service:
-  const int MISSBUF_COUNT = 16;
-  const int MAIN_MEM_LATENCY = 100; // above and beyond L1 + L2 latency
+  // Allow up to 32 outstanding lines in the L2 awaiting service:
+  const int MISSBUF_COUNT = 64;
+  // const int MISSBUF_COUNT = 4;
 
+  // Main memory latency
+  const int MAIN_MEM_LATENCY = 140; // Core 2 Duo 2.4 GHz has 160 cycle total L2 latency
+
+  const int CROSS_CACHE_LATENCY = 50;
   // TLBs
 #ifdef PTLSIM_HYPERVISOR
 #define USE_TLB
@@ -241,7 +267,7 @@ namespace CacheSubsystem {
       filled(line, newtag);
     }
 
-    static void probed(V& line, W64 tag, int way, bool hit) { 
+    static void probed(V& line, W64 tag, int way, bool hit) {
       if (logable(6) | FORCE_DEBUG) logfile << "[", cache_names[uniq], "] ", sim_cycle, ": probe(", (void*)tag, "): ", (hit ? "HIT" : "miss"), " way ", way, ": hitcount ", line.hitcount, ", filltime ", line.filltime, ", lasttime ", line.lasttime, " (line addr ", &line, ")", endl;
       if (hit) {
         line.hitcount++;
@@ -264,24 +290,24 @@ namespace CacheSubsystem {
   };
 
   typedef HistogramAssociativeArrayStatisticsCollector<0, L1CacheLine,
-    DCACHE_L1_LINE_LIFETIME_INTERVAL, DCACHE_L1_LINE_LIFETIME_SLOTS, 
-    DCACHE_L1_LINE_DEADTIME_INTERVAL, DCACHE_L1_LINE_DEADTIME_SLOTS, 
+    DCACHE_L1_LINE_LIFETIME_INTERVAL, DCACHE_L1_LINE_LIFETIME_SLOTS,
+    DCACHE_L1_LINE_DEADTIME_INTERVAL, DCACHE_L1_LINE_DEADTIME_SLOTS,
     DCACHE_L1_LINE_HITCOUNT_INTERVAL, DCACHE_L1_LINE_HITCOUNT_SLOTS> L1StatsCollectorBase;
 
   typedef HistogramAssociativeArrayStatisticsCollector<1, L1ICacheLine,
-    DCACHE_L1I_LINE_LIFETIME_INTERVAL, DCACHE_L1I_LINE_LIFETIME_SLOTS, 
-    DCACHE_L1I_LINE_DEADTIME_INTERVAL, DCACHE_L1I_LINE_DEADTIME_SLOTS, 
+    DCACHE_L1I_LINE_LIFETIME_INTERVAL, DCACHE_L1I_LINE_LIFETIME_SLOTS,
+    DCACHE_L1I_LINE_DEADTIME_INTERVAL, DCACHE_L1I_LINE_DEADTIME_SLOTS,
     DCACHE_L1I_LINE_HITCOUNT_INTERVAL, DCACHE_L1I_LINE_HITCOUNT_SLOTS> L1IStatsCollectorBase;
 
   typedef HistogramAssociativeArrayStatisticsCollector<2, L2CacheLine,
-    DCACHE_L2_LINE_LIFETIME_INTERVAL, DCACHE_L2_LINE_LIFETIME_SLOTS, 
-    DCACHE_L2_LINE_DEADTIME_INTERVAL, DCACHE_L2_LINE_DEADTIME_SLOTS, 
+    DCACHE_L2_LINE_LIFETIME_INTERVAL, DCACHE_L2_LINE_LIFETIME_SLOTS,
+    DCACHE_L2_LINE_DEADTIME_INTERVAL, DCACHE_L2_LINE_DEADTIME_SLOTS,
     DCACHE_L2_LINE_HITCOUNT_INTERVAL, DCACHE_L2_LINE_HITCOUNT_SLOTS> L2StatsCollectorBase;
 
 #ifdef ENABLE_L3_CACHE
   typedef HistogramAssociativeArrayStatisticsCollector<3, L3CacheLine,
-    DCACHE_L3_LINE_LIFETIME_INTERVAL, DCACHE_L3_LINE_LIFETIME_SLOTS, 
-    DCACHE_L3_LINE_DEADTIME_INTERVAL, DCACHE_L3_LINE_DEADTIME_SLOTS, 
+    DCACHE_L3_LINE_LIFETIME_INTERVAL, DCACHE_L3_LINE_LIFETIME_SLOTS,
+    DCACHE_L3_LINE_DEADTIME_INTERVAL, DCACHE_L3_LINE_DEADTIME_SLOTS,
     DCACHE_L3_LINE_HITCOUNT_INTERVAL, DCACHE_L3_LINE_HITCOUNT_SLOTS> L3StatsCollectorBase;
 #endif
 
@@ -301,7 +327,7 @@ namespace CacheSubsystem {
 #endif
 #endif
 
-  template <typename V, int setcount, int waycount, int linesize, typename stats = NullAssociativeArrayStatisticsCollector<W64, V> > 
+  template <typename V, int setcount, int waycount, int linesize, typename stats = NullAssociativeArrayStatisticsCollector<W64, V> >
   struct DataCache: public AssociativeArray<W64, V, setcount, waycount, linesize, stats> {
     typedef AssociativeArray<W64, V, setcount, waycount, linesize, stats> base_t;
     void clearstats() {
@@ -419,7 +445,7 @@ namespace CacheSubsystem {
       int way = base_t::select(tag, oldtag);
       W64 oldaddr = lowbits(oldtag, 36) << 12;
       if (logable(6)) {
-        logfile << "TLB insertion of virt page ", (void*)(Waddr)addr, " (virt addr ", 
+        logfile << "TLB insertion of virt page ", (void*)(Waddr)addr, " (virt addr ",
           (void*)(Waddr)(addr), ") into way ", way, ": ",
           ((oldtag != tag) ? "evicted old entry" : "already present"), endl;
       }
@@ -457,7 +483,7 @@ namespace CacheSubsystem {
 
   //
   // Load fill request queue (LFRQ) contains any requests for outstanding
-  // loads from both the L2 or L1. 
+  // loads from both the L2 or L1.
   //
   struct LoadFillReq {
     W64 addr;       // physical address
@@ -469,7 +495,7 @@ namespace CacheSubsystem {
     W8s  mbidx;
 
     inline LoadFillReq() { }
-  
+
     LoadFillReq(W64 addr, W64 virtaddr, W64 data, byte mask, LoadStoreInfo lsi);
     ostream& print(ostream& os) const;
   };
@@ -612,9 +638,12 @@ namespace CacheSubsystem {
     DTLB dtlb;
     ITLB itlb;
 
+    byte coreid;
+    static CacheHierarchy* hierarchies[];
+
     PerCoreCacheCallbacks* callback;
 
-    CacheHierarchy(): lfrq(*this), missbuf(*this) { callback = null; }
+    CacheHierarchy(int coreid_ = 0): lfrq(*this), missbuf(*this), coreid(coreid_) { callback = null; CacheHierarchy::hierarchies[coreid_] = this;}
 
     bool probe_cache_and_sfr(W64 addr, const SFR* sfra, int sizeshift);
     bool covered_by_sfr(W64 addr, SFR* sfr, int sizeshift);
@@ -631,15 +660,20 @@ namespace CacheSubsystem {
       bool L2hit = 0;
       return issueload_slowpath(physaddr, virtaddr, sfra, lsi, L2hit);
     }
-
+    // SD-TODO-MERGE: Put the faked virtual address stuff here?
     int get_lfrq_mb(int lfrqslot) const;
     int get_lfrq_mb_state(int lfrqslot) const;
     bool lfrq_or_missbuf_full() const { return lfrq.full() | missbuf.full(); }
 
-    W64 commitstore(const SFR& sfr, int threadid = 0xff, bool perform_actual_write = true);
+#ifdef POOR_MANS_MESI
+    bool probe_other_caches(W64 addr, W64 virtaddr, bool inv);
+    bool external_probe(W64 addr, W64 virtaddr, bool inv);
+#endif
+
+    W64 commitstore(const SFR& sfr, W64 virtaddr, bool internal = false, int threadid = 0xff, bool perform_actual_write = true);
     W64 speculative_store(const SFR& sfr, int threadid = 0xff);
 
-    void initiate_prefetch(W64 addr, int cachelevel);
+    void initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating = false);
 
     bool probe_icache(Waddr virtaddr, Waddr physaddr);
     int initiate_icache_miss(W64 addr, int rob = 0xffff, int threadid = 0xff);
@@ -661,7 +695,7 @@ struct PerContextDataCacheStats { // rootnode:
       W64 L3;
       W64 mem;
     } hit;
-        
+
     struct dtlb { // node: summable
       W64 hits;
       W64 misses;
@@ -673,7 +707,7 @@ struct PerContextDataCacheStats { // rootnode:
       W64 no_lfrq_mb;
     } tlbwalk;
   } load;
- 
+
   struct fetch {
     struct hit { // node: summable
       W64 L1;
@@ -681,7 +715,7 @@ struct PerContextDataCacheStats { // rootnode:
       W64 L3;
       W64 mem;
     } hit;
-    
+
     struct itlb { // node: summable
       W64 hits;
       W64 misses;
@@ -690,10 +724,10 @@ struct PerContextDataCacheStats { // rootnode:
     struct tlbwalk { // node: summable
       W64 L1_dcache_hit;
       W64 L1_dcache_miss;
-      W64 no_lfrq_mb;      
+      W64 no_lfrq_mb;
     } tlbwalk;
   } fetch;
-  
+
   struct store {
     W64 prefetches;
   } store;

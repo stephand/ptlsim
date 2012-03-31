@@ -3,6 +3,8 @@
 // Toplevel control and kernel interface to Xen inside the user domain
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <globals.h>
@@ -1506,7 +1508,7 @@ int handle_xen_hypercall(Context& ctx, int hypercallid, W64 arg1, W64 arg2, W64 
   }
 
   default:
-    if (debug) logfile << "Cannot handle hypercall ", hypercallid, "!", endl, flush;
+    /*if (debug)*/ logfile << "Cannot handle hypercall ", hypercallid, "!", endl, flush;
     assert(false);
   }
 
@@ -1893,6 +1895,13 @@ void handle_syscall_assist(Context& ctx) {
   // This only works when the guest OS is Linux and the program is 64 bit.
   //
   if (ctx.use64) {
+    W64 arg1 = ctx.commitarf[REG_rdi];
+    W64 arg2 = ctx.commitarf[REG_rsi];
+    W64 arg3 = ctx.commitarf[REG_rdx];
+    W64 arg4 = ctx.commitarf[REG_r10];
+    W64 arg5 = ctx.commitarf[REG_r8];
+    W64 arg6 = ctx.commitarf[REG_r9];
+
     switch (ctx.commitarf[REG_rax]) {
     case __NR_execve: {
       char filename[256];
@@ -1900,6 +1909,48 @@ void handle_syscall_assist(Context& ctx) {
       assert(inrange(n, 0, int(sizeof(filename)-1)));
       filename[n] = 0;
       logfile << "syscall: execve('", filename, "', ...)", endl;
+      break;
+    }
+    case __NR_futex: {
+      if likely (!logable(1)) break;
+      W64 stack[64];
+      int n = ctx.copy_from_user(stack, ctx.commitarf[REG_rsp], sizeof(stack));
+      const char *futex_names[]={
+        "FUTEX_WAIT",
+        "FUTEX_WAKE",
+        "FUTEX_FD",
+        "FUTEX_REQUEUE",
+        "FUTEX_CMP_REQUEUE",
+        "FUTEX_WAKE_OP",
+        "FUTEX_LOCK_PI",
+        "FUTEX_UNLOCK_PI",
+        "FUTEX_TRYLOCK_PI" 
+      };
+
+      W32 futex, val, op;
+      W64 time[2];
+
+      ctx.copy_from_user(&futex, arg1, sizeof(futex));
+      op  = (W32)arg2;
+      val = (W32)arg3;
+      ctx.copy_from_user(&time, arg4, sizeof(time));
+
+      W64 physaddr = mapped_virt_to_phys(pte_to_mapped_virt(arg1, ctx.virt_to_pte(arg1)));
+      logfile << "syscall: ", futex_names[op & 127], (op & 128) ? " (private)":"",
+                 " futex @ ",(void*)arg1,"(",(void*)physaddr ,")= ", (void*)futex, " val: ", (void*)val,
+                 " time: ", time[0], "s", time[1], "ns"
+                 " stack:", endl;
+      if (logable(5))
+        for (int i = 0; i < n / sizeof(stack[0]); i++)
+          logfile << "  ",hexstring (stack[i],64),endl;
+
+      break;
+    }
+    case __NR_write: {
+      if likely (!logable(5)) break;
+      char message[512];
+      int n = ctx.copy_from_user(message, arg2, sizeof(message)-1);
+      logfile << "sys_write to fd ", arg1, " message: ", message, endl;
       break;
     }
     }

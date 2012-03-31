@@ -431,11 +431,7 @@ return __res;
 }
 
 #define __HAVE_ARCH_STRCHR
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const char * strchr(const char * s, int c)
-#else
 char * strchr(const char * s, int c)
-#endif
 {
 int d0;
 register char * __res;
@@ -456,11 +452,7 @@ return __res;
 }
 
 #define __HAVE_ARCH_STRRCHR
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const char * strrchr(const char * s, int c)
-#else
 char * strrchr(const char * s, int c)
-#endif
 {
 int d0, d1;
 register char * __res;
@@ -517,11 +509,7 @@ return __res;
 }
 
 #define __HAVE_ARCH_MEMCHR
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const void* memchr(const void * cs,int c,size_t count)
-#else
 void* memchr(const void * cs,int c,size_t count)
-#endif
 {
 int d0;
 register void * __res;
@@ -851,11 +839,7 @@ int strncmp(const char *cs, const char *ct, size_t count)
  * @s: The string to be searched
  * @c: The character to search for
  */
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const char *strchr(const char *s, int c)
-#else
 char *strchr(const char *s, int c)
-#endif
 {
 	for (; *s != (char)c; ++s)
 		if (*s == '\0')
@@ -871,11 +855,7 @@ char *strchr(const char *s, int c)
  * @s: The string to be searched
  * @c: The character to search for
  */
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const char *strrchr(const char *s, int c)
-#else
 char *strrchr(const char *s, int c)
-#endif
 {
        const char *p = s + strlen(s);
        do {
@@ -993,11 +973,7 @@ size_t strcspn(const char *s, const char *reject)
  * @cs: The string to be searched
  * @ct: The characters to search for
  */
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const char *strpbrk(const char *cs, const char *ct)
-#else
 char *strpbrk(const char *cs, const char *ct)
-#endif
 {
 	const char *sc1, *sc2;
 
@@ -1167,11 +1143,7 @@ void *memscan(void *addr, int c, size_t size)
  * @s1: The string to be searched
  * @s2: The string to search for
  */
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const char *strstr(const char *s1, const char *s2)
-#else
 char *strstr(const char *s1, const char *s2)
-#endif
 {
 	int l1, l2;
 
@@ -1200,11 +1172,7 @@ char *strstr(const char *s1, const char *s2)
  * returns the address of the first occurrence of @c, or %NULL
  * if @c is not found
  */
-#ifdef __CORRECT_ISO_CPP_STRING_H_PROTO
-const void *memchr(const void *s, int c, size_t n)
-#else
 void *memchr(const void *s, int c, size_t n)
-#endif
 {
 	const unsigned char *p = (unsigned char*)s;
 	while (n-- != 0) {

@@ -12,6 +12,12 @@
 #include <superstl.h>
 #include <stdarg.h>
 
+//
+// Enable ASF support, for cores where supported
+//
+#define ENABLE_ASF
+//#define ENABLE_ASF_CACHE_BASED
+
 static const W64 infinity = limits<W64s>::max;
 
 struct ConfigurationOption {

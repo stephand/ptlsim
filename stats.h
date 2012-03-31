@@ -14,12 +14,13 @@
 #include <datastore.h>
 #include <ptlsim.h>
 
-#define STATS_ONLY
+//#define STATS_ONLY
 #include <decode.h>
 #include <ooocore.h>
+
 #include <dcache.h>
 #include <branchpred.h>
-#undef STATS_ONLY
+//#undef STATS_ONLY
 
 
 #define increment_clipped_histogram(h, slot, incr) h[clipto(W64(slot), W64(0), W64(lengthof(h)-1))] += incr;
@@ -40,7 +41,7 @@
 // need to replicate the vcpu0,vcpu1,... structures in several
 // places below.
 //
-static const int MAX_SIMULATED_VCPUS = 4;
+static const int MAX_SIMULATED_VCPUS = 8;
 
 struct EventsInMode { // rootnode: summable
   W64 user64;

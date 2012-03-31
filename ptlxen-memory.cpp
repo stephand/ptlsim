@@ -1313,6 +1313,10 @@ W64 storemask(Waddr physaddr, W64 data, byte bytemask) {
   }
 }
 
+W64 storephys(Waddr physaddr, W64 data) {
+  return storemask(physaddr, data, 0xff);
+}
+
 void Context::print_tlb(ostream& os) {
   os << "VCPU ", vcpuid, " mini-TLB:", endl;
   foreach (i, lengthof(cached_pte_virt)) {

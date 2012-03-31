@@ -3769,6 +3769,12 @@ namespace superstl {
   template <typename T> bool div_rem(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
   template <typename T> bool div_rem_s(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
 
+  //
+  // Safe divide and remainder functions that return true iff operation did not generate an exception:
+  //
+  template <typename T> bool div_rem(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
+  template <typename T> bool div_rem_s(T& quotient, T& remainder, T dividend_hi, T dividend_lo, T divisor);
+
   template <typename T>
   struct ScopedLock {
     T& lock;

@@ -1,5 +1,5 @@
-#LyX 1.5.2 created this file. For more info see http://www.lyx.org/
-\lyxformat 276
+#LyX 1.4.2 created this file. For more info see http://www.lyx.org/
+\lyxformat 245
 \begin_document
 \begin_header
 \textclass report
@@ -8,21 +8,13 @@
 \end_preamble
 \language english
 \inputencoding auto
-\font_roman times
-\font_sans helvet
-\font_typewriter cmtt
-\font_default_family default
-\font_sc false
-\font_osf false
-\font_sf_scale 100
-\font_tt_scale 100
+\fontscheme times
 \graphics default
 \paperfontsize 12
 \spacing single
 \papersize letterpaper
 \use_geometry true
 \use_amsmath 1
-\use_esint 0
 \cite_engine basic
 \use_bibtopic false
 \paperorientation portrait
@@ -42,9 +34,7 @@
 \papersides 1
 \paperpagestyle default
 \tracking_changes false
-\output_changes false
-\author "" 
-\author "" 
+\output_changes true
 \end_header
 
 \begin_body
@@ -111,7 +101,7 @@ Matt T.
 \begin_layout Standard
 \noindent
 \align center
-Revision 20070923
+Revision 20070317
 \newline
 
 \series bold
@@ -173,7 +163,7 @@ they are licensed under
 \end_layout
 
 \begin_layout Standard
-\begin_inset LatexCommand tableofcontents
+\begin_inset LatexCommand \tableofcontents{}
 
 \end_inset
 
@@ -181,8 +171,7 @@ they are licensed under
 \end_layout
 
 \begin_layout Part
-\begin_inset LatexCommand label
-name "part:Introduction"
+\begin_inset LatexCommand \label{part:Introduction}
 
 \end_inset
 
@@ -310,8 +299,7 @@ This manual has been divided into several parts:
 
 \begin_layout Itemize
 Part 
-\begin_inset LatexCommand ref
-reference "part:Introduction"
+\begin_inset LatexCommand \ref{part:Introduction}
 
 \end_inset
 
@@ -321,8 +309,7 @@ reference "part:Introduction"
 
 \begin_layout Itemize
 Part 
-\begin_inset LatexCommand ref
-reference "sec:PTLsimClassic"
+\begin_inset LatexCommand \ref{sec:PTLsimClassic}
 
 \end_inset
 
@@ -343,8 +330,7 @@ tutorial
 \end_deeper
 \begin_layout Itemize
 Part 
-\begin_inset LatexCommand ref
-reference "sec:PTLsimFullSystem"
+\begin_inset LatexCommand \ref{sec:PTLsimFullSystem}
 
 \end_inset
 
@@ -365,8 +351,7 @@ tutorial
 \end_deeper
 \begin_layout Itemize
 Part 
-\begin_inset LatexCommand ref
-reference "part:OutOfOrderModel"
+\begin_inset LatexCommand \ref{part:OutOfOrderModel}
 
 \end_inset
 
@@ -383,8 +368,7 @@ Read this part if you want to understand and modify PTLsim's out of order
 \end_deeper
 \begin_layout Itemize
 Part 
-\begin_inset LatexCommand ref
-reference "part:Appendices"
+\begin_inset LatexCommand \ref{part:Appendices}
 
 \end_inset
 
@@ -415,8 +399,7 @@ PTLsim Architecture
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:PTLsimCodeBase"
+\begin_inset LatexCommand \label{sec:PTLsimCodeBase}
 
 \end_inset
 
@@ -523,14 +506,12 @@ ptlhwdef.h
  The tables of uops might be interesting to see how a modern x86 processor
  is designed at the microcode level.
  The basic format is discussed in Section 
-\begin_inset LatexCommand ref
-reference "sec:UopIntro"
+\begin_inset LatexCommand \ref{sec:UopIntro}
 
 \end_inset
 
 ; all uops are documented in Section 
-\begin_inset LatexCommand ref
-reference "sec:UopReference"
+\begin_inset LatexCommand \ref{sec:UopReference}
 
 \end_inset
 
@@ -668,8 +649,7 @@ ooocore.cpp
  is the out of order simulator control logic.
  The microarchitectural model implemented by this simulator is the subject
  of Part 
-\begin_inset LatexCommand ref
-reference "part:OutOfOrderModel"
+\begin_inset LatexCommand \ref{part:OutOfOrderModel}
 
 \end_inset
 
@@ -691,13 +671,9 @@ ooopipe.cpp
 
 \begin_layout Itemize
 
-\family typewriter
 \series bold
-\size small
 oooexec.cpp
-\family default
 \series default
-\size default
  implements all functional units, load/store units and issue queue and replay
  logic
 \end_layout
@@ -737,8 +713,7 @@ dcache.h
  buffers, load fill request queues, ITLB/DTLB and bus interfaces.
  The cache hierarchy is very flexible configuration wise; it is described
  further in Section 
-\begin_inset LatexCommand ref
-reference "sec:CacheHierarchy"
+\begin_inset LatexCommand \ref{sec:CacheHierarchy}
 
 \end_inset
 
@@ -1255,8 +1230,7 @@ dstbuild
 \size default
  is a Perl script used to parse stats.h and generate the datastore template
  (Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsInfrastructure"
+\begin_inset LatexCommand \ref{sec:StatisticsInfrastructure}
 
 \end_inset
 
@@ -1956,8 +1930,7 @@ CycleTimer
 \size default
  is useful for timing intervals with sub-nanosecond precision using the
  CPU cycle counter (discussed in Section 
-\begin_inset LatexCommand ref
-reference "sec:Timing"
+\begin_inset LatexCommand \ref{sec:Timing}
 
 \end_inset
 
@@ -2254,8 +2227,7 @@ ListOfStateLists
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "part:x86andUops"
+\begin_inset LatexCommand \label{part:x86andUops}
 
 \end_inset
 
@@ -2263,8 +2235,7 @@ x86 Instructions and Micro-Ops (uops)
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:UopIntro"
+\begin_inset LatexCommand \label{sec:UopIntro}
 
 \end_inset
 
@@ -2409,8 +2380,7 @@ setflags
 \family default
 \size default
 : subset of the x86 flags set by this uop (see Section 
-\begin_inset LatexCommand ref
-reference "sub:FlagsManagement"
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
 
 \end_inset
 
@@ -2457,8 +2427,7 @@ rc
 \family default
 \size default
 : the architectural source and destination registers (see Section 
-\begin_inset LatexCommand ref
-reference "sub:RegisterRenaming"
+\begin_inset LatexCommand \ref{sub:RegisterRenaming}
 
 \end_inset
 
@@ -2551,8 +2520,7 @@ ripseq
 
 \begin_layout Standard
 Appendix 
-\begin_inset LatexCommand ref
-reference "sec:UopReference"
+\begin_inset LatexCommand \ref{sec:UopReference}
 
 \end_inset
 
@@ -2577,8 +2545,7 @@ ons with bizarre semantics; typically the translator will synthesize and
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:OperationSizes"
+\begin_inset LatexCommand \label{sec:OperationSizes}
 
 \end_inset
 
@@ -2695,8 +2662,7 @@ mask
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sub:FlagsManagement"
+\begin_inset LatexCommand \label{sub:FlagsManagement}
 
 \end_inset
 
@@ -2920,8 +2886,7 @@ EM64T
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \label{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -3080,8 +3045,7 @@ AssistCheck
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:ShiftRotateProblems"
+\begin_inset LatexCommand \label{sec:ShiftRotateProblems}
 
 \end_inset
 
@@ -3154,8 +3118,7 @@ PTLsim also includes a variety of vector integer uops used to construct
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sub:x87-Floating-Point"
+\begin_inset LatexCommand \label{sub:x87-Floating-Point}
 
 \end_inset
 
@@ -3333,8 +3296,7 @@ brp
  reduces complexity.
  For the out of order core, the exact mechanism used is described in Section
  
-\begin_inset LatexCommand ref
-reference "sec:PipelineFlushesAndBarriers"
+\begin_inset LatexCommand \ref{sec:PipelineFlushesAndBarriers}
 
 \end_inset
 
@@ -3342,8 +3304,7 @@ reference "sec:PipelineFlushesAndBarriers"
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:BasicBlockCache"
+\begin_inset LatexCommand \label{sec:BasicBlockCache}
 
 \end_inset
 
@@ -3356,8 +3317,7 @@ Basic Block Cache
 
 \begin_layout Standard
 As described in Section 
-\begin_inset LatexCommand ref
-reference "sec:UopIntro"
+\begin_inset LatexCommand \ref{sec:UopIntro}
 
 \end_inset
 
@@ -3385,8 +3345,7 @@ BasicBlock
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:RIPVirtPhys"
+\begin_inset LatexCommand \label{sec:RIPVirtPhys}
 
 \end_inset
 
@@ -3579,8 +3538,7 @@ SCASB
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:InvalidTranslations"
+\begin_inset LatexCommand \label{sec:InvalidTranslations}
 
 \end_inset
 
@@ -3688,8 +3646,7 @@ EXEC_PAGE_FAULT
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:SelfModifyingCode"
+\begin_inset LatexCommand \label{sec:SelfModifyingCode}
 
 \end_inset
 
@@ -3777,8 +3734,7 @@ SOM
 , start-of-macro-op uop) commits, the current context is used to translate
  its RIP into the physical page MFN on which it resides, as described in
  Section 
-\begin_inset LatexCommand ref
-reference "sec:RIPVirtPhys"
+\begin_inset LatexCommand \ref{sec:RIPVirtPhys}
 
 \end_inset
 
@@ -3838,8 +3794,7 @@ The dirty bit is only cleared when all translated basic blocks are invalidated
 
 \begin_layout Standard
 Other binary translation based software and hardware 
-\begin_inset LatexCommand cite
-key "TransmetaPatent.TBit,VMware,QEMU,Simics,SimNow"
+\begin_inset LatexCommand \cite{TransmetaPatent.TBit,VMware,QEMU,Simics,SimNow}
 
 \end_inset
 
@@ -3848,8 +3803,7 @@ key "TransmetaPatent.TBit,VMware,QEMU,Simics,SimNow"
  immediately invalidates all translations on that page.
  Unfortunately, this scheme has a number of disadvantages.
  First, patents cover its implementation 
-\begin_inset LatexCommand cite
-key "TransmetaPatent.SelfRevalTrans,TransmetaPatent.SubPageTBit,TransmetaPatent.TBit"
+\begin_inset LatexCommand \cite{TransmetaPatent.SelfRevalTrans,TransmetaPatent.SubPageTBit,TransmetaPatent.TBit}
 
 \end_inset
 
@@ -3868,8 +3822,7 @@ key "TransmetaPatent.SelfRevalTrans,TransmetaPatent.SubPageTBit,TransmetaPatent.
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:BasicBlockReclaim"
+\begin_inset LatexCommand \label{sec:BasicBlockReclaim}
 
 \end_inset
 
@@ -3884,8 +3837,7 @@ mm.cpp
 \family default
 \size default
 , see Section 
-\begin_inset LatexCommand ref
-reference "sec:MemoryManager"
+\begin_inset LatexCommand \ref{sec:MemoryManager}
 
 \end_inset
 
@@ -3971,8 +3923,7 @@ PTLsim Support Subsystems
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:UopImplementations"
+\begin_inset LatexCommand \label{sec:UopImplementations}
 
 \end_inset
 
@@ -4039,8 +3990,7 @@ Configuration Parser
 \begin_layout Standard
 PTLsim supports a wide array of command line or scriptable configuration
  options, described in Section 
-\begin_inset LatexCommand ref
-reference "sec:ConfigurationOptions"
+\begin_inset LatexCommand \ref{sec:ConfigurationOptions}
 
 \end_inset
 
@@ -4142,8 +4092,7 @@ ConfigurationParser<PTLsimConfig>::setup()
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:MemoryManager"
+\begin_inset LatexCommand \label{sec:MemoryManager}
 
 \end_inset
 
@@ -4334,8 +4283,7 @@ any
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:StatisticsInfrastructure"
+\begin_inset LatexCommand \label{sec:StatisticsInfrastructure}
 
 \end_inset
 
@@ -4509,8 +4457,7 @@ all
 \end_layout
 
 \begin_layout Subsection
-\begin_inset LatexCommand label
-name "sec:StatisticsNodeAttributes"
+\begin_inset LatexCommand \label{sec:StatisticsNodeAttributes}
 
 \end_inset
 
@@ -4569,21 +4516,14 @@ All subnodes and counters under this node are assumed to total 100% of whatever
 \family typewriter
 \size small
 W64 name[arraysize]; // histo:
-\family default
- 
-\family typewriter
 \emph on
-min,
-\family default
+min
 \emph default
  
-\family typewriter
 \emph on
-max,
-\family default
+max
 \emph default
  
-\family typewriter
 \emph on
 stride
 \end_layout
@@ -4630,7 +4570,7 @@ For example, let's say you want to measure the frequency distribution of
 
 \family typewriter
 \size small
-W64 consumers[64+1]; // histo: 0, 256, 4
+W64 consumers[64+1]; // histo: 0 256 4
 \end_layout
 
 \begin_layout Standard
@@ -4735,8 +4675,7 @@ addsubc
 
 \end_deeper
 \begin_layout Subsection
-\begin_inset LatexCommand label
-name "sec:StatisticsOptions"
+\begin_inset LatexCommand \label{sec:StatisticsOptions}
 
 \end_inset
 
@@ -4752,9 +4691,6 @@ PTLsim supports several options related to the statistics data store:
 \family typewriter
 \size small
 -stats
-\family default
- 
-\family typewriter
 \emph on
 filename
 \end_layout
@@ -4779,9 +4715,6 @@ filename.data
 \family typewriter
 \size small
 -snapshot-cycles
-\family default
- 
-\family typewriter
 \emph on
 N
 \end_layout
@@ -4805,9 +4738,6 @@ final
 \family typewriter
 \size small
 -snapshot-now
-\family default
- 
-\family typewriter
 \emph on
 name
 \end_layout
@@ -4961,8 +4891,7 @@ Notice how PTLstats will automatically sum up all entries in certain branches
 \end_inset
 
  attribute as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsNodeAttributes"
+\begin_inset LatexCommand \ref{sec:StatisticsNodeAttributes}
 
 \end_inset
 
@@ -4985,8 +4914,7 @@ Here is an example of a labeled histogram, produced using the
 \end_inset
 
  attribute described in Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsNodeAttributes"
+\begin_inset LatexCommand \ref{sec:StatisticsNodeAttributes}
 
 \end_inset
 
@@ -5093,17 +5021,18 @@ To select a specific snapshot, use the following option:
 \family typewriter
 \size small
 ptlstats
-\family default
- 
-\family typewriter
 \series bold
 -snapshot
 \family default
 \series default
- 
 \emph on
 name-or-number
+\family typewriter
+\series bold
 \emph default
+ 
+\family default
+\series default
  ...
 \end_layout
 
@@ -5134,11 +5063,18 @@ between
 ptlstats
 \family default
  -snapshot 
+\family typewriter
+\series bold
+ 
+\family default
+\series default
 \emph on
 final
+\family typewriter
+\series bold
 \emph default
  
-\series bold
+\family default
 -subtract
 \series default
  
@@ -5162,25 +5098,13 @@ To select a specific subtree of interest, use the syntax of the following
 \family typewriter
 \size small
 ptlstats
-\family default
- 
-\family typewriter
 \series bold
 -snapshot
-\family default
 \series default
- 
-\family typewriter
 final
-\family default
- 
-\family typewriter
 \series bold
 -collect
-\family default
 \series default
- 
-\family typewriter
 /ooocore/dcache/load example1.stats example2.stats ...
 \end_layout
 
@@ -5494,10 +5418,8 @@ The
 \series bold
 \size small
 -scale-relative-to-col
-\family default
 \series default
  
-\family typewriter
 \emph on
 N
 \family default
@@ -5653,8 +5575,7 @@ label:
 \family default
 \size default
  attributes, as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsNodeAttributes"
+\begin_inset LatexCommand \ref{sec:StatisticsNodeAttributes}
 
 \end_inset
 
@@ -5744,8 +5665,7 @@ Benchmarking Techniques
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:TriggerMode"
+\begin_inset LatexCommand \label{sec:TriggerMode}
 
 \end_inset
 
@@ -5924,8 +5844,7 @@ ptlcalls.h
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:IPCNotes"
+\begin_inset LatexCommand \label{sec:IPCNotes}
 
 \end_inset
 
@@ -5975,8 +5894,7 @@ the baseline took 100M cycles, while our improved system took 50M cycles,
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:SimulationWarmupPeriods"
+\begin_inset LatexCommand \label{sec:SimulationWarmupPeriods}
 
 \end_inset
 
@@ -6023,9 +5941,6 @@ ptlcall_switch_to_sim
 \family typewriter
 \size footnotesize
 -startrip
-\family default
- 
-\family typewriter
 \emph on
 0xADDRESS
 \family default
@@ -6048,9 +5963,6 @@ If you want to warm up the cache and branch predictors prior to starting
 \family typewriter
 \size footnotesize
 -snapshot-cycles
-\family default
- 
-\family typewriter
 \emph on
 N
 \family default
@@ -6096,8 +6008,7 @@ ptlstats -subtract 0 ptlsim.stats
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:SequentialMode"
+\begin_inset LatexCommand \label{sec:SequentialMode}
 
 \end_inset
 
@@ -6145,8 +6056,7 @@ warmup mode
  for branch predictors and caches.
  If you want this behavior, use statistical snapshot deltas as described
  in Section 
-\begin_inset LatexCommand ref
-reference "sec:SimulationWarmupPeriods"
+\begin_inset LatexCommand \ref{sec:SimulationWarmupPeriods}
 
 \end_inset
 
@@ -6174,8 +6084,7 @@ Sequential mode is enabled by specifying the
 \end_layout
 
 \begin_layout Part
-\begin_inset LatexCommand label
-name "sec:PTLsimClassic"
+\begin_inset LatexCommand \label{sec:PTLsimClassic}
 
 \end_inset
 
@@ -6195,8 +6104,7 @@ NOTE:
 -only version of PTLsim.
  If you are looking for the full system SMP/SMT version, PTLsim/X, please
  skip this entire part and read Part 
-\begin_inset LatexCommand ref
-reference "sec:PTLsimFullSystem"
+\begin_inset LatexCommand \ref{sec:PTLsimFullSystem}
 
 \end_inset
 
@@ -6309,8 +6217,7 @@ The Makefile will detect your platform and automatically compile the correct
 
 \end_deeper
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:RunningPTLsim"
+\begin_inset LatexCommand \label{sec:RunningPTLsim}
 
 \end_inset
 
@@ -6338,8 +6245,9 @@ ptlsim
 
 \family default
 \size default
+ 
 \emph on
-[ simulator configuration options -- ] full-path-to-executable
+full-path-to-executable
 \emph default
  
 \emph on
@@ -6347,26 +6255,91 @@ arguments...
 \end_layout
 
 \begin_layout Standard
-PTLsim can be given configuration options for running various user programs
- by placing those arguments between the ptlsim executable name and a delimiting
- parameter 
-\begin_inset Quotes eld
-\end_inset
+PTLsim reads configuration options for running various user programs by
+ looking for a configuration file named 
+\family typewriter
+\size footnotesize
+/home/
+\emph on
+username
+\emph default
+/.ptlsim/
+\emph on
+path/to/program/executablename
+\emph default
+.conf
+\family default
+\size default
+.
+ To set options for each program, you'll need to create a directory of the
+ form 
+\family typewriter
+\size footnotesize
+/home/
+\emph on
+username
+\emph default
+/.ptlsim
+\family default
+\size default
+ and make sub-directories under it corresponding to the full path to the
+ program.
+ For example, to configure 
+\family typewriter
+\size footnotesize
+/bin/ls
+\family default
+\size default
+ you'll need to run "
+\family typewriter
+\size footnotesize
+mkdir /home/
+\emph on
+username
+\emph default
+/.ptlsim/bin
+\family default
+\size default
 
---
 \begin_inset Quotes erd
 \end_inset
 
-.
- For example, run:
+ and then edit "
+\family typewriter
+\size footnotesize
+/home/
+\emph on
+username
+\emph default
+/.ptlsim/bin/ls.conf
+\family default
+\size default
+" with the appropriate options.
+ For example, try putting the following in 
+\family typewriter
+\size footnotesize
+ls.conf
+\family default
+\size default
+ as described:
 \end_layout
 
 \begin_layout Quote
 
 \family typewriter
 \size footnotesize
-ptlsim -logfile ptlsim.log -loglevel 9 -stats ls.stats -stopinsns 10000 --
- /bin/ls -la
+-logfile ptlsim.log -loglevel 9 -stats ls.stats -stopinsns 10000
+\end_layout
+
+\begin_layout Standard
+Then run:
+\end_layout
+
+\begin_layout Quote
+
+\family typewriter
+\size footnotesize
+ptlsim /bin/ls -la
 \end_layout
 
 \begin_layout Standard
@@ -6421,8 +6394,7 @@ ptlstats
 \family default
 \size default
  program (Chapter 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsInfrastructure"
+\begin_inset LatexCommand \ref{sec:StatisticsInfrastructure}
 
 \end_inset
 
@@ -6443,21 +6415,8 @@ ptlstats ls.stats
 .
 \end_layout
 
-\begin_layout Standard
-The configuration options are optional; if omitted, PTLsim will use its
- default settings, as in the following example:
-\end_layout
-
-\begin_layout Quote
-
-\family typewriter
-\size footnotesize
-ptlsim /bin/ls -la
-\end_layout
-
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:ConfigurationOptions"
+\begin_inset LatexCommand \label{sec:ConfigurationOptions}
 
 \end_inset
 
@@ -6540,8 +6499,7 @@ ooo
 
 , the dynamically scheduled out of order superscalar core described in great
  detail in Part 
-\begin_inset LatexCommand ref
-reference "part:OutOfOrderModel"
+\begin_inset LatexCommand \ref{part:OutOfOrderModel}
 
 \end_inset
 
@@ -6693,8 +6651,7 @@ rip
 
 \end_deeper
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:EventLogRingBuffer"
+\begin_inset LatexCommand \label{sec:EventLogRingBuffer}
 
 \end_inset
 
@@ -6886,8 +6843,7 @@ ptlcall_switch_to_sim()
  function, at which point simulation begins.
  This function, and other special code that can be used within the target
  program, is described in Section 
-\begin_inset LatexCommand ref
-reference "sec:TriggerMode"
+\begin_inset LatexCommand \ref{sec:TriggerMode}
 
 \end_inset
 
@@ -6983,14 +6939,12 @@ PTLsim supports the collection of a wide variety of statistics and counters
  as it simulates your code, and can make regular or triggered snapshots
  of the counters.
  Chapter 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsInfrastructure"
+\begin_inset LatexCommand \ref{sec:StatisticsInfrastructure}
 
 \end_inset
 
  describes this support, while Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsOptions"
+\begin_inset LatexCommand \ref{sec:StatisticsOptions}
 
 \end_inset
 
@@ -7025,8 +6979,7 @@ reference "sec:StatisticsOptions"
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:PTLsimInternals"
+\begin_inset LatexCommand \label{sec:PTLsimInternals}
 
 \end_inset
 
@@ -7034,8 +6987,7 @@ PTLsim Classic Internals
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:Injection"
+\begin_inset LatexCommand \label{sec:Injection}
 
 \end_inset
 
@@ -7060,8 +7012,7 @@ Note:
 \emph default
  This section does not apply to the full system PTLsim/X; please see the
  corresponding sections in Part 
-\begin_inset LatexCommand ref
-reference "sec:PTLsimFullSystem"
+\begin_inset LatexCommand \ref{sec:PTLsimFullSystem}
 
 \end_inset
 
@@ -7069,8 +7020,7 @@ reference "sec:PTLsimFullSystem"
 \end_layout
 
 \begin_layout Subsection
-\begin_inset LatexCommand label
-name "sub:Injection-On-x86-64"
+\begin_inset LatexCommand \label{sub:Injection-On-x86-64}
 
 \end_inset
 
@@ -7377,8 +7327,7 @@ Startup on 32-bit x86
 \begin_layout Standard
 The PTLsim startup process on a 32-bit x86 system is essentially a streamlined
  version of the process above (Section 
-\begin_inset LatexCommand ref
-reference "sub:Injection-On-x86-64"
+\begin_inset LatexCommand \ref{sub:Injection-On-x86-64}
 
 \end_inset
 
@@ -7413,14 +7362,12 @@ init_config()
 \size default
  to read in the user program specific configuration as described in Sections
  
-\begin_inset LatexCommand ref
-reference "sec:RunningPTLsim"
+\begin_inset LatexCommand \ref{sec:RunningPTLsim}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:ConfigurationOptions"
+\begin_inset LatexCommand \ref{sec:ConfigurationOptions}
 
 \end_inset
 
@@ -7453,8 +7400,7 @@ switch_to_native_restore_context()
  into the process and return to the dynamic linker entry point.
  This may involve switching from 64-bit back to 32-bit mode to start executing
  the user process natively as discussed in Section 
-\begin_inset LatexCommand ref
-reference "sec:Injection"
+\begin_inset LatexCommand \ref{sec:Injection}
 
 \end_inset
 
@@ -7514,8 +7460,7 @@ While the real PTLsim user process is running, the original PTLsim injector
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:AddressSpaceSimulation"
+\begin_inset LatexCommand \label{sec:AddressSpaceSimulation}
 
 \end_inset
 
@@ -7592,8 +7537,7 @@ itlbmap
 \size default
 , are used to track which pages are currently mapped by the simulated translatio
 n lookaside buffers (TLBs); this is discussed further in Section 
-\begin_inset LatexCommand ref
-reference "sec:TranslationLookasideBuffers"
+\begin_inset LatexCommand \ref{sec:TranslationLookasideBuffers}
 
 \end_inset
 
@@ -7660,8 +7604,7 @@ mqueryall()
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:DebuggingHints"
+\begin_inset LatexCommand \label{sec:DebuggingHints}
 
 \end_inset
 
@@ -7741,15 +7684,9 @@ Start PTLsim on the target program like normal.
 \family typewriter
 \size footnotesize
 Thread
-\family default
- 
-\family typewriter
 \emph on
 N
-\family default
 \emph default
- 
-\family typewriter
 is running in XX-bit mode
 \family default
 \size default
@@ -7868,8 +7805,7 @@ seconds
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:Timing"
+\begin_inset LatexCommand \label{sec:Timing}
 
 \end_inset
 
@@ -7964,8 +7900,7 @@ This will force PTLsim to switch between native mode and simulation mode,
 
 \series bold
 \size huge
-\begin_inset LatexCommand label
-name "sec:PTLsimFullSystem"
+\begin_inset LatexCommand \label{sec:PTLsimFullSystem}
 
 \end_inset
 
@@ -8022,8 +7957,7 @@ Hypervisors
 Xen
 \emph default
  
-\begin_inset LatexCommand cite
-key "Xen2Overview,Xen3,XenCambridge,XenIntroWiki,XenPerformance,XenSource"
+\begin_inset LatexCommand \cite{Xen2Overview,Xen3,XenCambridge,XenIntroWiki,XenPerformance,XenSource}
 
 \end_inset
 
@@ -8037,8 +7971,7 @@ key "Xen2Overview,Xen3,XenCambridge,XenIntroWiki,XenPerformance,XenSource"
 VMware
 \emph default
  
-\begin_inset LatexCommand cite
-key "VMware"
+\begin_inset LatexCommand \cite{VMware}
 
 \end_inset
 
@@ -8053,22 +7986,19 @@ key "VMware"
  x86 instructions.
  While this approach is sophisticated and effective, it exacts a heavy performan
 ce penalty on I/O intensive workloads 
-\begin_inset LatexCommand cite
-key "XenPerformance"
+\begin_inset LatexCommand \cite{XenPerformance}
 
 \end_inset
 
 .
  Interestingly, the latest microprocessors from Intel and AMD include hardware
  features (Intel VT 
-\begin_inset LatexCommand cite
-key "Intel-VT"
+\begin_inset LatexCommand \cite{Intel-VT}
 
 \end_inset
 
 , AMD SVM 
-\begin_inset LatexCommand cite
-key "AMD-SVM"
+\begin_inset LatexCommand \cite{AMD-SVM}
 
 \end_inset
 
@@ -8097,21 +8027,6 @@ Several other products, including Virtual PC and Parallels, provide features
  similar to VMware using similar technology.
 \end_layout
 
-\begin_layout Itemize
-
-\emph on
-KVM
-\emph default
- (Kernel Virtual Machine) is a new hypervisor infrastructure built into
- all Linux kernels after 2.6.19.
- It depends on the hardware virtualization extensions (Intel VT and AMD
- SVM) built into modern x86 chips, whereas Xen and VMware also support running
- on older processors without special hardware support.
- KVM is an attractive foundation for future virtual machine development
- since it's built into Linux (so it requires far less setup work than Xen
- or VMware) and provides excellent performance.
-\end_layout
-
 \begin_layout Standard
 Unlike hypervisors, 
 \emph on
@@ -8127,8 +8042,7 @@ simulators
 Bochs
 \emph default
  
-\begin_inset LatexCommand cite
-key "Bochs"
+\begin_inset LatexCommand \cite{Bochs}
 
 \end_inset
 
@@ -8152,8 +8066,7 @@ Bochs
 QEMU
 \emph default
  
-\begin_inset LatexCommand cite
-key "QEMU"
+\begin_inset LatexCommand \cite{QEMU}
 
 \end_inset
 
@@ -8179,8 +8092,7 @@ r's presence from the guest kernel.
 Simics
 \emph default
  
-\begin_inset LatexCommand cite
-key "Simics"
+\begin_inset LatexCommand \cite{Simics}
 
 \end_inset
 
@@ -8205,8 +8117,7 @@ cts (both because of technical considerations as well as its status as a
 SimNow
 \emph default
  
-\begin_inset LatexCommand cite
-key "SimNow"
+\begin_inset LatexCommand \cite{SimNow}
 
 \end_inset
 
@@ -8240,8 +8151,7 @@ Xen Overview
 
 \begin_layout Standard
 Xen 
-\begin_inset LatexCommand cite
-key "Xen3,Xen2Overview,XenCambridge,XenIntroWiki,XenPerformance,XenSource"
+\begin_inset LatexCommand \cite{Xen3,Xen2Overview,XenCambridge,XenIntroWiki,XenPerformance,XenSource}
 
 \end_inset
 
@@ -8498,8 +8408,7 @@ wrmsr
  unmodified drivers and software, at full native speed (we do just this
  on all our development workstations and servers).
  Benchmarks 
-\begin_inset LatexCommand cite
-key "XenPerformance"
+\begin_inset LatexCommand \cite{XenPerformance}
 
 \end_inset
 
@@ -8518,20 +8427,17 @@ HVM
 \end_inset
 
  (hardware virtual machine) mode, which is equivalent to what VMware 
-\begin_inset LatexCommand cite
-key "VMware"
+\begin_inset LatexCommand \cite{VMware}
 
 \end_inset
 
 , QEMU 
-\begin_inset LatexCommand cite
-key "QEMU"
+\begin_inset LatexCommand \cite{QEMU}
 
 \end_inset
 
 , Bochs 
-\begin_inset LatexCommand cite
-key "Bochs"
+\begin_inset LatexCommand \cite{Bochs}
 
 \end_inset
 
@@ -8543,14 +8449,12 @@ key "Bochs"
  Unfortunately, this mode has a well known performance cost, even when Xen
  leverages the specialized hardware support for full virtualization in newer
  Intel 
-\begin_inset LatexCommand cite
-key "Intel-VT"
+\begin_inset LatexCommand \cite{Intel-VT}
 
 \end_inset
 
  and AMD 
-\begin_inset LatexCommand cite
-key "AMD-SVM"
+\begin_inset LatexCommand \cite{AMD-SVM}
 
 \end_inset
 
@@ -8574,26 +8478,12 @@ NOTE:
  PTLsim/X.
  If you are looking for the userspace-only version, please skip this entire
  part and read Part 
-\begin_inset LatexCommand ref
-reference "sec:PTLsimClassic"
+\begin_inset LatexCommand \ref{sec:PTLsimClassic}
 
 \end_inset
 
  instead.
 \end_layout
-
-\begin_layout Standard
-\begin_inset Box Shadowbox
-position "t"
-hor_pos "c"
-has_inner_box 1
-inner_pos "t"
-use_parbox 0
-width "100col%"
-special "none"
-height "1in"
-height_special "totalheight"
-status open
 
 \begin_layout Standard
 
@@ -8602,8 +8492,8 @@ status open
 WARNING:
 \series default
 \emph default
- PTLsim/X assumes fairly high level of familiarity with Xen and the Linux
- kernel.
+ PTLsim/X assumes fairly high level of familiarity with both the Linux kernel
+ and Xen.
  If you have never compiled your own Linux kernel or if you are not yet
  running Xen or are unsure how to create and use domains, 
 \series bold
@@ -8612,13 +8502,6 @@ STOP NOW
  and become familiar with Xen itself before attempting to use PTLsim/X.
  The following sections all assume you are familiar with Xen, at least from
  a system administration perspective.
- We cannot provide support for Xen-related issues unless they are caused
- by PTLsim.
-\end_layout
-
-\end_inset
-
-
 \end_layout
 
 \begin_layout Section
@@ -8680,13 +8563,13 @@ highly recommend
  Xen.
  This requirement only applies to domain 0 - the virtual machines you'll
  be running can use any distribution and do not even need to know about
- Xen at all (other than the kernel, which must support Xen hypercalls and
+ Xen at all (other than the kernel, which much support Xen hypercalls and
  block/network drivers).
 \end_layout
 
 \begin_layout Itemize
-We have successfully built PTLsim/X with gcc 4.1.x+ (gcc 4.0.x has documented
- bugs affecting some of our code).
+aWe have successfully built PTLsim/X with gcc 3.4.x and 4.1.x+ (gcc 4.0.x has
+ documented bugs affecting some of our code).
 \end_layout
 
 \begin_layout Standard
@@ -8705,42 +8588,6 @@ http://www.ptlsim.org/download.php
 .
 \end_layout
 
-\begin_layout Standard
-\begin_inset Box Shadowbox
-position "t"
-hor_pos "c"
-has_inner_box 1
-inner_pos "t"
-use_parbox 0
-width "100col%"
-special "none"
-height "1in"
-height_special "totalheight"
-status open
-
-\begin_layout Standard
-
-\series bold
-\emph on
-IMPORTANT:
-\series default
-\emph default
- The instructions below refer to specific versions of various files (i.e.,
- Xen hypervisor, Linux kernel, etc.).
- We regularly update the versions of these files, and newer PTLsim/X versions
- may not work correctly with older kernel and/or hypervisor versions (i.e.
- the versions should be matching).
- The following instructions are therefore for informational purposes only;
- always check the PTLsim web site's download page for the latest versions
- of these files.
- The following versions are correct as of September 20th, 2007
-\end_layout
-
-\end_inset
-
-
-\end_layout
-
 \begin_layout Enumerate
 
 \series bold
@@ -8756,7 +8603,7 @@ Download
  our modified Xen source tree (
 \family typewriter
 \size footnotesize
-xen-3.1-ptlsim.tar.bz2
+xen-ptlsim-rXXXXX.tar.bz2
 \family default
 \size default
 ) from 
@@ -8796,30 +8643,29 @@ Build and install
 In 
 \family typewriter
 \size footnotesize
-xen-3.1-ptlsim/xen
+xen-unstable.hg/xen
 \family default
 \size default
 , run 
 \family typewriter
 \size footnotesize
-make.
- 
+make
 \family default
 \size default
-You can optionally copy the compiled Xen hypervisor (in 
+, and copy the 
 \family typewriter
 \size footnotesize
-xen/xen
+xen
 \family default
 \size default
-) somewhere else (such as wherever your kernel and initrd files are stored).
+ binary to your boot volume
 \end_layout
 
 \begin_layout Itemize
 In 
 \family typewriter
 \size footnotesize
-xen-3.1-ptlsim/tools
+xen-unstable.hg/tools
 \family default
 \size default
 , run 
@@ -8846,29 +8692,23 @@ Download
  our sample kernel and modules (
 \family typewriter
 \size footnotesize
-linux-2.6.22.6-mtyrel-64bit-xen.tar.bz2
+linux-2.6.20-mtyrel-64bit-xen.tar.bz2
 \family default
 \size default
-) and extract in the root directory (via 
+) and extract in the root directory to create 
 \family typewriter
 \size footnotesize
-tar jxvf linux-2.6.22.6-mtyrel-64bit-xen.tar.bz2
-\family default
-\size default
-) to create 
-\family typewriter
-\size footnotesize
-/lib/modules/2.6.22.6-mtyrel-64bit-xen/....
+/lib/modules/2.6.20-mtyrel-64bit-xen/....
 \end_layout
 
 \begin_deeper
 \begin_layout Itemize
-This is a SMP kernel based on 2.6.22.6 with the Xen patches maintained by SuSE
+This is a SMP kernel based on 2.6.20 with the Xen patches maintained by SuSE
  Linux.
  The complete source is in 
 \family typewriter
 \size footnotesize
-linux-2.6.22-mtyrel-source.tar.gz
+linux-2.6.20-mtyrel-64bit-xen-source.tar.gz
 \family default
 \size default
 , if you want to recompile it.
@@ -8882,108 +8722,6 @@ This is just a sample kernel we use - PTLsim/X should work even if you use
  and has all the latest Xen patches.
 \end_layout
 
-\begin_layout Itemize
-In addition, our kernels feature the ability to create Xen checkpoints and
- initiate PTLsim actions from within the domain by writing to 
-\family typewriter
-\size footnotesize
-/proc/xen/checkpoint
-\family default
-\size default
- and 
-\family typewriter
-\size footnotesize
-/proc/xen/ptlsim
-\family default
-\size default
-, respectively.
- The major changes are in 
-\family typewriter
-\size footnotesize
-linux-2.6.22-mtyrel/patches.mty/linux-2.6.22-xen-self-checkpointing.diff
-\family default
-\size default
- if you want to apply them to a different kernel or learn how they work.
-\end_layout
-
-\end_deeper
-\begin_layout Itemize
-
-\series bold
-Activate
-\series default
- the new Xen hypervisor and kernel:
-\end_layout
-
-\begin_deeper
-\begin_layout Itemize
-Install the new kernel and Xen hypervisor in a manner specific to your distribut
-ion.
- While we cannot provide instructions for every distribution, on SuSE, you
- need to run mkinitrd to collect the required boot drivers like this:
-\end_layout
-
-\begin_deeper
-\begin_layout LyX-Code
-
-\size footnotesize
-mkinitrd -k /lib/modules/2.6.22.6-mtyrel-64bit-xen/linux
-\newline
-         -i /lib/modules/2.6.
-22.6-mtyrel-64bit-xen/initrd
-\newline
-         -M /lib/modules/2.6.22.6-mtyrel-64bit-xen/Syste
-m.map
-\end_layout
-
-\begin_layout Standard
-
-\emph on
-IMPORTANT:
-\emph default
- All parts of this command should be on a single line (this manual makes
- long lines difficult to show)
-\end_layout
-
-\end_deeper
-\begin_layout Itemize
-Edit the GRUB bootloader configuration (usually in 
-\family typewriter
-\size footnotesize
-/boot/grub/menu.lst
-\family default
-\size default
- on most distributions) to specify the new Xen-enabled kernel and hypervisor.
- The first entry should be similar to:
-\end_layout
-
-\begin_deeper
-\begin_layout LyX-Code
-
-\size footnotesize
-title Linux 2.6.22.6-mtyrel-64bit-xen
-\newline
-kernel (hd0,0)/project/xen-3.1-ptlsim/xen/xen
- console=vga
-\newline
-module (hd0,0)/lib/modules/2.6.22.6-mtyrel-64bit-xen/linux root=/dev/...
-\newline
-mo
-dule (hd0,0)/lib/modules/2.6.22.6-mtyrel-64bit-xen/initrd
-\end_layout
-
-\begin_layout Standard
-Obviously you may need to adjust the file locations, if you're booting from
- a different hard drive or compiled Xen in a location other than 
-\family typewriter
-\size footnotesize
-/project/xen-3.1-ptlsim
-\family default
-\size default
-.
-\end_layout
-
-\end_deeper
 \end_deeper
 \begin_layout Itemize
 
@@ -9019,7 +8757,6 @@ ptlsim
 \end_inset
 
 .
- If this file doesn't exist, you're not running under Xen at all.
 \end_layout
 
 \end_deeper
@@ -9035,24 +8772,17 @@ Set up sample virtual machine and disk images:
 \series bold
 Download
 \series default
- our pre-configured example disk image (
+ our pre-configured 256 MB disk image (
 \family typewriter
 \size footnotesize
-ptlsim-disk-image-example.tar.bz2
+ptlsim.img.bz2
 \family default
 \size default
-) and uncompress with 
+) and uncompress with bunzip2.
+ The sample scripts below expect this file to be in 
 \family typewriter
 \size footnotesize
-tar jxvf ptlsim-disk-image-example.tar.bz2
-\family default
-\size default
-.
- The sample scripts inside this archive assume that the files were extracted
- into 
-\family typewriter
-\size footnotesize
-/project/ptlsim-disk-image-example
+/project/ptlsim/ptlsim.img
 \family default
 \size default
 .
@@ -9061,36 +8791,36 @@ tar jxvf ptlsim-disk-image-example.tar.bz2
 \begin_deeper
 \begin_layout Itemize
 We recommend placing this disk image on a local hard disk rather than NFS.
- However, if you're running Cluster NFS and/or are using the 
+ It will not mount correctly over NFS unless the 
 \family typewriter
 \size footnotesize
 no_root_squash
 \family default
 \size default
- NFS option, it's perfectly fine if you put the disk image on an NFS volume.
+ NFS option is used.
 \end_layout
 
 \end_deeper
 \begin_layout Itemize
-You already downloaded our Xen-compatible kernel above.
+You have already downloaded our Xen-compatible kernel above.
 \end_layout
 
 \begin_layout Itemize
-The disk image archive contains a sample Xen configuration file (sample-xen-doma
-in) and some helpful scripts (e.g.
- 
+Download the Xen configuration file (
 \family typewriter
 \size footnotesize
-run-domain
+ptlvm
 \family default
 \size default
-, 
+) and put it in 
 \family typewriter
 \size footnotesize
-restore-domain
+/etc/xen/ptlvm
 \family default
 \size default
-, etc.)
+.
+ By default, this configuration file specifies a 128 MB example domain using
+ the kernel and disk image above as the root filesystem.
 \end_layout
 
 \begin_layout Itemize
@@ -9101,7 +8831,7 @@ Make sure you can create this domain
 
 \family typewriter
 \size footnotesize
-xm create sample-xen-domain -c
+xm create ptlvm -c
 \family default
 \size default
 
@@ -9165,7 +8895,7 @@ PTLSIM_HYPERVISOR=1
 \begin_inset Quotes erd
 \end_inset
 
- line to enable full system PTLsim/X support.
+ line to enable PTLsim/X support.
 \end_layout
 
 \begin_layout Itemize
@@ -9189,13 +8919,13 @@ If the build process complains about missing header files, make sure
  is a symlink to 
 \family typewriter
 \size footnotesize
-/project/xen-3.1-ptlsim/tools/libxc/xen
+/project/xen-unstable.hg/tools/libxc/xen
 \family default
 \size default
  (or wherever you put the PTLsim-modified 
 \family typewriter
 \size footnotesize
-xen-3.1-ptlsim
+xen-unstable.hg
 \family default
 \size default
  tree you downloaded).
@@ -9211,8 +8941,7 @@ xen-3.1-ptlsim
 \end_deeper
 \end_deeper
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:RunningPTLsim"
+\begin_inset LatexCommand \label{sec:RunningPTLsim}
 
 \end_inset
 
@@ -9239,9 +8968,6 @@ sudo ptlsim ...
 \family typewriter
 \size footnotesize
 -domain
-\family default
- 
-\family typewriter
 \emph on
 N
 \family default
@@ -9256,13 +8982,21 @@ Booting Linux under PTLsim
 \end_layout
 
 \begin_layout Standard
-In the following examples, we will assume the target domain is called 
+In the following examples, we will assume the Xen configuration for the
+ target domain is in the text file 
 \family typewriter
 \size footnotesize
-ptlvm
+/etc/xen/ptlvm
 \family default
 \size default
 .
+ Edit 
+\family typewriter
+\size footnotesize
+/etc/xen/ptlvm
+\family default
+\size default
+ as needed, based on the example downloaded above.
 \end_layout
 
 \begin_layout Standard
@@ -9343,7 +9077,7 @@ Name                                      ID Mem(MiB) VCPUs State   Time(s)
 \begin_layout LyX-Code
 
 \size footnotesize
-Domain-0                                   0     7877     4 r-----    137.9
+Domain-0                                   0     1877     2 r-----    137.9
 \end_layout
 
 \begin_layout LyX-Code
@@ -9385,7 +9119,7 @@ Open another console and start PTLsim on this domain (using the domain ID
 \begin_layout LyX-Code
 
 \size footnotesize
-sudo ./ptlsim -domain ptlvm -logfile ptlsim.log -native
+sudo ./ptlsim -domain 21 -logfile ptlsim.log -native
 \end_layout
 
 \begin_layout Standard
@@ -9407,7 +9141,7 @@ The resulting output:
 \begin_layout LyX-Code
 
 \size footnotesize
-//  Copyright 1999-2007 Matt T.
+//  Copyright 1999-2006 Matt T.
  Yourst <yourst@yourst.com>
 \end_layout
 
@@ -9420,13 +9154,13 @@ The resulting output:
 \begin_layout LyX-Code
 
 \size footnotesize
-//  Revision 225 (2007-09-21)
+//  Revision 165 (2006-09-15)
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-//  Built Sep  21 2007 16:21:36 on tidalwave.lab.ptlsim.org using gcc-4.2
+//  Built Oct  8 2006 02:49:42 on tidalwave.lab.ptlsim.org using gcc-4.1
 \end_layout
 
 \begin_layout LyX-Code
@@ -9767,8 +9501,7 @@ Simulate another 100 million using PTLsim's sequential model.
  simply interacting with the domain.
  However, it does not collect any cycle accurate timing data.
  Section 
-\begin_inset LatexCommand ref
-reference "sec:SequentialMode"
+\begin_inset LatexCommand \ref{sec:SequentialMode}
 
 \end_inset
 
@@ -9800,8 +9533,7 @@ PTL calls
 ), special x86 instructions that can be used to control a domain's own simulatio
 n.
  More information on the PTLcall API is in Section 
-\begin_inset LatexCommand ref
-reference "sec:PTLcallsFullSystem"
+\begin_inset LatexCommand \ref{sec:PTLcallsFullSystem}
 
 \end_inset
 
@@ -10053,8 +9785,7 @@ PTLsim/X Options
 
 \begin_layout Standard
 In Section 
-\begin_inset LatexCommand ref
-reference "sec:ConfigurationOptions"
+\begin_inset LatexCommand \ref{sec:ConfigurationOptions}
 
 \end_inset
 
@@ -10158,8 +9889,7 @@ xm destroy
 
 \end_deeper
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:LiveConfigurationUpdates"
+\begin_inset LatexCommand \label{sec:LiveConfigurationUpdates}
 
 \end_inset
 
@@ -10186,7 +9916,7 @@ For instance,
 \begin_layout LyX-Code
 
 \size footnotesize
-sudo ptlsim -native -domain ptlvm
+sudo ptlsim -native -domain 21
 \end_layout
 
 \begin_layout Standard
@@ -10201,13 +9931,13 @@ To reset the log level in the middle of a simulation run, use the following:
 
 \series bold
 \size footnotesize
-sudo ptlsim -domain ptlvm -loglevel 99 : -run
+sudo ptlsim -domain 21 -loglevel 99 : -run
 \end_layout
 
 \begin_layout LyX-Code
 
 \size footnotesize
-ptlsim: Sending request '-domain ptlvm -loglevel 99 : -run' to domain 12...OK
+ptlsim: Sending request '-domain 12 -loglevel 99 : -run' to domain 12...OK
 \end_layout
 
 \begin_layout Standard
@@ -10243,7 +9973,7 @@ To end a simulation currently in progress, use this:
 \begin_layout LyX-Code
 
 \size footnotesize
-sudo ptlsim -domain ptlvm -kill
+sudo ptlsim -domain 21 -kill
 \end_layout
 
 \begin_layout Standard
@@ -10251,8 +9981,7 @@ This will force PTLsim to cleanly exit.
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:CommandScripts"
+\begin_inset LatexCommand \label{sec:CommandScripts}
 
 \end_inset
 
@@ -10273,7 +10002,7 @@ command scripts
 \size footnotesize
 sudo ./ptlsim -domain 
 \emph on
-name
+N
 \emph default
  @ptlvm.cmd
 \end_layout
@@ -10406,36 +10135,6 @@ Working with Checkpoints
 \end_layout
 
 \begin_layout Standard
-\begin_inset Box Shadowbox
-position "t"
-hor_pos "c"
-has_inner_box 1
-inner_pos "t"
-use_parbox 0
-width "100col%"
-special "none"
-height "1in"
-height_special "totalheight"
-status open
-
-\begin_layout Standard
-We maintain a tutorial on how to set up checkpoints and perform advanced
- checkpointing techniques at 
-\family typewriter
-\size footnotesize
-http://www.ptlsim.org/capswiki/index.php/SPEC_2006
-\family default
-\size default
-.
- Note that this address is subject to change.
-\end_layout
-
-\end_inset
-
-
-\end_layout
-
-\begin_layout Standard
 Xen provides the ability to capture the state of a domain into a 
 \emph on
 checkpoint file
@@ -10458,24 +10157,10 @@ To create a checkpoint, boot the domain in native mode without PTLsim running,
 sudo xm save ptlvm /tmp/ptlvm.img
 \end_layout
 
-\begin_layout Standard
-If you're using our sample disk images, this command will pause until you
- do the following from 
-\emph on
-within
-\emph default
- the domain:
-\end_layout
-
 \begin_layout LyX-Code
 
 \size footnotesize
-echo checkpoint > /proc/xen/checkpoint
-\end_layout
-
-\begin_layout Standard
-This facility allows very precise checkpoint placement, even by writing
- to this special file from within a benchmark.
+Started domain ptlvm
 \end_layout
 
 \begin_layout Standard
@@ -10504,10 +10189,16 @@ sudo xm console ptlvm
 PTLsim can then be started in the normal manner, by specifying 
 \family typewriter
 \size footnotesize
--domain domainname.
-
+-domain X
 \family default
 \size default
+ (according to the output of 
+\family typewriter
+\size footnotesize
+xm list
+\family default
+\size default
+).
  If the checkpoint was made while the domain waited for input (e.g.
  at a shell command line), you may have to press a few keys to get any response
  from its console.
@@ -10548,8 +10239,7 @@ xm kill ptlvm
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:TimeDilation"
+\begin_inset LatexCommand \label{sec:TimeDilation}
 
 \end_inset
 
@@ -10637,9 +10327,6 @@ Rather than attempt to solve this philosophical dilemma, PTLsim allows users
 \family typewriter
 \size footnotesize
 -corefreq
-\family default
- 
-\family typewriter
 \emph on
 Hz
 \end_layout
@@ -10682,9 +10369,6 @@ NOTE:
 \family typewriter
 \size footnotesize
 -timerfreq
-\family default
- 
-\family typewriter
 \emph on
 Hz
 \end_layout
@@ -10807,9 +10491,6 @@ PTLsim/X has a few additional options related to full system simulation:
 \family typewriter
 \size footnotesize
 -reservemem
-\family default
- 
-\family typewriter
 \emph on
 M
 \end_layout
@@ -10823,8 +10504,7 @@ M
  megabytes of physical memory for PTLsim and its translation cache.
  The default is 32 MB; the valid range is from 16 MB to 512 MB.
  See Chapter 
-\begin_inset LatexCommand ref
-reference "sec:PTLsimXArchitectureDetails"
+\begin_inset LatexCommand \ref{sec:PTLsimXArchitectureDetails}
 
 \end_inset
 
@@ -10834,8 +10514,7 @@ reference "sec:PTLsimXArchitectureDetails"
 \end_deeper
 \begin_layout Standard
 All other options in Section 
-\begin_inset LatexCommand ref
-reference "sec:ConfigurationOptions"
+\begin_inset LatexCommand \ref{sec:ConfigurationOptions}
 
 \end_inset
 
@@ -10844,8 +10523,7 @@ reference "sec:ConfigurationOptions"
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:PTLsimXArchitectureDetails"
+\begin_inset LatexCommand \label{sec:PTLsimXArchitectureDetails}
 
 \end_inset
 
@@ -11060,8 +10738,7 @@ vcpu_context_t
  the initial registers and page tables to map PTLsim's code, then unmaps
  all PTLsim reserved pages except for the first few pages (as shown in Table
  
-\begin_inset LatexCommand ref
-reference "table:MemLayout"
+\begin_inset LatexCommand \ref{table:MemLayout}
 
 \end_inset
 
@@ -11106,8 +10783,7 @@ bootpage.hostreq
 transfer page
 \emph default
  (see Table 
-\begin_inset LatexCommand ref
-reference "table:MemLayout"
+\begin_inset LatexCommand \ref{table:MemLayout}
 
 \end_inset
 
@@ -11174,15 +10850,17 @@ upcall
 ACCEPT_UPCALL
 \family default
 \size default
- hostcall to read the enqueued command line, then parses it and acts on
- any listed actions or parameter updates.
+\emph on
+ 
+\emph default
+hostcall to read the enqueued command line, then parses it and acts on any
+ listed actions or parameter updates.
 \end_layout
 
 \begin_layout Standard
 It should be noted that this design allows live configuration updates, as
  described in Section 
-\begin_inset LatexCommand ref
-reference "sec:LiveConfigurationUpdates"
+\begin_inset LatexCommand \ref{sec:LiveConfigurationUpdates}
 
 \end_inset
 
@@ -11219,8 +10897,7 @@ ptlxen.cpp
 mm.cpp
 \emph default
  as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:MemoryManager"
+\begin_inset LatexCommand \ref{sec:MemoryManager}
 
 \end_inset
 
@@ -11240,8 +10917,7 @@ reference "sec:MemoryManager"
  bytes).
  This memory is mapped to the physical pages reserved for PTLsim.
  The layout is shown in Table 
-\begin_inset LatexCommand ref
-reference "table:MemLayout"
+\begin_inset LatexCommand \ref{table:MemLayout}
 
 \end_inset
 
@@ -11255,21 +10931,12 @@ wide false
 sideways false
 status open
 
-\begin_layout Standard
-\begin_inset Caption
-
-\begin_layout Standard
-\begin_inset LatexCommand label
-name "table:MemLayout"
+\begin_layout Caption
+\begin_inset LatexCommand \label{table:MemLayout}
 
 \end_inset
 
 Memory Layout for PTLsim Space
-\end_layout
-
-\end_inset
-
-
 \end_layout
 
 \begin_layout Standard
@@ -11776,8 +11443,7 @@ Implementation Details
 \end_layout
 
 \begin_layout Subsection
-\begin_inset LatexCommand label
-name "sub:FullSystemPageTranslation"
+\begin_inset LatexCommand \label{sub:FullSystemPageTranslation}
 
 \end_inset
 
@@ -12141,8 +11807,7 @@ Xen lets the guest kernel execute various privileged instructions, which
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:PTLcallsFullSystem"
+\begin_inset LatexCommand \label{sec:PTLcallsFullSystem}
 
 \end_inset
 
@@ -12344,8 +12009,7 @@ Event Trace Mode
 
 \begin_layout Standard
 In Section 
-\begin_inset LatexCommand ref
-reference "sec:TimeDilation"
+\begin_inset LatexCommand \ref{sec:TimeDilation}
 
 \end_inset
 
@@ -12530,8 +12194,7 @@ instant visibility
 \end_layout
 
 \begin_layout Part
-\begin_inset LatexCommand label
-name "part:OutOfOrderModel"
+\begin_inset LatexCommand \label{part:OutOfOrderModel}
 
 \end_inset
 
@@ -12539,8 +12202,7 @@ Out of Order Processor Model
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:OutOfOrderFeatures"
+\begin_inset LatexCommand \label{sec:OutOfOrderFeatures}
 
 \end_inset
 
@@ -12562,8 +12224,7 @@ PTLsim completely models a modern out of order x86-64 compatible processor,
 
 \begin_layout Itemize
 The simulator directly fetches pre-decoded micro-operations (Section 
-\begin_inset LatexCommand ref
-reference "sec:FetchStage"
+\begin_inset LatexCommand \ref{sec:FetchStage}
 
 \end_inset
 
@@ -12580,8 +12241,7 @@ Branch prediction is configurable; PTLsim currently includes various models
 \begin_layout Itemize
 Register renaming takes into account x86 quirks such as flags renaming (Section
  
-\begin_inset LatexCommand ref
-reference "sub:FlagsManagement"
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
 
 \end_inset
 
@@ -12751,8 +12411,7 @@ MAX_CONTEXTS
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:MachineCoreClassHierarchy"
+\begin_inset LatexCommand \label{sec:MachineCoreClassHierarchy}
 
 \end_inset
 
@@ -12883,9 +12542,6 @@ name
 \family typewriter
 \size footnotesize
 -core
-\family default
- 
-\family typewriter
 \emph on
 xyz
 \family default
@@ -12964,8 +12620,7 @@ PTLsimMachine::update_stats()
 \family default
 \size default
  is described in Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsInfrastructure"
+\begin_inset LatexCommand \ref{sec:StatisticsInfrastructure}
 
 \end_inset
 
@@ -13005,15 +12660,13 @@ OutOfOrderMachine
 \family default
 \size default
  class and its functions (see Section 
-\begin_inset LatexCommand ref
-reference "sec:MachineCoreClassHierarchy"
+\begin_inset LatexCommand \ref{sec:MachineCoreClassHierarchy}
 
 \end_inset
 
 ), the top-level pipeline control functions, all event printing logic (Section
  
-\begin_inset LatexCommand ref
-reference "sec:OutOfOrderCoreEventLogRingBuffer"
+\begin_inset LatexCommand \ref{sec:OutOfOrderCoreEventLogRingBuffer}
 
 \end_inset
 
@@ -13123,8 +12776,7 @@ Context
 \size default
  structure into the physical register file and other per-core structures
  (see Section 
-\begin_inset LatexCommand ref
-reference "sec:PipelineFlushesAndBarriers"
+\begin_inset LatexCommand \ref{sec:PipelineFlushesAndBarriers}
 
 \end_inset
 
@@ -13266,8 +12918,7 @@ structure for that core.
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:OutOfOrderCoreEventLogRingBuffer"
+\begin_inset LatexCommand \label{sec:OutOfOrderCoreEventLogRingBuffer}
 
 \end_inset
 
@@ -13276,8 +12927,7 @@ Event Log Ring Buffer
 
 \begin_layout Standard
 Section 
-\begin_inset LatexCommand ref
-reference "sec:EventLogRingBuffer"
+\begin_inset LatexCommand \ref{sec:EventLogRingBuffer}
 
 \end_inset
 
@@ -13377,8 +13027,7 @@ Fetch Stage
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:FetchStage"
+\begin_inset LatexCommand \label{sec:FetchStage}
 
 \end_inset
 
@@ -13387,8 +13036,7 @@ Instruction Fetching and the Basic Block Cache
 
 \begin_layout Standard
 As described in Section 
-\begin_inset LatexCommand ref
-reference "sec:UopIntro"
+\begin_inset LatexCommand \ref{sec:UopIntro}
 
 \end_inset
 
@@ -13416,8 +13064,7 @@ basic block cache
 \emph default
 .
  The basic block cache, described in Chapter 
-\begin_inset LatexCommand ref
-reference "sec:BasicBlockCache"
+\begin_inset LatexCommand \ref{sec:BasicBlockCache}
 
 \end_inset
 
@@ -13481,8 +13128,7 @@ Technically speaking, the cached basic blocks contain
 transops
 \emph default
 , rather than uops: as explained in Section 
-\begin_inset LatexCommand ref
-reference "sec:UopIntro"
+\begin_inset LatexCommand \ref{sec:UopIntro}
 
 \end_inset
 
@@ -13532,8 +13178,7 @@ fetchq
 
 \begin_layout Standard
 Branch uops trigger the branch prediction mechanism (Section 
-\begin_inset LatexCommand ref
-reference "sec:BranchPrediction"
+\begin_inset LatexCommand \ref{sec:BranchPrediction}
 
 \end_inset
 
@@ -13673,8 +13318,7 @@ TransOp
 \size default
  augmented with fetch-related information like the uop's UUID, RIP and branch
  predictor information as described in the Fetch stage (Section 
-\begin_inset LatexCommand ref
-reference "sec:FetchStage"
+\begin_inset LatexCommand \ref{sec:FetchStage}
 
 \end_inset
 
@@ -13789,8 +13433,7 @@ uop
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:PhysicalRegisters"
+\begin_inset LatexCommand \label{sec:PhysicalRegisters}
 
 \end_inset
 
@@ -13835,8 +13478,7 @@ The actual 64-bit register data
 \begin_layout Itemize
 x86 flags: Z, P, S, O, C.
  These are discussed below in Section 
-\begin_inset LatexCommand ref
-reference "sub:FlagsManagement"
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
 
 \end_inset
 
@@ -13882,8 +13524,7 @@ ROB currently owning this physical register, or architectural register mapping
 \begin_layout Itemize
 Reference counter for the physical register.
  This is required for reasons described in Section 
-\begin_inset LatexCommand ref
-reference "sub:PhysicalRegisterRecyclingComplications"
+\begin_inset LatexCommand \ref{sub:PhysicalRegisterRecyclingComplications}
 
 \end_inset
 
@@ -13942,7 +13583,7 @@ null register:
 Physical register files are configured in 
 \family typewriter
 \size small
-ooocore.h
+ooohwdef.h
 \family default
 \size default
 .
@@ -14076,8 +13717,7 @@ pendingfree:
 \series default
 \emph default
  this is a special state described in Section 
-\begin_inset LatexCommand ref
-reference "sub:PhysicalRegisterRecyclingComplications"
+\begin_inset LatexCommand \ref{sub:PhysicalRegisterRecyclingComplications}
 
 \end_inset
 
@@ -14099,8 +13739,7 @@ waiting
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:LoadStoreQueueEntry"
+\begin_inset LatexCommand \label{sec:LoadStoreQueueEntry}
 
 \end_inset
 
@@ -14194,8 +13833,7 @@ store
 \end_layout
 
 \begin_layout Subsection
-\begin_inset LatexCommand label
-name "sub:RegisterRenaming"
+\begin_inset LatexCommand \label{sub:RegisterRenaming}
 
 \end_inset
 
@@ -14206,8 +13844,7 @@ Register Renaming
 The basic register renaming process in the PTLsim x86 model is very similar
  to classical register renaming, with the exception of the flags complications
  described in Section 
-\begin_inset LatexCommand ref
-reference "sub:FlagsManagement"
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
 
 \end_inset
 
@@ -14231,8 +13868,7 @@ commit RRT
 
 \begin_layout Standard
 Each rename table contains 80 entries as shown in Table 
-\begin_inset LatexCommand ref
-reference "table:ArchitecturalRegisters"
+\begin_inset LatexCommand \ref{table:ArchitecturalRegisters}
 
 \end_inset
 
@@ -14251,8 +13887,7 @@ reference "table:ArchitecturalRegisters"
 
 \begin_layout Itemize
 ZAPS, CF, OF flag sets described in Section 
-\begin_inset LatexCommand ref
-reference "sub:FlagsManagement"
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
 
 \end_inset
 
@@ -14318,21 +13953,12 @@ wide false
 sideways false
 status open
 
-\begin_layout Standard
-\begin_inset Caption
-
-\begin_layout Standard
-\begin_inset LatexCommand label
-name "table:ArchitecturalRegisters"
+\begin_layout Caption
+\begin_inset LatexCommand \label{table:ArchitecturalRegisters}
 
 \end_inset
 
 Architectural registers and pseudo-registers used for renaming.
-\end_layout
-
-\end_inset
-
-
 \end_layout
 
 \begin_layout Standard
@@ -15660,8 +15286,7 @@ FRONTEND_STAGES
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:ClusterDispatchScheduleIssue"
+\begin_inset LatexCommand \label{sec:ClusterDispatchScheduleIssue}
 
 \end_inset
 
@@ -15669,8 +15294,7 @@ Scheduling, Dispatch and Issue
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:Clustering"
+\begin_inset LatexCommand \label{sec:Clustering}
 
 \end_inset
 
@@ -15955,8 +15579,7 @@ ReorderBufferEntry::executable_on_cluster_mask
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:Scheduling"
+\begin_inset LatexCommand \label{sec:Scheduling}
 
 \end_inset
 
@@ -16019,8 +15642,7 @@ issued
 \size default
  bitmap indicates which of those uops have been issued.
  Together, these two bitmaps form the state machine described in Table 
-\begin_inset LatexCommand ref
-reference "table:IssueQueueStateMachine"
+\begin_inset LatexCommand \ref{table:IssueQueueStateMachine}
 
 \end_inset
 
@@ -16033,21 +15655,12 @@ wide false
 sideways false
 status open
 
-\begin_layout Standard
-\begin_inset Caption
-
-\begin_layout Standard
-\begin_inset LatexCommand label
-name "table:IssueQueueStateMachine"
+\begin_layout Caption
+\begin_inset LatexCommand \label{table:IssueQueueStateMachine}
 
 \end_inset
 
 Issue Queue State Machine
-\end_layout
-
-\end_inset
-
-
 \end_layout
 
 \begin_layout Standard
@@ -16451,7 +16064,7 @@ BIG_ROB
  must be defined in 
 \family typewriter
 \size small
-ooocore.h
+ooohwdef.h
 \family default
 \size default
 .
@@ -16487,8 +16100,7 @@ IssueQueue
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:Issue"
+\begin_inset LatexCommand \label{sec:Issue}
 
 \end_inset
 
@@ -16532,8 +16144,7 @@ issueq_operation_on_cluster_with_result(cluster, iqslot, issue())
 \family default
 \size default
  macro (Section 
-\begin_inset LatexCommand ref
-reference "sec:Clustering"
+\begin_inset LatexCommand \ref{sec:Clustering}
 
 \end_inset
 
@@ -16545,8 +16156,7 @@ issue()
 \size default
  method of the appropriate cluster to select the earliest ready issue queue
  slot, as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:Scheduling"
+\begin_inset LatexCommand \ref{sec:Scheduling}
 
 \end_inset
 
@@ -16595,8 +16205,7 @@ EXCEPTION_Propagate
  result and is not further executed.
  Otherwise, the uop is executed by calling the synthesized execute function
  for the uop (see Section 
-\begin_inset LatexCommand ref
-reference "sec:FetchStage"
+\begin_inset LatexCommand \ref{sec:FetchStage}
 
 \end_inset
 
@@ -16660,8 +16269,7 @@ ISSUE_NEEDS_REPLAY
 \size default
 , issuing from that cluster is aborted since the uop has been replayed in
  accordance with Section 
-\begin_inset LatexCommand ref
-reference "sec:Scheduling"
+\begin_inset LatexCommand \ref{sec:Scheduling}
 
 \end_inset
 
@@ -16722,8 +16330,7 @@ read
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:SpeculationAndRecovery"
+\begin_inset LatexCommand \label{sec:SpeculationAndRecovery}
 
 \end_inset
 
@@ -16748,8 +16355,7 @@ Replay
  Replayed uops remain in the issue queue so replay is very fast but limited
  in scope.
  Replay is described extensively in Section 
-\begin_inset LatexCommand ref
-reference "sec:ClusterDispatchScheduleIssue"
+\begin_inset LatexCommand \ref{sec:ClusterDispatchScheduleIssue}
 
 \end_inset
 
@@ -16783,8 +16389,7 @@ Annulment
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:Redispatch"
+\begin_inset LatexCommand \label{sec:Redispatch}
 
 \end_inset
 
@@ -16806,8 +16411,7 @@ redispatch
 \emph default
 ; in the baseline out of order core, it is used to recover from load-store
  aliasing (Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
@@ -16853,9 +16457,9 @@ ROB.redispatch()
 \family typewriter
 \size footnotesize
 rob_ready_to_dispatch
-\family default
 \size small
  
+\family default
 \size default
 state, lways in program order.
  This helps to avoid deadlocks, since the redispatched slice is given priority
@@ -16974,8 +16578,7 @@ not
  including) the branch must be annulled and removed from all processor structure
 s.
  The fetch queue (Section 
-\begin_inset LatexCommand ref
-reference "sec:FetchStage"
+\begin_inset LatexCommand \ref{sec:FetchStage}
 
 \end_inset
 
@@ -16995,8 +16598,7 @@ not
 \end_layout
 
 \begin_layout Subsection
-\begin_inset LatexCommand label
-name "sec:SpeculationRecovery"
+\begin_inset LatexCommand \label{sec:SpeculationRecovery}
 
 \end_inset
 
@@ -17046,8 +16648,7 @@ annul()
 \size default
  method by scanning backwards in time from the excepting uop until a uop
  with its SOM (start of macro-op) bit is set, as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:UopIntro"
+\begin_inset LatexCommand \ref{sec:UopIntro}
 
 \end_inset
 
@@ -17120,8 +16721,7 @@ Finally, the fetch unit is restarted at the correct RIP and uops enter the
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:IssuingLoads"
+\begin_inset LatexCommand \label{sec:IssuingLoads}
 
 \end_inset
 
@@ -17129,8 +16729,7 @@ Load Issue
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:AddressGeneration"
+\begin_inset LatexCommand \label{sec:AddressGeneration}
 
 \end_inset
 
@@ -17182,8 +16781,7 @@ st.hi
 \family default
 \size default
 ) described in Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -17202,8 +16800,7 @@ check_and_translate()
  The function of this method varies significantly between userspace-only
  PTLsim and full system PTLsim/X.
  In userspace-only PTLsim, the shadow page access tables (Section 
-\begin_inset LatexCommand ref
-reference "sec:AddressSpaceSimulation"
+\begin_inset LatexCommand \ref{sec:AddressSpaceSimulation}
 
 \end_inset
 
@@ -17213,8 +16810,7 @@ reference "sec:AddressSpaceSimulation"
  physical address, significantly more involved checks are done, and finally
  a pointer into PTLsim's mapping of all physical pages is returned (see
  Section 
-\begin_inset LatexCommand ref
-reference "sub:FullSystemPageTranslation"
+\begin_inset LatexCommand \ref{sub:FullSystemPageTranslation}
 
 \end_inset
 
@@ -17266,8 +16862,7 @@ st.hi
 \family default
 \size default
  uops described in Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -17320,8 +16915,7 @@ st.hi
 \family default
 \size default
  uops in accordance with Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -17431,8 +17025,7 @@ overlapping memory range
 \end_inset
 
  is defined more specifically in Section 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -17453,8 +17046,7 @@ ly preventing independent loads from starting as soon as their address is
  soon as possible unless the load is predicted to frequently alias another
  store currently in the pipeline.
  This load/store aliasing prediction technique is described in Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
@@ -17540,8 +17132,7 @@ addrgen()
  The correct word is then extracted and sign extended (if required) from
  this buffer to form the result of the load.
  Unaligned loads (described in Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -17578,8 +17169,7 @@ issueload()
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:CacheMissHandling"
+\begin_inset LatexCommand \label{sec:CacheMissHandling}
 
 \end_inset
 
@@ -17591,14 +17181,12 @@ If no combination of the prior store's forwarded bytes and data present
  in the L1 cache can fulfill a load, this is miss and lower cache levels
  must be accessed.
  This process is described in Sections 
-\begin_inset LatexCommand ref
-reference "sec:InitiatingCacheMiss"
+\begin_inset LatexCommand \ref{sec:InitiatingCacheMiss}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:FillingCacheMiss"
+\begin_inset LatexCommand \ref{sec:FillingCacheMiss}
 
 \end_inset
 
@@ -17628,8 +17216,7 @@ Stores
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:StoreMerging"
+\begin_inset LatexCommand \label{sec:StoreMerging}
 
 \end_inset
 
@@ -17653,8 +17240,7 @@ In the PTLsim out of order model, a given store may merge its data with
  This ensures that the current store's data can be composited on top of
  the older store's data to form a single up to date 8-byte chunk.
  As described in Section 
-\begin_inset LatexCommand ref
-reference "sec:LoadStoreQueueEntry"
+\begin_inset LatexCommand \ref{sec:LoadStoreQueueEntry}
 
 \end_inset
 
@@ -17695,8 +17281,7 @@ on of these approaches.
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:SplitPhaseStores"
+\begin_inset LatexCommand \label{sec:SplitPhaseStores}
 
 \end_inset
 
@@ -17768,8 +17353,7 @@ addrvalid
 \family default
 \size default
  bit as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:LoadStoreQueueEntry"
+\begin_inset LatexCommand \ref{sec:LoadStoreQueueEntry}
 
 \end_inset
 
@@ -17791,8 +17375,7 @@ FLAG_inv
 \end_layout
 
 \begin_layout Subsection
-\begin_inset LatexCommand label
-name "sub:AliasCheck"
+\begin_inset LatexCommand \label{sub:AliasCheck}
 
 \end_inset
 
@@ -17813,8 +17396,7 @@ aliasing
 , and is effectively a mis-speculation requiring us to reissue any uops
  depending on the store.
  The redispatch method (Section 
-\begin_inset LatexCommand ref
-reference "sec:Redispatch"
+\begin_inset LatexCommand \ref{sec:Redispatch}
 
 \end_inset
 
@@ -17854,8 +17436,7 @@ Store Queue Search (Merge Check)
 \begin_layout Standard
 At this point the store queue is searched for prior stores to the same 8-byte
  block as described above in Section 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -17868,8 +17449,7 @@ operands[RS]
 \size default
 ) on this prior store before the store is replayed in accordance with Section
  
-\begin_inset LatexCommand ref
-reference "sec:Scheduling"
+\begin_inset LatexCommand \ref{sec:Scheduling}
 
 \end_inset
 
@@ -17883,8 +17463,7 @@ load_store_second_phase
 \size default
  flag in its ROB entry.
  Finally, the store is replayed in accordance with Section 
-\begin_inset LatexCommand ref
-reference "sec:Scheduling"
+\begin_inset LatexCommand \ref{sec:Scheduling}
 
 \end_inset
 
@@ -18035,8 +17614,7 @@ completed
  state and is responsible for broadcasting the completed ROB's tag (ROB
  index) to the issue queues.
  Because of clustering (Section 
-\begin_inset LatexCommand ref
-reference "sec:Clustering"
+\begin_inset LatexCommand \ref{sec:Clustering}
 
 \end_inset
 
@@ -18107,8 +17685,7 @@ IssueQueue::broadcast()
 \family default
 \size default
  method (Section 
-\begin_inset LatexCommand ref
-reference "sec:Scheduling"
+\begin_inset LatexCommand \ref{sec:Scheduling}
 
 \end_inset
 
@@ -18126,7 +17703,7 @@ MAX_FORWARDING_LATENCY
  constant (in 
 \family typewriter
 \size footnotesize
-ooocore.h
+ooohwdef.h
 \family default
 \size default
 ) specifies the maximum number of cycles between any two clusters.
@@ -18188,8 +17765,7 @@ ready-to-writeback
 
 \begin_layout Standard
 As mentioned in Section 
-\begin_inset LatexCommand ref
-reference "sec:Issue"
+\begin_inset LatexCommand \ref{sec:Issue}
 
 \end_inset
 
@@ -18228,8 +17804,7 @@ ready-to-commit
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:CommitStage"
+\begin_inset LatexCommand \label{sec:CommitStage}
 
 \end_inset
 
@@ -18333,8 +17908,7 @@ PHYSREG_FREE
  Unfortunately for various reasons related to long pipelines and the renaming
  of x86 flags, register reclamation is not so simple, but this will be discussed
  below in Section 
-\begin_inset LatexCommand ref
-reference "sub:PhysicalRegisterRecyclingComplications"
+\begin_inset LatexCommand \ref{sub:PhysicalRegisterRecyclingComplications}
 
 \end_inset
 
@@ -18361,8 +17935,7 @@ REG_flags
 \size default
  pseudo-register anyway.
  However, for the speculation recovery scheme described in Section 
-\begin_inset LatexCommand ref
-reference "sec:SpeculationRecovery"
+\begin_inset LatexCommand \ref{sec:SpeculationRecovery}
 
 \end_inset
 
@@ -18439,8 +18012,7 @@ smc_isdirty(mfn)
 \family default
 \size default
 , as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:SelfModifyingCode"
+\begin_inset LatexCommand \ref{sec:SelfModifyingCode}
 
 \end_inset
 
@@ -18475,8 +18047,7 @@ If an interrupt is pending, and we have just committed the last uop in an
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sub:PhysicalRegisterRecyclingComplications"
+\begin_inset LatexCommand \label{sub:PhysicalRegisterRecyclingComplications}
 
 \end_inset
 
@@ -18496,8 +18067,7 @@ In some processor designs, it is not always possible to immediately free
  for the ZAPS, CF, OF flags in addition to the register rename table entry,
  any or all of which may be updated when uops rename and retire, depending
  on the uop's flag renaming semantics (see Section 
-\begin_inset LatexCommand ref
-reference "sub:FlagsManagement"
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
 
 \end_inset
 
@@ -18660,8 +18230,7 @@ addref()
 \size default
 are used whenever an entry in the speculative RRT or commit RRT is updated.
  During mis-speculation recovery (see Section 
-\begin_inset LatexCommand ref
-reference "sec:SpeculationRecovery"
+\begin_inset LatexCommand \ref{sec:SpeculationRecovery}
 
 \end_inset
 
@@ -18689,14 +18258,12 @@ addref()
 \size default
 are used when loads and stores need to add a new dependency on a waiting
  store queue entry (see Sections 
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:SplitPhaseStores"
+\begin_inset LatexCommand \ref{sec:SplitPhaseStores}
 
 \end_inset
 
@@ -18767,8 +18334,7 @@ In real processors, the Pentium 4 uses a scheme similar to this one but
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:PipelineFlushesAndBarriers"
+\begin_inset LatexCommand \label{sec:PipelineFlushesAndBarriers}
 
 \end_inset
 
@@ -18876,8 +18442,7 @@ handle_exception()
  stage.
  In contrast, on full system PTLsim/X, exceptions are little more than jumps
  into kernel space; this is described in detail in Chapter 
-\begin_inset LatexCommand ref
-reference "sec:PTLsimXArchitectureDetails"
+\begin_inset LatexCommand \ref{sec:PTLsimXArchitectureDetails}
 
 \end_inset
 
@@ -18911,8 +18476,7 @@ ctx.commitarf[]
  as appropriate.
  If the processor is configured with multiple physical register files (Section
  
-\begin_inset LatexCommand ref
-reference "sec:PhysicalRegisters"
+\begin_inset LatexCommand \ref{sec:PhysicalRegisters}
 
 \end_inset
 
@@ -18930,8 +18494,7 @@ external_to_core_state()
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:CacheHierarchy"
+\begin_inset LatexCommand \label{sec:CacheHierarchy}
 
 \end_inset
 
@@ -19183,8 +18746,7 @@ L3Cache
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:InitiatingCacheMiss"
+\begin_inset LatexCommand \label{sec:InitiatingCacheMiss}
 
 \end_inset
 
@@ -19193,8 +18755,7 @@ Initiating a Cache Miss
 
 \begin_layout Standard
 As described in Section 
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
@@ -19372,8 +18933,7 @@ In the very unlikely event that either the LFRQ slot or miss buffer are
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:FillingCacheMiss"
+\begin_inset LatexCommand \label{sec:FillingCacheMiss}
 
 \end_inset
 
@@ -19531,8 +19091,7 @@ LoadStoreInfo
 \size default
  metadata.
  The out of order core handles this callback as described in Section 
-\begin_inset LatexCommand ref
-reference "sec:CacheMissHandling"
+\begin_inset LatexCommand \ref{sec:CacheMissHandling}
 
 \end_inset
 
@@ -19574,8 +19133,7 @@ annul_lfrq_slot()
 \end_layout
 
 \begin_layout Section
-\begin_inset LatexCommand label
-name "sec:TranslationLookasideBuffers"
+\begin_inset LatexCommand \label{sec:TranslationLookasideBuffers}
 
 \end_inset
 
@@ -19589,8 +19147,7 @@ The following section applies to full system PTLsim/X only.
  actually walking real page tables and encountering the associated cache
  misses.
  For more information, please see Section 
-\begin_inset LatexCommand ref
-reference "sub:FullSystemPageTranslation"
+\begin_inset LatexCommand \ref{sub:FullSystemPageTranslation}
 
 \end_inset
 
@@ -19598,8 +19155,7 @@ reference "sub:FullSystemPageTranslation"
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:BranchPrediction"
+\begin_inset LatexCommand \label{sec:BranchPrediction}
 
 \end_inset
 
@@ -20061,8 +19617,7 @@ updateras()
 \end_layout
 
 \begin_layout Part
-\begin_inset LatexCommand label
-name "part:Appendices"
+\begin_inset LatexCommand \label{part:Appendices}
 
 \end_inset
 
@@ -20070,8 +19625,7 @@ Appendices
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:UopReference"
+\begin_inset LatexCommand \label{sec:UopReference}
 
 \end_inset
 
@@ -20208,15 +19762,9 @@ rd = ra
 \end_inset
 
  (ra
-\family default
- 
-\family sans
 \emph on
 op
-\family default
 \emph default
- 
-\family sans
 rb)
 \end_layout
 
@@ -20259,34 +19807,16 @@ sz
 \family sans
 \series bold
 sz = 0:
-\family default
 \series default
- 
-\family sans
 Low byte of
-\family default
- 
-\family sans
 \emph on
 rd
-\family default
 \emph default
- 
-\family sans
 is set to the 8-bit result; high 7 bytes of
-\family default
- 
-\family sans
 \emph on
 rd
-\family default
 \emph default
- 
-\family sans
 are set to corresponding bytes of
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -20298,34 +19828,16 @@ ra
 \family sans
 \series bold
 sz = 1:
-\family default
 \series default
- 
-\family sans
 Low two bytes of
-\family default
- 
-\family sans
 \emph on
 rd
-\family default
 \emph default
- 
-\family sans
 is set to the 16-bit result; high 6 bytes of
-\family default
- 
-\family sans
 \emph on
 rd
-\family default
 \emph default
- 
-\family sans
 are set to corresponding bytes of
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -20337,44 +19849,21 @@ ra
 \family sans
 \series bold
 sz = 2:
-\family default
 \series default
- 
-\family sans
 Low four bytes of
-\family default
- 
-\family sans
 \emph on
 rd
-\family default
 \emph default
- 
-\family sans
 is set to the 32-bit result; high 4 bytes of
-\family default
- 
-\family sans
 \emph on
 rd
-\family default
 \emph default
- 
-\family sans
 are cleared to zero in accordance with x86-64 zero extension semantics.
  The
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 operand is unused and should be
-\family default
- 
 \family typewriter
 \size small
 REG_zero
@@ -20388,34 +19877,17 @@ REG_zero
 \family sans
 \series bold
 sz = 3:
-\family default
 \series default
- 
-\family sans
 All 8 bytes of
-\family default
- 
-\family sans
 \emph on
 rd
-\family default
 \emph default
- 
-\family sans
 are set to the 64-bit result.
 
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 is unused and should be
-\family default
- 
 \family typewriter
 \size small
 REG_zero
@@ -20428,16 +19900,10 @@ REG_zero
 
 \family sans
 Flags are calculated based on the
-\family default
- 
-\family sans
 \emph on
 sz
 \emph default
 -byte value produced by the ALU, not the final 64-bit result in
-\family default
- 
-\family sans
 \emph on
 rd
 \emph default
@@ -20484,26 +19950,14 @@ ra
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 EvalFlags
-\family default
 \emph default
- 
-\family sans
 pseudo-operator evaluates the ZAPS, CF, OF flags attached to the source
  operand
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 in accordance with the type of condition code evaluation specified by the
  uop.
  The operator returns 1 if the evaluation is true; otherwise 0 is returned.
@@ -20524,28 +19978,16 @@ ra
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 SignExt
-\family default
 \emph default
- 
-\family sans
 operator sign extends the ra operand by the number of bits specified by
  N.
  Specifically, bit
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
 [N] is copied to all high order bits from bit 63 down to bit
-\family default
- 
-\family sans
 \emph on
 N
 \emph default
@@ -20565,15 +20007,9 @@ MergeWithSFR(mem, sfr)
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 MergeWithSFR
-\family default
 \emph default
- 
-\family sans
 pseudo-operator is described in the reference page for load uops.
 \end_layout
 
@@ -20588,15 +20024,9 @@ MergeAlign(mem, sfr)
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 MergeAlign
-\family default
 \emph default
- 
-\family sans
 pseudo-operator is described in the reference page for load uops.
 \end_layout
 
@@ -21066,15 +20496,9 @@ Notes:
 
 \family sans
 All operations merge the ALU result with
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and generate flags in accordance with the standard x86 merging rules described
  previously.
 \end_layout
@@ -21503,15 +20927,9 @@ Notes:
 
 \family sans
 All operations merge the ALU result with
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and generate flags in accordance with the standard x86 merging rules described
  previously.
 \end_layout
@@ -21520,24 +20938,18 @@ and generate flags in accordance with the standard x86 merging rules described
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 adda
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 adds
 \family sans
 \size default
  uops are useful for small shifts and x86 three-operand
-\family default
- 
 \family typewriter
 \size small
 LEA
@@ -21550,16 +20962,12 @@ LEA
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 addc
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 subc
@@ -21572,25 +20980,18 @@ subc
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 addm
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 subm
 \family sans
 \size default
  uops mask the result by the immediate in
-\family default
- 
-\family sans
 \emph on
 rc
 \emph default
@@ -21732,11 +21133,8 @@ Notes:
 \series bold
 \emph on
 cc
-\family default
 \series default
 \emph default
- 
-\family sans
 is any valid condition code flag evaluation
 \end_layout
 
@@ -21744,23 +21142,15 @@ is any valid condition code flag evaluation
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 sel
 \family sans
 \size default
  uop merges the selected operand with
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 in accordance with the standard x86 merging rules described previously
 \end_layout
 
@@ -21776,8 +21166,6 @@ The 64-bit result and all flags are treated as a single value for selection
 
 \family sans
 If one of the (ra, rb) operands is not valid (has
-\family default
- 
 \family typewriter
 \size small
 FLAG_INV
@@ -21787,15 +21175,9 @@ FLAG_INV
  This is an exception to the invalid bit propagation rule only when the
  selected input is valid.
  If the
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 operand is invalid, the result is always invalid.
 \end_layout
 
@@ -21958,11 +21340,8 @@ Notes:
 \series bold
 \emph on
 cc
-\family default
 \series default
 \emph default
- 
-\family sans
 is any valid condition code flag evaluation
 \end_layout
 
@@ -21970,38 +21349,22 @@ is any valid condition code flag evaluation
 
 \family sans
 The value 0 or 1 is zero extended to the operation size and merged with
-\family default
  
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
-in accordance with the standard x86 merging rules described previously (except
- that
-\family default
- 
+ in accordance with the standard x86 merging rules described previously
+ (except that 
 \family typewriter
 \size small
 set
 \family sans
 \size default
  uses
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 as the merge target instead of
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -22012,15 +21375,9 @@ ra
 
 \family sans
 Flags attached to
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 (condition code) are passed through to the output
 \end_layout
 
@@ -22200,40 +21557,30 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 set.sub
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 set.and
 \family sans
 \size default
  uops take the place of a
-\family default
- 
 \family typewriter
 \size small
 sub
 \family sans
 \size default
  or
-\family default
- 
 \family typewriter
 \size small
 and
 \family sans
 \size default
  uop immediately consumed by a
-\family default
- 
 \family typewriter
 \size small
 set
@@ -22249,11 +21596,8 @@ set
 \series bold
 \emph on
 cc
-\family default
 \series default
 \emph default
- 
-\family sans
 is any valid condition code flag evaluation
 \end_layout
 
@@ -22262,46 +21606,27 @@ is any valid condition code flag evaluation
 \family sans
 The value 0 or 1 is zero extended to the operation size and then merged
  with
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
-in accordance with the standard x86 merging rules described previously (except
- that
-\family default
- 
+ in accordance with the standard x86 merging rules described previously
+ (except that 
 \family typewriter
 \size small
 set.sub
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 set.and
 \family sans
 \size default
  use
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 as the merge target instead of
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -22445,11 +21770,8 @@ Notes:
 \series bold
 \emph on
 cc
-\family default
 \series default
 \emph default
- 
-\family sans
 is any valid condition code flag evaluation
 \end_layout
 
@@ -22457,8 +21779,6 @@ is any valid condition code flag evaluation
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 rip
@@ -22466,25 +21786,13 @@ rip
 \size default
  (user-visible instruction pointer register) is reset to one of two immediates.
  If the flags evaluation is true, the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate is selected; otherwise the
-\family default
- 
-\family sans
 \emph on
 ripseq
-\family default
 \emph default
- 
-\family sans
 immediate is selected.
 \end_layout
 
@@ -22492,8 +21800,6 @@ immediate is selected.
 
 \family sans
 If the flag evaluation is false (i.e., ripseq is selected), the
-\family default
- 
 \family typewriter
 \size small
 BranchMispredict
@@ -22502,9 +21808,6 @@ BranchMispredict
  internal exception is raised.
  The processor should annul all uops after the branch and restart fetching
  at the RIP specified by the result (in this case,
-\family default
- 
-\family sans
 \emph on
 ripseq
 \emph default
@@ -22518,25 +21821,13 @@ Branches are always assumed to be taken.
  If the branch is predicted as not taken (i.e.
  future uops come from the next sequential RIP after the branch), it is
  the responsibility of the decoder or frontend to swap the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 ripseq
-\family default
 \emph default
- 
-\family sans
 immediates and invert the condition of the branch.
  All condition encodings can be inverted by inverting bit 0 of the 4-bit
  condition specifier.
@@ -22546,8 +21837,6 @@ immediates and invert the condition of the branch.
 
 \family sans
 The destination register should always be
-\family default
- 
 \family typewriter
 \size small
 REG_rip
@@ -22561,8 +21850,6 @@ REG_rip
 \family sans
 If the target RIP falls within an unmapped page, not present page or a page
  marked as no-execute (NX), the
-\family default
- 
 \family typewriter
 \size small
 PageFaultOnExec
@@ -22745,40 +22032,30 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 br.sub
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 br.and
 \family sans
 \size default
  uops take the place of a
-\family default
- 
 \family typewriter
 \size small
 sub
 \family sans
 \size default
  or
-\family default
- 
 \family typewriter
 \size small
 and
 \family sans
 \size default
  uop immediately consumed by a
-\family default
- 
 \family typewriter
 \size small
 br
@@ -22794,11 +22071,8 @@ br
 \series bold
 \emph on
 cc
-\family default
 \series default
 \emph default
- 
-\family sans
 is any valid condition code flag evaluation
 \end_layout
 
@@ -22806,8 +22080,6 @@ is any valid condition code flag evaluation
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 rip
@@ -22815,25 +22087,13 @@ rip
 \size default
  (user-visible instruction pointer register) is reset to one of two immediates.
  If the flags evaluation is true, the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate is selected; otherwise the
-\family default
- 
-\family sans
 \emph on
 ripseq
-\family default
 \emph default
- 
-\family sans
 immediate is selected
 \end_layout
 
@@ -22841,8 +22101,6 @@ immediate is selected
 
 \family sans
 If the flag evaluation is false (i.e., ripseq is selected), the
-\family default
- 
 \family typewriter
 \size small
 BranchMispredict
@@ -22851,9 +22109,6 @@ BranchMispredict
  internal exception is raised.
  The processor should annul all uops after the branch and restart fetching
  at the RIP specified by the result (in this case,
-\family default
- 
-\family sans
 \emph on
 ripseq
 \emph default
@@ -22867,25 +22122,13 @@ Branches are always assumed to be taken.
  If the branch is predicted as not taken (i.e.
  future uops come from the next sequential RIP after the branch), it is
  the responsibility of the decoder or frontend to swap the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 ripseq
-\family default
 \emph default
- 
-\family sans
 immediates and invert the condition of the branch.
  All condition encodings can be inverted by inverting bit 0 of the 4-bit
  condition specifier.
@@ -22895,8 +22138,6 @@ immediates and invert the condition of the branch.
 
 \family sans
 The destination register should always be
-\family default
- 
 \family typewriter
 \size small
 REG_rip
@@ -22910,8 +22151,6 @@ REG_rip
 \family sans
 If the target RIP falls within an unmapped page, not present page or a page
  marked as no-execute (NX), the
-\family default
- 
 \family typewriter
 \size small
 PageFaultOnExec
@@ -23053,8 +22292,6 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 rip
@@ -23062,9 +22299,6 @@ rip
 \size default
  (user-visible instruction pointer register) is reset to the target address
  specified by
-\family default
- 
-\family sans
 \emph on
 ra
 \end_layout
@@ -23073,28 +22307,14 @@ ra
 
 \family sans
 If the
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 operand does not match the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate, the
-\family default
- 
 \family typewriter
 \size small
 BranchMispredict
@@ -23103,9 +22323,6 @@ BranchMispredict
  internal exception is raised.
  The processor should annul all uops after the branch and restart fetching
  at the RIP specified by the result (in this case,
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -23116,24 +22333,15 @@ ra
 
 \family sans
 Indirect jumps are always assumed to match the predicted target in
-\family default
- 
-\family sans
 \emph on
 riptaken
 \emph default
 .
  If some other target is predicted, it is the responsibility of the decoder
  or frontend to set the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate to that predicted target
 \end_layout
 
@@ -23141,8 +22349,6 @@ immediate to that predicted target
 
 \family sans
 The destination register should always be
-\family default
- 
 \family typewriter
 \size small
 REG_rip
@@ -23156,8 +22362,6 @@ REG_rip
 \family sans
 If the target RIP falls within an unmapped page, not present page or a marked
  as no-execute (NX), the
-\family default
- 
 \family typewriter
 \size small
 PageFaultOnExec
@@ -23298,8 +22502,6 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 jmpp
@@ -23307,9 +22509,6 @@ jmpp
 \size default
  uop redirects uop fetching into microcode not accessible as x86 instructions.
  The target address (inside PTLsim, not x86 space) is specified by
-\family default
- 
-\family sans
 \emph on
 ra
 \end_layout
@@ -23318,28 +22517,14 @@ ra
 
 \family sans
 If the
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 operand does not match the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate, the
-\family default
- 
 \family typewriter
 \size small
 BranchMispredict
@@ -23348,9 +22533,6 @@ BranchMispredict
  internal exception is raised.
  The processor should annul all uops after the branch and restart fetching
  at the RIP specified by the result (in this case,
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -23361,24 +22543,15 @@ ra
 
 \family sans
 Indirect jumps are always assumed to match the predicted target in
-\family default
- 
-\family sans
 \emph on
 riptaken
 \emph default
 .
  If some other target is predicted, it is the responsibility of the decoder
  or frontend to set the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate to that predicted target
 \end_layout
 
@@ -23386,8 +22559,6 @@ immediate to that predicted target
 
 \family sans
 The destination register should always be
-\family default
- 
 \family typewriter
 \size small
 REG_rip
@@ -23402,8 +22573,6 @@ REG_rip
 The user visible rip register is not updated after this uop issues; otherwise
  it would point into PTLsim space not accessible to x86 code.
  Updating is resumed after a normal
-\family default
- 
 \family typewriter
 \size small
 jmp
@@ -23412,8 +22581,6 @@ jmp
  issues to return to user code.
  It is the responsibility of the decoder to move the user address to return
  to into some temporary register (traditionally
-\family default
- 
 \family typewriter
 \size small
 REG_sr2
@@ -23554,8 +22721,6 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 rip
@@ -23576,8 +22741,6 @@ No exceptions are possible with unconditional branches
 \family sans
 If the target RIP falls within an unmapped page, not present page or a marked
  as no-execute (NX), the
-\family default
- 
 \family typewriter
 \size small
 PageFaultOnExec
@@ -23718,8 +22881,6 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 brp
@@ -23727,15 +22888,9 @@ brp
 \size default
  uop redirects uop fetching into microcode not accessible as x86 instructions.
  The target address (inside PTLsim, not x86 space) is specified by the
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate
 \end_layout
 
@@ -23743,23 +22898,15 @@ immediate
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 rip
 \family sans
 \size default
  (user-visible instruction pointer register) is reset to the specified
-\family default
- 
-\family sans
 \emph on
 riptaken
-\family default
 \emph default
- 
-\family sans
 immediate.
  The processor may redirect fetching from the new RIP
 \end_layout
@@ -23776,8 +22923,6 @@ No exceptions are possible with unconditional branches
 The user visible rip register is not updated after this uop issues; otherwise
  it would point into PTLsim space not accessible to x86 code.
  Updating is resumed after a normal
-\family default
- 
 \family typewriter
 \size small
 jmp
@@ -23786,8 +22931,6 @@ jmp
  uop issues to return to user code.
  It is the responsibility of the decoder to move the user address to return
  to into some temporary register (traditionally
-\family default
- 
 \family typewriter
 \size small
 REG_sr2
@@ -23930,47 +23073,29 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 chk
 \family sans
 \size default
  uop verifies
-\family default
- 
-\family sans
 \emph on
 certain
-\family default
 \emph default
- 
-\family sans
 properties about ra.
  If this verification check passes, no action is taken.
  If the check fails,
-\family default
- 
 \family typewriter
 \size small
 chk
 \family sans
 \size default
  signals an exception of the user specified type in the
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 immediate.
  The result of the
-\family default
- 
 \family typewriter
 \size small
 chk
@@ -23979,8 +23104,6 @@ chk
  uop in this case is the user specified RIP to recover at after the check
  failure is handled in microcode.
  This recovery RIP is saved in the
-\family default
- 
 \family typewriter
 \size small
 recoveryrip
@@ -23996,8 +23119,6 @@ This mechanism is intended to allow simple inlined uop sequences to branch
  into microcode if certain conditions fail, since normally inlined uop sequences
  cannot contain embedded branches.
  One example use is in the
-\family default
- 
 \family typewriter
 \size small
 REP
@@ -24011,36 +23132,22 @@ REP
 
 \family sans
 Unlike most conditional uops, the
-\family default
- 
 \family typewriter
 \size small
 chk
 \family sans
 \size default
  uop directly checks the numerical value of
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 against zero, and ignores any attached flags.
  Therefore, the
-\family default
- 
-\family sans
 \series bold
 \emph on
 cc
-\family default
 \series default
 \emph default
- 
-\family sans
 condition code flag evaluation type is restricted to the subset (e, ne,
  be, nbe, l, nl, le, nle).
 \end_layout
@@ -24259,8 +23366,7 @@ Notes:
 \emph on
 The PTLsim load unit model is described in substantial detail in Section
  
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
@@ -24271,42 +23377,28 @@ reference "sec:IssuingLoads"
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 ld
 \family sans
 \size default
  family of uops loads values from the virtual address specified by the sum
-\family default
  
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
 .
  The
-\family default
- 
 \family typewriter
 \size small
 ld
 \family sans
 \size default
  form zero extends the loaded value, while the
-\family default
- 
 \family typewriter
 \size small
 ldx
@@ -24321,8 +23413,6 @@ ldx
 All values are zero or sign extended to 64 bits; no subword merging takes
  place as with ALU uops.
  The decoder is responsible for following the load with an explicit
-\family default
- 
 \family typewriter
 \size small
 mov
@@ -24335,15 +23425,9 @@ mov
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 sfra
-\family default
 \emph default
- 
-\family sans
 operand specifies the store forwarding register (a.k.a.
  store buffer) to merge with data from the cache to form the final result.
  The inherited SFR may be determined dynamically by querying a store queue
@@ -24354,8 +23438,6 @@ operand specifies the store forwarding register (a.k.a.
 
 \family sans
 If the load misses the cache, the
-\family default
- 
 \family typewriter
 \size small
 FLAG_WAIT
@@ -24381,47 +23463,36 @@ Unaligned Load Support:
 
 \family sans
 The processor supports unaligned loads via a pair of
-\family default
- 
 \family typewriter
 \size small
 ld.lo
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 ld.hi
 \family sans
 \size default
  uops; an overview can be found in Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
 .
  The alignment type of the load is stored in the uop's cond field (0 =
-\family default
- 
 \family typewriter
 \size small
 ld
 \family sans
 \size default
 , 1 =
-\family default
- 
 \family typewriter
 \size small
 ld.lo
 \family sans
 \size default
 , 2 =
-\family default
- 
 \family typewriter
 \size small
 ld.hi
@@ -24434,8 +23505,6 @@ ld.hi
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 ld.lo
@@ -24447,8 +23516,6 @@ ld.lo
 
  to the nearest 64-bit boundary and performs the load.
  The
-\family default
- 
 \family typewriter
 \size small
 ld.hi
@@ -24468,8 +23535,6 @@ ld.lo
 ) load's result.
  The two loads are concatenated into a 128-bit word and the final unaligned
  data is extracted (and sign extended if the
-\family default
- 
 \family typewriter
 \size small
 ldx
@@ -24485,20 +23550,12 @@ ldx
 Special corner case for when the actual user address (
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
 ) did not actually require any bytes in the 8-byte range loaded by the
-\family default
- 
 \family typewriter
 \size small
 ld.hi
@@ -24509,8 +23566,6 @@ ld.hi
  Since it is perfectly legal to do an unaligned load to the very end of
  the page such that the next 64 bit chunk is not mapped to a valid page,
  the
-\family default
- 
 \family typewriter
 \size small
 ld.hi
@@ -24518,23 +23573,15 @@ ld.hi
 \size default
  uop does not actually access memory; the entire result is extracted from
  the prior
-\family default
- 
 \family typewriter
 \size small
 ld.lo
 \family sans
 \size default
  result in the
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 operand.
 \end_layout
 
@@ -24555,14 +23602,8 @@ UnalignedAccess
  if the address (
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
@@ -24574,8 +23615,6 @@ ld.lo
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 ld.hi
@@ -24584,8 +23623,7 @@ ld.hi
 ) do not generate this exception.
  Since x86 automatically corrects alignment problems, microcode must handle
  this exception as described in Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -24602,14 +23640,8 @@ PageFaultOnRead
  if the virtual address (
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
@@ -24828,8 +23860,7 @@ Notes:
 \emph on
 The PTLsim store unit model is described in substantial detail in Section
  
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -24840,8 +23871,6 @@ reference "sec:StoreMerging"
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 st
@@ -24849,19 +23878,10 @@ st
 \size default
  family of uops prepares values to be stored to the virtual address specified
  by the sum
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
@@ -24872,36 +23892,20 @@ rb
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 sfra
-\family default
 \emph default
- 
-\family sans
 operand specifies the store forwarding register (a.k.a.
  store buffer) to merge the data to be stored (the
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 operand) into.
  The inherited SFR may be determined dynamically by querying a store queue
  or can be predicted statically, as described in
-\family default
- 
-\family sans
 \emph on
 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -24919,50 +23923,25 @@ Store uops only generate the SFR for tracking purposes; the cache is only
 
 \family sans
 The store uop may issue as soon as the
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 operands are ready, even if the
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 sfra
-\family default
 \emph default
- 
-\family sans
 operands are not known.
  The store must be replayed once these operands become known, in accordance
  with Section 
-\begin_inset LatexCommand ref
-reference "sec:SplitPhaseStores"
+\begin_inset LatexCommand \ref{sec:SplitPhaseStores}
 
 \end_inset
 
@@ -24986,47 +23965,36 @@ Unaligned Store Support:
 
 \family sans
 The processor supports unaligned stores via a pair of
-\family default
- 
 \family typewriter
 \size small
 st.lo
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 st.hi
 \family sans
 \size default
  uops; an overview can be found in Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
 .
  The alignment type of the load is stored in the uop's cond field (0 =
-\family default
- 
 \family typewriter
 \size small
 st
 \family sans
 \size default
 , 1 =
-\family default
- 
 \family typewriter
 \size small
 st.lo
 \family sans
 \size default
 , 2 =
-\family default
- 
 \family typewriter
 \size small
 st.hi
@@ -25057,8 +24025,6 @@ st.hi
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 st.lo
@@ -25070,8 +24036,6 @@ st.lo
 
  to the nearest 64-bit boundary and stores the appropriately aligned portion
  of the
-\family default
- 
 \family typewriter
 \size small
 rc
@@ -25079,8 +24043,6 @@ rc
 \size default
  operand that actually falls within that range of 8 bytes.
  The
-\family default
- 
 \family typewriter
 \size small
 ld.hi
@@ -25092,8 +24054,6 @@ ld.hi
 
  up to the next 64-bit boundary and similarly stores the appropriately aligned
  portion of the
-\family default
- 
 \family typewriter
 \size small
 rc
@@ -25108,21 +24068,13 @@ rc
 Special corner case for when the actual user address (
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
 ) did not actually touch any bytes in the 8-byte range normally written
  by the
-\family default
- 
 \family typewriter
 \size small
 st.hi
@@ -25133,8 +24085,6 @@ st.hi
  Since it is perfectly legal to do an unaligned store to the very end of
  the page such that the next 64 bit chunk is not mapped to a valid page,
  the
-\family default
- 
 \family typewriter
 \size small
 st.hi
@@ -25161,14 +24111,8 @@ UnalignedAccess
  if the address (
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
@@ -25180,8 +24124,6 @@ st.lo
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 st.hi
@@ -25190,8 +24132,7 @@ st.hi
 ) do not generate this exception.
  Since x86 automatically corrects alignment problems, microcode must handle
  this exception as described in Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -25208,14 +24149,8 @@ PageFaultOnWrite
  if the virtual address (
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
@@ -25231,8 +24166,7 @@ LoadStoreAliasing
 \family sans
 \size default
  if a prior load is found to alias the store (see Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
@@ -25410,16 +24344,12 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 ldp
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 ldxp
@@ -25430,34 +24360,21 @@ ldxp
  Typically this address space is mapped to internal machine state registers
  (MSRs) and microcode scratch space.
  The internal address to access is specified by the sum
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
 .
  The
-\family default
- 
 \family typewriter
 \size small
 ldp
 \family sans
 \size default
  form zero extends the loaded value, while the
-\family default
- 
 \family typewriter
 \size small
 ldxp
@@ -25604,8 +24521,6 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 stp
@@ -25616,29 +24531,14 @@ stp
  Typically this address space is mapped to internal machine state registers
  (MSRs) and microcode scratch space.
  The internal address to store is specified by the sum
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 +
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 and the value to store is specified by
-\family default
- 
-\family sans
 \emph on
 rc
 \emph default
@@ -25887,15 +24787,9 @@ rd = ra
 \end_inset
 
  (ra
-\family default
- 
-\family sans
 \emph on
 rotateleft
-\family default
 \emph default
- 
-\family sans
 rb)
 \end_layout
 
@@ -25939,15 +24833,9 @@ rd = ra
 \end_inset
 
  (ra
-\family default
- 
-\family sans
 \emph on
 rotateright
-\family default
 \emph default
- 
-\family sans
 rb)
 \end_layout
 
@@ -25991,15 +24879,9 @@ rd = ra
 \end_inset
 
  ({rc.cf, ra}
-\family default
- 
-\family sans
 \emph on
 rotateleft
-\family default
 \emph default
- 
-\family sans
 rb)
 \end_layout
 
@@ -26043,15 +24925,9 @@ rd = ra
 \end_inset
 
  ({rc.cf, ra}
-\family default
- 
-\family sans
 \emph on
 rotateright
-\family default
 \emph default
- 
-\family sans
 rb)
 \end_layout
 
@@ -26083,8 +24959,7 @@ The shift and rotate instructions have some of the most bizarre semantics
  on the rotation count operand, which we may not even know until the instruction
  issues.
  This is introduced in Section 
-\begin_inset LatexCommand ref
-reference "sec:ShiftRotateProblems"
+\begin_inset LatexCommand \ref{sec:ShiftRotateProblems}
 
 \end_inset
 
@@ -26141,15 +25016,9 @@ Shifts also alter the ZAPS flags while rotates do not.
 
 \family sans
 For constant counts (immediate
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 values), the semantics are easy to determine in advance.
 \end_layout
 
@@ -26159,10 +25028,7 @@ values), the semantics are easy to determine in advance.
 For variable counts (
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 comes from register), things are more complex.
  Since the shift needs to determine its output flags at runtime based on
  both the shift count and the input flags (CF, OF, ZAPS), we need to specify
@@ -26170,16 +25036,13 @@ comes from register), things are more complex.
  However, this would require three operands to the shift uop not even counting
  the value and count operands.
  Therefore, we use a
-\family default
- 
 \family typewriter
 \size small
 collcc
 \family sans
 \size default
  (collect condition code flags, see Section 
-\begin_inset LatexCommand ref
-reference "sub:FlagsManagement"
+\begin_inset LatexCommand \ref{sub:FlagsManagement}
 
 \end_inset
 
@@ -26187,21 +25050,13 @@ reference "sub:FlagsManagement"
  operands for ZAPS, CF, OF.
  This forms a zero word with all the correct flags attached, which is then
  forwarded as the
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 operand to the shift.
  This may add additional scheduling constraints in the case that one of
  the operands to the shift itself sets the flags, but this is fairly rare.
  Conveniently, this also lets us directly implement the 65-bit
-\family default
- 
 \family typewriter
 \size small
 rotcl
@@ -26220,15 +25075,9 @@ rotcr
 
 \family sans
 All operations merge the ALU result with
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and generate flags in accordance with the standard x86 merging rules described
  previously.
 \end_layout
@@ -26370,8 +25219,6 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 mask
@@ -26386,24 +25233,18 @@ mask
 \family sans
 These uops are used extensively within PTLsim microcode, but are also useful
  if the processor supports dynamically merging a chain of
-\family default
- 
 \family typewriter
 \size small
 shr
 \family sans
 \size default
 ,
-\family default
- 
 \family typewriter
 \size small
 and
 \family sans
 \size default
 ,
-\family default
- 
 \family typewriter
 \size small
 or
@@ -26433,15 +25274,9 @@ Control Field Format
 
 \family sans
 The 18-bit
-\family default
- 
-\family sans
 \emph on
 rc
-\family default
 \emph default
- 
-\family sans
 immediate has the following three 6-bit fields:
 \end_layout
 
@@ -26540,8 +25375,6 @@ MS
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 mask
@@ -26773,23 +25606,15 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 bswap
 \family sans
 \size default
  uop reverses the endianness of the
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 operand.
  The uop's effective result size determines the range of bytes which are
  reversed.
@@ -26799,8 +25624,6 @@ operand.
 
 \family sans
 This uop's semantics are identical to the x86
-\family default
- 
 \family typewriter
 \size small
 bswap
@@ -26947,8 +25770,6 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 collcc
@@ -27135,23 +25956,15 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 movccr
 \family sans
 \size default
  uop takes the condition code flag bits attached to
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and copies them into the 64-bit register part of the result.
 \end_layout
 
@@ -27159,23 +25972,15 @@ and copies them into the 64-bit register part of the result.
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 movrcc
 \family sans
 \size default
  uop takes the low bits of the
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 operand and moves those bits into the condition code flag bits attached
  to the result.
 \end_layout
@@ -27191,9 +25996,6 @@ The bits moved consist of the ZF, PF, SF, CF, OF flags
 \family sans
 The WAIT and INV flags of the result are always cleared since the uop would
  not even issue if these were set in
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -27441,19 +26243,10 @@ Notes:
 \family sans
 These uops are used to perform logical operations on the condition code
  flags attached to
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
@@ -27464,15 +26257,9 @@ rb
 
 \family sans
 If the
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 operand is an immediate, the immediate data is used instead of the flags
  normally attached to a register operand.
 \end_layout
@@ -27663,47 +26450,23 @@ Notes:
 
 \family sans
 These uops multiply
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
 , then retain only the low
-\family default
- 
-\family sans
 \emph on
 N
-\family default
 \emph default
- 
-\family sans
 bits or high
-\family default
- 
-\family sans
 \emph on
 N
-\family default
 \emph default
- 
-\family sans
 bits of the result (where N is the uop's effective result size in bits).
  This result is then merged into
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -27727,15 +26490,9 @@ imul
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 operand may be an immediate
 \end_layout
 
@@ -28003,15 +26760,9 @@ Notes:
 
 \family sans
 These uops test a given bit in
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and then atomically modify (set, reset or complement) that bit in the result.
 \end_layout
 
@@ -28019,19 +26770,10 @@ and then atomically modify (set, reset or complement) that bit in the result.
 
 \family sans
 The CF flag of the output is set to the original value in bit position
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 of
-\family default
- 
-\family sans
 \emph on
 ra
 \emph default
@@ -28043,8 +26785,6 @@ ra
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 bt
@@ -28053,8 +26793,6 @@ bt
  (bit test) uop is special: it generates a value of -1 or +1 if the tested
  bit is 1 or 0, respectively.
  This is used in microcode for setting up an increment for the
-\family default
- 
 \family typewriter
 \size small
 rep
@@ -28239,23 +26977,16 @@ Notes:
 
 \family sans
 These uops find the bit index of the first '1' bit in
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
 , starting from the lowest bit 0 (for
-\family default
- 
 \family typewriter
 \size small
 ctz
 \family sans
 \size default
 ) or the highest bit of the data type (for
-\family default
- 
 \family typewriter
 \size small
 clz
@@ -28274,25 +27005,13 @@ The result is zero (technically, undefined) if ra is zero.
 
 \family sans
 The ZF flag of the result is 1 if
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 was zero, or 0 if
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 was nonzero.
  Other condition code flags are undefined.
 \end_layout
@@ -28425,23 +27144,15 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 ctpop
 \family sans
 \size default
  uop counts the number of '1' bits in the
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 operand.
 \end_layout
 
@@ -28449,25 +27160,13 @@ operand.
 
 \family sans
 The ZF flag of the result is 1 if
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 was zero, or 0 if
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 was nonzero.
  Other condition code flags are undefined.
 \end_layout
@@ -28504,15 +27203,9 @@ Floating Point Format and Merging
 All floating point uops use the same encoding to specify the precision and
  vector format of the operands.
  The uop's
-\family default
- 
-\family sans
 \emph on
 size
-\family default
 \emph default
- 
-\family sans
 field is encoded as follows:
 \end_layout
 
@@ -28596,27 +27289,15 @@ fd
 
 \family sans
 Most floating point operations merge the result with the
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 operand to prepare the destination.
  Since a full 64-bit result is generated with the vector and double formats,
  the
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 operand is not needed and may be specified as zero to reduce dependencies.
 \end_layout
 
@@ -28634,8 +27315,6 @@ Unless otherwise noted, all operations update the internal floating point
  ORing in any exceptions that occur.
  If the uop is encoded to generate an actual exception on excepting conditions,
  the
-\family default
- 
 \family typewriter
 \size small
 FLAG_INV
@@ -28996,15 +27675,9 @@ Notes:
 \family sans
 These uops do arithmetic on floating point numbers in various formats as
  specified in the
-\family default
- 
-\family sans
 \emph on
 Floating Point Format and Merging
-\family default
 \emph default
- 
-\family sans
 page.
 \end_layout
 
@@ -29188,16 +27861,12 @@ Notes:
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 maddf
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 msubf
@@ -29441,16 +28110,12 @@ These uops perform the specified unary operation on rb and merge the result
 
 \family sans
 The
-\family default
- 
 \family typewriter
 \size small
 rcpf
 \family sans
 \size default
  and
-\family default
- 
 \family typewriter
 \size small
 rsqrtf
@@ -29592,19 +28257,10 @@ Notes:
 
 \family sans
 This uop performs the specified comparison of
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 rb
 \emph default
@@ -29618,15 +28274,9 @@ rb
 
 \family sans
 The
-\family default
- 
-\family sans
 \emph on
 cond
-\family default
 \emph default
- 
-\family sans
 field in the uop encoding holds the comparison type.
  The set of compare types matches the x86 SSE/SSE2 CMPxx instructions.
 \end_layout
@@ -29759,25 +28409,13 @@ Notes:
 
 \family sans
 This uop performs all comparisons of
-\family default
- 
-\family sans
 \emph on
 ra
-\family default
 \emph default
- 
-\family sans
 and
-\family default
- 
-\family sans
 \emph on
 rb
-\family default
 \emph default
- 
-\family sans
 and produces x86 condition code flags (ZF, PF, CF) to represent the result.
 \end_layout
 
@@ -29786,8 +28424,6 @@ and produces x86 condition code flags (ZF, PF, CF) to represent the result.
 \family sans
 The semantics of the generated condition code flags exactly matches the
  x86 SSE/SSE2 instructions
-\family default
- 
 \family typewriter
 \size small
 COMISS
@@ -29818,15 +28454,9 @@ UCOMISD
 
 \family sans
 Unlike most encodings, the
-\family default
- 
-\family sans
 \emph on
 size
-\family default
 \emph default
- 
-\family sans
 field holds the comparison type of the two values as follows:
 \end_layout
 
@@ -29837,7 +28467,7 @@ field holds the comparison type of the two values as follows:
 \series bold
 \size small
 00:
-\family default
+\family sans
 \series default
 \size default
  
@@ -29847,8 +28477,6 @@ cmpccfp
 \family sans
 \size default
 : single precision ordered compare (same semantics as x86 SSE
-\family default
- 
 \family typewriter
 \size small
 COMISS
@@ -29863,7 +28491,7 @@ COMISS
 \series bold
 \size small
 01:
-\family default
+\family sans
 \series default
 \size default
  
@@ -29873,8 +28501,6 @@ cmpccfp.u
 \family sans
 \size default
 : single precision unordered compare (same semantics as x86 SSE
-\family default
- 
 \family typewriter
 \size small
 UCOMISS
@@ -29889,7 +28515,7 @@ UCOMISS
 \series bold
 \size small
 10:
-\family default
+\family sans
 \series default
 \size default
  
@@ -29899,8 +28525,6 @@ cmpccfd
 \family sans
 \size default
 : double precision ordered compare (same semantics as x86 SSE2
-\family default
- 
 \family typewriter
 \size small
 COMISD
@@ -29915,7 +28539,7 @@ COMISD
 \series bold
 \size small
 11:
-\family default
+\family sans
 \series default
 \size default
  
@@ -29925,8 +28549,6 @@ cmpccfd.u
 \family sans
 \size default
 : double precision ordered compare (same semantics as x86 SSE2
-\family default
- 
 \family typewriter
 \size small
 UCOMISD
@@ -30259,15 +28881,9 @@ The semantics of these instructions are identical to the semantics of the
 
 \family sans
 The uop
-\family default
- 
-\family sans
 \emph on
 size
-\family default
 \emph default
- 
-\family sans
 field is not used by these uops
 \end_layout
 
@@ -30500,15 +29116,9 @@ The semantics of these instructions are identical to the semantics of the
 
 \family sans
 The uop
-\family default
- 
-\family sans
 \emph on
 size
-\family default
 \emph default
- 
-\family sans
 field is not used by these uops
 \end_layout
 
@@ -30788,15 +29398,9 @@ The semantics of these instructions are identical to the semantics of the
 
 \family sans
 Unlike most encodings, the
-\family default
- 
-\family sans
 \emph on
 size
-\family default
 \emph default
- 
-\family sans
 field holds the rounding type of the result as follows:
 \end_layout
 
@@ -31102,15 +29706,9 @@ The semantics of these instructions are identical to the semantics of the
 
 \family sans
 Unlike most encodings, the
-\family default
- 
-\family sans
 \emph on
 size
-\family default
 \emph default
- 
-\family sans
 field holds the rounding type of the result as follows:
 \end_layout
 
@@ -31463,21 +30061,14 @@ The semantics of these instructions are identical to the semantics of the
 
 \family sans
 The uop
-\family default
- 
-\family sans
 \emph on
 size
-\family default
 \emph default
- 
-\family sans
 field is not used by these uops
 \end_layout
 
 \begin_layout Chapter
-\begin_inset LatexCommand label
-name "sec:PerformanceCounters"
+\begin_inset LatexCommand \label{sec:PerformanceCounters}
 
 \end_inset
 
@@ -31488,8 +30079,7 @@ Performance Counters
 PTLsim maintains hundreds of performance and statistical counters and data
  points as it simulates user code.
  In Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsInfrastructure"
+\begin_inset LatexCommand \ref{sec:StatisticsInfrastructure}
 
 \end_inset
 
@@ -31514,8 +30104,7 @@ General
 
 \begin_layout Standard
 As described in Section 
-\begin_inset LatexCommand ref
-reference "sec:StatisticsInfrastructure"
+\begin_inset LatexCommand \ref{sec:StatisticsInfrastructure}
 
 \end_inset
 
@@ -31547,8 +30136,7 @@ final
 \family default
 \size default
  configuration option (Section 
-\begin_inset LatexCommand ref
-reference "sec:ConfigurationOptions"
+\begin_inset LatexCommand \ref{sec:ConfigurationOptions}
 
 \end_inset
 
@@ -32041,9 +30629,9 @@ basic_blocks:
 \series bold
 \size footnotesize
 x86_insns:
-\family default
 \series default
  
+\family default
 \size default
 total x86 instructions decoded
 \end_layout
@@ -32249,13 +30837,9 @@ DMA into page with existing translations required page to be invalidated
 \series bold
 \size footnotesize
 spurious:
-\family default
 \series default
- 
-\family typewriter
 exec_page_fault
 \family default
- 
 \size default
 assist determined the page has now been made executable
 \end_layout
@@ -32386,13 +30970,9 @@ DMA into page with existing translations required page to be invalidated
 \series bold
 \size footnotesize
 spurious:
-\family default
 \series default
- 
-\family typewriter
 exec_page_fault
 \family default
- 
 \size default
 assist determined the page has now been made executable
 \end_layout
@@ -32521,9 +31101,9 @@ fetch unit was already stalled in the previous cycle
 \series bold
 \size footnotesize
 icache_miss:
-\family default
 \series default
  
+\family default
 \size default
 an instruction cache miss prevented further fetches
 \end_layout
@@ -32534,9 +31114,9 @@ an instruction cache miss prevented further fetches
 \series bold
 \size footnotesize
 fetchq_full:
-\family default
 \series default
  
+\family default
 \size default
 the uop fetch queue is full
 \end_layout
@@ -32547,9 +31127,9 @@ the uop fetch queue is full
 \series bold
 \size footnotesize
 bogus_rip:
-\family default
 \series default
  
+\family default
 \size default
 speculative execution redirected the fetch unit to an inaccessible (or non-execu
 table) page.
@@ -32563,9 +31143,9 @@ table) page.
 \series bold
 \size footnotesize
 microcode_assist:
-\family default
 \series default
  
+\family default
 \size default
 microcode assist must wait for pipeline to empty
 \end_layout
@@ -32602,9 +31182,9 @@ full_width:
 \series bold
 \size footnotesize
 opclass:
-\family default
 \series default
  
+\family default
 \size default
 histogram of how many uops of various operation classes passed through the
  fetch unit.
@@ -33023,8 +31603,7 @@ redispatch:
 \series default
 \size default
  statistics on the redispatch speculation recovery rmechanism (Section 
-\begin_inset LatexCommand ref
-reference "sec:SpeculationRecovery"
+\begin_inset LatexCommand \ref{sec:SpeculationRecovery}
 
 \end_inset
 
@@ -33125,14 +31704,12 @@ replay:
  is not yet available, or when insufficient resources are available to complete
  the memory operation.
  Details are given in Sections 
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:SplitPhaseStores"
+\begin_inset LatexCommand \ref{sec:SplitPhaseStores}
 
 \end_inset
 
@@ -33151,21 +31728,18 @@ misspeculation:
  uop mis-speculated and now all uops after and including the issued uop
  must be annulled.
  This generally occurs with loads (Section 
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
 ) and stores (Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
 ) when unaligned accesses or load-store aliasing occurs.
  This event is handled in accordance with Section 
-\begin_inset LatexCommand ref
-reference "sec:SpeculationRecovery"
+\begin_inset LatexCommand \ref{sec:SpeculationRecovery}
 
 \end_inset
 
@@ -33198,8 +31772,7 @@ branch_mispredict:
  uop was a branch and mispredicted, such that all uops after (but not including)
  the branch uop must be annulled.
  See Section 
-\begin_inset LatexCommand ref
-reference "sec:SpeculationAndRecovery"
+\begin_inset LatexCommand \ref{sec:SpeculationAndRecovery}
 
 \end_inset
 
@@ -33542,8 +32115,7 @@ smc:
 \size default
  self modifying code: the instruction attempting to commit has been modified
  since it was last decoded (see Section 
-\begin_inset LatexCommand ref
-reference "sec:SelfModifyingCode"
+\begin_inset LatexCommand \ref{sec:SelfModifyingCode}
 
 \end_inset
 
@@ -33568,8 +32140,7 @@ stop:
 \family default
 \size default
  option in Section 
-\begin_inset LatexCommand ref
-reference "sec:ConfigurationOptions"
+\begin_inset LatexCommand \ref{sec:ConfigurationOptions}
 
 \end_inset
 
@@ -33822,9 +32393,9 @@ ns
 \series bold
 \size footnotesize
 summary:
-\family default
 \series default
  
+\family default
 \size default
 summary of all prediction outcomes of the three types above, broken down
  into correct predictions and mispredictions
@@ -33836,9 +32407,9 @@ summary of all prediction outcomes of the three types above, broken down
 \series bold
 \size footnotesize
 ras:
-\family default
 \series default
  
+\family default
 \size default
 return address stack (RAS) operations
 \end_layout
@@ -33850,9 +32421,9 @@ return address stack (RAS) operations
 \series bold
 \size footnotesize
 push:
-\family default
 \series default
  
+\family default
 \size default
 RAS pushes on calls
 \end_layout
@@ -33863,9 +32434,9 @@ RAS pushes on calls
 \series bold
 \size footnotesize
 push_overflows:
-\family default
 \series default
  
+\family default
 \size default
 RAS pushes on calls in which the RAS overflowed
 \end_layout
@@ -33876,9 +32447,9 @@ RAS pushes on calls in which the RAS overflowed
 \series bold
 \size footnotesize
 pop:
-\family default
 \series default
  
+\family default
 \size default
 RAS pops on returns
 \end_layout
@@ -33889,9 +32460,9 @@ RAS pops on returns
 \series bold
 \size footnotesize
 pop_underflows:
-\family default
 \series default
  
+\family default
 \size default
 RAS pops on returns in which the RAS was empty
 \end_layout
@@ -33902,9 +32473,9 @@ RAS pops on returns in which the RAS was empty
 \series bold
 \size footnotesize
 annuls:
-\family default
 \series default
  
+\family default
 \size default
 annulment operations in which speculative updates to the RAS were rolled
  back
@@ -33972,14 +32543,12 @@ miss:
 \series default
 \size default
  L1 cache miss, and possibly lower levels as well (Sections 
-\begin_inset LatexCommand ref
-reference "sec:CacheMissHandling"
+\begin_inset LatexCommand \ref{sec:CacheMissHandling}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:InitiatingCacheMiss"
+\begin_inset LatexCommand \ref{sec:InitiatingCacheMiss}
 
 \end_inset
 
@@ -33997,8 +32566,7 @@ exception:
 \size default
  load generated an exception (typically a page fault), although the exception
  may still be speculative (Section 
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
@@ -34015,8 +32583,7 @@ ordering:
 \series default
 \size default
  load was misordered with respect to stores (Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
@@ -34034,14 +32601,12 @@ unaligned:
 \size default
  load was unaligned and will need to be re-executed as a pair of low and
  high loads (Sections 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
@@ -34058,8 +32623,7 @@ replay:
 \series default
 \size default
  histogram of events in which a load needed to be replayed (Section 
-\begin_inset LatexCommand ref
-reference "sec:IssuingLoads"
+\begin_inset LatexCommand \ref{sec:IssuingLoads}
 
 \end_inset
 
@@ -34073,13 +32637,12 @@ reference "sec:IssuingLoads"
 \series bold
 \size footnotesize
 sfr-addr-and-data-not-ready:
-\family default
 \series default
  
+\family default
 \size default
 load was predicted to forward data from a prior store (Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
@@ -34092,9 +32655,9 @@ reference "sub:AliasCheck"
 \series bold
 \size footnotesize
 sfr-addr-not-ready:
-\family default
 \series default
  
+\family default
 \size default
 load was predicted to forward data from a prior store, but the address of
  that store has not resolved yet
@@ -34106,9 +32669,9 @@ load was predicted to forward data from a prior store, but the address of
 \series bold
 \size footnotesize
 sfr-data-not-ready:
-\family default
 \series default
  
+\family default
 \size default
 load address matched a prior store in the store queue, but the data that
  store should write has not resolved yet
@@ -34120,13 +32683,12 @@ load address matched a prior store in the store queue, but the data that
 \series bold
 \size footnotesize
 missbuf-full:
-\family default
 \series default
  
+\family default
 \size default
 load missed the cache but the miss buffer and/or LFRQ (Section 
-\begin_inset LatexCommand ref
-reference "sec:InitiatingCacheMiss"
+\begin_inset LatexCommand \ref{sec:InitiatingCacheMiss}
 
 \end_inset
 
@@ -34141,9 +32703,9 @@ reference "sec:InitiatingCacheMiss"
 \series bold
 \size footnotesize
 hit:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the cache hierarchy level each load finally hit
 \end_layout
@@ -34155,9 +32717,9 @@ histogram of the cache hierarchy level each load finally hit
 \series bold
 \size footnotesize
 L1:
-\family default
 \series default
  
+\family default
 \size default
 L1 cache hit
 \end_layout
@@ -34168,9 +32730,9 @@ L1 cache hit
 \series bold
 \size footnotesize
 L2:
-\family default
 \series default
  
+\family default
 \size default
 L1 cache miss, L2 cache hit
 \end_layout
@@ -34181,9 +32743,9 @@ L1 cache miss, L2 cache hit
 \series bold
 \size footnotesize
 L3:
-\family default
 \series default
  
+\family default
 \size default
 L1 and L2 cache miss, L3 cache hit
 \end_layout
@@ -34194,9 +32756,9 @@ L1 and L2 cache miss, L3 cache hit
 \series bold
 \size footnotesize
 mem:
-\family default
 \series default
  
+\family default
 \size default
 all caches missed; value read from main memory
 \end_layout
@@ -34208,9 +32770,9 @@ all caches missed; value read from main memory
 \series bold
 \size footnotesize
 forward:
-\family default
 \series default
  
+\family default
 \size default
 histogram of which sources were used to fill each load
 \end_layout
@@ -34222,9 +32784,9 @@ histogram of which sources were used to fill each load
 \series bold
 \size footnotesize
 cache:
-\family default
 \series default
  
+\family default
 \size default
 how many loads obtained all their data from the cache
 \end_layout
@@ -34235,9 +32797,9 @@ how many loads obtained all their data from the cache
 \series bold
 \size footnotesize
 sfr:
-\family default
 \series default
  
+\family default
 \size default
 how many loads obtained all their data from a prior store in the pipeline
  (i.e.
@@ -34250,9 +32812,9 @@ how many loads obtained all their data from a prior store in the pipeline
 \series bold
 \size footnotesize
 sfr-and-cache:
-\family default
 \series default
  
+\family default
 \size default
 how many loads obtained their data from a combination of the cache and a
  prior store
@@ -34265,9 +32827,9 @@ how many loads obtained their data from a combination of the cache and a
 \series bold
 \size footnotesize
 dependency:
-\family default
 \series default
  
+\family default
 \size default
 histogram of how loads related to previous stores
 \end_layout
@@ -34279,9 +32841,9 @@ histogram of how loads related to previous stores
 \series bold
 \size footnotesize
 independent:
-\family default
 \series default
  
+\family default
 \size default
 load was independent of any store currently in the pipeline
 \end_layout
@@ -34292,15 +32854,14 @@ load was independent of any store currently in the pipeline
 \series bold
 \size footnotesize
 predicted-alias-unresolved:
-\family default
 \series default
  
+\family default
 \size default
 load was stalled because the load store alias predictor (LSAP) predicted
  that an earlier store would overlap the load's address address even though
  that earlier store's address was unresolved (Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
@@ -34313,9 +32874,9 @@ reference "sub:AliasCheck"
 \series bold
 \size footnotesize
 stq-address-match:
-\family default
 \series default
  
+\family default
 \size default
 load depended on an earlier store still found in the store queue
 \end_layout
@@ -34327,9 +32888,9 @@ load depended on an earlier store still found in the store queue
 \series bold
 \size footnotesize
 type:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the type of each load uop
 \end_layout
@@ -34341,9 +32902,9 @@ histogram of the type of each load uop
 \series bold
 \size footnotesize
 aligned:
-\family default
 \series default
  
+\family default
 \size default
 normal aligned loads
 \end_layout
@@ -34354,9 +32915,9 @@ normal aligned loads
 \series bold
 \size footnotesize
 unaligned:
-\family default
 \series default
  
+\family default
 \size default
 special unaligned load uops 
 \family typewriter
@@ -34371,8 +32932,7 @@ ld.hi
 \family default
 \size default
  (Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -34385,9 +32945,9 @@ reference "sub:UnalignedLoadsAndStores"
 \series bold
 \size footnotesize
 internal:
-\family default
 \series default
  
+\family default
 \size default
 loads from PTLsim space by microcode
 \end_layout
@@ -34399,9 +32959,9 @@ loads from PTLsim space by microcode
 \series bold
 \size footnotesize
 size:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the size in bytes of each load uop
 \end_layout
@@ -34412,14 +32972,13 @@ histogram of the size in bytes of each load uop
 \series bold
 \size footnotesize
 transfer-L2-to-L1:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the types of L2 to L1 line transfers that occurred (Section
  
-\begin_inset LatexCommand ref
-reference "sec:CacheHierarchy"
+\begin_inset LatexCommand \ref{sec:CacheHierarchy}
 
 \end_inset
 
@@ -34433,9 +32992,9 @@ reference "sec:CacheHierarchy"
 \series bold
 \size footnotesize
 full-L2-to-L1:
-\family default
 \series default
  
+\family default
 \size default
 all bytes in cache line were transferred from L2 to L1 cache
 \end_layout
@@ -34446,9 +33005,9 @@ all bytes in cache line were transferred from L2 to L1 cache
 \series bold
 \size footnotesize
 partial-L2-to-L1:
-\family default
 \series default
  
+\family default
 \size default
 some bytes in the L1 line were already valid (because of stores to those
  bytes), but the remaining bytes still need to be fetched
@@ -34460,9 +33019,9 @@ some bytes in the L1 line were already valid (because of stores to those
 \series bold
 \size footnotesize
 L2-to-L1I:
-\family default
 \series default
  
+\family default
 \size default
 all bytes in the L2 line were transferred into the L1 instruction cache
 \end_layout
@@ -34474,13 +33033,12 @@ all bytes in the L2 line were transferred into the L1 instruction cache
 \series bold
 \size footnotesize
 dtlb:
-\family default
 \series default
  
+\family default
 \size default
 data cache translation lookaside buffer hit versus miss rate (Section 
-\begin_inset LatexCommand ref
-reference "sec:TranslationLookasideBuffers"
+\begin_inset LatexCommand \ref{sec:TranslationLookasideBuffers}
 
 \end_inset
 
@@ -34493,13 +33051,12 @@ reference "sec:TranslationLookasideBuffers"
 \series bold
 \size footnotesize
 fetch:
-\family default
 \series default
  
+\family default
 \size default
 instruction fetch unit statistics (Section 
-\begin_inset LatexCommand ref
-reference "sec:FetchStage"
+\begin_inset LatexCommand \ref{sec:FetchStage}
 
 \end_inset
 
@@ -34512,9 +33069,9 @@ reference "sec:FetchStage"
 \series bold
 \size footnotesize
 hit:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the cache hierarchy level each fetch finally hit
 \end_layout
@@ -34526,9 +33083,9 @@ histogram of the cache hierarchy level each fetch finally hit
 \series bold
 \size footnotesize
 L1:
-\family default
 \series default
  
+\family default
 \size default
 L1 cache hit
 \end_layout
@@ -34539,9 +33096,9 @@ L1 cache hit
 \series bold
 \size footnotesize
 L2:
-\family default
 \series default
  
+\family default
 \size default
 L1 cache miss, L2 cache hit
 \end_layout
@@ -34552,9 +33109,9 @@ L1 cache miss, L2 cache hit
 \series bold
 \size footnotesize
 L3:
-\family default
 \series default
  
+\family default
 \size default
 L1 and L2 cache miss, L3 cache hit
 \end_layout
@@ -34565,9 +33122,9 @@ L1 and L2 cache miss, L3 cache hit
 \series bold
 \size footnotesize
 mem:
-\family default
 \series default
  
+\family default
 \size default
 all caches missed; value read from main memory
 \end_layout
@@ -34579,14 +33136,13 @@ all caches missed; value read from main memory
 \series bold
 \size footnotesize
 itlb:
-\family default
 \series default
  
+\family default
 \size default
 instruction cache translation lookaside buffer hit versus miss rate (Section
  
-\begin_inset LatexCommand ref
-reference "sec:TranslationLookasideBuffers"
+\begin_inset LatexCommand \ref{sec:TranslationLookasideBuffers}
 
 \end_inset
 
@@ -34599,9 +33155,9 @@ reference "sec:TranslationLookasideBuffers"
 \series bold
 \size footnotesize
 prefetches:
-\family default
 \series default
  
+\family default
 \size default
 prefetch engine statistics
 \end_layout
@@ -34612,9 +33168,9 @@ prefetch engine statistics
 \series bold
 \size footnotesize
 in-L1:
-\family default
 \series default
  
+\family default
 \size default
 requested data already in L1 cache
 \end_layout
@@ -34625,9 +33181,9 @@ requested data already in L1 cache
 \series bold
 \size footnotesize
 in-L2:
-\family default
 \series default
  
+\family default
 \size default
 requested data already in L2 cache (and possibly also in L1 cache)
 \end_layout
@@ -34638,9 +33194,9 @@ requested data already in L2 cache (and possibly also in L1 cache)
 \series bold
 \size footnotesize
 required:
-\family default
 \series default
  
+\family default
 \size default
 prefetch was actually required (data was not cached or was in L3 or lower
  levels)
@@ -34652,19 +33208,17 @@ prefetch was actually required (data was not cached or was in L3 or lower
 \series bold
 \size footnotesize
 missbuf:
-\family default
 \series default
  
+\family default
 \size default
 miss buffer performance (Sections 
-\begin_inset LatexCommand ref
-reference "sec:InitiatingCacheMiss"
+\begin_inset LatexCommand \ref{sec:InitiatingCacheMiss}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:FillingCacheMiss"
+\begin_inset LatexCommand \ref{sec:FillingCacheMiss}
 
 \end_inset
 
@@ -34677,9 +33231,9 @@ reference "sec:FillingCacheMiss"
 \series bold
 \size footnotesize
 inserts:
-\family default
 \series default
  
+\family default
 \size default
 total number of lines inserted into the miss buffer
 \end_layout
@@ -34690,9 +33244,9 @@ total number of lines inserted into the miss buffer
 \series bold
 \size footnotesize
 delivers:
-\family default
 \series default
  
+\family default
 \size default
 total number of lines delivered to various cache hierarchy levels from the
  miss buffer
@@ -34705,9 +33259,9 @@ total number of lines delivered to various cache hierarchy levels from the
 \series bold
 \size footnotesize
 mem-to-L3:
-\family default
 \series default
  
+\family default
 \size default
 deliver line from main memory to the L3 cache
 \end_layout
@@ -34718,9 +33272,9 @@ deliver line from main memory to the L3 cache
 \series bold
 \size footnotesize
 L3-to-L2:
-\family default
 \series default
  
+\family default
 \size default
 deliver line to the L3 cache to the L2 cache
 \end_layout
@@ -34731,9 +33285,9 @@ deliver line to the L3 cache to the L2 cache
 \series bold
 \size footnotesize
 L2-to-L1D:
-\family default
 \series default
  
+\family default
 \size default
 deliver line from the L2 cache to the L1 data cache
 \end_layout
@@ -34744,9 +33298,9 @@ deliver line from the L2 cache to the L1 data cache
 \series bold
 \size footnotesize
 L2-to-L1I:
-\family default
 \series default
  
+\family default
 \size default
 deliver line from the L2 cache to the L1 instruction cache
 \end_layout
@@ -34758,19 +33312,17 @@ deliver line from the L2 cache to the L1 instruction cache
 \series bold
 \size footnotesize
 lfrq:
-\family default
 \series default
  
+\family default
 \size default
 load fill request queue (LFRQ) performance (Sections 
-\begin_inset LatexCommand ref
-reference "sec:InitiatingCacheMiss"
+\begin_inset LatexCommand \ref{sec:InitiatingCacheMiss}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:FillingCacheMiss"
+\begin_inset LatexCommand \ref{sec:FillingCacheMiss}
 
 \end_inset
 
@@ -34783,9 +33335,9 @@ reference "sec:FillingCacheMiss"
 \series bold
 \size footnotesize
 inserts:
-\family default
 \series default
  
+\family default
 \size default
 total number of loads inserted into the LFRQ
 \end_layout
@@ -34796,9 +33348,9 @@ total number of loads inserted into the LFRQ
 \series bold
 \size footnotesize
 wakeups:
-\family default
 \series default
  
+\family default
 \size default
 total number of loads awakened from the LFRQ
 \end_layout
@@ -34809,9 +33361,9 @@ total number of loads awakened from the LFRQ
 \series bold
 \size footnotesize
 annuls:
-\family default
 \series default
  
+\family default
 \size default
 total number of loads annulled in the LFRQ (after they were annulled in
  the processor core)
@@ -34823,9 +33375,9 @@ total number of loads annulled in the LFRQ (after they were annulled in
 \series bold
 \size footnotesize
 resets:
-\family default
 \series default
  
+\family default
 \size default
 total number of LFRQ resets (all entries cleared)
 \end_layout
@@ -34836,9 +33388,9 @@ total number of LFRQ resets (all entries cleared)
 \series bold
 \size footnotesize
 total-latency:
-\family default
 \series default
  
+\family default
 \size default
 total latency in cycles of all loads passing through the LFRQ
 \end_layout
@@ -34849,9 +33401,9 @@ total latency in cycles of all loads passing through the LFRQ
 \series bold
 \size footnotesize
 average-miss-latency:
-\family default
 \series default
  
+\family default
 \size default
 average load latency, weighted by cache level hit and latency to that level
 \end_layout
@@ -34862,9 +33414,9 @@ average load latency, weighted by cache level hit and latency to that level
 \series bold
 \size footnotesize
 width:
-\family default
 \series default
  
+\family default
 \size default
 histogram of how many loads were awakened per cycle by the LFRQ
 \end_layout
@@ -34875,9 +33427,9 @@ histogram of how many loads were awakened per cycle by the LFRQ
 \series bold
 \size footnotesize
 store:
-\family default
 \series default
  
+\family default
 \size default
 store unit statistics
 \end_layout
@@ -34888,9 +33440,9 @@ store unit statistics
 \series bold
 \size footnotesize
 issue:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the final disposition of issuing each store uop
 \end_layout
@@ -34902,9 +33454,9 @@ histogram of the final disposition of issuing each store uop
 \series bold
 \size footnotesize
 complete:
-\family default
 \series default
  
+\family default
 \size default
 store completed without problems
 \end_layout
@@ -34915,14 +33467,13 @@ store completed without problems
 \series bold
 \size footnotesize
 exception:
-\family default
 \series default
  
+\family default
 \size default
 store generated an exception (typically a page fault), although the exception
  may still be speculative (Section 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -34935,14 +33486,13 @@ reference "sec:StoreMerging"
 \series bold
 \size footnotesize
 ordering:
-\family default
 \series default
  
+\family default
 \size default
 store detected that a later load in program order aliased the store but
  was issued earlier than the store (Section 
-\begin_inset LatexCommand ref
-reference "sub:AliasCheck"
+\begin_inset LatexCommand \ref{sub:AliasCheck}
 
 \end_inset
 
@@ -34955,14 +33505,13 @@ reference "sub:AliasCheck"
 \series bold
 \size footnotesize
 unaligned:
-\family default
 \series default
  
+\family default
 \size default
 store was unaligned and will need to be re-executed as a pair of low and
  high stores (Sections 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -34975,19 +33524,17 @@ reference "sub:UnalignedLoadsAndStores"
 \series bold
 \size footnotesize
 replay:
-\family default
 \series default
  
+\family default
 \size default
 histogram of events in which a store needed to be replayed (Sections 
-\begin_inset LatexCommand ref
-reference "sec:SplitPhaseStores"
+\begin_inset LatexCommand \ref{sec:SplitPhaseStores}
 
 \end_inset
 
  and 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -35001,9 +33548,9 @@ reference "sec:StoreMerging"
 \series bold
 \size footnotesize
 wait-sfraddr-sfrdata:
-\family default
 \series default
  
+\family default
 \size default
 neither the address nor the data of a prior store this store inherits some
  of its data from was ready
@@ -35015,9 +33562,9 @@ neither the address nor the data of a prior store this store inherits some
 \series bold
 \size footnotesize
 wait-sfraddr:
-\family default
 \series default
  
+\family default
 \size default
 the data of a prior store was ready but its address was still unavailable
 \end_layout
@@ -35028,9 +33575,9 @@ the data of a prior store was ready but its address was still unavailable
 \series bold
 \size footnotesize
 wait-sfrdata:
-\family default
 \series default
  
+\family default
 \size default
 the address of a prior store was ready but its data was still unavailable
 \end_layout
@@ -35041,20 +33588,18 @@ the address of a prior store was ready but its data was still unavailable
 \series bold
 \size footnotesize
 wait-storedata-sfraddr-sfrdata:
-\family default
 \series default
  
+\family default
 \size default
 the actual data value to store was not ready (Section 
-\begin_inset LatexCommand ref
-reference "sec:SplitPhaseStores"
+\begin_inset LatexCommand \ref{sec:SplitPhaseStores}
 
 \end_inset
 
 ), in addition to having neither the data nor the address of a prior store
  (Section 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -35067,19 +33612,17 @@ reference "sec:StoreMerging"
 \series bold
 \size footnotesize
 wait-storedata-sfraddr:
-\family default
 \series default
  
+\family default
 \size default
 the actual data value to store was not ready (Section 
-\begin_inset LatexCommand ref
-reference "sec:SplitPhaseStores"
+\begin_inset LatexCommand \ref{sec:SplitPhaseStores}
 
 \end_inset
 
 ), in addition to not having the address of the prior store (Section 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -35092,19 +33635,17 @@ reference "sec:StoreMerging"
 \series bold
 \size footnotesize
 wait-storedata-sfrdata:
-\family default
 \series default
  
+\family default
 \size default
 the actual data value to store was not ready (Section 
-\begin_inset LatexCommand ref
-reference "sec:SplitPhaseStores"
+\begin_inset LatexCommand \ref{sec:SplitPhaseStores}
 
 \end_inset
 
 ), in addition to not having the data from the prior store (Section 
-\begin_inset LatexCommand ref
-reference "sec:StoreMerging"
+\begin_inset LatexCommand \ref{sec:StoreMerging}
 
 \end_inset
 
@@ -35119,9 +33660,9 @@ reference "sec:StoreMerging"
 \series bold
 \size footnotesize
 forward:
-\family default
 \series default
  
+\family default
 \size default
 histogram of which sources were used to construct the merged store buffer:
 \end_layout
@@ -35133,9 +33674,9 @@ histogram of which sources were used to construct the merged store buffer:
 \series bold
 \size footnotesize
 zero:
-\family default
 \series default
  
+\family default
 \size default
 no prior store overlapping the current store was found in the pipeline
 \end_layout
@@ -35146,9 +33687,9 @@ no prior store overlapping the current store was found in the pipeline
 \series bold
 \size footnotesize
 sfr:
-\family default
 \series default
  
+\family default
 \size default
 data from a prior store in the pipeline was merged with the value to be
  stored to form the final store buffer
@@ -35161,9 +33702,9 @@ data from a prior store in the pipeline was merged with the value to be
 \series bold
 \size footnotesize
 type:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the type of each store uop
 \end_layout
@@ -35175,9 +33716,9 @@ histogram of the type of each store uop
 \series bold
 \size footnotesize
 aligned:
-\family default
 \series default
  
+\family default
 \size default
 normal aligned store
 \end_layout
@@ -35188,9 +33729,9 @@ normal aligned store
 \series bold
 \size footnotesize
 unaligned:
-\family default
 \series default
  
+\family default
 \size default
 special unaligned store uops 
 \family typewriter
@@ -35205,8 +33746,7 @@ st.hi
 \family default
 \size default
  (Section 
-\begin_inset LatexCommand ref
-reference "sub:UnalignedLoadsAndStores"
+\begin_inset LatexCommand \ref{sub:UnalignedLoadsAndStores}
 
 \end_inset
 
@@ -35219,9 +33759,9 @@ reference "sub:UnalignedLoadsAndStores"
 \series bold
 \size footnotesize
 internal:
-\family default
 \series default
  
+\family default
 \size default
 stores to PTLsim space by microcode
 \end_layout
@@ -35233,9 +33773,9 @@ stores to PTLsim space by microcode
 \series bold
 \size footnotesize
 size:
-\family default
 \series default
  
+\family default
 \size default
 histogram of the size in bytes of each store uop
 \end_layout
@@ -35246,9 +33786,9 @@ histogram of the size in bytes of each store uop
 \series bold
 \size footnotesize
 commit:
-\family default
 \series default
  
+\family default
 \size default
 histogram of how stores are committed
 \end_layout
@@ -35260,14 +33800,13 @@ histogram of how stores are committed
 \series bold
 \size footnotesize
 direct:
-\family default
 \series default
  
+\family default
 \size default
 store committed directly to the data cache in the commit stage (Section
  
-\begin_inset LatexCommand ref
-reference "sec:CommitStage"
+\begin_inset LatexCommand \ref{sec:CommitStage}
 
 \end_inset
 
@@ -35281,9 +33820,9 @@ reference "sec:CommitStage"
 \series bold
 \size footnotesize
 commits:
-\family default
 \series default
  
+\family default
 \size default
 total number of committed uops
 \end_layout
@@ -35294,9 +33833,9 @@ total number of committed uops
 \series bold
 \size footnotesize
 usercommits:
-\family default
 \series default
  
+\family default
 \size default
 total number of committed x86 instructions
 \end_layout
@@ -35307,14 +33846,13 @@ total number of committed x86 instructions
 \series bold
 \size footnotesize
 issues:
-\family default
 \series default
  
+\family default
 \size default
 total number of uops issued.
  This includes uops issued more than once by through replay (Section 
-\begin_inset LatexCommand ref
-reference "sec:Scheduling"
+\begin_inset LatexCommand \ref{sec:Scheduling}
 
 \end_inset
 
@@ -35327,9 +33865,9 @@ reference "sec:Scheduling"
 \series bold
 \size footnotesize
 ipc:
-\family default
 \series default
  
+\family default
 \size default
 Instructions Per Cycle (IPC) statistics
 \end_layout
@@ -35341,9 +33879,9 @@ Instructions Per Cycle (IPC) statistics
 \series bold
 \size footnotesize
 commit-in-uops:
-\family default
 \series default
  
+\family default
 \size default
 average number of uops committed per cycle
 \end_layout
@@ -35354,9 +33892,9 @@ average number of uops committed per cycle
 \series bold
 \size footnotesize
 issue-in-uops:
-\family default
 \series default
  
+\family default
 \size default
 average number of uops issued per cycle
 \end_layout
@@ -35367,9 +33905,9 @@ average number of uops issued per cycle
 \series bold
 \size footnotesize
 commit-in-user-insns:
-\family default
 \series default
  
+\family default
 \size default
 average number of x86 instructions committed per cycle
 \newline
@@ -35407,9 +33945,9 @@ never
 \series bold
 \size footnotesize
 simulator:
-\family default
 \series default
  
+\family default
 \size default
 describes the performance of PTLsim itself.
  Useful for tuning the simulator.
@@ -35421,9 +33959,9 @@ describes the performance of PTLsim itself.
 \series bold
 \size footnotesize
 total_time:
-\family default
 \series default
  
+\family default
 \size default
 total time in seconds 
 \emph on
@@ -35445,9 +33983,9 @@ ooocore.cpp
 \series bold
 \size footnotesize
 cputime:
-\family default
 \series default
  
+\family default
 \size default
 PTLsim simulator performance
 \end_layout
@@ -35604,9 +34142,9 @@ status collapsed
 \series bold
 \size footnotesize
 total-secs:
-\family default
 \series default
  
+\family default
 \size default
 total seconds spent in simulation mode (native mode does not count towards
  this total)
@@ -35618,9 +34156,9 @@ total seconds spent in simulation mode (native mode does not count towards
 \series bold
 \size footnotesize
 cycles-per-sec:
-\family default
 \series default
  
+\family default
 \size default
 average number of processor cycles simulated per second
 \end_layout
@@ -35631,9 +34169,9 @@ average number of processor cycles simulated per second
 \series bold
 \size footnotesize
 issues-per-sec:
-\family default
 \series default
  
+\family default
 \size default
 average number of uops issued in the simulator per second
 \end_layout
@@ -35644,9 +34182,9 @@ average number of uops issued in the simulator per second
 \series bold
 \size footnotesize
 commits-per-sec:
-\family default
 \series default
  
+\family default
 \size default
 average number of uops committed in the simulator per second
 \end_layout
@@ -35657,9 +34195,9 @@ average number of uops committed in the simulator per second
 \series bold
 \size footnotesize
 user-commits-per-sec:
-\family default
 \series default
  
+\family default
 \size default
 average number of x86 instructions committed in the simulator per second
 \end_layout
@@ -35703,27 +34241,8 @@ traps:
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "PTLsimISPASS"
 
-\end_inset
-
-M.
- Yourst.
- 
-\emph on
-PTLsim: A Cycle Accurate Full System x86-64 Microarchitectural Simulator.
-
-\emph default
- ISPASS 2007, April 2007.
-\end_layout
-
-\begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "XenSource"
-
-\end_inset
-
+\bibitem {XenSource}
 
 \begin_inset ERT
 status inlined
@@ -35756,11 +34275,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "XenCambridge"
 
-\end_inset
-
+\bibitem {XenCambridge}
 
 \begin_inset ERT
 status inlined
@@ -35793,11 +34309,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "Xen2Overview"
 
-\end_inset
-
+\bibitem {Xen2Overview}
 
 \begin_inset ERT
 status inlined
@@ -35833,11 +34346,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "XenCambridge"
 
-\end_inset
-
+\bibitem {XenCambridge}
 
 \begin_inset ERT
 status inlined
@@ -35870,11 +34380,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "Xen2Overview"
 
-\end_inset
-
+\bibitem {Xen2Overview}
 
 \begin_inset ERT
 status inlined
@@ -35910,11 +34417,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "Xen3"
 
-\end_inset
-
+\bibitem {Xen3}
 
 \begin_inset ERT
 status inlined
@@ -35950,11 +34454,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "XenIntroWiki"
 
-\end_inset
-
+\bibitem {XenIntroWiki}
 
 \begin_inset ERT
 status inlined
@@ -35987,11 +34488,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "XenPerformance"
 
-\end_inset
-
+\bibitem {XenPerformance}
 
 \begin_inset ERT
 status inlined
@@ -36024,11 +34522,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "QEMU"
 
-\end_inset
-
+\bibitem {QEMU}
 
 \begin_inset ERT
 status inlined
@@ -36064,11 +34559,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "Bochs"
 
-\end_inset
-
+\bibitem {Bochs}
 
 \begin_inset ERT
 status inlined
@@ -36101,11 +34593,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "VMware"
 
-\end_inset
-
+\bibitem {VMware}
 
 \begin_inset ERT
 status inlined
@@ -36141,11 +34630,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "Simics"
 
-\end_inset
-
+\bibitem {Simics}
 
 \begin_inset ERT
 status inlined
@@ -36178,11 +34664,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "SimNow"
 
-\end_inset
-
+\bibitem {SimNow}
 
 \begin_inset ERT
 status inlined
@@ -36218,11 +34701,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "Intel-VT"
 
-\end_inset
-
+\bibitem {Intel-VT}
 
 \begin_inset ERT
 status inlined
@@ -36264,11 +34744,8 @@ status inlined
 \end_layout
 
 \begin_layout Bibliography
-\begin_inset LatexCommand bibitem
-key "AMD-SVM"
 
-\end_inset
-
+\bibitem {AMD-SVM}
 
 \begin_inset ERT
 status inlined
@@ -36311,11 +34788,8 @@ status inlined
 
 \begin_layout Bibliography
 \paragraph_spacing single
-\begin_inset LatexCommand bibitem
-key "TransmetaPatent.TBit"
 
-\end_inset
-
+\bibitem {TransmetaPatent.TBit}
 E.
  Kelly et al.
  
@@ -36331,11 +34805,8 @@ Translated memory protection apparatus for an advanced microprocessor.
 
 \begin_layout Bibliography
 \paragraph_spacing single
-\begin_inset LatexCommand bibitem
-key "TransmetaPatent.SubPageTBit"
 
-\end_inset
-
+\bibitem {TransmetaPatent.SubPageTBit}
 J.
  Banning et al.
  
@@ -36351,11 +34822,8 @@ Fine grain translation discrimination.
 
 \begin_layout Bibliography
 \paragraph_spacing single
-\begin_inset LatexCommand bibitem
-key "TransmetaPatent.SelfRevalTrans"
 
-\end_inset
-
+\bibitem {TransmetaPatent.SelfRevalTrans}
 J.
  Banning et al.
  
@@ -36372,11 +34840,8 @@ Translation consistency checking for modified target instructions by comparing
 
 \begin_layout Bibliography
 \paragraph_spacing single
-\begin_inset LatexCommand bibitem
-key "IBMDaisyIEEE"
 
-\end_inset
-
+\bibitem {IBMDaisyIEEE}
 K.
  Ebcioglu et al.
  
@@ -36390,11 +34855,8 @@ Dynamic Binary Translation and Optimization
 
 \begin_layout Bibliography
 \paragraph_spacing single
-\begin_inset LatexCommand bibitem
-key "IBMDaisyTechReport"
 
-\end_inset
-
+\bibitem {IBMDaisyTechReport}
 K.
  Ebcioglu, E.
  Altman.
@@ -36408,11 +34870,8 @@ DAISY: Dynamic Compilation for 100% Architectural Compatibility.
 
 \begin_layout Bibliography
 \paragraph_spacing single
-\begin_inset LatexCommand bibitem
-key "IBMDaisyManual"
 
-\end_inset
-
+\bibitem {IBMDaisyManual}
 E.
  Altman, K.
  Ebcioglu.

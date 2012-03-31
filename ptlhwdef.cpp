@@ -3,6 +3,8 @@
 // Hardware Definitions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <ptlsim.h>
@@ -15,13 +17,13 @@ Context ctx alignto(4096) insection(".ctx");
 const char* opclass_names[OPCLASS_COUNT] = {
   "logic", "addsub", "addsubc", "addshift", "sel", "cmp", "br.cc", "jmp", "bru", 
   "assist", "mf", "ld", "st", "ld.pre", "shiftsimple", "shift", "mul", "bitscan", "flags",  "chk", 
-  "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f", "vec",
+  "fpu", "fp-div-sqrt", "fp-cmp", "fp-perm", "fp-cvt-i2f", "fp-cvt-f2i", "fp-cvt-f2f", "vec", "asf",
 };
 
 //
 // Micro-operation (uop) definitions
 //
-
+// SD: What is the third field good for? It is never used for anything?!
 const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   // name, opclass, latency, fu
   {"nop",            OPCLASS_LOGIC,         opNOSIZE   },
@@ -185,6 +187,12 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"vsad",           OPCLASS_VEC_ALU,       opAB }, // sum of absolute differences
   {"vpack.us",       OPCLASS_VEC_ALU,       opAB }, // pack larger to smaller (unsigned saturation)
   {"vpack.ss",       OPCLASS_VEC_ALU,       opAB }, // pack larger to smaller (signed saturation)
+#ifdef ENABLE_ASF
+  {"asf.spec",       OPCLASS_ASF,           opB },
+  {"asf.com",        OPCLASS_ASF,           opB },
+  {"asf.val",        OPCLASS_ASF,           opB },
+  {"asf.rel",        OPCLASS_ASF,           opB },
+#endif
 };
 
 const char* exception_names[EXCEPTION_COUNT] = {
@@ -198,12 +206,15 @@ const char* exception_names[EXCEPTION_COUNT] = {
   "PageExec",
   "StStAlias",
   "LdStAlias",
+  "RetryLd",
   "CheckFailed",
   "SkipBlock",
   "LFRQFull",
   "Float",
   "FloatNotAvail",
   "DivideOverflow",
+  "ASFAbort",
+  "ASFTesting",
 };
 
 const char* x86_exception_names[256] = {
@@ -424,6 +435,7 @@ stringbuf& operator <<(stringbuf& sb, const TransOpBase& op) {
 
   if ((ld|st) && (op.cachelevel > 0)) sbname << ".L", (char)('1' + op.cachelevel);
   if ((ld|st) && (op.locked)) sbname << ((ld) ? ".acq" : ".rel");
+  if (op.invalidating) sbname << ".inv";
   if (op.internal) sbname << ".p";
   if (op.eom) sbname << ".", (op.any_flags_in_insn ? "+" : "-");
 

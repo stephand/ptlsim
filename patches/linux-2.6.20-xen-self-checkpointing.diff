@@ -1,26 +1,6 @@
-diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/machine_reboot.c linux-2.6.20-mtyrel-new/drivers/xen/core/machine_reboot.c
---- linux-2.6.20-mtyrel-old/drivers/xen/core/machine_reboot.c	2007-03-17 02:53:40.000000000 -0400
-+++ linux-2.6.20-mtyrel-new/drivers/xen/core/machine_reboot.c	2007-05-18 00:08:42.168470000 -0400
-@@ -130,6 +130,8 @@
- 
- #endif
- 
-+unsigned long long resume_started_at_tsc = 0;
-+
- int __xen_suspend(void)
- {
- 	int err, suspend_cancelled;
-@@ -168,6 +170,7 @@
- 	 * merely checkpointed, and 0 if it is resuming in a new domain.
- 	 */
- 	suspend_cancelled = HYPERVISOR_suspend(virt_to_mfn(xen_start_info));
-+	rdtscll(resume_started_at_tsc);
- 
- 	post_suspend(suspend_cancelled);
- 
 diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c
 --- linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c	2007-03-17 02:53:41.000000000 -0400
-+++ linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c	2007-05-18 02:15:11.208715000 -0400
++++ linux-2.6.20-mtyrel-new/drivers/xen/core/reboot.c	2007-05-12 23:14:19.477405000 -0400
 @@ -8,6 +8,9 @@
  #include <asm/hypervisor.h>
  #include <xen/xenbus.h>
@@ -49,89 +29,16 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
  	return 0;
  }
  
-@@ -97,6 +106,89 @@
+@@ -97,6 +106,16 @@
  	}
  }
  
-+//
-+// PTLsim hypercalls
-+//
-+typedef unsigned char byte;
-+typedef unsigned short W16;
-+typedef unsigned int W32;
-+typedef unsigned long long W64;
-+
-+enum {
-+  PTLCALL_NOP = 0,
-+  PTLCALL_VERSION = 1,
-+  PTLCALL_ENQUEUE = 2,
-+  PTLCALL_FLUSH_QUEUE = 3,
-+};
-+
-+struct PTLsimCommandDescriptor {
-+  W64 command; // pointer to command string
-+  W64 length;       // length of command string
-+};
-+
-+static int ptlcall_not_available = 0;
-+
-+W64 ptlcall(W64 op, W64 arg1, W64 arg2, W64 arg3, W64 arg4) {
-+#if 0
-+  /*
-+   * This is disabled since subsequent calls may be running
-+   * under PTLsim and therefore should succeed.
-+   */
-+  if (ptlcall_not_available)
-+    return (W64)-ENOSYS;
-+#endif
-+
-+  asm volatile("1: .byte 0x0f,0x37\n"
-+               "2:\n"
-+               ".section .fixup,\"ax\"\n" \
-+               "3:\n"
-+               "  movq %[enosys],%%rax\n" \
-+               "  jmp 2b\n" \
-+               ".previous\n" \
-+               ".section __ex_table,\"a\"\n" \
-+               "  .align 8\n" \
-+               "  .quad 1b,3b\n" \
-+               ".previous"
-+               : "+a" (op)
-+               : "c" (arg1), "d" (arg2), "S" (arg3), "D" (arg4), [enosys] "i" (-ENOSYS)
-+               : "memory");
-+
-+  if (op == -ENOSYS)
-+    ptlcall_not_available = 1;
-+  return op;
-+}
-+
-+static inline W64 ptlcall_single_flush(const char* command) {
-+  int flush = 1;
-+  struct PTLsimCommandDescriptor desc;
-+  desc.command = (W64)command;
-+  desc.length = strlen(command);
-+
-+  return ptlcall(PTLCALL_ENQUEUE, (W64)&desc, 1, flush, 0);
-+}
-+
-+extern unsigned long long resume_started_at_tsc;
-+
-+char ptlcall_after_resume[1024];
-+
 +static void checkpoint_or_suspend_triggered(void)
 +{
 +	int err;
-+  unsigned long long resume_ended_at_tsc;
 +	shutting_down = SHUTDOWN_SUSPEND;
 +	err = kthread_create_on_cpu(xen_suspend, &suspend_waitq, "suspend", 0);
 +	wait_event_interruptible(suspend_waitq, (shutting_down < 0));
-+  rdtscll(resume_ended_at_tsc);
-+  printk("Resume took %llu cycles\n", resume_ended_at_tsc - resume_started_at_tsc);
-+  if (strlen(ptlcall_after_resume)) {
-+    printk("Executing PTLsim action after resume: '%s'\n", ptlcall_after_resume);
-+    err = ptlcall_single_flush(ptlcall_after_resume);
-+    if (err <= 0) printk("PTLcall returned error %d\n", err);
-+  }
 +}
 +
 +static int shutdown_handler_disabled = 0;
@@ -139,7 +46,7 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
  static void shutdown_handler(struct xenbus_watch *watch,
  			     const char **vec, unsigned int len)
  {
-@@ -107,6 +199,11 @@
+@@ -107,6 +126,11 @@
  	if (shutting_down != SHUTDOWN_INVALID)
  		return;
  
@@ -151,7 +58,7 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
   again:
  	err = xenbus_transaction_start(&xbt);
  	if (err)
-@@ -186,6 +283,143 @@
+@@ -186,6 +210,64 @@
  	.callback = sysrq_handler
  };
  
@@ -213,89 +120,10 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +	return len;
 +}
 +
-+static struct proc_dir_entry *ptlcall_pde = NULL;
-+
-+static int ptlcall_write(struct file *file, const char __user *userbuf,
-+                         unsigned long count, void *data)
-+{
-+	int n = 0;
-+  int rc;
-+  char* buf = NULL;
-+
-+	if (count >= PAGE_SIZE)
-+		return -EFBIG;   /* too long */
-+
-+  buf = (char*)__get_free_page(GFP_KERNEL);
-+  if (!buf)
-+    return -ENOMEM;
-+
-+	if (copy_from_user(buf, userbuf, count)) {
-+    free_page((unsigned long)buf);
-+		return -EFAULT;
-+  }
-+
-+	buf[count] = '\0';
-+
-+	n = strlen(buf);
-+	if ((n > 0) && (buf[n-1] == '\n')) buf[n-1] = '\0';
-+
-+  /* printk("Sending PTLsim command '%s' to hypervisor\n", buf); */
-+
-+  rc = ptlcall_single_flush(buf);
-+
-+  if ((int)rc == -ENOSYS) {
-+    printk("ptlcall('%s'): Warning: PTLsim is not running\n", buf);
-+  }
-+
-+  free_page((unsigned long)buf);
-+
-+	return count;
-+}
-+
-+static int ptlcall_read(char *page, char **start, off_t off,
-+                                   int count, int *eof, void *data)
-+{
-+	*eof = 1;
-+	return 0;
-+}
-+
-+static struct proc_dir_entry *ptlcall_after_resume_pde = NULL;
-+
-+static int ptlcall_after_resume_write(struct file *file, const char __user *buffer,
-+                                    unsigned long count, void *data)
-+{
-+	int n = 0;
-+
-+	if (count >= sizeof(ptlcall_after_resume))
-+		return -EFBIG;   /* too long */
-+
-+	if (copy_from_user(ptlcall_after_resume, buffer, count))
-+		return -EFAULT;
-+	ptlcall_after_resume[count] = '\0';
-+
-+	n = strlen(ptlcall_after_resume);
-+	if ((n > 0) && (ptlcall_after_resume[n-1] == '\n')) ptlcall_after_resume[n-1] = '\0';
-+
-+  /* printk("Set ptlcall_after_resume = '%s'\n", ptlcall_after_resume); */
-+
-+	return count;
-+}
-+
-+static int ptlcall_after_resume_read(char *page, char **start, off_t off,
-+                                   int count, int *eof, void *data)
-+{
-+	int len;
-+
-+  len = sprintf(page, "%s", ptlcall_after_resume);
-+
-+	*eof = 1;
-+	return len;
-+}
-+
  static int setup_shutdown_watcher(struct notifier_block *notifier,
  				  unsigned long event,
  				  void *data)
-@@ -204,6 +438,30 @@
+@@ -204,6 +286,14 @@
  	else
  		xenbus_write(XBT_NIL, "control", "feature-sysrq", "1");
  
@@ -305,22 +133,6 @@ diff -urN linux-2.6.20-mtyrel-old/drivers/xen/core/reboot.c linux-2.6.20-mtyrel-
 +		checkpoint_trigger_pde->write_proc = checkpoint_trigger_write;
 +	} else {
 +		printk(KERN_ERR "Failed to create /proc/xen/checkpoint\n");
-+	}
-+
-+	/* Use "chmod a+rw /proc/xen/checkpoint" to enable ordinary users to do this */
-+	if ((ptlcall_after_resume_pde = create_xen_proc_entry("ptlcall-after-resume", 0644))) {
-+		ptlcall_after_resume_pde->read_proc  = ptlcall_after_resume_read;
-+		ptlcall_after_resume_pde->write_proc = ptlcall_after_resume_write;
-+	} else {
-+		printk(KERN_ERR "Failed to create /proc/xen/ptlcall-after-resume\n");
-+	}
-+
-+	/* Use "chmod a+rw /proc/xen/checkpoint" to enable ordinary users to do this */
-+	if ((ptlcall_pde = create_xen_proc_entry("ptlcall", 0644))) {
-+		ptlcall_pde->read_proc  = ptlcall_read;
-+		ptlcall_pde->write_proc = ptlcall_write;
-+	} else {
-+		printk(KERN_ERR "Failed to create /proc/xen/ptlcall\n");
 +	}
 +
  	return NOTIFY_DONE;

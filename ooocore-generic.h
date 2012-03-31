@@ -1,11 +1,27 @@
 // -*- c++ -*-
 //
 // PTLsim: Cycle Accurate x86-64 Simulator
-// Out-of-Order Core Simulator
-// AMD K8 (Athlon 64 / Opteron / Turion)
+// SMT Core Simulator Configuration
 //
-// Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+// 02110-1301, USA.
+//
+// Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
+// Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
+// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 //
@@ -16,7 +32,7 @@
 // threaded mode.
 //
 
-// #define ENABLE_SMT
+//#define ENABLE_SMT
 
 static const int MAX_THREADS_BIT = 4; // up to 16 threads
 static const int MAX_ROB_IDX_BIT = 12; // up to 4096 ROB entries
@@ -38,10 +54,10 @@ static const int MAX_THREADS_PER_CORE = 1;
 #define stop_timer(ct) (0)
 #endif
 
-#define per_context_ooocore_stats_ref(vcpuid) (*(((PerContextOutOfOrderCoreStats*)&stats.ooocore.vcpu0) + (vcpuid)))
-#define per_context_ooocore_stats_update(vcpuid, expr) stats.ooocore.total.expr, per_context_ooocore_stats_ref(vcpuid).expr
+#define per_context_smtcore_stats_ref(vcpuid) (*(((PerContextSMTStats*)&stats.smtcore.vcpu0) + (vcpuid)))
+#define per_context_smtcore_stats_update(vcpuid, expr) stats.smtcore.total.expr, per_context_smtcore_stats_ref(vcpuid).expr
 
-namespace OutOfOrderModel {
+namespace SMTModel {
   //
   // Operand formats
   //
@@ -54,52 +70,55 @@ namespace OutOfOrderModel {
   //
   // Uop to functional unit mappings
   //
-  static const int FU_COUNT = 9;
-  static const int LOADLAT = 3;
+  static const int FU_COUNT = 8;
+  static const int LOADLAT = 2;
 
   enum {
-    FU_ALU1       = (1 << 0),
-    FU_ALUC       = (1 << 1),
-    FU_ALU2       = (1 << 2),
-    FU_LSU1       = (1 << 3),
-    FU_ALU3       = (1 << 4),
-    FU_LSU2       = (1 << 5),
-    FU_FADD       = (1 << 6),
-    FU_FMUL       = (1 << 7),
-    FU_FCVT       = (1 << 8),
+    FU_LDU0       = (1 << 0),
+    FU_STU0       = (1 << 1),
+    FU_LDU1       = (1 << 2),
+    FU_STU1       = (1 << 3),
+    FU_ALU0       = (1 << 4),
+    FU_FPU0       = (1 << 5),
+    FU_ALU1       = (1 << 6),
+    FU_FPU1       = (1 << 7),
   };
 
   static const int LOAD_FU_COUNT = 2;
 
   const char* fu_names[FU_COUNT] = {
+    "ldu0",
+    "stu0",
+    "ldu1",
+    "stu1",
+    "alu0",
+    "fpu0",
     "alu1",
-    "aluc",
-    "alu2",
-    "lsu1",
-    "alu3",
-    "lsu2",
-    "fadd",
-    "fmul",
-    "fcvt",
+    "fpu1",
   };
 
   //
   // Opcodes and properties
   //
+#define ALU0 FU_ALU0
 #define ALU1 FU_ALU1
-#define ALU2 FU_ALU2
-#define ALU3 FU_ALU3
-#define ALUC FU_ALUC
-#define LSU1 FU_LSU1
-#define LSU2 FU_LSU2
-#define FADD FU_FADD
-#define FMUL FU_FMUL
-#define FCVT FU_FCVT
+#define STU0 FU_STU0
+#define STU1 FU_STU1
+#define LDU0 FU_LDU0
+#define LDU1 FU_LDU1
+#define FPU0 FU_FPU0
+#define FPU1 FU_FPU1
 #define A 1 // ALU latency, assuming fast bypass
 #define L LOADLAT
 
+#define ANYALU ALU0|ALU1
+#define ANYLDU LDU0|LDU1
+#define ANYSTU STU0|STU1
+#define ANYFPU FPU0|FPU1
+#define ANYINT ANYALU|ANYSTU|ANYLDU
+
   struct FunctionalUnitInfo {
-    byte opcode;   // Must match definition in ptlhwdef.h and ptlhwdef.cpp! 
+    byte opcode;   // Must match definition in ptlhwdef.h and ptlhwdef.cpp!
     byte latency;  // Latency in cycles, assuming ideal bypass
     W16  fu;       // Map of functional units on which this uop can issue
   };
@@ -110,167 +129,133 @@ namespace OutOfOrderModel {
   //
   const FunctionalUnitInfo fuinfo[OP_MAX_OPCODE] = {
     // name, latency, fumask
-    {OP_nop,            1, ALU1|ALU2|ALU3|ALUC|LSU1|LSU2|FADD|FMUL|FCVT},
-    {OP_mov,            1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_nop,            A, ANYINT|ANYFPU},
+    {OP_mov,            A, ANYINT|ANYFPU},
     // Logical
-    {OP_and,            1, ALU1|ALU2|ALU3|FADD|FMUL},
-    {OP_andnot,         1, ALU1|ALU2|ALU3|FADD|FMUL},
-    {OP_xor,            1, ALU1|ALU2|ALU3|FADD|FMUL},
-    {OP_or,             1, ALU1|ALU2|ALU3|FADD|FMUL},
-    {OP_nand,           1, ALU1|ALU2|ALU3|FADD|FMUL},
-    {OP_ornot,          1, ALU1|ALU2|ALU3|FADD|FMUL},
-    {OP_eqv,            1, ALU1|ALU2|ALU3|FADD|FMUL},
-    {OP_nor,            1, ALU1|ALU2|ALU3|FADD|FMUL},
+    {OP_and,            A, ANYINT|ANYFPU},
+    {OP_andnot,         A, ANYINT|ANYFPU},
+    {OP_xor,            A, ANYINT|ANYFPU},
+    {OP_or,             A, ANYINT|ANYFPU},
+    {OP_nand,           A, ANYINT|ANYFPU},
+    {OP_ornot,          A, ANYINT|ANYFPU},
+    {OP_eqv,            A, ANYINT|ANYFPU},
+    {OP_nor,            A, ANYINT|ANYFPU},
     // Mask, insert or extract bytes
-    {OP_maskb,          A, ALU1|ALU2|ALU3},
+    {OP_maskb,          A, ANYINT},
     // Add and subtract
-    {OP_add,            1, ALU1|ALU2|ALU3},
-    {OP_sub,            1, ALU1|ALU2|ALU3},
-    {OP_adda,           1, ALU1|ALU2|ALU3},
-    {OP_suba,           1, ALU1|ALU2|ALU3},
-    {OP_addm,           1, ALU1|ALU2|ALU3},
-    {OP_subm,           1, ALU1|ALU2|ALU3},
+    {OP_add,            A, ANYINT},
+    {OP_sub,            A, ANYINT},
+    {OP_adda,           A, ANYINT},
+    {OP_suba,           A, ANYINT},
+    {OP_addm,           A, ANYINT},
+    {OP_subm,           A, ANYINT},
     // Condition code logical ops
-    {OP_andcc,          1, ALUC},
-    {OP_orcc,           1, ALUC},
-    {OP_xorcc,          1, ALUC},
-    {OP_ornotcc,        1, ALUC},
+    {OP_andcc,          A, ANYINT},
+    {OP_orcc,           A, ANYINT},
+    {OP_xorcc,          A, ANYINT},
+    {OP_ornotcc,        A, ANYINT},
     // Condition code movement and merging
-    {OP_movccr,         1, ALUC},
-    {OP_movrcc,         1, ALUC},
-    {OP_collcc,         1, ALUC},
+    {OP_movccr,         A, ANYINT},
+    {OP_movrcc,         A, ANYINT},
+    {OP_collcc,         A, ANYINT},
     // Simple shifting (restricted to small immediate 1..8)
-    {OP_shls,           1, ALU1|ALU2|ALU3},
-    {OP_shrs,           1, ALU1|ALU2|ALU3},
-    {OP_bswap,          1, ALU1|ALU2|ALU3},
-    {OP_sars,           1, ALU1|ALU2|ALU3},
+    {OP_shls,           A, ANYINT},
+    {OP_shrs,           A, ANYINT},
+    {OP_bswap,          A, ANYINT},
+    {OP_sars,           A, ANYINT},
     // Bit testing
-    {OP_bt,             1, ALU1|ALU2|ALU3},
-    {OP_bts,            1, ALU1|ALU2|ALU3},
-    {OP_btr,            1, ALU1|ALU2|ALU3},
-    {OP_btc,            1, ALU1|ALU2|ALU3},
+    {OP_bt,             A, ANYALU},
+    {OP_bts,            A, ANYALU},
+    {OP_btr,            A, ANYALU},
+    {OP_btc,            A, ANYALU},
     // Set and select
-    {OP_set,            1, ALU1|ALU2|ALU3},
-    {OP_set_sub,        1, ALU1|ALU2|ALU3},
-    {OP_set_and,        1, ALU1|ALU2|ALU3},
-    {OP_sel,            1, ALU1|ALU2|ALU3},
-    {OP_sel_cmp,        1, ALU1|ALU2|ALU3},
+    {OP_set,            A, ANYINT},
+    {OP_set_sub,        A, ANYINT},
+    {OP_set_and,        A, ANYINT},
+    {OP_sel,            A, ANYINT},
     // Branches
-    {OP_br,             1, ALU1|ALU2|ALU3},
-    {OP_br_sub,         1, ALU1|ALU2|ALU3},
-    {OP_br_and,         1, ALU1|ALU2|ALU3},
-    {OP_jmp,            1, ALU1|ALU2|ALU3},
-    {OP_bru,            1, ALU1|ALU2|ALU3},
-    {OP_jmpp,           1, ALUC},
-    {OP_brp,            1, ALUC},
+    {OP_br,             A, ANYINT},
+    {OP_br_sub,         A, ANYINT},
+    {OP_br_and,         A, ANYINT},
+    {OP_jmp,            A, ANYINT},
+    {OP_bru,            A, ANYINT},
+    {OP_jmpp,           A, ANYALU|ANYLDU},
+    {OP_brp,            A, ANYALU|ANYLDU},
     // Checks
-    {OP_chk,            1, ALU1|ALU2|ALU3},
-    {OP_chk_sub,        1, ALU1|ALU2|ALU3},
-    {OP_chk_and,        1, ALU1|ALU2|ALU3},
+    {OP_chk,            A, ANYINT},
+    {OP_chk_sub,        A, ANYINT},
+    {OP_chk_and,        A, ANYINT},
     // Loads and stores
-    {OP_ld,             3, LSU1|LSU2},
-    {OP_ldx,            3, LSU1|LSU2},
-    {OP_ld_pre,         1, LSU1     },
-    {OP_st,             1, LSU1|LSU2},
-    {OP_mf,             1, LSU1     },
+    {OP_ld,             L, ANYLDU},
+    {OP_ldx,            L, ANYLDU},
+    {OP_ld_pre,         1, ANYLDU},
+    {OP_st,             1, ANYSTU},
+    {OP_mf,             1, STU0  },
     // Shifts, rotates and complex masking
-    {OP_shl,            1, ALU1|ALU2|ALU3},
-    {OP_shr,            1, ALU1|ALU2|ALU3},
-    {OP_mask,           1, ALU1|ALU2|ALU3},
-    {OP_sar,            1, ALU1|ALU2|ALU3},
-    {OP_rotl,           1, ALU1|ALU2|ALU3},  
-    {OP_rotr,           1, ALU1|ALU2|ALU3},   
-    {OP_rotcl,          1, ALU1|ALU2|ALU3},
-    {OP_rotcr,          1, ALU1|ALU2|ALU3},  
+    {OP_shl,            A, ANYALU},
+    {OP_shr,            A, ANYALU},
+    {OP_mask,           A, ANYALU},
+    {OP_sar,            A, ANYALU},
+    {OP_rotl,           A, ANYALU},
+    {OP_rotr,           A, ANYALU},
+    {OP_rotcl,          A, ANYALU},
+    {OP_rotcr,          A, ANYALU},
     // Multiplication
-    {OP_mull,           4, ALUC},
-    {OP_mulh,           4, ALUC},
-    {OP_mulhu,          4, ALUC},
-    {OP_mulhl,          4, ALUC},
+    {OP_mull,           4, ANYFPU},
+    {OP_mulh,           4, ANYFPU},
+    {OP_mulhu,          4, ANYFPU},
     // Bit scans
-    {OP_ctz,            4, ALUC},
-    {OP_clz,            4, ALUC},
-    {OP_ctpop,          4, ALUC},  
-    {OP_permb,          2, ALUC|FCVT},
-    // Integer divide and remainder step
-    {OP_div,           32, ALUC},
-    {OP_rem,           32, ALUC},
-    {OP_divs,          32, ALUC},
-    {OP_rems,          32, ALUC},
-    // Minimum and maximum
-    {OP_min,            1, ALU1|ALU2|ALU3},
-    {OP_max,            1, ALU1|ALU2|ALU3},
-    {OP_min_s,          1, ALU1|ALU2|ALU3},
-    {OP_max_s,          1, ALU1|ALU2|ALU3},
+    {OP_ctz,            3, ANYFPU},
+    {OP_clz,            3, ANYFPU},
+    {OP_ctpop,          3, ANYFPU},
+    {OP_permb,          4, ANYFPU},
     // Floating point
     // uop.size bits have following meaning:
     // 00 = single precision, scalar (preserve high 32 bits of ra)
     // 01 = single precision, packed (two 32-bit floats)
     // 1x = double precision, scalar or packed (use two uops to process 128-bit xmm)
-    {OP_fadd,           4, FADD},
-    {OP_fsub,           4, FADD},
-    {OP_fmul,           5, FMUL},
-    {OP_fmadd,          5, FMUL},
-    {OP_fmsub,          5, FMUL},
-    {OP_fmsubr,         5, FMUL},
-    {OP_fdiv,          16, FMUL},
-    {OP_fsqrt,         19, FMUL},
-    {OP_frcp,           4, FMUL},
-    {OP_frsqrt,         4, FMUL},
-    {OP_fmin,           3, FADD},
-    {OP_fmax,           3, FADD},
-    {OP_fcmp,           3, FADD},
+    {OP_addf,           6, ANYFPU},
+    {OP_subf,           6, ANYFPU},
+    {OP_mulf,           6, ANYFPU},
+    {OP_maddf,          6, ANYFPU},
+    {OP_msubf,          6, ANYFPU},
+    {OP_divf,           6, ANYFPU},
+    {OP_sqrtf,          6, ANYFPU},
+    {OP_rcpf,           6, ANYFPU},
+    {OP_rsqrtf,         6, ANYFPU},
+    {OP_minf,           4, ANYFPU},
+    {OP_maxf,           4, ANYFPU},
+    {OP_cmpf,           4, ANYFPU},
     // For fcmpcc, uop.size bits have following meaning:
     // 00 = single precision ordered compare
     // 01 = single precision unordered compare
     // 10 = double precision ordered compare
     // 11 = double precision unordered compare
-    {OP_fcmpcc,         4, FADD},
+    {OP_cmpccf,         4, ANYFPU},
     // and/andn/or/xor are done using integer uops
+    {OP_permf,          3, ANYFPU}, // shuffles
     // For these conversions, uop.size bits select truncation mode:
     // x0 = normal IEEE-style rounding
     // x1 = truncate to zero
-    {OP_fcvt_i2s_ins,   9, FCVT},
-    {OP_fcvt_i2s_p,     9, FCVT},
-    {OP_fcvt_i2d_lo,    9, FCVT},
-    {OP_fcvt_i2d_hi,    9, FCVT},
-    {OP_fcvt_q2s_ins,   9, FCVT},
-    {OP_fcvt_q2d,       9, FCVT},
-    {OP_fcvt_s2i,       6, FCVT},
-    {OP_fcvt_s2q,       6, FCVT},
-    {OP_fcvt_s2i_p,     6, FCVT},
-    {OP_fcvt_d2i,       6, FCVT},
-    {OP_fcvt_d2q,       6, FCVT},
-    {OP_fcvt_d2i_p,     6, FCVT},
-    {OP_fcvt_d2s_ins,   4, FCVT},
-    {OP_fcvt_d2s_p,     4, FCVT},
-    {OP_fcvt_s2d_lo,    4, FCVT},
-    {OP_fcvt_s2d_hi,    4, FCVT},
-    // Vector integer uops
-    // uop.size defines element size: 00 = byte, 01 = W16, 10 = W32, 11 = W64 (i.e. same as normal ALU uops)
-    {OP_vadd,           1, FADD|FMUL},
-    {OP_vsub,           1, FADD|FMUL},
-    {OP_vadd_us,        1, FADD|FMUL},
-    {OP_vsub_us,        1, FADD|FMUL},
-    {OP_vadd_ss,        1, FADD|FMUL},
-    {OP_vsub_ss,        1, FADD|FMUL},
-    {OP_vshl,           1, FMUL},
-    {OP_vshr,           1, FMUL},
-    {OP_vbt,            1, FMUL},
-    {OP_vsar,           1, FMUL},
-    {OP_vavg,           1, FADD},
-    {OP_vcmp,           1, FADD|FMUL},
-    {OP_vmin,           1, FADD|FMUL},
-    {OP_vmax,           1, FADD|FMUL},
-    {OP_vmin_s,         1, FADD|FMUL},
-    {OP_vmax_s,         1, FADD|FMUL},
-    {OP_vmull,          4, FMUL},
-    {OP_vmulh,          4, FMUL},
-    {OP_vmulhu,         4, FMUL},
-    {OP_vmaddp,         4, FADD|FMUL},
-    {OP_vsad,           4, FADD|FMUL},
-    {OP_vpack_us,       2, FADD|FMUL},
-    {OP_vpack_ss,       2, FADD|FMUL},
+    {OP_cvtf_i2s_ins,   6, ANYFPU},
+    {OP_cvtf_i2s_p,     6, ANYFPU},
+    {OP_cvtf_i2d_lo,    6, ANYFPU},
+    {OP_cvtf_i2d_hi,    6, ANYFPU},
+    {OP_cvtf_q2s_ins,   6, ANYFPU},
+    {OP_cvtf_q2d,       6, ANYFPU},
+    {OP_cvtf_s2i,       6, ANYFPU},
+    {OP_cvtf_s2q,       6, ANYFPU},
+    {OP_cvtf_s2i_p,     6, ANYFPU},
+    {OP_cvtf_d2i,       6, ANYFPU},
+    {OP_cvtf_d2q,       6, ANYFPU},
+    {OP_cvtf_d2i_p,     6, ANYFPU},
+    {OP_cvtf_d2s_ins,   6, ANYFPU},
+    {OP_cvtf_d2s_p,     6, ANYFPU},
+    {OP_cvtf_s2d_lo,    6, ANYFPU},
+    {OP_cvtf_s2d_hi,    6, ANYFPU},
+    {OP_spec,           A, ANYINT},
+    {OP_com,            A, ANYINT|ANYFPU},
+    {OP_val,            A, ANYINT},
   };
 
 #undef A
@@ -292,18 +277,21 @@ namespace OutOfOrderModel {
 #undef ANYSTU
 #undef ANYFPU
 #undef ANYINT
-  
+
   //
   // Global limits
   //
-  
-  const int MAX_ISSUE_WIDTH = 6;
 
-  // Largest size of any physical register file or the store queue:
-  const int MAX_PHYS_REG_FILE_SIZE = 128;
-  const int PHYS_REG_FILE_SIZE = 128;
+  const int MAX_ISSUE_WIDTH = 4;
+
+  const int PHYS_REG_FILE_SIZE = 128*MAX_THREADS_PER_CORE;
   const int PHYS_REG_NULL = 0;
-  
+  // Largest size of any physical register file or the store queue:
+  /* S.D.: getting this maximum of constants during compile-time doesn't work :(
+    static const int _tmp = max(STQ_SIZE * MAX_THREADS_PER_CORE, MAX_BRANCHES_IN_FLIGHT * MAX_THREADS_PER_CORE);
+    const int MAX_PHYS_REG_FILE_SIZE = max(PHYS_REG_FILE_SIZE, _tmp);
+   */
+  const int MAX_PHYS_REG_FILE_SIZE = 128*MAX_THREADS_PER_CORE;
   //
   // IMPORTANT! If you change this to be greater than 256, you MUST
   // #define BIG_ROB below to use the correct associative search logic
@@ -313,14 +301,14 @@ namespace OutOfOrderModel {
   //
 #define BIG_ROB
 
-  const int ROB_SIZE = 72;
-  
+  const int ROB_SIZE = 128;
+
   // Maximum number of branches in the pipeline at any given time
-  const int MAX_BRANCHES_IN_FLIGHT = 24;
+  const int MAX_BRANCHES_IN_FLIGHT = 16;
 
   // Set this to combine the integer and FP phys reg files:
   // #define UNIFIED_INT_FP_PHYS_REG_FILE
-  
+
 #ifdef UNIFIED_INT_FP_PHYS_REG_FILE
   // unified, br, st
   const int PHYS_REG_FILE_COUNT = 3;
@@ -328,39 +316,39 @@ namespace OutOfOrderModel {
   // int, fp, br, st
   const int PHYS_REG_FILE_COUNT = 4;
 #endif
-  
+
   //
   // Load and Store Queues
   //
-  const int LDQ_SIZE = 44;
-  const int STQ_SIZE = 44;
+  const int LDQ_SIZE = 48;
+  const int STQ_SIZE = 32;
 
   //
   // Fetch
   //
-  const int FETCH_QUEUE_SIZE = 36;
-  const int FETCH_WIDTH = 3;
+  const int FETCH_QUEUE_SIZE = 32;
+  const int FETCH_WIDTH = 4;
 
   //
   // Frontend (Rename and Decode)
   //
-  const int FRONTEND_WIDTH = 3;
-  const int FRONTEND_STAGES = 7;
+  const int FRONTEND_WIDTH = 4;
+  const int FRONTEND_STAGES = 5;
 
   //
   // Dispatch
   //
-  const int DISPATCH_WIDTH = 3;
+  const int DISPATCH_WIDTH = 4;
 
   //
   // Writeback
   //
-  const int WRITEBACK_WIDTH = 3;
+  const int WRITEBACK_WIDTH = 4;
 
   //
   // Commit
   //
-  const int COMMIT_WIDTH = 3;
+  const int COMMIT_WIDTH = 4;
 
   //
   // Clustering, Issue Queues and Bypass Network
@@ -370,19 +358,28 @@ namespace OutOfOrderModel {
 #define MULTI_IQ
 
 #ifdef ENABLE_SMT
-#error AMD K8 microarchitecture does not support SMT
+  //
+  // Multiple issue queues are currently only supported in
+  // the non-SMT configuration, due to ambiguities in the
+  // ICOUNT SMT heuristic when multiple queues are active.
+  //
+#undef MULTI_IQ
 #endif
 
+#ifdef MULTI_IQ
   const int MAX_CLUSTERS = 4;
+#else
+  const int MAX_CLUSTERS = 1;
+#endif
 
   enum { PHYSREG_NONE, PHYSREG_FREE, PHYSREG_WAITING, PHYSREG_BYPASS, PHYSREG_WRITTEN, PHYSREG_ARCH, PHYSREG_PENDINGFREE, MAX_PHYSREG_STATE };
   static const char* physreg_state_names[MAX_PHYSREG_STATE] = {"none", "free", "waiting", "bypass", "written", "arch", "pendingfree"};
   static const char* short_physreg_state_names[MAX_PHYSREG_STATE] = {"-", "free", "wait", "byps", "wrtn", "arch", "pend"};
 
-#ifdef INSIDE_OOOCORE
+#ifdef INSIDE_SMTCORE
 
-  struct OutOfOrderCore;
-  OutOfOrderCore& coreof(int coreid);
+  struct SMTCore;
+  SMTCore& coreof(int coreid);
 
   struct ReorderBufferEntry;
 
@@ -428,8 +425,8 @@ namespace OutOfOrderModel {
     int reserved_entries;
 
     void set_reserved_entries(int num) { reserved_entries = num; }
-    bool reset_shared_entries() { 
-      shared_entries = size - reserved_entries; 
+    bool reset_shared_entries() {
+      shared_entries = size - reserved_entries;
       return true;
     }
     bool alloc_reserved_entry() {
@@ -441,7 +438,7 @@ namespace OutOfOrderModel {
       assert(shared_entries < size - reserved_entries);
       shared_entries++;
       return true;
-    }    
+    }
     bool shared_empty() {
       return (shared_entries == 0);
     }
@@ -501,7 +498,7 @@ namespace OutOfOrderModel {
       return true;
     }
 
-    OutOfOrderCore& getcore() const { return coreof(coreid); }
+    SMTCore& getcore() const { return coreof(coreid); }
   };
 
   template <int size, int operandcount>
@@ -553,7 +550,7 @@ namespace OutOfOrderModel {
 
     void init(const char* name, ListOfStateLists& lol, W32 flags = 0);
 
-    StateList(const char* name, ListOfStateLists& lol, W32 flags = 0) {  
+    StateList(const char* name, ListOfStateLists& lol, W32 flags = 0) {
       init(name, lol, flags);
     }
 
@@ -570,7 +567,7 @@ namespace OutOfOrderModel {
         return null;
       count--;
       assert(count >=0);
-      selfqueuelink* obj = removehead(); 
+      selfqueuelink* obj = removehead();
       return obj;
     }
 
@@ -601,7 +598,7 @@ namespace OutOfOrderModel {
     void checkvalid();
   };
 
-  template <typename T> 
+  template <typename T>
   static void print_list_of_state_lists(ostream& os, const ListOfStateLists& lol, const char* title);
 
   //
@@ -626,7 +623,7 @@ namespace OutOfOrderModel {
     void validate() { }
 
     FetchBufferEntry() { }
-    
+
     FetchBufferEntry(const TransOp& transop) {
       *((TransOp*)this) = transop;
     }
@@ -635,13 +632,14 @@ namespace OutOfOrderModel {
   //
   // ReorderBufferEntry
   struct ThreadContext;
-  struct OutOfOrderCore;
+  struct SMTCore;
   struct PhysicalRegister;
   struct LoadStoreQueueEntry;
-  struct OutOfOrderCoreEvent;
+  struct SMTCoreEvent;
+  struct LLBLine;
   //
   // Reorder Buffer (ROB) structure, used for tracking all uops in flight.
-  // This same structure is used to represent both dispatched but not yet issued 
+  // This same structure is used to represent both dispatched but not yet issued
   // uops as well as issued uops.
   //
   struct ReorderBufferEntry: public selfqueuelink {
@@ -687,14 +685,14 @@ namespace OutOfOrderModel {
     int forward();
     int select_cluster();
     int issue();
-    Waddr addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
+    void* addrgen(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& virtpage, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate, Waddr& addr, int& exception, PageFaultErrorCode& pfec, bool& annul);
     bool handle_common_load_store_exceptions(LoadStoreQueueEntry& state, Waddr& origaddr, Waddr& addr, int& exception, PageFaultErrorCode& pfec);
     int issuestore(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, bool rcready, PTEUpdate& pteupdate);
     int issueload(LoadStoreQueueEntry& state, Waddr& origvirt, W64 ra, W64 rb, W64 rc, PTEUpdate& pteupdate);
-    void issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel);
     int probecache(Waddr addr, LoadStoreQueueEntry* sfra);
     void tlbwalk();
     int issuefence(LoadStoreQueueEntry& state);
+    void issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc, int cachelevel, PTEUpdate& pteupdate);
     void release();
     W64 annul(bool keep_misspec_uop, bool return_first_annulled_rip = false);
     W64 annul_after() { return annul(true); }
@@ -713,10 +711,16 @@ namespace OutOfOrderModel {
     stringbuf& get_operand_info(stringbuf& sb, int operand) const;
     ostream& print_operand_info(ostream& os, int operand) const;
 
-    OutOfOrderCore& getcore() const { return coreof(coreid); }
+    SMTCore& getcore() const { return coreof(coreid); }
 
     ThreadContext& getthread() const;
     issueq_tag_t get_tag();
+
+    // ASF-related things
+    LLBLine* llbline;
+    int commit_asf_instruction();
+    int issueasf(IssueState& state, W64 rbdata);
+    void abort_asf();
   };
 
   void decode_tag(issueq_tag_t tag, int& threadid, int& idx) {
@@ -732,10 +736,10 @@ namespace OutOfOrderModel {
   //
   // Load/Store Queue
   //
-#define LSQ_SIZE 44 // K8 uses a unified LSQ
+#define LSQ_SIZE (LDQ_SIZE + STQ_SIZE)
 
   // Define this to allow speculative issue of loads before unresolved stores
-  // #define SMT_ENABLE_LOAD_HOISTING // (K8 does not support this)
+#define SMT_ENABLE_LOAD_HOISTING
 
   struct LoadStoreQueueEntry: public SFR {
     ReorderBufferEntry* rob;
@@ -762,7 +766,7 @@ namespace OutOfOrderModel {
     }
 
     void validate() { entry_valid = 1; }
-  
+
     ostream& print(ostream& os) const;
 
     LoadStoreQueueEntry& operator =(const SFR& sfr) {
@@ -770,7 +774,7 @@ namespace OutOfOrderModel {
       return *this;
     }
 
-    OutOfOrderCore& getcore() const { return coreof(coreid); }
+    SMTCore& getcore() const { return coreof(coreid); }
   };
 
   static inline ostream& operator <<(ostream& os, const LoadStoreQueueEntry& lsq) {
@@ -792,7 +796,7 @@ namespace OutOfOrderModel {
   //
   // Physical Register File
   //
- 
+
   struct PhysicalRegister: public selfqueuelink {
     ReorderBufferEntry* rob;
     W64 data;
@@ -845,7 +849,7 @@ namespace OutOfOrderModel {
     void complete() { changestate(PHYSREG_BYPASS); }
     void writeback() { changestate(PHYSREG_WRITTEN); }
 
-    void free() {      
+    void free() {
       changestate(PHYSREG_FREE);
       rob = 0;
       refcount = 0;
@@ -877,7 +881,7 @@ namespace OutOfOrderModel {
 
     void fill_operand_info(PhysicalRegisterOperandInfo& opinfo);
 
-    OutOfOrderCore& getcore() const { return coreof(coreid); }
+    SMTCore& getcore() const { return coreof(coreid); }
   };
 
   ostream& operator <<(ostream& os, const PhysicalRegister& physreg);
@@ -903,12 +907,12 @@ namespace OutOfOrderModel {
 
     void init(const char* name, int coreid, int rfid, int size);
     bool remaining() const { return (!states[PHYSREG_FREE].empty()); }
-   
+
     PhysicalRegister* alloc(W8 threadid, int r = -1);
     void reset(W8 threadid);
     ostream& print(ostream& os) const;
 
-    OutOfOrderCore& getcore() const { return coreof(coreid); }
+    SMTCore& getcore() const { return coreof(coreid); }
 
   private:
     void reset();
@@ -956,7 +960,7 @@ namespace OutOfOrderModel {
   // Lookup tables (LUTs):
   //
   struct Cluster {
-    const char* name;
+    char* name;
     W16 issue_width;
     W32 fu_mask;
   };
@@ -967,11 +971,11 @@ namespace OutOfOrderModel {
   extern const byte archdest_can_commit[TRANSREG_COUNT];
   extern const byte archdest_is_visible[TRANSREG_COUNT];
 
-  struct OutOfOrderMachine;
+  struct SMTMachine;
 
-  struct OutOfOrderCoreCacheCallbacks: public CacheSubsystem::PerCoreCacheCallbacks {
-    OutOfOrderCore& core;
-    OutOfOrderCoreCacheCallbacks(OutOfOrderCore& core_): core(core_) { }
+  struct SMTCoreCacheCallbacks: public CacheSubsystem::PerCoreCacheCallbacks {
+    SMTCore& core;
+    SMTCoreCacheCallbacks(SMTCore& core_): core(core_) { }
     virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
   };
@@ -983,17 +987,17 @@ namespace OutOfOrderModel {
     W8 threadid;
 
     void reset() { uuid = 0; rob = 0; vcpuid = 0; threadid = 0;}
- 
+
     ostream& print(ostream& os, W64 physaddr) const {
       os << "phys ", (void*)physaddr, ": vcpu ", vcpuid, ", threadid ", threadid, ", uuid ", uuid, ", rob ", rob;
       return os;
     }
   };
- 
+
   struct MemoryInterlockBuffer: public LockableAssociativeArray<W64, MemoryInterlockEntry, 16, 4, 8> { };
- 
+
   extern MemoryInterlockBuffer interlocks;
- 
+
   //
   // Event Tracing
   //
@@ -1085,7 +1089,7 @@ namespace OutOfOrderModel {
   // and uuids are only 32-bits; in practice wraparound is
   // not likely to be a problem.
   //
-  struct OutOfOrderCoreEvent {
+  struct SMTCoreEvent {
     W32 cycle;
     W32 uuid;
     RIPVirtPhysBase rip;
@@ -1101,7 +1105,7 @@ namespace OutOfOrderModel {
     W8 threadid;
     W32 issueq_count;
 
-    OutOfOrderCoreEvent* fill(int type) {
+    SMTCoreEvent* fill(int type) {
       this->type = type;
       cycle = sim_cycle;
       uuid = 0;
@@ -1109,7 +1113,7 @@ namespace OutOfOrderModel {
       return this;
     }
 
-    OutOfOrderCoreEvent* fill(int type, const FetchBufferEntry& uop) {
+    SMTCoreEvent* fill(int type, const FetchBufferEntry& uop) {
       fill(type);
       uuid = uop.uuid;
       rip = uop.rip;
@@ -1118,13 +1122,13 @@ namespace OutOfOrderModel {
       return this;
     }
 
-    OutOfOrderCoreEvent* fill(int type, const RIPVirtPhys& rvp) {
+    SMTCoreEvent* fill(int type, const RIPVirtPhys& rvp) {
       fill(type);
       rip = rvp;
       return this;
     }
 
-    OutOfOrderCoreEvent* fill(int type, const ReorderBufferEntry* rob) {
+    SMTCoreEvent* fill(int type, const ReorderBufferEntry* rob) {
       fill(type, rob->uop);
       this->rob = rob->index();
       physreg = rob->physreg->index();
@@ -1136,7 +1140,7 @@ namespace OutOfOrderModel {
       return this;
     }
 
-    OutOfOrderCoreEvent* fill_commit(int type, const ReorderBufferEntry* rob) {
+    SMTCoreEvent* fill_commit(int type, const ReorderBufferEntry* rob) {
       fill(type, rob);
       if unlikely (isstore(rob->uop.opcode)) {
         commit.state.st = *rob->lsq;
@@ -1156,9 +1160,9 @@ namespace OutOfOrderModel {
       return this;
     }
 
-    OutOfOrderCoreEvent* fill_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr, Waddr virtaddr) {
+    SMTCoreEvent* fill_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr, Waddr virtaddr) {
       fill(type, rob);
-      loadstore.sfr = *rob->lsq;
+      if likely (rob->lsq) loadstore.sfr = *rob->lsq;
       loadstore.virtaddr = virtaddr;
       loadstore.load_store_second_phase = rob->load_store_second_phase;
       loadstore.inherit_sfr_used = (inherit_sfr != null);
@@ -1211,11 +1215,11 @@ namespace OutOfOrderModel {
         byte ready;
       } replay;
       struct {
-        W64 virtaddr; 
+        W64 virtaddr;
         W64 data_to_store;
         SFR sfr;
         SFR inherit_sfr;
-        W64 inherit_sfr_uuid;        
+        W64 inherit_sfr_uuid;
         W64 inherit_sfr_rip;
         W16 inherit_sfr_lsq;
         W16 inherit_sfr_rob;
@@ -1263,7 +1267,7 @@ namespace OutOfOrderModel {
       } writeback;
       struct {
         IssueState state;
-        byte taken:1, predtaken:1, ld_st_truly_unaligned:1;
+        byte taken:1, predtaken:1, ld_st_truly_unaligned:1,krn:1;
         PTEUpdateBase pteupdate;
         W16s oldphysreg;
         W16 oldphysreg_refcount;
@@ -1278,53 +1282,120 @@ namespace OutOfOrderModel {
   };
 
   struct EventLog {
-    OutOfOrderCoreEvent* start;
-    OutOfOrderCoreEvent* end;
-    OutOfOrderCoreEvent* tail;
+    SMTCoreEvent* start;
+    SMTCoreEvent* end;
+    SMTCoreEvent* tail;
+    int           coreid;
     ostream* logfile;
 
-    EventLog() { start = null; end = null; tail = null; logfile = null; }
+    EventLog(int coreid_) :coreid(coreid_) { start = null; end = null; tail = null; logfile = null; }
 
     bool init(size_t bufsize);
     void reset();
 
-    OutOfOrderCoreEvent* add() {
+    SMTCoreEvent* add() {
       if unlikely (tail >= end) {
         tail = start;
         flush();
       }
-      OutOfOrderCoreEvent* event = tail;
+      SMTCoreEvent* event = tail;
       tail++;
       return event;
     }
 
     void flush(bool only_to_tail = false);
 
-    OutOfOrderCoreEvent* add(int type) {
+    SMTCoreEvent* add(int type) {
       return add()->fill(type);
     }
 
-    OutOfOrderCoreEvent* add(int type, const RIPVirtPhys& rvp) {
+    SMTCoreEvent* add(int type, const RIPVirtPhys& rvp) {
       return add()->fill(type, rvp);
     }
 
-    OutOfOrderCoreEvent* add(int type, const FetchBufferEntry& uop) {
+    SMTCoreEvent* add(int type, const FetchBufferEntry& uop) {
       return add()->fill(type, uop);
     }
 
-    OutOfOrderCoreEvent* add(int type, const ReorderBufferEntry* rob) {
+    SMTCoreEvent* add(int type, const ReorderBufferEntry* rob) {
       return add()->fill(type, rob);
     }
 
-    OutOfOrderCoreEvent* add_commit(int type, const ReorderBufferEntry* rob) {
+    SMTCoreEvent* add_commit(int type, const ReorderBufferEntry* rob) {
       return add()->fill_commit(type, rob);
     }
 
-    OutOfOrderCoreEvent* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
+    SMTCoreEvent* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
       return add()->fill_load_store(type, rob, inherit_sfr, addr);
     }
 
     ostream& print(ostream& os, bool only_to_tail = false);
+  };
+
+  #define ASF_MAX_LINES (8)
+  #define LLB_LINE_SIZE CacheSubsystem::L1_LINE_SIZE
+  struct LLBLine {
+    W64   orig_data[LLB_LINE_SIZE / sizeof(W64)];
+    bool  written;
+    int   refcount;
+    void  reset() {written = false; refcount = 0;}
+    void  copy_from_phys(Waddr physaddr) {
+      assert(mask(physaddr, LLB_LINE_SIZE) == 0);
+      void *src;
+#ifdef PTLSIM_HYPERVISOR
+      src = phys_to_mapped_virt(sim_physaddr_to_host_physaddr(physaddr));
+#else
+      src = (void*)physaddr;
+#endif
+      memcpy(orig_data, src, sizeof(orig_data));
+    }
+    void  copy_to_phys(Waddr physaddr) {
+      assert(mask(physaddr, LLB_LINE_SIZE) == 0);
+      void *dst;
+#ifdef PTLSIM_HYPERVISOR
+      dst = phys_to_mapped_virt(sim_physaddr_to_host_physaddr(physaddr));
+#else
+      dst = (void*)physaddr;
+#endif
+      memcpy(dst, orig_data, sizeof(orig_data));
+    }
+    LLBLine():written(false),refcount(0) {}
+  };
+  enum {
+    PROBE_ACK,
+    PROBE_NACK,
+    PROBE_WAIT
+  };
+
+  struct LockedLineBuffer: public FullyAssociativeArray<Waddr, LLBLine, ASF_MAX_LINES> {
+    typedef FullyAssociativeArray<Waddr, LLBLine, ASF_MAX_LINES> base_t;
+    ThreadContext& thread;
+    int num_locations;
+
+    LockedLineBuffer(ThreadContext& _thread): base_t(), thread(_thread) {}
+    LLBLine* add_location(Waddr addr);
+    void remove_ref(LLBLine* line);
+    void clear();
+    void snapshot();
+    void snapshot(LLBLine *llbline);
+    void undo();
+
+    void commit() {clear(); lasterr = 0;};
+    void abort() { undo(); /*clear();*/ lasterr = 0; };
+
+    bool contains(Waddr addr) {return probe(floor(addr, LLB_LINE_SIZE));}
+    bool empty() {return (num_locations == 0);}
+    LLBLine* external_probe(Waddr addr, bool invalidating);
+    LLBLine* probe_other_LLBs(Waddr addr, bool invalidating);
+    void mark_clean(Waddr addr);
+    void mark_clean_others(Waddr addr);
+    void mark_written(Waddr addr);
+
+    W64  consistency_error() {
+/* S.D. Error injection framework!*/if (!lasterr)  lasterr = (asf_consistency_error()) ? 0xDEADBEEF : 0;
+      return lasterr;
+    }
+    private: W64 lasterr;
   };
 
   struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 8> { };
@@ -1335,11 +1406,16 @@ namespace OutOfOrderModel {
     ROB_STATE_PRE_READY_TO_DISPATCH = (1 << 2)
   };
 
+#ifdef MULTI_IQ
 #define InitClusteredROBList(name, description, flags) \
   name[0](description "-int0", rob_states, flags); \
   name[1](description "-int1", rob_states, flags); \
   name[2](description "-ld", rob_states, flags); \
   name[3](description "-fp", rob_states, flags)
+#else
+#define InitClusteredROBList(name, description, flags) \
+  name[0](description "-all", rob_states, flags);
+#endif
 
   static const int ISSUE_QUEUE_SIZE = 16;
 
@@ -1351,8 +1427,8 @@ namespace OutOfOrderModel {
   static const int UNALIGNED_PREDICTOR_SIZE = 4096;
 
   struct ThreadContext {
-    OutOfOrderCore& core;
-    OutOfOrderCore& getcore() const { return core; }
+    SMTCore& core;
+    SMTCore& getcore() const { return core; }
 
     int threadid;
     Context& ctx;
@@ -1393,8 +1469,8 @@ namespace OutOfOrderModel {
     BasicBlock* current_basic_block;
     int current_basic_block_transop_index;
     bool stall_frontend;
+    bool stall_on_eom;
     bool waiting_for_icache_fill;
-    Waddr waiting_for_icache_fill_physaddr;
 
     // Last block in icache we fetched into our buffer
     W64 current_icache_block;
@@ -1420,7 +1496,7 @@ namespace OutOfOrderModel {
     // statistics:
     W64 total_uops_committed;
     W64 total_insns_committed;
-    int dispatch_deadlock_countdown;    
+    int dispatch_deadlock_countdown;
     int issueq_count;
 
     //
@@ -1433,7 +1509,7 @@ namespace OutOfOrderModel {
     byte queued_mem_lock_release_count;
     W64 queued_mem_lock_release_list[4];
 
-    ThreadContext(OutOfOrderCore& core_, int threadid_, Context& ctx_): core(core_), threadid(threadid_), ctx(ctx_) {
+    ThreadContext(SMTCore& core_, int threadid_, Context& ctx_): core(core_), threadid(threadid_), ctx(ctx_), locked_line_buffer(*this) {
       reset();
     }
 
@@ -1458,7 +1534,7 @@ namespace OutOfOrderModel {
     void annul_fetchq();
     BasicBlock* fetch_or_translate_basic_block(const RIPVirtPhys& rvp);
     void redispatch_deadlock_recovery();
-    void flush_mem_lock_release_list(int start = 0);
+    void flush_mem_lock_release_list(byte start = 0);
     int get_priority() const;
 
     void dump_smt_state(ostream& os);
@@ -1469,15 +1545,24 @@ namespace OutOfOrderModel {
 
     void reset();
     void init();
+
+    // ASF
+    bool        asf_in_crit_sec;
+    RIPVirtPhys asf_abort_rip;
+    W64         asf_saved_rsp;
+    LockedLineBuffer locked_line_buffer;
+    void check_asf_conflicts();
+    int asf_runcycle(int commitrc);
+    void asf_rollback_last_spec(W64 errorcode, int reg_nextrip = REG_rip);
   };
 
   //
   // checkpointed core
   //
-  struct OutOfOrderCore {
-    OutOfOrderMachine& machine;
+  struct SMTCore {
+    SMTMachine& machine;
     int coreid;
-    OutOfOrderCore& getcore() const { return coreof(coreid); }
+    SMTCore& getcore() const { return coreof(coreid); }
 
     int threadcount;
     ThreadContext* threads[MAX_THREADS_PER_CORE];
@@ -1493,44 +1578,57 @@ namespace OutOfOrderModel {
     int dispatchcount;
 
     byte round_robin_tid;
+    byte round_robin_cid;
 
     //
     // Issue Queues (one per cluster)
     //
     int reserved_iq_entries;
-#define declare_issueq_templates \
-    template struct IssueQueue<8>; \
-    template struct IssueQueue<36>
+#define declare_issueq_templates template struct IssueQueue<ISSUE_QUEUE_SIZE>
+#ifdef MULTI_IQ
+    IssueQueue<ISSUE_QUEUE_SIZE> issueq_int0;
+    IssueQueue<ISSUE_QUEUE_SIZE> issueq_int1;
+    IssueQueue<ISSUE_QUEUE_SIZE> issueq_ld;
+    IssueQueue<ISSUE_QUEUE_SIZE> issueq_fp;
 
-    IssueQueue<8> issueq_int1;
-    IssueQueue<8> issueq_int2;
-    IssueQueue<8> issueq_int3;
-    IssueQueue<36> issueq_fp;
+    // Instantiate any issueq sizes used above:
 
-#define foreach_issueq(expr) { OutOfOrderCore& core = getcore(); core.issueq_int1.expr; core.issueq_int2.expr; core.issueq_int3.expr; core.issueq_fp.expr; }
-  
+
+#define foreach_issueq(expr) { SMTCore& core = getcore(); core.issueq_int0.expr; core.issueq_int1.expr; core.issueq_ld.expr; core.issueq_fp.expr; }
+
     void sched_get_all_issueq_free_slots(int* a) {
-      a[0] = issueq_int1.remaining();
-      a[1] = issueq_int2.remaining();
-      a[2] = issueq_int3.remaining();
+      a[0] = issueq_int0.remaining();
+      a[1] = issueq_int1.remaining();
+      a[2] = issueq_ld.remaining();
       a[3] = issueq_fp.remaining();
     }
 
 #define issueq_operation_on_cluster_with_result(core, cluster, rc, expr) \
   switch (cluster) { \
-  case 0: rc = core.issueq_int1.expr; break; \
-  case 1: rc = core.issueq_int2.expr; break; \
-  case 2: rc = core.issueq_int3.expr; break; \
+  case 0: rc = core.issueq_int0.expr; break; \
+  case 1: rc = core.issueq_int1.expr; break; \
+  case 2: rc = core.issueq_ld.expr; break; \
   case 3: rc = core.issueq_fp.expr; break; \
   }
 
 #define per_cluster_stats_update(prefix, cluster, expr) \
   switch (cluster) { \
-  case 0: prefix.int1 expr; break; \
-  case 1: prefix.int2 expr; break; \
-  case 2: prefix.int3 expr; break; \
+  case 0: prefix.int0 expr; break; \
+  case 1: prefix.int1 expr; break; \
+  case 2: prefix.ld expr; break; \
   case 3: prefix.fp expr; break; \
   }
+
+#else
+    IssueQueue<ISSUE_QUEUE_SIZE> issueq_all;
+#define foreach_issueq(expr) { getcore().issueq_all.expr; }
+    void sched_get_all_issueq_free_slots(int* a) {
+      a[0] = issueq_all.remaining();
+    }
+#define issueq_operation_on_cluster_with_result(core, cluster, rc, expr) rc = core.issueq_all.expr;
+#define per_cluster_stats_update(prefix, cluster, expr) prefix.all expr;
+
+#endif
 
 #define per_physregfile_stats_update(prefix, rfid, expr) \
   switch (rfid) { \
@@ -1545,14 +1643,14 @@ namespace OutOfOrderModel {
 #define for_each_cluster(iter) foreach (iter, MAX_CLUSTERS)
 #define for_each_operand(iter) foreach (iter, MAX_OPERANDS)
 
-    OutOfOrderCore(int coreid_, OutOfOrderMachine& machine_): coreid(coreid_), machine(machine_), cache_callbacks(*this) {
+    SMTCore(int coreid_, SMTMachine& machine_): coreid(coreid_), machine(machine_), cache_callbacks(*this), caches(coreid_), eventlog(coreid_) {
       threadcount = 0;
       setzero(threads);
     }
-    
-    ~OutOfOrderCore(){};
 
-    // 
+    ~SMTCore(){};
+
+    //
     // Initialize structures independent of the core parameters
     //
     void init_generic();
@@ -1578,7 +1676,7 @@ namespace OutOfOrderModel {
 
     enum { PHYS_REG_FILE_INT, PHYS_REG_FILE_FP, PHYS_REG_FILE_ST, PHYS_REG_FILE_BR };
 
-    enum {  
+    enum {
       PHYS_REG_FILE_MASK_INT = (1 << 0),
       PHYS_REG_FILE_MASK_FP  = (1 << 1),
       PHYS_REG_FILE_MASK_ST  = (1 << 2),
@@ -1591,7 +1689,7 @@ namespace OutOfOrderModel {
     W32 fu_avail;
     ReorderBufferEntry* robs_on_fu[FU_COUNT];
     CacheSubsystem::CacheHierarchy caches;
-    OutOfOrderCoreCacheCallbacks cache_callbacks;
+    SMTCoreCacheCallbacks cache_callbacks;
 
     // Unaligned load/store predictor
     bitvec<UNALIGNED_PREDICTOR_SIZE> unaligned_predictor;
@@ -1620,14 +1718,20 @@ namespace OutOfOrderModel {
     void print_smt_state(ostream& os);
     void check_refcounts();
     void check_rob();
+
   };
 
-#define MAX_SMT_CORES 32
+#ifdef ENABLE_SMT
+  #define MAX_SMT_CORES 1
+#else
+  #define MAX_SMT_CORES 32
+#endif
 
-  struct OutOfOrderMachine: public PTLsimMachine {
-    OutOfOrderCore* cores[MAX_SMT_CORES];
+  struct SMTMachine: public PTLsimMachine {
+    SMTCore* cores[MAX_SMT_CORES];
+    int corecount;
     bitvec<MAX_CONTEXTS> stopped;
-    OutOfOrderMachine(const char* name);
+    SMTMachine(const char* name);
     virtual bool init(PTLsimConfig& config);
     virtual int run(PTLsimConfig& config);
     virtual void dump_state(ostream& os);
@@ -1657,45 +1761,57 @@ namespace OutOfOrderModel {
   // latency between them, but both clusters can access the load pseudo-cluster with
   // no extra cycle. The floating point cluster is two cycles from everything else.
   //
-
+#ifdef MULTI_IQ
   const Cluster clusters[MAX_CLUSTERS] = {
-    {"int1",  2, (FU_ALU1|FU_ALUC)},
-    {"int2",  2, (FU_ALU2|FU_LSU1)},
-    {"int3",  2, (FU_ALU3|FU_LSU2)},
-    {"fp",    3, (FU_FADD|FU_FMUL|FU_FCVT)},
+    {"int0",  2, (FU_ALU0|FU_STU0)},
+    {"int1",  2, (FU_ALU1|FU_STU1)},
+    {"ld",    2, (FU_LDU0|FU_LDU1)},
+    {"fp",    2, (FU_FPU0|FU_FPU1)},
   };
 
   const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
-    // I0 I1 I2 FP <-to
-    {0, 0, 0, 2}, // from I0
-    {0, 0, 0, 2}, // from I1
-    {0, 0, 0, 2}, // from I2
+    // I0 I1 LD FP <-to
+    {0, 1, 0, 2}, // from I0
+    {1, 0, 0, 2}, // from I1
+    {0, 0, 0, 2}, // from LD
     {2, 2, 2, 0}, // from FP
   };
 
   const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {
-    // I1 I2 I3 FP <-to
-    {2, 2, 2, 1}, // from I1
-    {2, 2, 2, 1}, // from I2
-    {2, 2, 2, 2}, // from I3
+    // I0 I1 LD FP <-to
+    {2, 2, 1, 1}, // from I0
+    {2, 2, 1, 1}, // from I1
+    {1, 1, 2, 2}, // from LD
     {1, 1, 1, 2}, // from FP
   };
 
+#else // single issueq
+  const Cluster clusters[MAX_CLUSTERS] = {
+    {"all",  4, (FU_ALU0|FU_ALU1|FU_STU0|FU_STU1|FU_LDU0|FU_LDU1|FU_FPU0|FU_FPU1)},
+   };
+  const byte intercluster_latency_map[MAX_CLUSTERS][MAX_CLUSTERS] = {{0}};
+  const byte intercluster_bandwidth_map[MAX_CLUSTERS][MAX_CLUSTERS] = {{64}};
+#endif // multi_issueq
+
 #endif // DECLARE_STRUCTURES
 
-#endif // INSIDE_OOOCORE
+#endif // INSIDE_SMTCORE
 
   //
   // This part is used when parsing stats.h to build the
   // data store template; these must be in sync with the
   // corresponding definitions elsewhere.
   //
-  static const char* cluster_names[MAX_CLUSTERS] = {"int1", "int2", "int3", "fp"};
+#ifdef MULTI_IQ
+  static const char* cluster_names[MAX_CLUSTERS] = {"int0", "int1", "ld", "fp"};
+#else
+  static const char* cluster_names[MAX_CLUSTERS] = {"all"};
+#endif
 
   static const char* phys_reg_file_names[PHYS_REG_FILE_COUNT] = {"int", "fp", "st", "br"};
 };
 
-struct PerContextOutOfOrderCoreStats { // rootnode:
+struct PerContextSMTStats { // rootnode:
   struct fetch {
     struct stop { // node: summable
       W64 stalled;
@@ -1708,7 +1824,7 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
       W64 full_width;
     } stop;
     W64 opclass[OPCLASS_COUNT]; // label: opclass_names
-    W64 width[OutOfOrderModel::FETCH_WIDTH+1]; // histo: 0, OutOfOrderModel::FETCH_WIDTH, 1
+    W64 width[SMTModel::FETCH_WIDTH+1]; // histo: 0, SMTModel::FETCH_WIDTH, 1
     W64 blocks;
     W64 uops;
     W64 user_insns;
@@ -1723,7 +1839,7 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
       W64 ldq_full;
       W64 stq_full;
     } status;
-    W64 width[OutOfOrderModel::FRONTEND_WIDTH+1]; // histo: 0, OutOfOrderModel::FRONTEND_WIDTH, 1
+    W64 width[SMTModel::FRONTEND_WIDTH+1]; // histo: 0, SMTModel::FRONTEND_WIDTH, 1
     struct renamed {
       W64 none;
       W64 reg;
@@ -1741,12 +1857,12 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
   } frontend;
 
   struct dispatch {
-    W64 cluster[OutOfOrderModel::MAX_CLUSTERS]; // label: OutOfOrderModel::cluster_names
+    W64 cluster[SMTModel::MAX_CLUSTERS]; // label: SMTModel::cluster_names
     struct redispatch {
       W64 trigger_uops;
       W64 deadlock_flushes;
       W64 deadlock_uops_flushed;
-      W64 dependent_uops[OutOfOrderModel::ROB_SIZE+1]; // histo: 0, OutOfOrderModel::ROB_SIZE, 1
+      W64 dependent_uops[SMTModel::ROB_SIZE+1]; // histo: 0, SMTModel::ROB_SIZE, 1
     } redispatch;
   } dispatch;
 
@@ -1766,7 +1882,7 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
   } issue;
 
   struct writeback {
-    W64 writebacks[OutOfOrderModel::PHYS_REG_FILE_COUNT]; // label: OutOfOrderModel::phys_reg_file_names
+    W64 writebacks[SMTModel::PHYS_REG_FILE_COUNT]; // label: SMTModel::phys_reg_file_names
   } writeback;
 
   struct commit {
@@ -1837,7 +1953,7 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
         W64 sfr;
         W64 sfr_and_cache;
       } forward;
-        
+
       struct dependency { // node: summable
         W64 independent;
         W64 predicted_alias_unresolved;
@@ -1845,13 +1961,13 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
         W64 stq_address_not_ready;
         W64 fence;
       } dependency;
-        
+
       struct type { // node: summable
         W64 aligned;
         W64 unaligned;
         W64 internal;
       } type;
-        
+
       W64 size[4]; // label: sizeshift_names
 
       W64 datatype[DATATYPE_COUNT]; // label: datatype_names
@@ -1881,13 +1997,13 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
         W64 zero;
         W64 sfr;
       } forward;
-        
+
       struct type { // node: summable
         W64 aligned;
         W64 unaligned;
         W64 internal;
       } type;
-        
+
       W64 size[4]; // label: sizeshift_names
 
       W64 datatype[DATATYPE_COUNT]; // label: datatype_names
@@ -1902,42 +2018,50 @@ struct PerContextOutOfOrderCoreStats { // rootnode:
 };
 
 //
-// Out-of-Order Core
+// SMT Core
 //
-struct OutOfOrderCoreStats { // rootnode:
+struct SMTCoreStats { // rootnode:
   W64 cycles;
 
   struct dispatch {
     struct source { // node: summable
-      W64 integer[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
-      W64 fp[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
-      W64 st[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
-      W64 br[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 integer[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 fp[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 st[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 br[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
     } source;
-    W64 width[OutOfOrderModel::DISPATCH_WIDTH+1]; // histo: 0, OutOfOrderModel::DISPATCH_WIDTH, 1
+    W64 width[SMTModel::DISPATCH_WIDTH+1]; // histo: 0, SMTModel::DISPATCH_WIDTH, 1
   } dispatch;
 
   struct issue {
     struct source { // node: summable
-      W64 integer[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
-      W64 fp[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
-      W64 st[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
-      W64 br[OutOfOrderModel::MAX_PHYSREG_STATE]; // label: OutOfOrderModel::physreg_state_names
+      W64 integer[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 fp[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 st[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
+      W64 br[SMTModel::MAX_PHYSREG_STATE]; // label: SMTModel::physreg_state_names
     } source;
     struct width {
-      W64 int1[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
-      W64 int2[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
-      W64 int3[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
-      W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+#ifdef MULTI_IQ
+      W64 int0[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 ld[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#else
+      W64 all[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#endif
     } width;
   } issue;
 
   struct writeback {
     struct width {
-      W64 int1[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
-      W64 int2[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
-      W64 int3[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
-      W64 fp[OutOfOrderModel::MAX_ISSUE_WIDTH+1]; // histo: 0, OutOfOrderModel::MAX_ISSUE_WIDTH, 1
+#ifdef MULTI_IQ
+      W64 int0[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 int1[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 ld[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+      W64 fp[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#else
+      W64 all[SMTModel::MAX_ISSUE_WIDTH+1]; // histo: 0, SMTModel::MAX_ISSUE_WIDTH, 1
+#endif
     } width;
   } writeback;
 
@@ -1949,32 +2073,18 @@ struct OutOfOrderCoreStats { // rootnode:
 
     W64 free_regs_recycled;
 
-    W64 width[OutOfOrderModel::COMMIT_WIDTH+1]; // histo: 0, OutOfOrderModel::COMMIT_WIDTH, 1
+    W64 width[SMTModel::COMMIT_WIDTH+1]; // histo: 0, SMTModel::COMMIT_WIDTH, 1
   } commit;
 
-  struct branchpred {
-    W64 predictions;
-    W64 updates;
-
-    // These counters are [0] = mispred, [1] = correct
-    W64 cond[2]; // label: branchpred_outcome_names
-    W64 indir[2]; // label: branchpred_outcome_names
-    W64 ret[2]; // label: branchpred_outcome_names
-    W64 summary[2]; // label: branchpred_outcome_names
-    struct ras { // node: summable
-      W64 pushes;
-      W64 overflows;
-      W64 pops;
-      W64 underflows;
-      W64 annuls;
-    } ras;
-  } branchpred;
-
-  PerContextOutOfOrderCoreStats total;
-  PerContextOutOfOrderCoreStats vcpu0;
-  PerContextOutOfOrderCoreStats vcpu1;
-  PerContextOutOfOrderCoreStats vcpu2;
-  PerContextOutOfOrderCoreStats vcpu3;
+  PerContextSMTStats total;
+  PerContextSMTStats vcpu0;
+  PerContextSMTStats vcpu1;
+  PerContextSMTStats vcpu2;
+  PerContextSMTStats vcpu3;
+  PerContextSMTStats vcpu4;
+  PerContextSMTStats vcpu5;
+  PerContextSMTStats vcpu6;
+  PerContextSMTStats vcpu7;
 
   struct simulator {
     double total_time;

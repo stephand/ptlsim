@@ -113,11 +113,11 @@ void assist_sysenter(Context& ctx) {
   // REG_rip is filled out for us
 }
 
-static const char cpuid_vendor[12+1] = "GenuineIntel";
-static const char cpuid_description[48+1] = "Intel(R) Xeon(TM) CPU 2.00 GHz                  ";
+//static const char cpuid_vendor[12+1] = "GenuineIntel";
+//static const char cpuid_description[48+1] = "Intel(R) Xeon(TM) CPU 2.00 GHz                  ";
 
-//static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
-//static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
+static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
+static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
 
 
 //
@@ -796,35 +796,10 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x61: {
-    // popa
-    if (use64) {
-      // popa is invalid in 64-bit mode
+    // popa [not used by gcc]
       MakeInvalid();
       break;
     }
-    EndOfDecode();
-
-    int sizeshift = (opsize_prefix) ? 1 : 2;
-    int size = (1 << sizeshift);
-    int offset = 0;
-
-#define POP(reg) \
-    this << TransOp(OP_ld, reg, REG_rsp, REG_imm, REG_zero, sizeshift, offset);
-
-    POP(REG_rdi);   offset += size;
-    POP(REG_rsi);   offset += size;
-    POP(REG_rbp);   offset += size;
-    /* skip rsp */  offset += size;
-    POP(REG_rbx);   offset += size;
-    POP(REG_rdx);   offset += size;
-    POP(REG_rcx);   offset += size;
-    POP(REG_rax);   offset += size;
-#undef POP
-
-    this << TransOp(OP_add, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, offset);
-
-    break;
-  }
 
   case 0x62: {
     // bound [not used by gcc]
@@ -1768,13 +1743,16 @@ bool TraceDecoder::decode_complex() {
   }
 
   case 0x10d: {
-    // prefetchw [eform] (NOTE: this is an AMD-only insn from K6 onwards)
+    // prefetch(w) [eform] (NOTE: this is an AMD-only insn from K6 onwards)
+    /* Let decode_asf handle the locked versions of prefetchw */
+    if (prefixes & PFX_LOCK) return false;
+
     DECODE(eform, ra, b_mode);
     EndOfDecode();
 
     int level = 2;
-    prefixes &= ~PFX_LOCK;
-    operand_load(REG_temp0, ra, OP_ld_pre, DATATYPE_INT, level);
+    assert(!(prefixes & PFX_LOCK));
+    operand_load(REG_temp0, ra, OP_ld_pre, DATATYPE_INT, level, (modrm.reg == 1));
     break;
   }
 
@@ -2367,7 +2345,8 @@ bool TraceDecoder::decode_complex() {
   }
 
   default: {
-    MakeInvalid();
+    //S.D. Give the ASF-Decoder a chance to run first! MakeInvalid();
+    return false;
     break;
   }
   }
