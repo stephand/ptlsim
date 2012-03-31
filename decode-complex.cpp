@@ -256,7 +256,7 @@ void assist_cpuid(Context& ctx) {
   case 0: {
     // Max avail function spec and vendor ID:
     const W32* vendor = (const W32*)&cpuid_vendor;
-    rax = 1; // only one extended function
+    rax = 2; // two extended function
     rbx = vendor[0];
     rdx = vendor[1];
     rcx = vendor[2];
@@ -269,6 +269,15 @@ void assist_cpuid(Context& ctx) {
     rbx = PTLSIM_X86_MISC_INFO | (ctx.vcpuid << 24);
     rcx = PTLSIM_X86_EXT_FEATURE;
     rdx = PTLSIM_X86_FEATURE;
+    break;
+  }
+
+  case 2: {
+    // Dummy cache informations, required by glibc
+    rax = 0; // TODO
+    rbx = 0;
+    rcx = 0;
+    rdx = 0;
     break;
   }
 
@@ -790,8 +799,32 @@ bool TraceDecoder::decode_complex() {
   switch (op) {
  
   case 0x60: {
-    // pusha [not used by gcc]
+    // pusha
+    if (use64) {
+      // pusha is invalid in 64-bit mode
     MakeInvalid();
+    break;
+  }
+    EndOfDecode();
+
+    int sizeshift = (opsize_prefix) ? 1 : 2;
+    int size = (1 << sizeshift);
+    int offset = 0;
+
+#define PUSH(reg) \
+    this << TransOp(OP_st, REG_mem, REG_rsp, REG_imm, reg, sizeshift, offset);
+
+    offset -= size;   PUSH(REG_rax);
+    offset -= size;   PUSH(REG_rcx);
+    offset -= size;   PUSH(REG_rdx);
+    offset -= size;   PUSH(REG_rbx);
+    offset -= size;   PUSH(REG_rsp);
+    offset -= size;   PUSH(REG_rbp);
+    offset -= size;   PUSH(REG_rsi);
+    offset -= size;   PUSH(REG_rdi);
+#undef PUSH
+
+    this << TransOp(OP_sub, REG_rsp, REG_rsp, REG_imm, REG_zero, sizeshift, -offset);
     break;
   }
 
@@ -990,7 +1023,7 @@ bool TraceDecoder::decode_complex() {
       rd.mem.offset += (1 << sizeshift);
 
     // There is no way to encode 32-bit pushes and pops in 64-bit mode:
-    if (rd.type == OPTYPE_MEM && rd.mem.size == 2) rd.mem.size = 3;
+    if (use64 && rd.type == OPTYPE_MEM && rd.mem.size == 2) rd.mem.size = 3;
 
     if (rd.type == OPTYPE_MEM) {
       prefixes &= ~PFX_LOCK;
@@ -1347,7 +1380,7 @@ bool TraceDecoder::decode_complex() {
   case 0xcc: {
     // INT3 (breakpoint)
     EndOfDecode();
-    immediate(REG_ar1, 3, 0);
+    immediate(REG_ar1, 0, 3);
     microcode_assist(ASSIST_INT, ripstart, rip);
     end_of_block = 1;
     break;
@@ -1388,8 +1421,31 @@ bool TraceDecoder::decode_complex() {
 
   case 0xd7: {
     // xlat
+#if 0
     // (not used by gcc)
     MakeInvalid();
+#else
+    EndOfDecode();
+
+    int destreg  = REG_temp0;
+    int srcreg   = REG_rax;
+    int basereg  = bias_by_segreg(REG_rbx);
+    int indexreg = REG_temp0;
+    int tempreg  = REG_temp8;
+    
+    // Only lower 8 bit of offset matter
+    this << TransOp(OP_mov, indexreg, REG_zero, srcreg, REG_zero, 0);
+
+    this << TransOp(OP_add, tempreg, basereg, indexreg, REG_zero,
+                    (use64 ? (addrsize_prefix ? 2 : 3)
+                           : (addrsize_prefix ? 1 : 2)));
+
+    // NB: Standard OP_ld does not merge
+    this << TransOp(OP_ld, destreg, tempreg, REG_imm, REG_zero /*srcreg*/, 0);
+
+    // Merge the low 8 bits only
+    this << TransOp(OP_mov, srcreg, srcreg, destreg, REG_zero, 0);
+#endif
     break;
   }
 
@@ -2066,13 +2122,13 @@ bool TraceDecoder::decode_complex() {
 
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-
+    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
     /*
       
     Action:
-    - Compare rax with [mem]. 
-    - If (rax == [mem]), [mem] := ra. 
-    - Else rax := [mem]
+    - Compare rax with [mem] / reg. 
+    - If (rax == [mem] / reg), [mem] / reg := rax. 
+    - Else rax := [mem] / reg
 
     cmpxchg [mem],ra
 
@@ -2084,25 +2140,40 @@ bool TraceDecoder::decode_complex() {
     sel.ne rax = t1,rax,t0          # If (rax != [mem]), rax = [mem]
     st     [mem] = t2               # Store back selected value
 
+    cmpxchg rd,ra
+
+    becomes:
+    mov    t0 = rd                  # Load [mem]
+    cmp    t1 = rax,t0              # Compare (rax == rd) and set flags
+    sel.eq rd = t1,t0,ra            # Compute value to store back
+    sel.ne rax = t1,rax,rd          # If (rax != rd), rax = rd
+
     */
 
+#if (0) //SD: Note that there is no mandatory implicit LOCK prefix for CMPXCHG!
     if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
+#endif
+    int tmpreg = REG_temp0;
+    if likely (rd.type == OPTYPE_MEM) {
+      if (memory_fence_if_locked(0)) break;
+      tmpreg = REG_temp0;
+      rdreg  = REG_temp2;
+      operand_load(tmpreg, rd, OP_ld, 1);
+    } else {
+      this << TransOp(OP_mov, tmpreg, REG_zero, rdreg, REG_zero, sizeshift);
+    }
 
-    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
+    this << TransOp(OP_sub, REG_temp1, REG_rax, tmpreg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
 
-    operand_load(REG_temp0, rd, OP_ld, 1);
-
-    this << TransOp(OP_sub, REG_temp1, REG_rax, REG_temp0, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
-
-    TransOp selmem(OP_sel, REG_temp2, REG_temp0, rareg, REG_temp1, sizeshift);
+    TransOp selmem(OP_sel, rdreg, tmpreg, rareg, REG_temp1, sizeshift);
     selmem.cond = COND_e;
     this << selmem;
 
-    TransOp selreg(OP_sel, REG_rax, REG_rax, REG_temp0, REG_temp1, sizeshift);
+    TransOp selreg(OP_sel, REG_rax, REG_rax, tmpreg, REG_temp1, sizeshift);
     selreg.cond = COND_ne;
     this << selreg;
 
-    if likely (rd.type == OPTYPE_MEM) result_store(REG_temp2, REG_temp0, rd);
+    if likely (rd.type == OPTYPE_MEM) result_store(rdreg, REG_temp0, rd);
 
     if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
 
@@ -2170,7 +2241,8 @@ bool TraceDecoder::decode_complex() {
 
     int sizeshift = reginfo[ra.reg.reg].sizeshift;
     int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
-
+    int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    int tmpreg = REG_temp0;    
     /*
       
     Action:
@@ -2184,22 +2256,38 @@ bool TraceDecoder::decode_complex() {
 
     ld     t0 = [mem]               # Load [mem]
     add    t1 = t0,ra               # Add temporary
+    mov    ra = t0                  # Swap back old value
     st     [mem] = t1               # Store back added value
+
+    xadd rd,ra
+
+    becomes:
+
+    mov    t0 = rd                  # Copy rd
+    add    rd = t0,ra               # Add and store in result reg
     mov    ra = t0                  # Swap back old value
 
     */
 
+#if (0)  //SD: Rubbish!
     // xadd [mem],reg is always locked:
     if likely (rd.type == OPTYPE_MEM) prefixes |= PFX_LOCK;
+#endif
+    if likely (rd.type == OPTYPE_MEM) {
+      if (memory_fence_if_locked(0)) break;
+      rdreg  = REG_temp1;
+      operand_load(tmpreg, rd, OP_ld, 1);
+    } else {
+      this << TransOp(OP_mov, tmpreg, REG_zero, rdreg, REG_zero, sizeshift);
+    }
 
-    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(0)) break; }
+    this << TransOp(OP_add, rdreg, tmpreg, rareg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
+    this << TransOp(OP_mov, rareg, rareg, tmpreg, REG_zero, sizeshift);
 
-    operand_load(REG_temp0, rd, OP_ld, 1);
-    this << TransOp(OP_add, REG_temp1, REG_temp0, rareg, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
-    result_store(REG_temp1, REG_temp2, rd);
-    this << TransOp(OP_mov, rareg, rareg, REG_temp0, REG_zero, sizeshift);
-
-    if likely (rd.type == OPTYPE_MEM) { if (memory_fence_if_locked(1)) break; }
+    if likely (rd.type == OPTYPE_MEM) {
+      result_store(rdreg, REG_temp2, rd);
+      if (memory_fence_if_locked(1)) break;
+    }
 
     break;
   }
@@ -2244,6 +2332,7 @@ bool TraceDecoder::decode_complex() {
 
       ra.type = OPTYPE_REG;
       ra.reg.reg = 0; // get the requested mxcsr into ar1
+      ra.mem.size = 2; // always 32-bit 
       operand_load(REG_ar1, ra);
       //
       // LDMXCSR needs to flush the pipeline since future FP instructions will

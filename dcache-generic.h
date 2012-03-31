@@ -19,7 +19,7 @@
 // 02110-1301, USA.
 //
 // Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -31,7 +31,7 @@
 #define POOR_MANS_MESI
 #include <ptlsim.h>
 //#include <datastore.h>
-#define MAX_HIERARCHIES 8
+#define MAX_HIERARCHIES 32
 struct LoadStoreInfo {
   W16 rob;
   W8  threadid;
@@ -535,7 +535,10 @@ namespace CacheSubsystem {
     }
 
     void free(int lfrqslot) {
+      assert(waiting[lfrqslot]);
       changestate(lfrqslot, waiting, freemap);
+      assert(count > 0);
+      count--;
     }
 
     bool full() const {
@@ -673,7 +676,7 @@ namespace CacheSubsystem {
     W64 commitstore(const SFR& sfr, W64 virtaddr, bool internal = false, int threadid = 0xff, bool perform_actual_write = true);
     W64 speculative_store(const SFR& sfr, int threadid = 0xff);
 
-    void initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating = false);
+    void initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating = false, int threadid = 0xfe);
 
     bool probe_icache(Waddr virtaddr, Waddr physaddr);
     int initiate_icache_miss(W64 addr, int rob = 0xffff, int threadid = 0xff);

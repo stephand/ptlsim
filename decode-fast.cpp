@@ -3,7 +3,7 @@
 // Decoder for simple x86 instructions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -239,9 +239,8 @@ bool TraceDecoder::decode_fast() {
     EndOfDecode();
 
     int destreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-    int sizeshift = reginfo[rd.reg.reg].sizeshift;
 
-    ra.mem.size = sizeshift;
+    ra.mem.size = (use64 ? (addrsize_prefix ? 2 : 3) : (addrsize_prefix ? 1 : 2));
 
     address_generate_and_load_or_store(destreg, REG_zero, ra, OP_add);
     break;
@@ -288,6 +287,9 @@ bool TraceDecoder::decode_fast() {
 
   case 0xa0 ... 0xa3: {
     // mov rAX,Ov and vice versa
+    /* Handle LOCKed loads with ASF! */
+    if (prefixes & PFX_LOCK) return false;
+
     prefixes &= ~PFX_LOCK;
     rd.gform_ext(*this, (op & 1) ? v_mode : b_mode, REG_rax);
     DECODE(iform64, ra, (use64 ? q_mode : addrsize_prefix ? w_mode : d_mode));
@@ -324,7 +326,7 @@ bool TraceDecoder::decode_fast() {
     DECODE(iform, ra, b_mode);
     EndOfDecode();
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-    this << TransOp(OP_mov, rdreg, rdreg, REG_imm, REG_zero, 0, ra.imm.imm);
+    move_reg_or_mem(rd,ra);
     break;
   }
 
@@ -473,6 +475,9 @@ bool TraceDecoder::decode_fast() {
 
   case 0xc6 ... 0xc7: {
     // move reg_or_mem,imm8|imm16|imm32|imm64 (signed imm for 32-bit to 64-bit form)
+    /* Handle LOCKed loads with ASF! */
+    if (prefixes & PFX_LOCK) return false;
+
     int bytemode = bit(op, 0) ? v_mode : b_mode;
     DECODE(eform, rd, bytemode); DECODE(iform, ra, bytemode);
     EndOfDecode();

@@ -18,7 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA.
  *
- * Copyright (c) 2009-2010 Advanced Micro Devices, Inc.
+ * Copyright (c) 2009-2012 Advanced Micro Devices, Inc.
  * Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
  *
  */
@@ -31,7 +31,7 @@ int main(int argc, const char* argv[]) {
 
 	while (!feof(f)) {
 		if (fread(&e, sizeof(e), 1, f) != 1) continue;
-		printf("%2i.%02i %15li %lx\n", e.coreid, e.threadid, e.cycle, e.rip);
+		printf("%2i.%02i %15li 0x%016lx\n", e.coreid, e.threadid, e.cycle, e.rip);
 	}
 	return 0;
 }

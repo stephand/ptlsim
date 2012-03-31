@@ -211,11 +211,11 @@ switch_to_native_restore_context_lowlevel:
 
   mov      %rdi,[%rdi + 8*REG_rdi]      # Restore %rdi
 
-  jmp      [switch_to_native_restore_context_temp_64_or_32_func]
+  jmp      qword ptr [switch_to_native_restore_context_temp_64_or_32_func]
 
 switch_to_native_restore_context_64_to_32:
   mov byte ptr [running_in_sim_mode],0      # store must be atomic
-  ljmp     [switch_to_native_restore_context_temp_64_to_32]
+  jmp  fword ptr [switch_to_native_restore_context_temp_64_to_32]
 
 switch_to_native_restore_context_64_to_64:
   mov byte ptr [running_in_sim_mode],0      # store must be atomic

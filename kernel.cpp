@@ -3,7 +3,7 @@
 // Linux Kernel Interface
 //
 // Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -88,16 +88,18 @@ Waddr get_gs_base() {
 }
 
 #else
-// We need this here because legacy x86 readily runs out of registers:
-static W32 tempsysid;
-
 // 32-bit only
 static inline W32 do_syscall_32bit(W32 sysid, W32 arg1, W32 arg2, W32 arg3, W32 arg4, W32 arg5, W32 arg6) {
   W32 rc;
-  tempsysid = sysid;
+  W32 ebp;
 
-  asm volatile ("push %%ebp ; movl %%eax,%%ebp ; movl tempsysid,%%eax ; int $0x80 ; pop %%ebp" : "=a" (rc) :
-                "b" (arg1), "c" (arg2), "d" (arg3), 
+  asm volatile ("movl %%ebp,%[ebp]\n\t"
+                "movl %%eax,%%ebp\n\t"
+                "movl %[sysid],%%eax\n\t" // a 'push' would break this reference
+                "int $0x80\n\t"
+                "movl %[ebp],%%ebp"
+              : "=a" (rc), [ebp] "=m" (ebp)
+              : [sysid] "m" (sysid), "b" (arg1), "c" (arg2), "d" (arg3),
                 "S" (arg4), "D" (arg5), "0" (arg6));
   return rc;
 }
@@ -1516,11 +1518,7 @@ W32 read_process_memory_W32(int pid, W64 source) {
   return LO32(data);
 }
 
-#ifdef __x86_64__
 extern "C" void ptlsim_loader_thunk_64bit(LoaderInfo* info);
-#else
-extern "C" void ptlsim_loader_thunk_32bit(LoaderInfo* info);
-#endif
 
 int is_elf_64bit(const char* filename) {
   idstream is;
@@ -1603,19 +1601,11 @@ int ptlsim_inject(int argc, char** argv) {
 
   regs.rsp -= sizeof(LoaderInfo);
 
-#ifdef __x86_64__
   if (!x86_64_mode) {
     cerr << "ptlsim: Error: This is a 64-bit build of PTLsim. It cannot run 32-bit processes.", endl;
     assert(false);
   }
   void* thunk_source = (void*)&ptlsim_loader_thunk_64bit;
-#else
-  if (x86_64_mode) {
-    cerr << "ptlsim: Error: This is a 32-bit build of PTLsim. It cannot run 64-bit processes.", endl;
-    assert(false);
-  }
-  void* thunk_source = (void*)&ptlsim_loader_thunk_32bit;
-#endif
   int thunk_size = LOADER_THUNK_SIZE;
 
   if (DEBUG) cerr << "Saving old code (", thunk_size, " bytes) at thunk rip ", (void*)regs.rip, " in pid ", pid, endl;

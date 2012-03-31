@@ -17,6 +17,7 @@
 //
 #define ENABLE_ASF
 //#define ENABLE_ASF_CACHE_BASED
+//#define ENABLE_ASF_CACHE_WRITE_SET
 
 static const W64 infinity = limits<W64s>::max;
 

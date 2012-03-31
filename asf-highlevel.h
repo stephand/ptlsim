@@ -18,7 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA.
  *
- * Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+ * Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
  * Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
  *
  * @author stephan.diestelhorst@amd.com

@@ -20,7 +20,7 @@
 //
 // Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
 // Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -254,6 +254,7 @@ namespace SMTModel {
     {OP_cvtf_s2d_lo,    6, ANYFPU},
     {OP_cvtf_s2d_hi,    6, ANYFPU},
     {OP_spec,           A, ANYINT},
+    {OP_spec_inv,       A, ANYINT},
     {OP_com,            A, ANYINT|ANYFPU},
     {OP_val,            A, ANYINT},
   };
@@ -2085,6 +2086,30 @@ struct SMTCoreStats { // rootnode:
   PerContextSMTStats vcpu5;
   PerContextSMTStats vcpu6;
   PerContextSMTStats vcpu7;
+  PerContextSMTStats vcpu8;
+  PerContextSMTStats vcpu9;
+  PerContextSMTStats vcpu10;
+  PerContextSMTStats vcpu11;
+  PerContextSMTStats vcpu12;
+  PerContextSMTStats vcpu13;
+  PerContextSMTStats vcpu14;
+  PerContextSMTStats vcpu15;
+  PerContextSMTStats vcpu16;
+  PerContextSMTStats vcpu17;
+  PerContextSMTStats vcpu18;
+  PerContextSMTStats vcpu19;
+  PerContextSMTStats vcpu20;
+  PerContextSMTStats vcpu21;
+  PerContextSMTStats vcpu22;
+  PerContextSMTStats vcpu23;
+  PerContextSMTStats vcpu24;
+  PerContextSMTStats vcpu25;
+  PerContextSMTStats vcpu26;
+  PerContextSMTStats vcpu27;
+  PerContextSMTStats vcpu28;
+  PerContextSMTStats vcpu29;
+  PerContextSMTStats vcpu30;
+  PerContextSMTStats vcpu31;
 
   struct simulator {
     double total_time;

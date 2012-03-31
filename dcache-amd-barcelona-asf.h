@@ -19,7 +19,7 @@
 // 02110-1301, USA.
 //
 // Copyright 2000-2006 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -31,7 +31,8 @@
 #define POOR_MANS_MESI
 #include <ptlsim.h>
 //#include <datastore.h>
-#define MAX_HIERARCHIES 8
+// XXX number of vcpus, right?
+#define MAX_HIERARCHIES 32
 struct LoadStoreInfo {
   W16 rob;
   W8  threadid;
@@ -232,6 +233,7 @@ namespace CacheSubsystem {
     void clear_sr() {sr_ = false; }
     void set_sr()   {sr_ = true; }
     void reset() { base_t::reset(); sr_ = false; }
+    void clear_spec_state() { clear_sr(); }
     void invalidate() { reset(); }
     void fill(W64 tag, const bitvec<linesize>& valid, bool spec_read) {
       base_t::fill(tag, valid);
@@ -247,7 +249,75 @@ namespace CacheSubsystem {
     return line.print(os, 0);
   }
   typedef CacheLineWithValidMaskSpecRead<L1_LINE_SIZE> L1CacheLineSpecRead;
-#endif
+
+#ifdef ENABLE_ASF_CACHE_WRITE_SET
+  // TODO: Merge with LLB, move to extra source file.
+  template <int linesize>
+  class BackupStorage {
+    private:
+      W64  orig_data[linesize / sizeof(W64)];
+      int  written:1, datavalid:1, speculative:1;
+      int  refcount;
+
+    public:
+      void  reset() {written = 0; refcount = 0; datavalid = 0; speculative = 0;}
+
+      void  copy_from_phys(Waddr physaddr) {
+        assert(mask(physaddr, linesize) == 0);
+        if (logable(5)) logfile << "Reading from ", (void*) physaddr,": ";
+        for (int i = 0; i < linesize / sizeof(W64);
+             ++i, physaddr += sizeof(W64)) {
+               orig_data[i] = loadphys(physaddr);
+               if (logable(5)) logfile << (void*)orig_data[i]," ";
+        }
+        if (logable(5)) logfile << endl;
+        datavalid = true;
+      }
+
+      void  copy_to_phys(Waddr physaddr) {
+        assert(mask(physaddr, linesize) == 0);
+        assert(datavalid);
+        if (logable(5)) logfile << "Restoring to ", (void*) physaddr,": ";
+        for (int i = 0; i < linesize / sizeof(W64);
+             ++i, physaddr += sizeof(W64)) {
+               storephys(physaddr, orig_data[i]);
+               if (logable(5)) logfile << (void*)orig_data[i]," ";
+        }
+        if (logable(5)) logfile << endl;
+      }
+
+      W64 data(Waddr physaddr) {
+        assert(datavalid);
+        return orig_data[mask(physaddr, linesize) >> 3];
+      }
+      BackupStorage() : written(false),refcount(0),datavalid(0),speculative(0) {}
+      ostream& toString(ostream& os) const;
+
+      bool is_dirty() const { return written; }
+      bool is_data_valid() const { return datavalid; }
+
+      void set_dirty() { written = true; }
+      void set_clean() { written = false; }
+  };
+  template <int linesize>
+  struct CacheLineWithValidMaskSpecRW : CacheLineWithValidMaskSpecRead<linesize>, BackupStorage<linesize> {
+    typedef CacheLineWithValidMaskSpecRead<linesize> cache_t;
+    typedef BackupStorage<linesize> llb_t;
+
+    void reset() { cache_t::reset(); llb_t::reset(); }
+    void invalidate() { reset(); }
+
+    void set_sw()   { llb_t::set_dirty();  }
+    void clear_sw() { llb_t::set_clean(); }
+    bool sw() const { return llb_t::is_dirty(); }
+    bool has_backup() const { return llb_t::is_data_valid(); }
+
+    void clear_spec_state() { clear_sw(); cache_t::clear_spec_state(); llb_t::reset(); }
+    ostream& print(ostream& os, W64 tag) const;
+  };
+  typedef CacheLineWithValidMaskSpecRW<L1_LINE_SIZE> L1CacheLineSpecRW;
+#endif // ENABLE_ASF_CACHE_WRITE_SET
+#endif // ENABLE_ASF_CACHE_BASED
 
   typedef CacheLineWithValidMask<L1_LINE_SIZE> L1CacheLine;
   typedef CacheLine<L1I_LINE_SIZE> L1ICacheLine;
@@ -452,6 +522,34 @@ namespace CacheSubsystem {
     }
 
     /**
+     * Probing virtually indexed caches with just a physaddr causes a look-up
+     * of the tag in all possible alias-sets.
+     */
+    V* probe(T physaddr) {
+      const int naliases = (setcount*linesize) >> PAGE_SHIFT;
+
+      if (!naliases) {
+        return base_t::probe(physaddr);
+      }
+
+      V *cur, *res = NULL;
+      int hit = 0;
+      int aliasset;
+      foreach (i, naliases) {
+        aliasset = base_t::setof((i << PAGE_SHIFT) | lowbits(physaddr, PAGE_SHIFT));
+        cur = base_t::sets[aliasset].probe(base_t::tagof(physaddr));
+        if (cur) {
+          hit++;
+          res = cur;
+        }
+      }
+#ifdef L1_ENFORCE_VIRTUAL_ALIASING
+      assert((hit == 0) || (hit == 1));
+#endif
+      return res;
+    }
+
+    /**
      * Selecting virtually indexed caches, care has to be taken to prevent
      * aliasing! Simple handling here: On a cache miss, probe the other aliases
      * and evict them if present.
@@ -459,8 +557,12 @@ namespace CacheSubsystem {
      * @param virtaddr Virtual address of probed item.
      */
     V* select(T physaddr, T virtaddr) {
+      if (! (floor(lowbits(physaddr,PAGE_SHIFT), (int)linesize)
+          == floor(lowbits(virtaddr,PAGE_SHIFT), (int)linesize))) {
+        logfile << __FILE__,__LINE__,"phys: ", (void*) physaddr, " virt: ", (void*) virtaddr, endl;
       assert(floor(lowbits(physaddr,PAGE_SHIFT), (int)linesize)
           == floor(lowbits(virtaddr,PAGE_SHIFT), (int)linesize));
+      }
 
 #ifdef L1_ENFORCE_VIRTUAL_ALIASING
       V* res = probe(physaddr, virtaddr);
@@ -483,6 +585,23 @@ namespace CacheSubsystem {
 #endif
       T dummy;
       return base_t::sets[base_t::setof(virtaddr)].select(base_t::tagof(physaddr), dummy);
+    }
+
+    /**
+     * Invalidate a particular tag, regardless of the index.
+     */
+    void invalidate(T physaddr) {
+      const int naliases = (setcount*linesize) >> PAGE_SHIFT;
+      if (!naliases) {
+         base_t::sets[base_t::setof(physaddr)].invalidate(base_t::tagof(physaddr));
+        return;
+      }
+      /* SD: Find all aliases & invalidate them, if they have the same physaddr. */
+      int aliasset;
+      foreach (i, naliases) {
+        aliasset = base_t::setof((i << PAGE_SHIFT) | lowbits(physaddr, PAGE_SHIFT));
+        base_t::sets[aliasset].invalidate(base_t::tagof(physaddr));
+      }
     }
 
     /**
@@ -539,7 +658,7 @@ namespace CacheSubsystem {
     L1_LINE_SIZE, L1StatsCollector> > L1CacheBase;
 #endif
 
-  struct L1Cache: public L1CacheBase {
+  struct L1Cache_: public L1CacheBase {
     L1CacheLine* validate(W64 physaddr, W64 virtaddr, const bitvec<L1_LINE_SIZE>& valid) {
       L1CacheLine* line = select(physaddr, virtaddr);
 
@@ -547,10 +666,13 @@ namespace CacheSubsystem {
       return line;
     }
   };
-
-  static inline ostream& operator <<(ostream& os, const L1Cache& cache) {
+  static inline ostream& operator <<(ostream& os, const L1Cache_& cache) {
     return os;
   }
+#if !defined(ENABLE_ASF_CACHE_BASED) && !defined(ENABLE_ASF_CACHE_WRITE_SET)
+  typedef L1Cache_ L1Cache;
+#endif
+
 
 #ifdef ENABLE_ASF_CACHE_BASED
   // This L1 cache has additional "speculative read" bits for each cache-line,
@@ -566,27 +688,35 @@ namespace CacheSubsystem {
   };
 
 #ifdef L1_VIRTUALLY_INDEXED
-  typedef VirtIdxDataCache<ASFCacheTrait<L1CacheLineSpecRead, L1_SET_COUNT,
-    L1_WAY_COUNT, L1_LINE_SIZE, L1StatsCollector> > L1CacheSpecBase;
+  template <class T>
+  struct L1CacheSpecBase {
+    typedef VirtIdxDataCache<ASFCacheTrait<T, L1_SET_COUNT,L1_WAY_COUNT,
+      L1_LINE_SIZE, L1StatsCollector> > Type;
+  };
 #else
-  typedef DataCache<ASFCacheTrait<L1CacheLineSpecRead, L1_SET_COUNT,
-    L1_WAY_COUNT, L1_LINE_SIZE, L1StatsCollector> > L1CacheSpecBase;
+  template <class T>
+  struct L1CacheSpecBase {
+    typedef DataCache<ASFCacheTrait<T, L1_SET_COUNT,L1_WAY_COUNT,
+      L1_LINE_SIZE, L1StatsCollector> > Type;
+  };
 #endif
 
-  class L1CacheSpecRead : public L1CacheSpecBase {
-    typedef L1CacheSpecBase base_t;
-    typedef base_t::base_t  NotifyAssociativeWrapper;
-    typedef NotifyAssociativeWrapper::LineNotify LineNotify;
-    typedef NotifyAssociativeWrapper::Notify     Notify;
+  template <class T=L1CacheLineSpecRead>
+  class L1CacheSpecRead : public L1CacheSpecBase<T>::Type {
+  protected:
+    typedef typename L1CacheSpecBase<T>::Type base_t;
+    typedef typename base_t::base_t  NotifyAssociativeWrapper;
+    typedef typename NotifyAssociativeWrapper::LineNotify LineNotify;
+    typedef typename NotifyAssociativeWrapper::Notify     Notify;
   private:
     bool evicted_spec_line;
     bool invalidated_spec_line;
     bool in_spec_region;
 
     void flash_clear_spec_bits() {
-      base_t::iterator it = base_t::begin();
+      typename base_t::iterator it = base_t::begin();
       for (; it != base_t::end(); ++it)
-        (*it).clear_sr();
+        (*it).second.clear_spec_state();
     }
 
     void reset_spec_state() {
@@ -594,8 +724,8 @@ namespace CacheSubsystem {
       evicted_spec_line     = false;
       invalidated_spec_line = false;
     }
-
-    static void callback_evict(void *data, L1CacheLineSpecRead *line, W64 physaddr) {
+  protected:
+    static void callback_evict(void *data, T *line, W64 physaddr) {
       assert(line);
       if (logable(5)) logfile << __FILE__,__LINE__, " CB: Line ", line->sr() ? "spec ":"", line, " evicted, physaddr: ",(void*) physaddr, endl;
       if likely (!line->sr()) return;
@@ -605,7 +735,7 @@ namespace CacheSubsystem {
       cache->evicted_spec_line = true;
       line->clear_sr();
     }
-    static void callback_inv(void *data, L1CacheLineSpecRead *line, W64 physaddr) {
+    static void callback_inv(void *data, T *line, W64 physaddr) {
       assert(line);
       if (logable(5)) logfile << __FILE__,__LINE__, " CB: Line ", line->sr() ? "spec ":"", line, " invalidated, physaddr: ",(void*) physaddr, endl;
       if likely (!line->sr()) return;
@@ -621,10 +751,10 @@ namespace CacheSubsystem {
     }
 
   public:
-    L1CacheLineSpecRead* validate(W64 physaddr, W64 virtaddr, const bitvec<L1_LINE_SIZE>& valid, bool spec_read) {
-      L1CacheLineSpecRead* line = select(physaddr, virtaddr);
+    T* validate(W64 physaddr, W64 virtaddr, const bitvec<L1_LINE_SIZE>& valid, bool spec_read) {
+      T* line = base_t::select(physaddr, virtaddr);
       assert(line);
-      line->fill(tagof(physaddr), valid, spec_read);
+      line->fill(base_t::tagof(physaddr), valid, spec_read);
       return line;
     }
     void reset() {
@@ -648,10 +778,134 @@ namespace CacheSubsystem {
     bool capacity_error() const { return evicted_spec_line; }
   };
 
-  static inline ostream& operator <<(ostream& os, const L1CacheSpecRead& cache) {
+  template <class T>
+  static inline ostream& operator <<(ostream& os, const L1CacheSpecRead<T>& cache) {
     return os;
   }
+
+#ifdef ENABLE_ASF_CACHE_WRITE_SET
+  template <class T = L1CacheLineSpecRW>
+  class L1CacheSpecRW : public L1CacheSpecRead<T> {
+    typedef L1CacheSpecRead<T> base_t;
+    typedef T line_t;
+  private:
+    bool probed_spec_dirty_line;
+
+#if (0)
+    static void callback_probe(void *cache, T *line) {
+      assert(line);
+      if (logable(5)) logfile << __FILE__,__LINE__, " CB: Line ", line->sr() ? "spec ":"", line, " probed.", endl;
+
+      if (line->sw()) ((L1CacheSpecRW<>*)cache)->probed_spec_dirty_line = true;
+      line->set_nonspec();
+    }
 #endif
+    void reset_write_spec_state() {
+      probed_spec_dirty_line = false;
+    }
+    void reset_spec_state() {
+      base_t::reset_spec_state();
+      reset_write_spec_state();
+    }
+
+    void restore_dirty_lines() {
+      typename base_t::iterator it = base_t::begin();
+      for (; it != base_t::end(); ++it) {
+        T&  line     = (*it).second;
+        W64 physaddr = (*it).first;
+        if unlikely (line.sw()) {
+          logfile << __FILE__,__LINE__,(void*)physaddr,endl;
+          if (line.has_backup())
+            line.copy_to_phys(physaddr);
+          line.clear_sw();
+        }
+      }
+    }
+
+    static void callback_evict(void *data, T *line, W64 physaddr) {
+      assert(line);
+      if (logable(5)) logfile << __FILE__,__LINE__, " CB: Line ", line->sr() ? "spec ":"", line, " evicted, physaddr: ",(void*) physaddr, endl;
+
+      base_t::callback_evict(data, line, physaddr);
+      line->clear_spec_state();
+
+      if likely (!line->sw()) return;
+
+      L1CacheSpecRW *cache = (L1CacheSpecRW*)data;
+      if (line->has_backup())
+        line->copy_to_phys(physaddr);
+      //cache->evicted_spec_line = true;
+      line->clear_spec_state();
+    }
+    static void callback_inv(void *data, T *line, W64 physaddr) {
+      assert(line);
+      if (logable(5)) logfile << __FILE__,__LINE__, " CB: Line ", line->sr() ? "spec ":"", line, " invalidated, physaddr: ",(void*) physaddr, endl;
+
+      base_t::callback_inv(data, line, physaddr);
+
+      if likely (!line->sw()) return;
+
+      L1CacheSpecRW *cache = (L1CacheSpecRW*)data;
+      if (line->has_backup())
+        line->copy_to_phys(physaddr);
+      //cache->invalidated_spec_line = true;
+      line->clear_sr();
+    }
+    static void callback_reset(void *cache) {
+      if (logable(5)) logfile << __FILE__,__LINE__," CB: Cache reset. ", endl;
+      base_t::callback_reset(cache);
+      ((L1CacheSpecRW*)cache)->restore_dirty_lines();
+    }
+
+
+  public:
+    L1CacheSpecRW() : base_t()  {
+      base_t::NotifyAssociativeWrapper::set_notifications((void*)this, &callback_evict,
+          &callback_inv, NULL, &callback_reset);
+    }
+
+    bool external_probe(W64 physaddr, bool inv) {
+      if (logable(5))
+        logfile << __FILE__,__LINE__, " External probe for L1 @ ", (void*) physaddr, " inv: ", inv, endl;
+
+      physaddr = floor(physaddr, L1_LINE_SIZE);
+
+      T* line = base_t::probe(physaddr);
+      if (logable(5))
+        logfile << __FILE__,__LINE__, " Hit line: ", line, endl;
+
+      if (!line) return false;
+
+      if (logable(5))
+        logfile << __FILE__,__LINE__, " SR: ", line->sr(), " SW: ", line->sw(), endl;
+
+      if (line->sw()) {
+        probed_spec_dirty_line = true;
+        logfile << __FILE__,__LINE__,(void*)physaddr,endl;
+        if (line->has_backup())
+          line->copy_to_phys(physaddr);
+        line->clear_spec_state();
+
+        if (logable(5))
+          logfile << __FILE__,__LINE__, " Restoring data to ", (void*)physaddr, endl;
+
+        return true;
+      }
+
+      //NOTE: The invalidate_callback handles the eviction of ASF-spec lines!
+      if (inv) base_t::invalidate(physaddr);
+      return true;
+    }
+    void start()  { base_t::start(); reset_write_spec_state(); };
+    void commit() { base_t::commit(); reset_write_spec_state(); };
+    void abort()  { restore_dirty_lines(); base_t::abort(); reset_write_spec_state(); };
+    bool consistency_error() const { return base_t::consistency_error() || probed_spec_dirty_line; }
+  };
+  typedef L1CacheSpecRW<> L1Cache;
+#else
+  typedef L1CacheSpecRead<> L1Cache;
+#endif // ENABLE_ASF_CACHE_WRITE_SET
+#endif // ENABLE_ASF_CACHE_BASED
 
   //
   // L1 instruction cache
@@ -853,7 +1107,10 @@ namespace CacheSubsystem {
     }
 
     void free(int lfrqslot) {
+      assert(waiting[lfrqslot]);
       changestate(lfrqslot, waiting, freemap);
+      assert(count > 0);
+      count--;
     }
 
     bool full() const {
@@ -887,8 +1144,8 @@ namespace CacheSubsystem {
     return lfrq.print(os);
   }
 
-  enum { STATE_IDLE, STATE_DELIVER_TO_L3, STATE_DELIVER_TO_L2, STATE_DELIVER_TO_L1, STATE_INVALIDATED};
-  static const char* missbuf_state_names[] = {"idle", "mem->L3", "L3->L2", "L2->L1", "invalid"};
+  enum { STATE_IDLE, STATE_DELIVER_TO_L3, STATE_DELIVER_TO_L2, STATE_DELIVER_TO_L1};
+  static const char* missbuf_state_names[] = {"idle", "mem->L3", "L3->L2", "L2->L1"};
 
   template <int SIZE>
   struct MissBuffer {
@@ -951,8 +1208,9 @@ namespace CacheSubsystem {
   }
 
   struct PerCoreCacheCallbacks {
-    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr, bool retry);
+    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
+    virtual void external_probe(W64 physaddr, bool invalidating);
   };
 
   //
@@ -991,11 +1249,7 @@ namespace CacheSubsystem {
   struct CacheHierarchy {
     LoadFillReqQueue<LFRQ_SIZE> lfrq;
     MissBuffer<MISSBUF_COUNT> missbuf;
-#ifdef ENABLE_ASF_CACHE_BASED
-    L1CacheSpecRead L1;
-#else
     L1Cache L1;
-#endif
     L1ICache L1I;
     L2Cache L2;
 #ifdef ENABLE_L3_CACHE
@@ -1043,14 +1297,14 @@ namespace CacheSubsystem {
     bool lfrq_or_missbuf_full() const { return lfrq.full() | missbuf.full(); }
 
 #ifdef POOR_MANS_MESI
-    bool probe_other_caches(W64 addr, W64 virtaddr, bool inv);
-    bool external_probe(W64 addr, W64 virtaddr, bool inv);
+    bool probe_other_caches(W64 addr, bool inv);
+    bool external_probe(W64 addr, bool inv);
 #endif
 
     W64 commitstore(const SFR& sfr, W64 virtaddr, bool internal = false, int threadid = 0xff, bool perform_actual_write = true);
     W64 speculative_store(const SFR& sfr, W64 virtaddr, int threadid = 0xff);
 
-    void initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating = false);
+    void initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating = false, int threadid = 0xfe);
 
     bool probe_icache(Waddr virtaddr, Waddr physaddr);
     int initiate_icache_miss(W64 addr, int rob = 0xffff, int threadid = 0xff);

@@ -3,7 +3,7 @@
 // Decoder for SSE/SSE2/SSE3/MMX and misc instructions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -599,11 +599,17 @@ bool TraceDecoder::decode_sse() {
     int rareg;
 
     if (ra.type == OPTYPE_MEM) {
-      ra.mem.size = (rex.mode64) ? 3 : 2;
+      ra.mem.size = 3;
       operand_load(REG_temp0, ra, OP_ld);
       rareg = REG_temp0;
     } else {
       rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+
+      if (unlikely (rareg == rdreg)) {
+        TransOp mov(OP_mov, REG_temp0, REG_zero, rareg, REG_zero, 3);
+        this << mov;
+        rareg = REG_temp0;
+      }
     }
 
     TransOp uoplo(OP_fcvt_i2d_lo, rdreg+0, REG_zero, rareg, REG_zero, 3); uoplo.datatype = DATATYPE_VEC_DOUBLE; this << uoplo;
@@ -1220,7 +1226,7 @@ bool TraceDecoder::decode_sse() {
   }
 
   case 0x56e: { // movd xmm,rm32/rm64
-    /* Let decode_asf handle the locked verisons of movd xmm,rm32/rm64 */
+    /* Let decode_asf handle the locked versions of movd xmm,rm32/rm64 */
     if (prefixes & PFX_LOCK) return false;
 
     DECODE(gform, rd, x_mode);
@@ -1242,6 +1248,9 @@ bool TraceDecoder::decode_sse() {
   }
 
   case 0x57e: { // movd rm32/rm64,xmm
+    /* Let decode_asf handle the locked versions of movd rm32/rm64,xmm */
+    if (prefixes & PFX_LOCK) return false;
+
     DECODE(eform, rd, v_mode);
     DECODE(gform, ra, x_mode);
     EndOfDecode();

@@ -3,7 +3,7 @@
 // Hardware Definitions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -189,6 +189,7 @@ const OpcodeInfo opinfo[OP_MAX_OPCODE] = {
   {"vpack.ss",       OPCLASS_VEC_ALU,       opAB }, // pack larger to smaller (signed saturation)
 #ifdef ENABLE_ASF
   {"asf.spec",       OPCLASS_ASF,           opB },
+  {"asf.spec_inv",   OPCLASS_ASF,           opB },
   {"asf.com",        OPCLASS_ASF,           opB },
   {"asf.val",        OPCLASS_ASF,           opB },
   {"asf.rel",        OPCLASS_ASF,           opB },

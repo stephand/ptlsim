@@ -1,10 +1,10 @@
-               PTLsim-ASF 239.asf.2.0 
+               PTLsim-ASF 239.asf.2.0b 
 	       Release Notes
 
                Stephan Diestelhorst
 	       AMD Operating System Research Center
 
-	       March 2010
+	       March 2012
 
 Overview
 ========
@@ -79,6 +79,22 @@ PTLsim release:
     _does not have a minimum capacity guarantee_ as specified in the
     specification proposal above. Furthermore does the RELEASE
     instruction not work with data managed by the L1 cache.
+
+  * Furthermore, speculative lines can be tracked in the L1 cache
+    when the option ENABLE_ASF_CACHE_WRITE_SET is enabled in config.h.
+    In addition to tracking unmodified lines in the cache, this mode
+    will track speculative writes in the cache hierarchy, also not
+    implementing the minimal capacity.
+
+  * PTLsim also supports the "inverted default" semantics, which will
+    turn all memory instructions inside a speculative region into
+    speculative accesses (i.e., invert the meaning of ASF's notion of
+    LOCK MOV).  Further details can be found in our publication
+
+       From Lightweight Hardware Transactional Memory to
+       Lightweight Lock Elision
+       Martin Pohlack and Stephan Diestelhorst (AMD)
+       http://www.cs.purdue.edu/transact11/web/papers/Pohlack.pdf
 
 * Support for simulating multicore configurations with a simple
   cache-coherence performance model

@@ -19,7 +19,7 @@
 // 02110-1301, USA.
 //
 // Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2008-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2008-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 

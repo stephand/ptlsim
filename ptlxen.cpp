@@ -3,7 +3,7 @@
 // Toplevel control and kernel interface to Xen inside the user domain
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -822,6 +822,9 @@ asmlinkage void assert_fail(const char *__assertion, const char *__file, unsigne
     logfile.close();
   }
 
+  // Flush commit log, if used
+  if(!config.commitlog_filename.empty()) commitlogfile << flush;
+  
   // Make sure the ring buffer is flushed too:
   ptl_mm_flush_logging();
   cerr.flush();
@@ -1592,12 +1595,12 @@ void handle_xen_hypercall_assist(Context& ctx) {
     }
 
     ctx.commitarf[REG_rip] = iretctx.rip;
-    ctx.reload_segment_descriptor(SEGID_CS, iretctx.cs | 3);
+    //ctx.reload_segment_descriptor(SEGID_CS, iretctx.cs | 3);
     // Set IF and IOPL=3 in flags
     ctx.internal_eflags = (iretctx.rflags & ~(FLAG_IOPL|FLAG_VM)) | FLAG_IF;
     ctx.commitarf[REG_flags] = ctx.internal_eflags & (FLAG_ZAPS|FLAG_CF|FLAG_OF);
     ctx.commitarf[REG_rsp] = iretctx.rsp;
-    ctx.reload_segment_descriptor(SEGID_SS, iretctx.ss | 3);
+    //ctx.reload_segment_descriptor(SEGID_SS, iretctx.ss | 3);
     //
     //++MTY CHECKME if returning from 64-bit kernel to 32-bit userspace,
     // the base and limit semantics of DS/ES/FS/GS must now be enforced.
@@ -1610,6 +1613,8 @@ void handle_xen_hypercall_assist(Context& ctx) {
       ctx.x86_exception = 0;
       ctx.commitarf[REG_r11] = iretctx.r11;
       ctx.commitarf[REG_rcx] = iretctx.rcx;
+      ctx.reload_segment_descriptor(SEGID_CS, iretctx.cs | 3);
+      ctx.reload_segment_descriptor(SEGID_SS, iretctx.ss | 3);
     } else {
       if (logable(4)) logfile << "  Restore as system call", endl;
     }
@@ -1632,7 +1637,7 @@ void handle_xen_hypercall_assist(Context& ctx) {
           ": abs ", prev_cycles_at_last_mode_switch, " cycles, ", prev_insns_at_last_mode_switch, " insns; ",
           "delta ", delta_cycles, " cycles, ", delta_insns, " insns)", endl;
       }
-
+      ctx.kernel_in_syscall = 0;
       stats.external.cycles_in_mode.kernel64 += delta_cycles;
       stats.external.insns_in_mode.kernel64 += delta_insns;
     }

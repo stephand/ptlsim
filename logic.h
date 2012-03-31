@@ -879,7 +879,9 @@ struct AssociativeArray {
     bool at_end() {return ((s == setcount) && (w == 0 )); }
 
   public:
-    V& operator*() { return sets[s][w]; }
+    Pair<T,V> operator*() {
+      return Pair<T,V>(sets[s].tags[w], sets[s].data[w]);
+    }
     iterator& operator++() {
       if (at_end()) return *this;
       ++w;
@@ -1291,7 +1293,7 @@ public:
   private:
     typename B::iterator base_it;
   public:
-    V& operator*() { return *base_it; }
+    Pair<T,V> operator*() { return *base_it; }
     iterator& operator++() { ++base_it; return *this;}
     bool operator==(const iterator& other) const { return (base_it == other.base_it); }
     bool operator!=(const iterator& other) const { return (base_it != other.base_it); }

@@ -120,6 +120,7 @@ void print_banner(ostream& os, const PTLsimStats& stats, int argc = 0, char** ar
 
 extern ostream logfile;
 extern ostream commitlogfile;
+extern ostream eventlogfile;
 extern W64 user_insn_commits;
 extern W64 iterations;
 extern W64 total_uops_executed;
@@ -149,6 +150,7 @@ struct PTLsimConfig {
   bool quiet;
   stringbuf log_filename;
   stringbuf commitlog_filename;
+  stringbuf eventlog_filename;
   W64 loglevel;
   W64 start_log_at_iteration;
   W64 start_log_at_rip;

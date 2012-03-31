@@ -5,7 +5,7 @@
 //
 // Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 // Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -304,7 +304,7 @@ namespace OutOfOrderModel {
   }
 
   template <>
-  ostream& EventLog::print(ostream& os, bool only_to_tail) {
+  ostream& GenericEventLog<OutOfOrderCoreEvent>::print(ostream& os, bool only_to_tail) {
     if (tail >= end) tail = start;
     if (tail < start) tail = end;
 
@@ -337,14 +337,17 @@ namespace OutOfOrderModel {
     return os;
   }
 
-  template <>
-  void EventLog::flush(bool only_to_tail) {
-    if likely (!logable(6)) return;
+  template <class T>
+  void GenericEventLog<T>::flush(bool only_to_tail) {
+    //if likely (!logable(6)) return;
     if unlikely (!logfile) return;
     if unlikely (!logfile->ok()) return;
     print(*logfile, only_to_tail);
     tail = start;
   }
+
+  template
+  void GenericEventLog<FlexibleOOOCoreBinaryEvent>::flush(bool);
 
   ostream& OutOfOrderCoreEvent::print(ostream& os) const {
     bool ld = isload(uop.opcode);
@@ -368,7 +371,7 @@ namespace OutOfOrderModel {
     case EVENT_FETCH_FETCHQ_FULL:
       os <<  "fetch  rip ", rip, ": fetchq full"; break;
     case EVENT_FETCH_IQ_QUOTA_FULL:
-      os <<  "fetch  rip ", rip, ": issue queue quota full = ", issueq_count, " "; break;
+      os <<  "fetch  rip ", rip, ": issue queue quota full = ", fetch.issueq_count, " "; break;
     case EVENT_FETCH_BOGUS_RIP:
       os <<  "fetch  rip ", rip, ": bogus RIP or decode failed"; break;
     case EVENT_FETCH_ICACHE_MISS:
@@ -878,6 +881,226 @@ namespace OutOfOrderModel {
   ostream& operator<<(ostream& os, const OutOfOrderCoreBinaryEvent& e ) {
     return e.print_binary(os, e.coreid);
   }
+
+  template <>
+  ostream& GenericEventLog<FlexibleOOOCoreBinaryEvent>::print(ostream& os, bool only_to_tail) {
+    if (tail >= end) tail = start;
+    if (tail < start) tail = end;
+    FlexibleOOOCoreBinaryEvent* p;
+
+    W64 cycle = limits<W64>::max;
+    size_t bufsize = end - start;
+
+    // Print a special event for the coreid.
+    MetadataCoreidEvent e = {EVENT_META_COREID, (W16)coreid};
+    p = (FlexibleOOOCoreBinaryEvent*) &e;
+    p->print_binary(os, coreid);
+
+    p = (only_to_tail) ? start : tail;
+    foreach (i, (only_to_tail ? (tail - start) : bufsize)) {
+      if unlikely (p >= end) p = start;
+      if unlikely (p < start) p = end-1;
+      if unlikely (p->type == EVENT_INVALID) {
+        p++;
+        continue;
+      }
+      if unlikely (p->cycle != cycle) {
+        cycle = p->cycle;
+      }
+
+      p->print_binary(os, coreid);
+      p++;
+    }
+
+    return os;
+  }
+
+  class SubfieldSizes {
+  private:
+    struct TypeSizeMap {
+      W16 type_start;
+      W16 type_end;
+      int size;
+    };
+
+    // This maps event IDs to their used structs in the union, if any.
+    // Inclusive ranges are used such that multiple types can easily use the same
+    // union struct.Keep this in order and dense, it is binary-chopped.
+    static const TypeSizeMap sizes[];
+    static const int sizes_elem;
+    static W16 last_type;
+    static int last_size;
+    static bool printed_info;
+
+    static int find_chop(int type) {
+      // Binary chop
+      int i;
+      int found = -1;
+      int left, right;
+      bool out_left, out_right;
+      left = 0; right = sizes_elem;
+
+      while (left <= right) {
+        i = (left + right) >> 1;
+        out_left  = type < sizes[i].type_start;
+        out_right = sizes[i].type_end < type;
+
+        if (!out_left & !out_right) {
+          found = i;
+          break;
+        }
+
+        if (out_left) right = i - 1;
+        else          left  = i + 1;
+      }
+      return found;
+    }
+    static int find_lin(int type) {
+      int i;
+      for (i = 0; i < sizes_elem; i++)
+        if ((sizes[i].type_start <= type) && (type <= sizes[i].type_end))
+          return i;
+      return -1;
+    }
+    static void print_sizes() {
+      logfile << endl;
+      logfile << "Fixed size ", /*offsetof(FlexibleOOOCoreBinaryEvent, start_flexible) +*/ sizeof(W16), endl;
+      for (int i = 0; i < sizes_elem; i++)
+        logfile << "  ", sizes[i].type_start,"-",sizes[i].type_end,": ", sizes[i].size," bytes",endl;
+    }
+  public:
+    static int get_size(W16 type) {
+      //if unlikely (!printed_info) {print_sizes(); printed_info = true;}
+      if likely(type == last_type) return last_size;
+      // For small (< 60) the linear search is faster...
+      last_type = type;
+      last_size = sizes[find_lin(type)].size;
+      //last_size = sizes[find_chop(type)].size;
+      return last_size;
+    }
+  };
+
+  // I know it is just nasty. We may gain a little by rearranging some of the events
+  // NOTE SD: GCC has issues with the PTLsim provided definition of the
+  //          offset-of macro together with sizeof
+#define FIX_SIZE(T) (__builtin_offsetof(T, start_flexible))
+#define FLEX_SIZE(T, F) ((sizeof(T().F)) + (__builtin_offsetof(T, F)))
+  const SubfieldSizes::TypeSizeMap SubfieldSizes::sizes[] = {
+      {EVENT_FETCH_STALLED,          EVENT_FETCH_OK,            FLEX_SIZE(OutOfOrderCoreEvent, fetch)},
+      {EVENT_RENAME_FETCHQ_EMPTY,    EVENT_RENAME_OK,           FLEX_SIZE(OutOfOrderCoreEvent, rename)},
+      {EVENT_FRONTEND,               EVENT_FRONTEND,            FLEX_SIZE(OutOfOrderCoreEvent, frontend)},
+      {EVENT_CLUSTER_NO_CLUSTER,     EVENT_CLUSTER_OK,          FLEX_SIZE(OutOfOrderCoreEvent, select_cluster)},
+      {EVENT_DISPATCH_NO_CLUSTER,    EVENT_DISPATCH_OK,         FLEX_SIZE(OutOfOrderCoreEvent, dispatch)},
+      {EVENT_ISSUE_NO_FU,            EVENT_ISSUE_OK,            FLEX_SIZE(OutOfOrderCoreEvent, issue)},
+      {EVENT_REPLAY,                 EVENT_REPLAY,              FLEX_SIZE(OutOfOrderCoreEvent, replay)},
+      {EVENT_STORE_EXCEPTION,        EVENT_TLBWALK_COMPLETE,    FLEX_SIZE(OutOfOrderCoreEvent, loadstore)},
+      {EVENT_FENCE_ISSUED,           EVENT_ALIGNMENT_FIXUP,     FIX_SIZE(OutOfOrderCoreEvent)},
+      {EVENT_ANNUL_NO_FUTURE_UOPS,   EVENT_ANNUL_FLUSH,         FLEX_SIZE(OutOfOrderCoreEvent, annul)},
+      {EVENT_REDISPATCH_DEPENDENTS,  EVENT_REDISPATCH_EACH_ROB, FLEX_SIZE(OutOfOrderCoreEvent, redispatch)},
+      {EVENT_COMPLETE,               EVENT_COMPLETE,            FIX_SIZE(OutOfOrderCoreEvent)},
+      {EVENT_BROADCAST,              EVENT_FORWARD,             FLEX_SIZE(OutOfOrderCoreEvent, forwarding)},
+      {EVENT_WRITEBACK,              EVENT_WRITEBACK,           FLEX_SIZE(OutOfOrderCoreEvent, writeback)},
+      {EVENT_COMMIT_FENCE_COMPLETED, EVENT_COMMIT_OK,           FLEX_SIZE(OutOfOrderCoreEvent, commit)},
+      {EVENT_RECLAIM_PHYSREG,        EVENT_RECLAIM_PHYSREG,     FIX_SIZE(OutOfOrderCoreEvent)},
+      {EVENT_RELEASE_MEM_LOCK,       EVENT_RELEASE_MEM_LOCK,    FLEX_SIZE(OutOfOrderCoreEvent, loadstore)},
+      {EVENT_ASF_ABORT,              EVENT_ASF_ABORT,           FLEX_SIZE(OutOfOrderCoreEvent, abort)},
+      {EVENT_ASF_CONFLICT,           EVENT_ASF_CONFLICT,        FLEX_SIZE(OutOfOrderCoreEvent, conflict)},
+      {EVENT_META_COREID,            EVENT_META_COREID,         sizeof(MetadataCoreidEvent)},
+  };
+  const int SubfieldSizes::sizes_elem = sizeof(sizes)/sizeof(sizes[0]);
+  W16 SubfieldSizes::last_type = 0xFFFF;
+  int SubfieldSizes::last_size = 0;
+  bool SubfieldSizes::printed_info = false;
+
+  ostream& FlexibleOOOCoreBinaryEvent::print_binary(ostream& os, W8 coreid) const {
+//    os.write(this, sizeof(*this));
+
+    W16 size;
+    size = SubfieldSizes::get_size(type) + sizeof(size);
+    os.write(&size, sizeof(size));
+    const OutOfOrderCoreEvent* p = this;
+    os.write(p, size - sizeof(size));
+
+// Use stupid dumping for now.
+#if (0)
+    bool ld = isload(uop.opcode);
+    bool st = isstore(uop.opcode);
+    bool br = isbranch(uop.opcode);
+    boll rl = (uop.opcode == OP_rel);
+    W32 exception = LO32(commit.state.reg.rddata);
+    W32 error_code = HI32(commit.state.reg.rddata);
+
+    FlexibleTraceEvent rep;
+
+    // Figure out event type, I know this is nasty.
+    if (ld)      rep.hdr.event = FlexibleTraceEventHeader::LOAD;
+    else if (st) rep.hdr.event = FlexibleTraceEventHeader::STORE;
+    else if (pf) rep.hdr.event = FlexibleTraceEventHeader::PREFETCH;
+    else if (rl) rep.hdr.event = FlexibleTraceEventHeader::RELEASE;
+    else if (uop.opcode == OP_spec) rep.hdr.event = FlexibleTraceEventHeader::SPECULATE;
+    else if (uop.opcode == OP_com)  rep.hdr.event = FlexibleTraceEventHeader::COMMIT;
+
+    switch (type) {
+    case EVENT_COMMIT_OK: {
+      rep.hdr.pipestage = FlexibleTraceEventHeader::COMMIT_STAGE;
+      break;
+    }
+    case EVENT_DISPATCH_OK: {
+      rep.hdr.pipestage = FlexibleTraceEventHeader::DISPATCH_STAGE;
+      break;
+    }
+    default:
+      break;
+    }
+      // Values
+      //   uop.rd                  - Destination arch-register
+      //   commit.state.reg.rddata - Data in destination arch-register
+      //   - Do we need flags?
+      //   Core + cycle generated from outer code!
+      //   rip                      - Own RIP
+      //   uop.eom                  - Destination register is RIP
+      //   commit.target_rip        - Target RIP (for branches interesting!)
+      //   commit.state.st.physaddr - Physical address for stores
+      //   commit.state.st.data     - Data for stores
+      //   commit.state.st.bytemask - Bytemask for stores
+      //   commit.state.reg.addr    - Physical address for loads
+      //   commit.origvirt          - virtual address (incl. byte offset!)
+      //   uop.size                 - Size for loads and stores (2^n bytes)
+      //   uop.is_asf               - ASF flag for these instructions
+      //   uop.opcode               - differenciate between ASF start / end
+      //   threadid                 - thread ID
+      //   cycle                    - Simulation cycle
+
+
+
+      int offset = 0;
+      if (ld) {
+        rep.var.data     = commit.state.reg.rddata;
+        rep.var.length   = (1 << uop.size);
+      } else if (st) {
+        rep.var.data     = commit.state.st.data;
+        rep.var.length   = popcount8bit(commit.state.st.bytemask);
+        offset           = lsbindex8bit(commit.state.st.bytemask);
+      }
+      if (ld|st|pf|rl) {
+        rep.var.physaddr = commit.state.reg.addr + offset;
+        rep.var.virtaddr = commit.origvirt;
+      }
+      break;
+    }
+    }
+
+    // Fill fixed headers
+    rep.hdr.coreid   = coreid;
+    rep.hdr.threadid = threadid;
+    rep.hdr.cycle    = cycle;
+    rep.hdr.rip      = rip.rip;
+    rep.hdr.length   = foo;
+
+    os.write(&rep, sizeof(rep.hdr));
+#endif
+    return os;
+  }
 };
 
 ostream& RegisterRenameTable::print(ostream& os) const {
@@ -1230,7 +1453,7 @@ bool OutOfOrderCore::runcycle() {
     ThreadContext* thread = threads[i];
     if unlikely (!thread->ctx.running) break;
 
-    if unlikely ((sim_cycle - thread->last_commit_at_cycle) > 4096) {
+    if unlikely ((sim_cycle - thread->last_commit_at_cycle) > 1024 * MAX_SIMULATED_VCPUS) {
       stringbuf sb;
       sb << "[vcpu ", thread->ctx.vcpuid, "] thread ", thread->threadid, ": WARNING: At cycle ",
         sim_cycle, ", ", total_user_insns_committed,  " user commits: no instructions have committed for ",
@@ -1858,7 +2081,7 @@ int OutOfOrderMachine::run(PTLsimConfig& config) {
 
     if unlikely (config.event_log_enabled && (!cores[i]->eventlog.start)) {
       cores[i]->eventlog.init(config.event_log_ring_buffer_size);
-      cores[i]->eventlog.logfile = &logfile;
+      cores[i]->eventlog.logfile = &eventlogfile;
     }
   }
 

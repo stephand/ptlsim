@@ -5,7 +5,7 @@
 //
 // Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 // Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -397,6 +397,7 @@ bool ThreadContext::fetch() {
   if unlikely (stall_frontend) {
     if unlikely (config.event_log_enabled) {
       event = eventlog.add(EVENT_FETCH_STALLED);
+      if unlikely (event)
       event->threadid = threadid;
     }
     per_context_ooocore_stats_update(threadid, fetch.stop.stalled++);
@@ -406,9 +407,11 @@ bool ThreadContext::fetch() {
   if unlikely (waiting_for_icache_fill) {
     if unlikely (config.event_log_enabled){
       event = eventlog.add(EVENT_FETCH_ICACHE_WAIT);
+      if unlikely (event) {
       event->threadid = threadid;
       event->rip = fetchrip;
       event->uuid = fetch_uuid;
+    }
     }
     per_context_ooocore_stats_update(threadid, fetch.stop.icache_miss++);
     return true;
@@ -419,9 +422,11 @@ bool ThreadContext::fetch() {
       if unlikely (config.event_log_enabled) {
         if (!fetchcount) {
           event =  eventlog.add(EVENT_FETCH_FETCHQ_FULL);
+          if unlikely (event) {
           event->threadid = threadid;
           event->uuid = fetch_uuid;
         }
+      }
       }
       per_context_ooocore_stats_update(threadid, fetch.stop.fetchq_full++);
       break;
@@ -463,6 +468,7 @@ bool ThreadContext::fetch() {
     if unlikely (current_basic_block->invalidblock) {
       if unlikely (config.event_log_enabled) {
         event = eventlog.add(EVENT_FETCH_BOGUS_RIP, fetchrip);
+        if unlikely (event)
         event->threadid = threadid;
       }
       per_context_ooocore_stats_update(threadid, fetch.stop.bogus_rip++);
@@ -486,9 +492,11 @@ bool ThreadContext::fetch() {
         int missbuf = core.caches.initiate_icache_miss(physaddr, fetch_uuid,threadid);
         if unlikely (config.event_log_enabled) {
           event = eventlog.add(EVENT_FETCH_ICACHE_MISS, fetchrip);
+          if unlikely (event) {
           event->fetch.missbuf = missbuf;
           event->threadid = threadid;
           event->uuid = fetch_uuid;
+        }
         }
 
         if unlikely (missbuf < 0) {
@@ -601,6 +609,7 @@ bool ThreadContext::fetch() {
 
     if unlikely (config.event_log_enabled) {
       event = eventlog.add(EVENT_FETCH_OK, transop);
+      if unlikely (event)
       event->fetch.predrip = predrip;
     }
 
@@ -652,9 +661,11 @@ BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp
     assert(current_basic_block);
     if unlikely (config.event_log_enabled) {
       OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_FETCH_TRANSLATE, rvp);
+      if unlikely (event) {
       event->fetch.bb_uop_count = current_basic_block->count;
       event->threadid = threadid;
     }
+  }
   }
 
   //
@@ -690,6 +701,7 @@ void ThreadContext::rename() {
       if unlikely (config.event_log_enabled) {
         if likely (!prepcount) {
           event = core.eventlog.add(EVENT_RENAME_FETCHQ_EMPTY);
+          if unlikely (event)
           event->threadid = threadid;
         }
       }
@@ -701,6 +713,7 @@ void ThreadContext::rename() {
       if unlikely (config.event_log_enabled) {
         if likely (!prepcount) {
           event = core.eventlog.add(EVENT_RENAME_ROB_FULL);
+          if unlikely (event)
           event->threadid = threadid;
         }
       }
@@ -724,7 +737,8 @@ void ThreadContext::rename() {
     if (phys_reg_file < 0) {
       if unlikely (config.event_log_enabled) {
         if likely (!prepcount) {
-          event = core.eventlog.add()->fill(EVENT_RENAME_PHYSREGS_FULL);
+          event = core.eventlog.add(EVENT_RENAME_PHYSREGS_FULL);
+          if unlikely (event)
           event->threadid = threadid;
         }
       }
@@ -740,19 +754,37 @@ void ThreadContext::rename() {
     ld |= (fetchbuf.opcode == OP_rel);
 #endif
     if unlikely (ld && (loads_in_flight >= LDQ_SIZE)) {
-      if unlikely (config.event_log_enabled) { if likely (!prepcount) core.eventlog.add(EVENT_RENAME_LDQ_FULL)->threadid = threadid; }
+      if unlikely (config.event_log_enabled) {
+        if likely (!prepcount) {
+          event = core.eventlog.add(EVENT_RENAME_LDQ_FULL);
+          if unlikely (event)
+            event->threadid = threadid;
+        }
+      }
       per_context_ooocore_stats_update(threadid, frontend.status.ldq_full++);
       break;
     }
 
     if unlikely (st && (stores_in_flight >= STQ_SIZE)) {
-      if unlikely (config.event_log_enabled) { if likely (!prepcount) core.eventlog.add(EVENT_RENAME_STQ_FULL)->threadid = threadid; }
+      if unlikely (config.event_log_enabled) {
+        if likely (!prepcount) {
+          event = core.eventlog.add(EVENT_RENAME_STQ_FULL);
+          if unlikely (event)
+            event->threadid = threadid;
+        }
+      }
       per_context_ooocore_stats_update(threadid, frontend.status.stq_full++);
       break;
     }
 
     if unlikely ((ld|st) && (!LSQ.remaining())) {
-      if unlikely (config.event_log_enabled) { if likely (!prepcount) core.eventlog.add(EVENT_RENAME_MEMQ_FULL)->threadid = threadid; }
+      if unlikely (config.event_log_enabled) {
+        if likely (!prepcount) {
+          event = core.eventlog.add(EVENT_RENAME_MEMQ_FULL);
+          if unlikely (event)
+            event->threadid = threadid;
+        }
+      }
       break;
     }
 
@@ -854,6 +886,7 @@ void ThreadContext::rename() {
     if unlikely (config.event_log_enabled) {
       OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_RENAME_OK, &rob);
 
+      if unlikely (event) {
       foreach (i, MAX_OPERANDS) rob.operands[i]->fill_operand_info(event->rename.opinfo[i]);
 
       if likely (archdest_can_commit[transop.rd]) {
@@ -862,6 +895,7 @@ void ThreadContext::rename() {
         event->rename.oldcf = specrrt[REG_cf]->index();
         event->rename.oldof = specrrt[REG_of]->index();
       }
+    }
     }
 
     bool renamed_reg = 0;
@@ -940,6 +974,7 @@ void ThreadContext::frontend() {
     } else {
       if unlikely (config.event_log_enabled) {
         OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_FRONTEND, rob);
+        if unlikely (event)
         event->frontend.cycles_left = rob->cycles_left;
       }
     }
@@ -1215,12 +1250,14 @@ int ReorderBufferEntry::select_cluster_penalty() {
 
   if unlikely (config.event_log_enabled) {
     event = getcore().eventlog.add(EVENT_CLUSTER_OK, this);
+    if unlikely (event) {
     event->select_cluster.allowed_clusters = executable_on_cluster_mask;
     foreach (i, MAX_CLUSTERS) event->select_cluster.iq_avail[i] = cluster_issue_queue_avail_count[i];
   }
+  }
 
   if unlikely (!executable_on_cluster) {
-    if unlikely (config.event_log_enabled) event->type = EVENT_CLUSTER_NO_CLUSTER;
+    if unlikely (config.event_log_enabled && event) event->type = EVENT_CLUSTER_NO_CLUSTER;
     return -1;
   }
 
@@ -1240,7 +1277,7 @@ int ReorderBufferEntry::select_cluster_penalty() {
 
   per_context_ooocore_stats_update(threadid, dispatch.cluster[cluster]++);
 
-  if unlikely (config.event_log_enabled) event->cluster = cluster;
+  if unlikely (config.event_log_enabled && event) event->cluster = cluster;
 
   return cluster;
 
@@ -1280,12 +1317,14 @@ int ReorderBufferEntry::select_cluster() {
 
   if unlikely (config.event_log_enabled) {
     event = getcore().eventlog.add(EVENT_CLUSTER_OK, this);
+    if unlikely (event) {
     event->select_cluster.allowed_clusters = executable_on_cluster_mask;
     foreach (i, MAX_CLUSTERS) event->select_cluster.iq_avail[i] = cluster_issue_queue_avail_count[i];
   }
+  }
 
   if unlikely (!executable_on_cluster) {
-    if unlikely (config.event_log_enabled) event->type = EVENT_CLUSTER_NO_CLUSTER;
+    if unlikely (config.event_log_enabled && event) event->type = EVENT_CLUSTER_NO_CLUSTER;
     return -1;
   }
 
@@ -1301,7 +1340,7 @@ int ReorderBufferEntry::select_cluster() {
 
   per_context_ooocore_stats_update(threadid, dispatch.cluster[cluster]++);
 
-  if unlikely (config.event_log_enabled) event->cluster = cluster;
+  if unlikely (config.event_log_enabled && event) event->cluster = cluster;
 
   return cluster;
 }
@@ -1335,6 +1374,7 @@ int ThreadContext::dispatch() {
     if unlikely (rob->cluster < 0) {
       if unlikely (config.event_log_enabled) {
         event = core.eventlog.add(EVENT_DISPATCH_NO_CLUSTER, rob);
+        if unlikely (event)
         foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
       }
 #if 0
@@ -1376,6 +1416,7 @@ int ThreadContext::dispatch() {
 
     if unlikely (config.event_log_enabled) {
       event = core.eventlog.add(EVENT_DISPATCH_OK, rob);
+      if unlikely (event)
       foreach (i, MAX_OPERANDS) rob->operands[i]->fill_operand_info(event->dispatch.opinfo[i]);
     }
 
@@ -1395,18 +1436,20 @@ int ThreadContext::dispatch() {
          (rob_cache_miss_list.count || rob_tlb_miss_list.count ))
       dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
 
-    /* and commit everything that is ready to do so! */
-    if ( !dispatch_deadlock_countdown && rob_ready_to_commit_queue.count) {
+    /* SD: Other conditions where it is stupid to redispatch:
+     * - commitable x86 instructions at the head
+     * - LOCKed RMW x86 instructions, with fair memory interlocks
+     */
+    if ( !dispatch_deadlock_countdown ) {
       bool head_x86_ready = true;
+      bool head_x86_locked = false;
       /* Check if the *full* x86 instruction can actually commit */
       foreach_forward(ROB, i) {
-        if (!ROB[i].ready_to_commit()) {
-          head_x86_ready = false;
-          break;
-        }
+        if (!ROB[i].ready_to_commit()) head_x86_ready = false;
+		if (ROB[i].uop.locked) { head_x86_locked = true; break; }
         if (ROB[i].uop.eom) break;
       }
-      if (head_x86_ready) dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
+      if (head_x86_ready || head_x86_locked) dispatch_deadlock_countdown = DISPATCH_DEADLOCK_COUNTDOWN_CYCLES;
     }
 
     if (!dispatch_deadlock_countdown) {
@@ -1527,6 +1570,7 @@ int ThreadContext::writeback(int cluster) {
     if likely (!isclass(rob->uop.opcode, OPCLASS_STORE|OPCLASS_BRANCH)) {
       if unlikely (config.event_log_enabled) {
         OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_WRITEBACK, rob);
+        if unlikely (event) {
         event->writeback.data = rob->physreg->data;
         event->writeback.flags = rob->physreg->flags;
         event->writeback.consumer_count = rob->consumer_count;
@@ -1535,6 +1579,7 @@ int ThreadContext::writeback(int cluster) {
         event->writeback.no_branches_between_renamings = rob->no_branches_between_renamings;
         event->writeback.dest_renamed_before_writeback = rob->dest_renamed_before_writeback;
       }
+    }
     }
 
     //
@@ -1640,8 +1685,10 @@ int ThreadContext::commit() {
       if unlikely (!physreg->referenced()) {
         if unlikely (config.event_log_enabled) {
           OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_RECLAIM_PHYSREG);
+          if unlikely (event) {
           event->physreg = physreg->index();
           event->threadid = physreg->threadid;
+        }
         }
         physreg->free();
         stats.ooocore.commit.free_regs_recycled++;
@@ -1685,23 +1732,25 @@ void ThreadContext::flush_mem_lock_release_list(int start) {
 
     MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
 
-    if (!lock) {
+    if (!lock || lock->free()) {
       logfile << "ERROR: thread ", ctx.vcpuid, ": attempted to release queued lock #", i, " for physaddr ", (void*)lockaddr, ": lock was ", lock, endl;
       assert(false);
     }
 
-    if (lock->vcpuid != ctx.vcpuid) {
+    if (!lock->owned(ctx.vcpuid)) {
       logfile << "ERROR: thread ", ctx.vcpuid, ": attempted to release queued lock #", i, " for physaddr ", (void*)lockaddr, ": lock vcpuid was ", lock->vcpuid, endl;
       assert(false);
     }
 
     if unlikely (config.event_log_enabled) {
       OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_RELEASE_MEM_LOCK);
+      if unlikely (event) {
       event->threadid = ctx.vcpuid;
       event->loadstore.sfr.physaddr = lockaddr >> 3;
     }
+    }
 
-    interlocks.invalidate(lockaddr);
+    interlocks.release(lockaddr, ctx.vcpuid);
   }
 
   queued_mem_lock_release_count = start;
@@ -1873,7 +1922,7 @@ int ReorderBufferEntry::commit() {
     // See notes in handle_exception():
     if likely (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
       thread.chk_recovery_rip = ctx.commitarf[REG_rip] + uop.bytes;
-      if unlikely (config.event_log_enabled) event->type = EVENT_COMMIT_SKIPBLOCK;
+      if unlikely (config.event_log_enabled && event) event->type = EVENT_COMMIT_SKIPBLOCK;
       per_context_ooocore_stats_update(threadid, commit.result.skipblock++);
     } else {
       per_context_ooocore_stats_update(threadid, commit.result.exception++);
@@ -1931,7 +1980,7 @@ int ReorderBufferEntry::commit() {
     W64 lockaddr = lsq->physaddr << 3;
     MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
 
-    if unlikely (lock && (lock->vcpuid != thread.ctx.vcpuid)) {
+    if unlikely (lock && !lock->free() && !lock->owned(thread.ctx.vcpuid)) {
       if unlikely (config.event_log_enabled) core.eventlog.add_commit(EVENT_COMMIT_MEM_LOCKED, this);
 
       per_context_ooocore_stats_update(threadid, commit.result.memlocked++);
@@ -1939,6 +1988,13 @@ int ReorderBufferEntry::commit() {
     }
   }
 
+  // Check for in-order replay conditions
+  if unlikely (ld && lsq->needs_retry) {
+    if (logable(5)) logfile << "vcpu: ", thread.ctx.vcpuid, " uuid ", uop.uuid,
+      " rob ", idx, " needs retry", endl, flush;
+    redispatch_dependents(true);
+    return COMMIT_RESULT_NONE;
+  }
   //
   // Update architectural state:
   // (this is the point of no return)
@@ -2005,6 +2061,15 @@ int ReorderBufferEntry::commit() {
   if likely (uop.som) assert(ctx.commitarf[REG_rip] == uop.rip);
 
 #ifdef ENABLE_ASF
+  if unlikely ((uop.opcode == OP_st) && (lsq->bytemask)) {
+    // Moved before the pipeline intercept to allow conflict detection before
+    // pulling in wrong backup data into the LLB.
+    // TODO: One should actually move this (and the probing in
+    //       dcache::commitstore) to issue_store...
+    W64 dummy_merge;
+    thread.asf_pipeline_intercept.issue_probe_and_merge(lsq->physaddr << 3, true, dummy_merge, this);
+  }
+
   if (uop.is_asf)
     if (!thread.asf_pipeline_intercept.commit(ctx, *this))
       return COMMIT_RESULT_NONE;
@@ -2047,7 +2112,7 @@ int ReorderBufferEntry::commit() {
       assert(!isbranch(uop.opcode));
       ctx.commitarf[REG_rip] += uop.bytes;
     }
-    if unlikely (config.event_log_enabled) {
+    if unlikely (config.event_log_enabled && event) {
       event->commit.target_rip = ctx.commitarf[REG_rip];
 #ifdef PTLSIM_HYPERVISOR
       event->commit.krn = ctx.kernel_mode;
@@ -2064,7 +2129,7 @@ int ReorderBufferEntry::commit() {
     per_context_ooocore_stats_update(threadid, commit.setflags.no += (uop.setflags == 0));
     per_context_ooocore_stats_update(threadid, commit.setflags.yes += (uop.setflags != 0));
 
-    if unlikely (config.event_log_enabled) event->commit.state.reg.rdflags = ctx.commitarf[REG_flags];
+    if unlikely (config.event_log_enabled && event) event->commit.state.reg.rdflags = ctx.commitarf[REG_flags];
 
     if likely (uop.setflags & SETFLAG_ZF) {
       thread.commitrrt[REG_zf]->uncommitref(REG_zf, thread.threadid);
@@ -2087,10 +2152,6 @@ int ReorderBufferEntry::commit() {
     Waddr mfn = (lsq->physaddr << 3) >> 12;
     smc_setdirty(mfn);
 
-#ifdef ENABLE_ASF
-    W64 dummy_merge;
-    thread.asf_pipeline_intercept.issue_probe_and_merge(lsq->physaddr << 3, true, dummy_merge);
-#endif
     if (lsq->bytemask) assert(core.caches.commitstore(*lsq, virtpage, uop.internal, thread.threadid) == 0);
   }
 
@@ -2112,9 +2173,9 @@ int ReorderBufferEntry::commit() {
   assert(archdest_can_commit[uop.rd]);
   assert(oldphysreg->state == PHYSREG_ARCH);
 
-  if unlikely (config.event_log_enabled) event->commit.oldphysreg = -1;
+  if unlikely (config.event_log_enabled && event) event->commit.oldphysreg = -1;
   if likely (oldphysreg->nonnull()) {
-    if unlikely (config.event_log_enabled) {
+    if unlikely (config.event_log_enabled && event) {
       event->commit.oldphysreg = oldphysreg->index();
       event->commit.oldphysreg_refcount = oldphysreg->refcount;
     }
@@ -2159,7 +2220,7 @@ int ReorderBufferEntry::commit() {
     bool taken = (ctx.commitarf[REG_rip] != end_of_branch_x86_insn);
     bool predtaken = (uop.riptaken != end_of_branch_x86_insn);
 
-    if unlikely (config.event_log_enabled) {
+    if unlikely (config.event_log_enabled && event) {
       event->commit.taken = taken;
       event->commit.predtaken = predtaken;
     }
@@ -2175,6 +2236,9 @@ int ReorderBufferEntry::commit() {
 
     stats.summary.insns++;
   }
+  if unlikely (config.event_log_enabled && event) {
+    event->commit.total_insns_committed = thread.total_insns_committed;
+  }
 
   stats.summary.uops++;
   total_uops_committed++;
@@ -2189,7 +2253,11 @@ int ReorderBufferEntry::commit() {
   thread.ROB.commit(*this);
 
   if unlikely (uop_is_barrier) {
-    if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_COMMIT_ASSIST, RIPVirtPhys(ctx.commitarf[REG_rip]))->threadid = thread.threadid;
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent *event = core.eventlog.add(EVENT_COMMIT_ASSIST, RIPVirtPhys(ctx.commitarf[REG_rip]));
+      if (event)
+        event->threadid = thread.threadid;
+    }
     per_context_ooocore_stats_update(threadid, commit.result.barrier++);
     return COMMIT_RESULT_BARRIER;
   }

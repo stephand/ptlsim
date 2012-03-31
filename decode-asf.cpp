@@ -17,7 +17,7 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 // 02110-1301, USA.
 //
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -115,6 +115,18 @@ bool TraceDecoder::decode_asf() {
       if (reg != REG_rax) MakeInvalid();
 
       switch (modrm.rm) {
+        /* SPECULATE_INV */
+        // fixme: MP not sure if 0x4 is really free
+        case 0x4: {
+          /* Decode into a new µop */
+          TransOp spec(OP_spec_inv, reg, REG_rsp, REG_zero, REG_zero, sizeshift, 0, 0, FLAGS_DEFAULT_ALU);
+          spec.is_asf = true; this << spec;
+          // prevent LOCKed memops to issue before SPECulate is commited
+          TransOp mf(OP_mf, REG_temp0, REG_zero, REG_zero, REG_zero, 0);
+          mf.extshift = MF_TYPE_LFENCE | MF_TYPE_SFENCE;
+          mf.is_asf = true; this << mf;
+          break;
+        }
         /* SPECULATE */
         case 0x5: {
           /* Decode into a new µop */
@@ -219,6 +231,23 @@ bool TraceDecoder::decode_asf() {
         operand_load(REG_rax, ra);
         scan_transb_and_flag_asf(OP_ld);
       }
+      break;
+    }
+    case 0xc6 ... 0xc7: {
+      // move reg_or_mem,imm8|imm16|imm32|imm64 (signed imm for 32-bit to 64-bit form)
+      if (!isasfcore) MakeInvalid();
+      /* Remove the LOCK prefix, as it was just used to flag the ASFness of this load */
+      assert(prefixes & PFX_LOCK);
+      prefixes &= ~PFX_LOCK;
+
+      int bytemode = bit(op, 0) ? v_mode : b_mode;
+      DECODE(eform, rd, bytemode); DECODE(iform, ra, bytemode);
+      /* ASF permits only locked memory operations! */
+      if (rd.type != OPTYPE_MEM ) MakeInvalid();
+      EndOfDecode();
+      move_reg_or_mem(rd, ra);
+      /* search for and flag the st-µop as ASF */
+      scan_transb_and_flag_asf(OP_st);
       break;
     }
 

@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA.
  *
- * Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+ * Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
  * Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
  *
  * @author stephan.diestelhorst@amd.com
@@ -71,6 +71,14 @@
     ASF_XOP3("0", "0xF", "0", "0") \
     ".byte 0x0F \n\t" \
     ".byte " ASF_MOD_RM( ASF_MOD_REG, ASF_REG_AX, "5" ) "\n\t"
+
+#define ASF_SPECULATE_INV\
+    "#speculate \n\t"\
+    ASF_XOP1 \
+    ASF_XOP2("1", "1", "1", "0x9") \
+    ASF_XOP3("0", "0xF", "0", "0") \
+    ".byte 0x0F \n\t" \
+    ".byte " ASF_MOD_RM( ASF_MOD_REG, ASF_REG_AX, "4" ) "\n\t"
 
 #define ASF_ABORT\
     "#abort\n\t"\

@@ -13,14 +13,14 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/fcntl.h>
+#ifndef __USE_GNU
+#define __USE_GNU
+#endif
 #include <signal.h>
 #include <string.h>
 #include <malloc.h>
 #include <stdio.h>
 #include <errno.h>
-#ifndef __USE_GNU
-#define __USE_GNU
-#endif
 #include <sys/ucontext.h>
 #define sys_munlock munlock
 

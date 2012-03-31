@@ -24,6 +24,7 @@ PTLsimStats stats;
 
 ostream logfile;
 ostream commitlogfile;
+ostream eventlogfile;
 bool logenable = 0;
 W64 sim_cycle = 0;
 W64 unhalted_cycle_count = 0;
@@ -150,6 +151,7 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(log_filename,                 "logfile",              "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
   add(loglevel,                     "loglevel",             "Log level (0 to 99)");
   add(commitlog_filename,           "commitlog",            "Commit-Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
+  add(eventlog_filename,            "eventlog",             "Event-Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
   add(start_log_at_iteration,       "startlog",             "Start logging after iteration <startlog>");
   add(start_log_at_rip,             "startlogrip",          "Start logging after first translation of basic block starting at rip");
   add(log_on_console,               "consolelog",           "Replicate log file messages to console");
@@ -283,7 +285,7 @@ void collect_common_sysinfo(PTLsimStats& stats) {
 
   sb.reset(); sb << __DATE__, " ", __TIME__;
   strput(stats.simulator.version.build_timestamp, sb);
-  stats.simulator.version.svn_revision = SVNREV;
+  strput(stats.simulator.version.svn_revision, stringify(SVNREV));
   strput(stats.simulator.version.svn_timestamp, stringify(SVNDATE));
   strput(stats.simulator.version.build_hostname, stringify(BUILDHOST));
   sb.reset(); sb << "gcc-", __GNUC__, ".", __GNUC_MINOR__;
@@ -306,15 +308,16 @@ void print_usage(int argc, char** argv) {
 stringbuf current_stats_filename;
 stringbuf current_log_filename;
 stringbuf current_commitlog_filename;
+stringbuf current_eventlog_filename;
 stringbuf current_bbcache_dump_filename;
 
 void backup_and_reopen_logfile(stringbuf& name, ostream& logfile) {
   if (name) {
     if (logfile) logfile.close();
-    stringbuf oldname;
-    oldname << name, ".backup";
-    sys_unlink(oldname);
-    sys_rename(name, oldname);
+    //stringbuf oldname;
+    //oldname << name, ".backup";
+    //sys_unlink(oldname);
+    //sys_rename(name, oldname);
     logfile.open(name);
   }
 }
@@ -372,6 +375,12 @@ bool handle_config_change(PTLsimConfig& config, int argc, char** argv) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
     backup_and_reopen_logfile(config.commitlog_filename, commitlogfile);
     current_commitlog_filename = config.commitlog_filename;
+  }
+
+  if (config.eventlog_filename.set() && (config.eventlog_filename != current_eventlog_filename)) {
+    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
+    backup_and_reopen_logfile(config.eventlog_filename, eventlogfile);
+    current_eventlog_filename = config.eventlog_filename;
   }
 
   logfile.setchain((config.log_on_console) ? &cout : null);
@@ -597,6 +606,7 @@ bool simulate(const char* machinename) {
   logfile << sb, flush;
   cerr << sb, flush;
   if(!config.commitlog_filename.empty()) commitlogfile << flush;
+  if(!config.eventlog_filename.empty())  eventlogfile << flush;
 
   if (config.dumpcode_filename.set()) {
     byte insnbuf[256];

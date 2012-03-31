@@ -5,7 +5,7 @@
 //
 // Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 // Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -145,6 +145,7 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
     temp[slot] = 0;
 
     OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_FORWARD, source);
+    if unlikely (event) {
     event->forwarding.operand = operand;
     event->forwarding.forward_cycle = source->forward_cycle;
     event->forwarding.target_uuid = target->uop.uuid;
@@ -159,6 +160,7 @@ void IssueQueue<size, operandcount>::tally_broadcast_matches(IssueQueue<size, op
     foreach (i, MAX_OPERANDS) event->forwarding.target_operands_ready |= ((target->operands[i]->ready()) << i);
     event->forwarding.target_all_operands_ready = target->ready_to_issue();
   }
+}
 }
 
 template <int size, int operandcount>
@@ -286,6 +288,7 @@ int ReorderBufferEntry::issue() {
   if unlikely (!executable_on_fu) {
     if unlikely (config.event_log_enabled) {
       event = core.eventlog.add(EVENT_ISSUE_NO_FU, this);
+      if unlikely (event)
       event->issue.fu_avail = core.fu_avail;
     }
 
@@ -452,6 +455,7 @@ int ReorderBufferEntry::issue() {
 
   if unlikely (config.event_log_enabled && (propagated_exception | (!(ld|st)))) {
     event = core.eventlog.add(EVENT_ISSUE_OK, this);
+    if unlikely (event) {
     event->issue.state = state;
     event->issue.cycles_left = cycles_left;
     event->issue.operand_data[0] = radata;
@@ -462,6 +466,7 @@ int ReorderBufferEntry::issue() {
     event->issue.operand_flags[2] = rc.flags;
     event->issue.mispredicted = br & mispredicted;
     event->issue.predrip = uop.riptaken;
+  }
   }
 
   //
@@ -701,20 +706,24 @@ namespace OutOfOrderModel {
 // is called, for instance after the entire macro-op has committed.
 //
 bool ReorderBufferEntry::release_mem_lock(bool forced) {
+  OutOfOrderCore& core = getcore();
+  ThreadContext& thread = getthread();
+
+  if (uop.locked && lsq) interlocks.withdraw(lsq->physaddr << 3, thread.ctx.vcpuid);
+
   if likely (!lock_acquired) return false;
  
   W64 physaddr = lsq->physaddr << 3;
   MemoryInterlockEntry* lock = interlocks.probe(physaddr);
   assert(lock);
  
-  OutOfOrderCore& core = getcore();
-  ThreadContext& thread = getthread();
- 
   if unlikely (config.event_log_enabled) {
     OutOfOrderCoreEvent* event = core.eventlog.add_load_store((forced) ? EVENT_STORE_LOCK_ANNULLED : EVENT_STORE_LOCK_RELEASED, this, null, physaddr);
+    if unlikely (event) {
     event->loadstore.locking_vcpuid = lock->vcpuid;
     event->loadstore.locking_uuid = lock->uuid;
     event->loadstore.locking_rob = lock->rob;
+  }
   }
  
   assert(lock->vcpuid == thread.ctx.vcpuid);
@@ -770,6 +779,20 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   Waddr physaddr = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 
 #ifdef ENABLE_ASF
+  // fixme: MP care for a potential not_asf here
+  // fixme: MP we need to make sure we do not invert several times in
+  //        case of replay.  On first sight load_store_second_phase
+  //        seems to be a nice guard for this, however, on second
+  //        sight there seem to be some holes
+  if (thread.ctx.asf_context->in_spec_region() &&
+      thread.ctx.asf_context->is_inverted() && ! uop.inverted) {
+    if (logable(5))
+      logfile << "[vcpu ", thread.ctx.vcpuid,"]"__FILE__,__LINE__,"@",sim_cycle,
+        ": Inverting ASF bit (was ", uop.is_asf, ")", *this, "@", uop.rip, endl;
+    uop.is_asf = ! uop.is_asf;
+    uop.inverted = true;
+  }
+
   if unlikely (uop.is_asf) {
     // SD HACKALERT: Drop is ASF flag on the instruction without side-effects.
     if unlikely (annul) uop.is_asf = 0;
@@ -878,6 +901,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   if unlikely (!ready) {
     if unlikely (config.event_log_enabled) {
       event = core.eventlog.add_load_store(EVENT_STORE_WAIT, this, sfra, addr);
+      if unlikely (event)
       event->loadstore.rcready = rcready;
     }
 
@@ -1023,9 +1047,11 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
       //
       if unlikely (config.event_log_enabled) {
         event = core.eventlog.add_load_store(EVENT_STORE_LOCK_REPLAY, this, null, addr);
+        if unlikely (event) {
         event->loadstore.locking_vcpuid = lock->vcpuid;
         event->loadstore.locking_uuid = lock->uuid;
         event->loadstore.threadid = lock->threadid;   
+      }
       }
 
       per_context_ooocore_stats_update(threadid, dcache.store.issue.replay.interlocked++);
@@ -1069,6 +1095,7 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add_load_store(EVENT_STORE_ISSUED, this, sfra, addr);
+    if unlikely (event)
     event->loadstore.data_to_store = rc;
   }
 
@@ -1124,6 +1151,20 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
   Waddr physaddr = addrgen(state, origaddr, virtpage, ra, rb, rc, pteupdate, addr, exception, pfec, annul);
 #ifdef ENABLE_ASF
+  // fixme: MP care for a potential not_asf here
+  // fixme: MP we need to make sure we do not invert several times in
+  //        case of replay.  On first sight load_store_second_phase
+  //        seems to be a nice guard for this, however, on second
+  //        sight there seem to be some holes
+  if (thread.ctx.asf_context->in_spec_region() &&
+      thread.ctx.asf_context->is_inverted() && ! uop.inverted) {
+    if (logable(5))
+      logfile << "[vcpu ", thread.ctx.vcpuid,"]"__FILE__,__LINE__,"@",sim_cycle,
+        ": Inverting ASF bit (was ", uop.is_asf, ")", *this, "@", uop.rip, endl;
+    uop.is_asf = ! uop.is_asf;
+    uop.inverted = true;
+  }
+
   if unlikely (uop.is_asf) {
     // SD HACKALERT: Drop is ASF flag on the instruction without side-effects.
     if unlikely (annul) uop.is_asf = 0;
@@ -1153,7 +1194,8 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 #ifdef ENABLE_ASF
   // NOTE: This relies on issue_probe_and_merge to leave the data alone in case
   //       nothing has been updated
-  thread.asf_pipeline_intercept.issue_probe_and_merge(physaddr, uop.invalidating, data);
+  if (!annul)
+    thread.asf_pipeline_intercept.issue_probe_and_merge(physaddr, uop.invalidating, data, this);
 #endif
 
   LoadStoreQueueEntry* sfra = null;
@@ -1256,6 +1298,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
     if unlikely (config.event_log_enabled) {
       event = core.eventlog.add_load_store(EVENT_LOAD_WAIT, this, sfra, addr);
+      if unlikely (event)
       event->loadstore.predicted_alias = (load_is_known_to_alias_with_store && sfra && (!sfra->addrvalid));
     }
 
@@ -1335,6 +1378,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
   // system doesn't work across multiple threads on the same core.
   //
   if unlikely ((contextcount > 1) && (!annul)) {
+    int vcpuid = thread.ctx.vcpuid;
     MemoryInterlockEntry* lock = interlocks.probe(physaddr);
 
     //
@@ -1346,31 +1390,27 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
     // cache chunk, while thread 1 is releasing a spinlock using an
     // *unlocked* ADD [mem],1 on the high 4 bytes of the chunk.
     //
-    if unlikely (lock && (lock->vcpuid != thread.ctx.vcpuid)) {
+    if unlikely (lock && !lock->free() && !lock->owned(vcpuid)) {
       //
       // Some other thread or core has locked up this word: replay
       // the uop until it becomes unlocked.
       //
       if unlikely (config.event_log_enabled) {
         event = core.eventlog.add_load_store(EVENT_LOAD_LOCK_REPLAY, this, null, addr);
+        if unlikely (event) {
         event->loadstore.locking_vcpuid = lock->vcpuid;
         event->loadstore.locking_uuid = lock->uuid;
         event->loadstore.locking_rob = lock->rob;
       }
- 
-      // Double-locking within a thread is NOT allowed!
-      // S.D. This assertion is checked already in if's condition
-      //assert(lock->vcpuid != thread.ctx.vcpuid);
-      // S.D. This assertion breaks with threadids being local to cores
-      //assert(lock->threadid != threadid);
-
+      }
       per_context_ooocore_stats_update(threadid, dcache.load.issue.replay.interlocked++);
       replay_locked();
+      // Enqueue at the lock
+      if unlikely (uop.locked) interlocks.enqueue(physaddr, vcpuid);
       return ISSUE_NEEDS_REPLAY;
     }
-
     // Issuing more than one ld.acq on the same block is not allowed:
-    if (lock) { //&& (lock->vcpuid == thread.ctx.vcpuid)
+    if (lock && lock->owned(vcpuid)) {
       logfile << "ERROR: thread ", thread.ctx.vcpuid, " uuid ", uop.uuid, " over physaddr ", (void*)physaddr, ": lock was already acquired by vcpuid ", lock->vcpuid, " uuid ", lock->uuid, " rob ", lock->rob, endl;
       assert(false);
     }
@@ -1390,7 +1430,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
       // these conditions represent an error in the microcode.
       //
 
-      lock = interlocks.select_and_lock(physaddr);
+      lock = interlocks.acquire(physaddr, vcpuid);
  
       if unlikely (!lock) {
         //
@@ -1575,7 +1615,7 @@ int ReorderBufferEntry::probecache(Waddr addr, LoadStoreQueueEntry* sfra) {
     forward_cycle = 0;
 
     // If we have an ASF invalidating probe, this will be decoded as a load, but will also invalidate the line in all other caches!
-    if unlikely (uop.invalidating) core.caches.probe_other_caches(physaddr, addr, true);
+    if unlikely (uop.invalidating) core.caches.probe_other_caches(physaddr, true);
 
     per_context_ooocore_stats_update(threadid, dcache.load.issue.complete++);
     per_context_dcache_stats_update(threadid, load.hit.L1++);
@@ -1611,7 +1651,7 @@ int ReorderBufferEntry::probecache(Waddr addr, LoadStoreQueueEntry* sfra) {
   assert(lfrqslot >= 0);
 
   // If we have an ASF invalidating probe, this will be decoded as a load, but will also invalidate the line in all other caches!
-  if unlikely (uop.invalidating) core.caches.probe_other_caches(physaddr,addr, true);
+  if unlikely (uop.invalidating) core.caches.probe_other_caches(physaddr, true);
 
   if unlikely (config.event_log_enabled) event = core.eventlog.add_load_store(EVENT_LOAD_MISS, this, sfra, addr);
 
@@ -1671,7 +1711,7 @@ void ReorderBufferEntry::tlbwalk() {
       PTEUpdate pteupdate;
       Context& ctx = getthread().ctx;
       Waddr physaddr = ctx.check_and_translate(virtaddr, 1, 0, 0, exception, pfec, pteupdate);
-      core.caches.initiate_prefetch(physaddr, virtaddr, uop.cachelevel);
+      core.caches.initiate_prefetch(physaddr, virtaddr, uop.cachelevel, uop.invalidating, threadid);
     } else {
       probecache(virtaddr, null);
     }
@@ -1797,6 +1837,7 @@ int ReorderBufferEntry::issuefence(LoadStoreQueueEntry& state) {
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add_load_store(EVENT_FENCE_ISSUED, this);
+    if unlikely (event)
     event->loadstore.data_to_store = 0;
   }
 
@@ -1828,6 +1869,9 @@ void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc
   Waddr physaddr = addrgen(dummy, origaddr, virtpage, ra, rb, rc, uop.is_asf ? pteupdate : dummy_pteu, addr, exception, pfec, annul);
 
 #ifdef ENABLE_ASF
+  // fixme: MP we have a problem here, do not touch prefetches for now
+  //        with inverted default semantics
+
   // LOCKed PREFETCHes are decoded into loads!
   assert(!uop.is_asf);
 #endif
@@ -1870,13 +1914,65 @@ void ReorderBufferEntry::issueprefetch(IssueState& state, W64 ra, W64 rb, W64 rc
 
   per_context_dcache_stats_update(threadid, load.dtlb.l1hits++);
 #endif /* USE_TLB */
-  core.caches.initiate_prefetch(physaddr, origaddr, cachelevel, uop.invalidating);
+  core.caches.initiate_prefetch(physaddr, origaddr, cachelevel, uop.invalidating, threadid);
 }
 
+/**
+ * Notify the core of external probes, this will track the local queues and cause
+ * retries and ASF aborts if necessary.
+ */
+void OutOfOrderCoreCacheCallbacks::external_probe(W64 physaddr, bool invalidating) {
+  physaddr = floor(physaddr, CacheSubsystem::L1_LINE_SIZE);
+  if (logable(6)) logfile << "Probe on address ", (void*)physaddr, " invalidating: ", invalidating, endl, flush;
+  if (!invalidating) return;
+
+  // Check (snoop) the loads in all threads' LSQs
+  for (int t = 0; t < MAX_THREADS_PER_CORE; t++) {
+    ThreadContext* thread = core.threads[t];
+    if (!thread) continue;
+
+    if (logable(6)) logfile << "Checking thread ", t, endl, flush;
+    Queue<LoadStoreQueueEntry, LSQ_SIZE>& LSQ = thread->LSQ;
+    LoadStoreQueueEntry* oldest_load = NULL;
+
+    foreach_forward(LSQ, i) {
+      LoadStoreQueueEntry* buf = &LSQ[i];
+      if (!buf->entry_valid) continue;
+      // We are only interested in actual loads
+      if (buf->lfence || buf->sfence || buf->store) continue;
+
+      if (!oldest_load) {
+        if (logable(6)) logfile << "The oldest load is ", *buf, endl, flush;
+        oldest_load = buf;
+}
+      if (!buf->addrvalid) continue;
+      if (!buf->rob->issued) continue;
+
+      // Address match
+      if (floor(buf->physaddr << 3, CacheSubsystem::L1_LINE_SIZE) != physaddr) continue;
+
+      if (buf != oldest_load) {
+        // Record the need for a reprobe, note: oldest loads do not need to
+        // reprobe because they cannot be reordered wrt to anything
+        if (logable(6)) logfile << "Found matching load ", *buf, endl, flush;
+        buf->needs_retry = true;
+      }
+#ifdef ENABLE_ASF_CACHE_BASED
+      // ASF is notified at once, for faster aborts
+      if unlikely (buf->rob->issued &&  buf->rob->uop.is_asf) {
+        if (logable(5)) logfile << "Found matching ASF load -> aborting", endl, flush;
+        // An in-flight ASF uop has been hit by an external probe -> abort the speculative region
+        thread->asf_pipeline_intercept.reprobe_load(*buf->rob);
+      }
+#endif
+
+    }
+  }
+}
 //
 // Data cache has delivered a load: wake up corresponding ROB/LSQ/physreg entries
 //
-void OutOfOrderCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr, bool retry) {
+void OutOfOrderCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr) {
   int idx = lsi.rob;
   ThreadContext* thread = core.threads[lsi.threadid];
   assert(inrange(idx, 0, ROB_SIZE-1));
@@ -1895,10 +1991,10 @@ void OutOfOrderCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr
   }
   assert(rob.current_state_list == &thread->rob_cache_miss_list);
 
-  rob.loadwakeup(retry);
+  rob.loadwakeup();
 }
 
-void ReorderBufferEntry::loadwakeup(bool retry) {
+void ReorderBufferEntry::loadwakeup() {
   if (tlb_walk_level) {
     // Wake up from TLB walk wait and move to next level
     // NOTE SD: TLB walks will implicitly retry by not finding the data in L1
@@ -1906,17 +2002,6 @@ void ReorderBufferEntry::loadwakeup(bool retry) {
     lfrqslot = -1;
     changestate(getthread().rob_tlb_miss_list);
   } else {
-    // Reprobe the load, if the cache-line was invalidated during the probe
-    if unlikely (retry) {
-      /* TODO: One could also just remember this condition and call
-               redispatch-depends on this uop when it hits commit/retire stage. */
-      if unlikely (!reprobe_load()) {
-        // Just clean up the LFRQ slot
-        lfrqslot = -1;
-        return;
-      }
-    }
-
     // Actually wake up the load
     if unlikely (config.event_log_enabled) getcore().eventlog.add_load_store(EVENT_LOAD_WAKEUP, this);
 
@@ -1931,27 +2016,6 @@ void ReorderBufferEntry::loadwakeup(bool retry) {
     forward_cycle = 0;
     fu = 0;
   }
-}
-
-/**
- * Notifies the memop ROB that it has to query the caches again as the original
- * request has been invalidated while being in-flight.
- * @return Can the load still see the data?
- */
-bool ReorderBufferEntry::reprobe_load() {
-#ifdef ENABLE_ASF_CACHE_BASED
-  if unlikely (uop.is_asf) {
-    // An in-flight ASF uop has been hit by an external probe -> abort the speculative region
-    getthread().asf_pipeline_intercept.reprobe_load(*this);
-    return false;
-  }
-#endif
-  // TODO: What would be the right retry mechanism? redispatch_dependents vs replay vs in-loop reprobing
-  // TODO: We could also wait until this load instruction hits the commit/retire stage and cause redispatch from there
-  //redispatch_dependents(true); // NOTE: This causes issues as it frees the LFRQ slot that is currently used to notify this load
-  //replay(); // NOTE: This breaks as loads that miss in the cache: they have their issue completed and cannot replay!
-
-  return true;
 }
 
 void ReorderBufferEntry::fencewakeup() {
@@ -2006,6 +2070,7 @@ void ReorderBufferEntry::replay() {
 
   if unlikely (config.event_log_enabled) {
     OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
+    if unlikely (event)
     foreach (i, MAX_OPERANDS) {
       operands[i]->fill_operand_info(event->replay.opinfo[i]);
       event->replay.ready |= (operands[i]->ready()) << i;
@@ -2055,6 +2120,7 @@ void ReorderBufferEntry::replay_locked() {
 
   if unlikely (config.event_log_enabled) {
     OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_REPLAY, this);
+    if unlikely (event)
     foreach (i, MAX_OPERANDS) {
       operands[i]->fill_operand_info(event->replay.opinfo[i]);
       event->replay.ready |= (operands[i]->ready()) << i;
@@ -2171,8 +2237,10 @@ int ReorderBufferEntry::forward() {
     if likely (!bit(targets, i)) continue;
     if unlikely (config.event_log_enabled) {
       OutOfOrderCoreEvent* event = getcore().eventlog.add(EVENT_BROADCAST, this);
+      if unlikely (event) {
       event->forwarding.target_cluster = i;
       event->forwarding.forward_cycle = forward_cycle;
+    }
     }
 
     issueq_operation_on_cluster(getcore(), i, broadcast(get_tag()));
@@ -2245,7 +2313,9 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     // no action is necessary (but in practice this is generally not possible)
     if unlikely (config.event_log_enabled) {
       OutOfOrderCoreEvent* event = core.eventlog.add(EVENT_ANNUL_NO_FUTURE_UOPS, this);
+      if unlikely (event) {
       event->annul.somidx = somidx; event->annul.eomidx = eomidx;
+    }
     }
 
     return uop.rip;
@@ -2259,8 +2329,10 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add(EVENT_ANNUL_MISSPECULATION, this);
+    if unlikely (event) {
     event->annul.startidx = startidx; event->annul.endidx = endidx;
     event->annul.somidx = somidx; event->annul.eomidx = eomidx;
+  }
   }
 
   //
@@ -2337,6 +2409,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
 
     if unlikely (config.event_log_enabled) {
       event = core.eventlog.add(EVENT_ANNUL_EACH_ROB, &annulrob);
+      if unlikely (event)
       event->annul.annulras = 0;
     }
 
@@ -2384,7 +2457,7 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
       // BR mispredicts, so everything after BR must be annulled.
       // RAS contains: C1 C3 C4, so we need to annul [C4 C3].
       //
-      if unlikely (config.event_log_enabled) event->annul.annulras = 1;
+      if unlikely (config.event_log_enabled && event) event->annul.annulras = 1;
       branchpred.annulras(annulrob.uop.predinfo);
     }
 
@@ -2447,9 +2520,11 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add(EVENT_REDISPATCH_EACH_ROB, this);
+    if unlikely (event) {
     event->redispatch.current_state_list = current_state_list;
     event->redispatch.dependent_operands = dependent_operands.integer();
     foreach (i, MAX_OPERANDS) operands[i]->fill_operand_info(event->redispatch.opinfo[i]);
+  }
   }
 
   per_context_ooocore_stats_update(threadid, dispatch.redispatch.trigger_uops++);
@@ -2466,7 +2541,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
       }
       thread.issueq_count--;
     }
-    if unlikely (config.event_log_enabled) event->redispatch.iqslot = found;
+    if unlikely (config.event_log_enabled && event) event->redispatch.iqslot = found;
     cluster = -1;
   }
 
@@ -2486,6 +2561,7 @@ void ReorderBufferEntry::redispatch(const bitvec<MAX_OPERANDS>& dependent_operan
     lsq->data = 0;
     lsq->physaddr = 0;
     lsq->invalid = 0;
+    lsq->needs_retry = 0;
 
     if (operands[RS]->nonnull()) {
       operands[RS]->unref(*this, thread.threadid);
@@ -2579,6 +2655,7 @@ void ReorderBufferEntry::redispatch_dependents(bool inclusive) {
 
   if unlikely (config.event_log_enabled) {
     event = core.eventlog.add(EVENT_REDISPATCH_DEPENDENTS_DONE, this);
+    if unlikely (event)
     event->redispatch.count = count;
   }
 }

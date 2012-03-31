@@ -3,7 +3,7 @@
 // L1 and L2 Data Caches
 //
 // Copyright 2005-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -175,7 +175,7 @@ void LoadFillReqQueue<size>::clock() {
         
     stats.dcache.lfrq.wakeups++;
     wakeupcount++;
-    if likely (hierarchy.callback) hierarchy.callback->dcache_wakeup(req.lsi, req.addr, retry[idx]);
+    if likely (hierarchy.callback) hierarchy.callback->dcache_wakeup(req.lsi, req.addr);
 
     assert(!freemap[idx]);
     changestate(idx, ready, freemap);
@@ -281,6 +281,8 @@ template <int SIZE>
 void MissBuffer<SIZE>::reset(int threadid) {
   foreach (i, SIZE) {
     Entry& mb = missbufs[i];
+    // NOTE SD: This check is broken. A MBE may be shared by LFRQs from different threads.
+#if (0)
     if likely (mb.threadid == threadid) {
       if (logable(6)) logfile << "[vcpu ", threadid, "] reset missbuf slot ", i, ": for rob", mb.rob, endl;
       assert(!freemap[i]);
@@ -294,6 +296,7 @@ void MissBuffer<SIZE>::reset(int threadid) {
       // flushed, we'll wake up a stale LFRQ. We have to make sure after
       // a missbuf reset, all the entries point to a valid lfrqmap.
       //
+      // NOTE SD: mb.lfrqmap should be zero by now (mb.reset() above)
       if (*mb.lfrqmap) {
         bitvec<LFRQ_SIZE> tmp_lfrqmap = mb.lfrqmap ^ hierarchy.lfrq.waiting;
         if (*tmp_lfrqmap) {
@@ -301,8 +304,33 @@ void MissBuffer<SIZE>::reset(int threadid) {
           mb.lfrqmap &= ~tmp_lfrqmap;
           if (logable(6)) logfile << "after remove stale lfrq entries, its lfrqmap is ", mb.lfrqmap, endl;
         }
+        // NB SD: This is the same as mb.lfrqmap &= hierarchy.lfrq.waiting; which actually makes sense :)
       }
     }
+#endif
+    if (freemap[i]) continue;
+
+    if (logable(6)) logfile << "Adjusting LFR wakeups for missbuf[", i, "] : before lfrqmap is ", mb.lfrqmap, endl;
+    for (size_t l = mb.lfrqmap.lsb(-1); l != -1; l = mb.lfrqmap.nextlsb(l, -1)) {
+      // Go through all associated LFRs and check their thread ID
+      // NOTE: This could also be done in LFRQ::reset or through several
+      //       assumptions about the waiting bitmap, as above.
+      const LoadFillReq &lfr = hierarchy.lfrq.reqs[l];
+      if (lfr.lsi.threadid == threadid)
+        mb.lfrqmap[l] = 0;
+    }
+    if (logable(6)) logfile << "Adjusting LFR wakeups for missbuf[", i, "] : after  lfrqmap is ", mb.lfrqmap, endl;
+
+    if likely (!mb.lfrqmap && (mb.threadid == threadid)) {
+      // Drop empty MBEs that had only wakeups for the flushed thread
+      if (logable(6)) logfile << "[vcpu ", threadid, "] reset missbuf slot ", i, ": for rob", mb.rob, endl;
+      assert(!freemap[i]);
+      mb.reset();
+      freemap[i] = 1;
+      count--;
+      assert(count >= 0);
+    }
+
   }
 }
 
@@ -331,18 +359,28 @@ int MissBuffer<SIZE>::find(W64 addr) {
 template <int SIZE>
 int MissBuffer<SIZE>::initiate_miss(W64 addr, W64 virtaddr, bool hit_in_L2, bool icache, int rob, int threadid) {
   bool DEBUG = logable(6);
-
+//FIXME: SD Add assertion regarding the correspondence of addr and virtaddr here, too
   addr = floor(addr, L1_LINE_SIZE);
 
   int idx = find(addr);
 
+  // NOTE SD: This is a fundamental question here: can MBEs be shared by two threads?
+  //          Care has to betaken with respect to reset / annullment if so.
+  //          Further note that prefetches and store commits have their own bogus thread IDs
   // if unlikely (idx >= 0 && threadid == missbufs[idx].threadid) {
   if unlikely (idx >= 0) {
     // Handle case where dcache miss is already in progress but some 
     // code needed in icache is also stored in that line:
     Entry& mb = missbufs[idx];
+    // Icache misses do not have a virtual address => update for aliasing dcache
+    // accesses
+    if (!icache && mb.icache && !mb.dcache) {
+      assert(mb.virtaddr == 0);
+      mb.virtaddr = virtaddr;
+    }
     mb.icache |= icache;
     mb.dcache |= (!icache);
+    //FIXME: SD assertion for correspondence virt / phys addr?
     // Handle case where icache miss is already in progress but some
     // data needed in dcache is also stored in that line:
     if (DEBUG) logfile << "[vcpu ", threadid, "] miss buffer hit for address ", (void*)(Waddr)addr, ": returning old slot ", idx, endl;
@@ -398,7 +436,7 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, W64 virtaddr, bool hit_in_L2, bool
 #endif
 
 #ifdef POOR_MANS_MESI
-  if (hierarchy.probe_other_caches(addr, virtaddr, false))
+  if (hierarchy.probe_other_caches(addr, false))
     mb.cycles = CROSS_CACHE_LATENCY;
   else
     mb.cycles = MAIN_MEM_LATENCY;
@@ -427,7 +465,7 @@ int MissBuffer<SIZE>::initiate_miss(LoadFillReq& req, bool hit_in_L2, int rob) {
   Entry& missbuf = missbufs[mbidx];
   missbuf.lfrqmap[lfrqslot] = 1;
   hierarchy.lfrq[lfrqslot].mbidx = mbidx;
-  // missbuf.threadid = req.lsi.threadid;
+  // missbuf.threadid = req.lsi.threadid;       //NOTE SD: Multiple threads can share the same MBE
 #ifdef ENABLE_ASF_CACHE_BASED
   // For multiple loads the ASF speculative bit is dominant, as the speculative
   // region has to be aborted always if there is a probe hit
@@ -513,22 +551,6 @@ void MissBuffer<SIZE>::clock() {
       }
       break;
     }
-    case STATE_INVALIDATED: {
-      // This entry has been hit by an external invalidating probe. Notify the
-      // consumers to retry and free the entry
-      // Other options:
-      // TODO: Option 1: Reprobe directly in here -> notify ASF from here, too
-      // TODO: Option 2: Send tainted data to the core -> let it retry the load
-      hierarchy.lfrq.wakeup(mb.addr, mb.lfrqmap, true);
-
-      // TODO: Stats
-      assert(!freemap[i]);
-      freemap[i] = 1;
-      mb.reset();
-      count--;
-      assert(count >= 0);
-      break;
-    }
     }
   }
 }
@@ -539,31 +561,6 @@ void MissBuffer<SIZE>::annul_lfrq(int slot) {
     Entry& mb = missbufs[i];
     mb.lfrqmap[slot] = 0;  // which LFRQ entries should this load wake up?
   }
-}
-
-/**
- * Notify the miss-buffer of external probes to cache-line sized objects.
- * @param physaddr Physical address of the probed cache-line, properly aligned!
- * @param inv Invalidating probe?
- */
-template <int SIZE>
-void MissBuffer<SIZE>::external_probe(W64 physaddr, bool inv) {
-  // NonInv probes do not affect the MissBuffer that just contains loads
-  if (!inv) return;
-
-  physaddr = floor(physaddr, L1_LINE_SIZE);
-
-  int idx = find(physaddr);
-
-  // No matching in flight request.
-  if (idx == -1) return;
-
-  Entry& mbe = missbufs[idx];
-  mbe.state = STATE_INVALIDATED;
-
-  if (logable(5)) logfile << "mb", idx, ": hit by inv(", inv,
-    ") probe. ", endl;
-  // The mb.clock() function will pick up the state change and act accordingly
 }
 
 template <int SIZE>
@@ -706,6 +703,7 @@ int CacheHierarchy::issueload_slowpath(Waddr physaddr, Waddr virtaddr, SFR& sfra
   // them in.
   //
 
+  //SD: FIXME: assertion over correspondence of physaddr and virtaddr
   LoadFillReq req(physaddr, virtaddr, lsi.sfrused ? sfra.data : 0, lsi.sfrused ? sfra.bytemask : 0, lsi);
 
   int lfrqslot = missbuf.initiate_miss(req, L2hit, lsi.rob);
@@ -789,9 +787,9 @@ void CacheHierarchy::annul_lfrq_slot(int lfrqslot) {
 //
 static const int PREFETCH_STOPS_AT_L2 = 0;
   
-void CacheHierarchy::initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating) {
+void CacheHierarchy::initiate_prefetch(W64 physaddr, W64 virtaddr, int cachelevel, bool invalidating, int threadid) {
   static const bool DEBUG = 0;
-
+//FIXME: SD: Assertion over correspondence of physaddr and virtaddr!
   physaddr = floor(physaddr, L1_LINE_SIZE);
   virtaddr = floor(virtaddr, L1_LINE_SIZE);
   L1CacheLine* L1line = L1.probe(physaddr, virtaddr);
@@ -799,7 +797,7 @@ void CacheHierarchy::initiate_prefetch(W64 physaddr, W64 virtaddr, int cacheleve
   if unlikely (L1line) {
     stats.dcache.prefetch.in_L1++;
 #ifdef POOR_MANS_MESI
-    if (invalidating) probe_other_caches(physaddr, virtaddr, true);
+    if (invalidating) probe_other_caches(physaddr, true);
 #endif
     return;
   }
@@ -810,7 +808,7 @@ void CacheHierarchy::initiate_prefetch(W64 physaddr, W64 virtaddr, int cacheleve
     stats.dcache.prefetch.in_L2++;
     if (PREFETCH_STOPS_AT_L2) {
 #ifdef POOR_MANS_MESI
-      if (invalidating) probe_other_caches(physaddr, virtaddr, true);
+      if (invalidating) probe_other_caches(physaddr, true);
 #endif
       return; // only move up to L2 level, and it's already there
     }
@@ -819,10 +817,10 @@ void CacheHierarchy::initiate_prefetch(W64 physaddr, W64 virtaddr, int cacheleve
   if (DEBUG) logfile << "Prefetch requested for ", (void*)(Waddr)physaddr, " to cache level ", cachelevel, endl;
     
   // NB: This might actually get the line from another cache, ie with less cycles than full memory latency.
-  missbuf.initiate_miss(physaddr, virtaddr, L2line);
+  missbuf.initiate_miss(physaddr, virtaddr, L2line, false /*, 0xffff, threadid*/); // NB: no threadid -> default bogus threadid -> not flushed on pipeline flush
   // NB(cont'd): hence we will just invalidate after initiating the miss!
 #ifdef POOR_MANS_MESI
-  if (invalidating) probe_other_caches(physaddr, (W64)virtaddr, true);
+  if (invalidating) probe_other_caches(physaddr, true);
 #endif
   stats.dcache.prefetch.required++;
 }
@@ -864,7 +862,7 @@ W64 CacheHierarchy::commitstore(const SFR& sfr, W64 virtaddr, bool internal, int
   starttimer(store_flush_timer);
 
   W64 addr = sfr.physaddr << 3;
-
+//FIXME: SD: Assert that addresses actually correspond
   // internal stores do not hit the caches
   if unlikely (internal && perform_actual_write) {
     storemask(addr, sfr.data, sfr.bytemask);
@@ -875,7 +873,7 @@ W64 CacheHierarchy::commitstore(const SFR& sfr, W64 virtaddr, bool internal, int
 
   if likely (perform_actual_write) storemask(addr, sfr.data, sfr.bytemask);
 #ifdef POOR_MANS_MESI
-  probe_other_caches(addr, virtaddr, true);
+  probe_other_caches(addr, true);
 #endif
 
   L1CacheLine* L1line = L1.select(addr, virtaddr);
@@ -920,13 +918,18 @@ void CacheHierarchy::clock() {
 
 #ifdef POOR_MANS_MESI
 
-bool CacheHierarchy::external_probe(W64 addr, W64 virtaddr, bool inv) {
+bool CacheHierarchy::external_probe(W64 addr, bool inv) {
 
-  missbuf.external_probe(addr, inv);
+  // SD: Removed to probe the core directly
+  if likely (callback) callback->external_probe(addr, inv);
+
+#ifdef ENABLE_ASF_CACHE_WRITE_SET
+  L1.external_probe(addr, inv);
+#endif
 
   if unlikely (inv) {
     // Invalidations remove the entry from all cache levels
-    L1.invalidate(addr, virtaddr);
+    L1.invalidate(addr);
     L1I.invalidate(addr);
     L2.invalidate(addr);
 #ifdef ENABLE_L3_CACHE
@@ -948,7 +951,7 @@ bool CacheHierarchy::external_probe(W64 addr, W64 virtaddr, bool inv) {
 // in them contains the line with the specified address. Invalidates the line,
 // if necessary.
 //
-bool CacheHierarchy::probe_other_caches(W64 addr, W64 virtaddr, bool inv) {
+bool CacheHierarchy::probe_other_caches(W64 addr, bool inv) {
   CacheHierarchy *other_hier;
   int            other_id;
   int  this_id   = (int) coreid;
@@ -962,9 +965,10 @@ bool CacheHierarchy::probe_other_caches(W64 addr, W64 virtaddr, bool inv) {
     if (!other_hier) continue;
 
     if (logable(6)) logfile << "[vcpu ", this_id, "] Sending ", inv ? "" : "Non",
-      "Inv probe @ ", (void*) virtaddr, " / ", (void*) addr, " to core ", other_id, endl;
-    crosshit |= other_hier->external_probe(addr, virtaddr, inv);
-    if (!inv && crosshit) break;  //Short-cut read probes
+      "Inv probe @ ", (void*) addr, " to core ", other_id, endl;
+    crosshit |= other_hier->external_probe(addr, inv);
+    // NOTE: This might break ASF, but actually there always should be max a single modified line around!
+    //if (!inv && crosshit) break;  //Short-cut read probes
   }
   return crosshit;
 }
@@ -1009,8 +1013,9 @@ ostream& CacheHierarchy::print(ostream& os) {
 //
 // Make sure the templates and vtables get instantiated:
 //
-void PerCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr, bool retry) { }
+void PerCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr) { }
 void PerCoreCacheCallbacks::icache_wakeup(LoadStoreInfo lsi, W64 physaddr) { }
+void PerCoreCacheCallbacks::external_probe(W64 physaddr, bool invalidating) { }
 
 template struct LoadFillReqQueue<LFRQ_SIZE>;
 template struct MissBuffer<MISSBUF_COUNT>;

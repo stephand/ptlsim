@@ -3782,6 +3782,17 @@ namespace superstl {
     ~ScopedLock() { lock.release(); }
   };
 
+  template <class T1, class T2>
+  struct Pair {
+    typedef T1 first_type;
+    typedef T2 second_type;
+
+    T1& first;
+    T2& second;
+    Pair(T1& x, T2& y) : first(x), second(y) {}
+    template <class U, class V>
+      Pair (const Pair<U,V> &p) : first(p.first), second(p.second) { }
+  };
 } // namespace superstl
 
 #endif // _SUPERSTL_H_

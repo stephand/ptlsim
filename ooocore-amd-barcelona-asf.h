@@ -21,11 +21,14 @@
 //
 // Copyright 2003-2006 Matt T. Yourst <yourst@yourst.com>
 // Copyright 2006 Hui Zeng <hzeng@cs.binghamton.edu>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
 #include <branchpred.h>
+namespace OutOfOrderModel {
+#include <ticket_counter.h>
+}
 #ifdef ENABLE_ASF
 #include <asf.h>
 #endif
@@ -301,6 +304,7 @@ namespace OutOfOrderModel {
     {OP_vpack_ss,       2, FADD|FMUL},
 #ifdef ENABLE_ASF
     {OP_spec,           A, ALU1|ALU2|ALU3},
+    {OP_spec_inv,       A, ALU1|ALU2|ALU3},
     {OP_com,            A, ALU1|ALU2|ALU3},
     {OP_val,            A, ALU1|ALU2|ALU3},
     {OP_rel,            A, ALU1|ALU2|ALU3},
@@ -677,7 +681,6 @@ namespace OutOfOrderModel {
   struct PhysicalRegister;
   struct LoadStoreQueueEntry;
   struct OutOfOrderCoreEvent;
-  struct LLBLine;
   //
   // Reorder Buffer (ROB) structure, used for tracking all uops in flight.
   // This same structure is used to represent both dispatched but not yet issued
@@ -745,7 +748,7 @@ namespace OutOfOrderModel {
     int pseudocommit();
     void redispatch(const bitvec<MAX_OPERANDS>& dependent_operands, ReorderBufferEntry* prevrob);
     void redispatch_dependents(bool inclusive = true);
-    void loadwakeup(bool retry);
+    void loadwakeup();
     bool reprobe_load();
     void fencewakeup();
     LoadStoreQueueEntry* find_nearest_memory_fence();
@@ -788,7 +791,7 @@ namespace OutOfOrderModel {
     W16 idx;
     byte coreid;
     W8s mbtag;
-    W8 store:1, lfence:1, sfence:1, entry_valid:1;
+    W8 store:1, lfence:1, sfence:1, entry_valid:1, needs_retry:1;
     W32 padding;
 
     LoadStoreQueueEntry() { }
@@ -800,6 +803,7 @@ namespace OutOfOrderModel {
       setzero(*this);
       idx = oldidx;
       mbtag = -1;
+      needs_retry = false;
     }
 
     void init(int idx) {
@@ -1019,26 +1023,84 @@ namespace OutOfOrderModel {
   struct OutOfOrderCoreCacheCallbacks: public CacheSubsystem::PerCoreCacheCallbacks {
     OutOfOrderCore& core;
     OutOfOrderCoreCacheCallbacks(OutOfOrderCore& core_): core(core_) { }
-    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr, bool retry);
+    virtual void dcache_wakeup(LoadStoreInfo lsi, W64 physaddr);
     virtual void icache_wakeup(LoadStoreInfo lsi, W64 physaddr);
+    virtual void external_probe(W64 physaddr, bool invalidating);
   };
 
   struct MemoryInterlockEntry {
+  private:
+    TicketCounter<byte, MAX_CONTEXTS> tc;
+  public:
+    static const byte FREE_VCPUID = -1;
     W64 uuid;
     W16 rob;
     byte vcpuid;
     W8 threadid;
 
-    void reset() { uuid = 0; rob = 0; vcpuid = 0; threadid = 0;}
+    void reset() { uuid = 0; rob = 0; vcpuid = FREE_VCPUID; threadid = 0; tc.reset();}
 
     ostream& print(ostream& os, W64 physaddr) const {
       os << "phys ", (void*)physaddr, ": vcpu ", vcpuid, ", threadid ", threadid, ", uuid ", uuid, ", rob ", rob;
+      os << tc;
       return os;
     }
+    MemoryInterlockEntry *acquire(byte vcpuid) {
+      if (this->vcpuid == vcpuid) {
+        return this;
+      }
+      if (this->vcpuid != FREE_VCPUID) {
+        tc.enqueue(vcpuid);
+        return NULL;
+      }
+      if likely (!tc.has_queuers() || tc.serve(vcpuid)) {
+        // Free entry.
+        this->vcpuid = vcpuid;
+        return this;
+      }
+      // Wait for the next guy in line first.
+      return NULL;
+    }
+    // Release the lock for the vcpu, returns whether there are others waiting for this lock.
+    bool release(byte vcpuid) {
+      assert(this->vcpuid == vcpuid);
+      this->vcpuid = FREE_VCPUID;
+      return tc.has_queuers();
+    }
+    bool free() const {return vcpuid == FREE_VCPUID; }
+    bool owned(byte vcpuid) const {return this->vcpuid == vcpuid; }
+    void withdraw(byte vcpuid) { tc.withdraw(vcpuid); }
+    void enqueue(byte vcpuid) { tc.enqueue(vcpuid); }
   };
 
-  struct MemoryInterlockBuffer: public LockableAssociativeArray<W64, MemoryInterlockEntry, 16, 4, CacheSubsystem::L1_LINE_SIZE> {
+  struct MemoryInterlockBuffer: private LockableAssociativeArray<W64, MemoryInterlockEntry, 16, 4, CacheSubsystem::L1_LINE_SIZE> {
+    typedef LockableAssociativeArray<W64, MemoryInterlockEntry, 16, 4, CacheSubsystem::L1_LINE_SIZE> base_t;
+    MemoryInterlockEntry* acquire(W64 addr, byte vcpuid) {
+      MemoryInterlockEntry *mie = probe(addr);
+      // Let the MIE decide (fairness) if it can be acquired by the current vcpuid
+      if unlikely (mie) return mie->acquire(vcpuid);
+      // Free entry -> grab it.
+      mie = base_t::select_and_lock(addr);
+      if unlikely (!mie) return mie;
+      mie->reset();
+      return mie->acquire(vcpuid);
+    }
+    void enqueue(W64 addr, byte vcpuid) {
+      MemoryInterlockEntry *mie = probe(addr);
+      if (mie) mie->enqueue(vcpuid);
+    }
 
+    void release(W64 addr, byte vcpuid) {
+      MemoryInterlockEntry *mie = probe(addr);
+      assert(mie);
+      if (!mie->release(vcpuid)) base_t::invalidate(addr);
+    }
+    void withdraw(W64 addr, byte vcpuid) {
+      MemoryInterlockEntry *mie = probe(addr);
+      if (mie) mie->withdraw(vcpuid);
+    }
+    MemoryInterlockEntry* probe(W64 addr) { return base_t::probe(addr); }
+    ostream& print(ostream& os) { return base_t::print(os); }
   };
 
   extern MemoryInterlockBuffer interlocks;
@@ -1125,6 +1187,11 @@ namespace OutOfOrderModel {
     EVENT_COMMIT_OK,
     EVENT_RECLAIM_PHYSREG,
     EVENT_RELEASE_MEM_LOCK,
+    // ASF special events
+    EVENT_ASF_ABORT,
+    EVENT_ASF_CONFLICT,
+    // Metadata events
+    EVENT_META_COREID,
   };
 
   //
@@ -1135,20 +1202,19 @@ namespace OutOfOrderModel {
   // not likely to be a problem.
   //
   struct OutOfOrderCoreEvent {
+    W16 type;
+    W16 rob;
     W32 cycle;
     W32 uuid;
     RIPVirtPhysBase rip;
     TransOpBase uop;
-    W16 rob;
     W16 physreg;
     W16 lsq;
-    W16 type;
     W16s lfrqslot;
     byte rfid;
     byte cluster;
     byte fu;
     W8 threadid;
-    W32 issueq_count;
 
     // NOTE: Some of these fields are filled later directly :-/
     OutOfOrderCoreEvent* fill(int type) {
@@ -1201,6 +1267,7 @@ namespace OutOfOrderModel {
       // oldphysreg_refcount filled in later
       commit.origvirt = rob->origvirt;
       commit.total_user_insns_committed = total_user_insns_committed;
+      //commit.total_insns_committed = rob->getthread().total_insns_committed;
       // target_rip filled in later
       foreach (i, MAX_OPERANDS) commit.operand_physregs[i] = rob->operands[i]->index();
       return this;
@@ -1225,28 +1292,30 @@ namespace OutOfOrderModel {
     }
 
     union {
+      byte start_flexible[0];
       struct {
-        W16s missbuf;
         W64 predrip;
+        W16s missbuf;
         W16 bb_uop_count;
-      } fetch;
+        W32 issueq_count;
+      } fetch __attribute__ ((packed));
       struct {
         W16  oldphys;
         W16  oldzf;
         W16  oldcf;
         W16  oldof;
         PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
-      } rename;
+      } rename __attribute__ ((packed));
       struct {
         W16 cycles_left;
-      } frontend;
+      } frontend __attribute__ ((packed));
       struct {
         W16 allowed_clusters;
         W16 iq_avail[MAX_CLUSTERS];
-      } select_cluster;
+      } select_cluster __attribute__ ((packed));
       struct {
         PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
-      } dispatch;
+      } dispatch __attribute__ ((packed));
       struct {
         byte mispredicted:1;
         IssueState state;
@@ -1255,11 +1324,11 @@ namespace OutOfOrderModel {
         W16 operand_flags[MAX_OPERANDS];
         W64 predrip;
         W32 fu_avail;
-      } issue;
+      } issue __attribute__ ((packed));
       struct {
         PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
         byte ready;
-      } replay;
+      } replay __attribute__ ((packed));
       struct {
         W64 virtaddr;
         W64 data_to_store;
@@ -1277,21 +1346,21 @@ namespace OutOfOrderModel {
         W16 locking_rob;
         W8 threadid;
         W8 tlb_walk_level;
-      } loadstore;
+      } loadstore __attribute__ ((packed));
       struct {
         W16 somidx;
         W16 eomidx;
         W16 startidx;
         W16 endidx;
         byte annulras;
-      } annul;
+      } annul __attribute__ ((packed));
       struct {
         StateList* current_state_list;
         W16 iqslot;
         W16 count;
         byte dependent_operands;
         PhysicalRegisterOperandInfo opinfo[MAX_OPERANDS];
-      } redispatch;
+      } redispatch __attribute__ ((packed));
       struct {
         W8  forward_cycle;
         W8  operand;
@@ -1304,13 +1373,13 @@ namespace OutOfOrderModel {
         W64 target_uuid;
         W16 target_lsq;
         W8  target_st;
-      } forwarding;
+      } forwarding __attribute__ ((packed));
       struct {
         W16 consumer_count;
         W16 flags;
         W64 data;
         byte transient:1, all_consumers_sourced_from_bypass:1, no_branches_between_renamings:1, dest_renamed_before_writeback:1;
-      } writeback;
+      } writeback __attribute__ ((packed));
       struct {
         IssueState state;
         byte taken:1, predtaken:1, ld_st_truly_unaligned:1,krn:1;
@@ -1319,12 +1388,71 @@ namespace OutOfOrderModel {
         W16 oldphysreg_refcount;
         W64 origvirt;
         W64 total_user_insns_committed;
+        W64 total_insns_committed;
         W64 target_rip;
         W16 operand_physregs[MAX_OPERANDS];
-      } commit;
-    };
+      } commit __attribute__ ((packed));
+      struct {
+        W64 total_insns_committed;
+        W32 abort_reason;
+      } abort __attribute__ ((packed));
+      struct {
+        W64 phys_addr;
+        W64 virt_addr;
+        W8 src_id;
+        W8 dst_id;
+        W8 inv;
+      } conflict __attribute__ ((packed));
+    } __attribute__ ((packed));
 
     ostream& print(ostream& os) const;
+  }  __attribute__ ((packed));
+
+  // Let all events pass
+  struct AllPassFilter {
+    bool operator()(const W16 type) const {
+      assert(false);
+      return true;}
+    bool operator()(const FetchBufferEntry& uop) const {assert(false); return true;}
+  };
+
+  // Only adds elements which are of interest for ASF analysis
+  struct ASFStatsFilter {
+    bool operator()(const W16 type) const {
+      return (
+//           (type == EVENT_STORE_ISSUED) ||
+//           (type == EVENT_LOAD_HIT) ||
+//           (type == EVENT_LOAD_MISS) ||
+//           (type == EVENT_LOAD_WAKEUP) ||
+           (type == EVENT_COMMIT_OK) ||
+           (type == EVENT_DISPATCH_OK) ||
+           (type == EVENT_ASF_ABORT) ||
+           (type == EVENT_ASF_CONFLICT)
+          );
+    }
+    bool operator()(const W16 type, const FetchBufferEntry& uop) const {
+      return (operator()(type) && (
+                uop.is_asf  ||
+                isasf(uop.opcode) ||
+                (type == EVENT_ASF_ABORT) ||
+                (type == EVENT_ASF_CONFLICT) /*||
+                isclass(uop.opcode, OPCLASS_MEM)*/
+              )
+             );
+    }
+  };
+
+  // Only adds elements which are of interest for ASF analysis
+  struct ASFUserStatsFilter : private ASFStatsFilter {
+    bool operator()(const W16 type) const {
+      return ASFStatsFilter::operator()(type);
+    }
+    bool operator()(const W16 type, const FetchBufferEntry& uop) const {
+      return ( (!uop.rip.kernel || 
+               (type == EVENT_ASF_CONFLICT) ||
+               (type == EVENT_ASF_ABORT)) 
+               && ASFStatsFilter::operator()(type, uop));
+    }
   };
 
   template <class T>
@@ -1381,16 +1509,121 @@ namespace OutOfOrderModel {
     ostream& print(ostream& os, bool only_to_tail = false);
   };
 
+  template <class T, class F>
+  struct FilteredEventLog: public GenericEventLog<T> {
+    typedef GenericEventLog<T> base_t;
+    F    filter;
+
+    FilteredEventLog(int coreid_): base_t(coreid_) {}
+private:
+    T* add() {
+//cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      return base_t::add();
+    }
+public:
+    T* add(int type) {
+//cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      if (!filter(type)) return NULL;
+//cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      return base_t::add(type);
+    }
+
+    T* add(int type, const RIPVirtPhys& rvp) {
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      if (!filter(type)) return NULL;
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      return base_t::add(type, rvp);
+    }
+
+    T* add(int type, const FetchBufferEntry& uop) {
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      if (!filter(type, uop)) return NULL;
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      return base_t::add(type, uop);
+    }
+
+    T* add(int type, const ReorderBufferEntry* rob) {
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      if (!filter(type, rob->uop)) return NULL;
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      return base_t::add(type, rob);
+    }
+
+    T* add_commit(int type, const ReorderBufferEntry* rob) {
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      if (!filter(type, rob->uop)) return NULL;
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      return base_t::add_commit(type, rob);
+    }
+
+    T* add_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr = null, Waddr addr = 0) {
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      if (!filter(type, rob->uop)) return NULL;
+//      cerr << __FILE__,__LINE__, "Start: ", (void*)base_t::start, " Tail: ", (void*)base_t::tail, " Size: ", base_t::tail - base_t::start, endl;
+      return base_t::add_load_store(type, rob, inherit_sfr, addr);
+    }
+  };
 
   struct OutOfOrderCoreBinaryEvent : OutOfOrderCoreEvent {
     W8 coreid;
     OutOfOrderCoreBinaryEvent(W8 coreid_) : OutOfOrderCoreEvent(),
       coreid(coreid_) {}
-    ostream& print_binary(ostream& os, W8 coreid) const;
+    virtual ostream& print_binary(ostream& os, W8 coreid) const;
   };
   ostream& operator<<(ostream& os, const OutOfOrderCoreBinaryEvent& e );
 
-  typedef GenericEventLog<OutOfOrderCoreEvent> EventLog;
+  struct FlexibleOOOCoreBinaryEvent : OutOfOrderCoreEvent {
+#if (0)
+    // The coreid is now conveyed as a separate event
+    W8 coreid;
+    FlexibleOOOCoreBinaryEvent(W8 coreid_) : OutOfOrderCoreEvent(),
+      coreid(coreid_) {}
+#endif
+    FlexibleOOOCoreBinaryEvent() : OutOfOrderCoreEvent() {}
+
+    ostream& print_binary(ostream& os, W8 coreid) const;
+
+    FlexibleOOOCoreBinaryEvent* fill(int type) {
+      OutOfOrderCoreEvent::fill(type);
+      return this;
+    }
+
+    FlexibleOOOCoreBinaryEvent* fill(int type, const FetchBufferEntry& uop) {
+      OutOfOrderCoreEvent::fill(type, uop);
+      return this;
+    }
+
+    FlexibleOOOCoreBinaryEvent* fill(int type, const RIPVirtPhys& rvp) {
+      OutOfOrderCoreEvent::fill(type, rvp);
+      return this;
+    }
+
+    FlexibleOOOCoreBinaryEvent* fill(int type, const ReorderBufferEntry* rob) {
+      OutOfOrderCoreEvent::fill(type, rob);
+      return this;
+    }
+
+    FlexibleOOOCoreBinaryEvent* fill_commit(int type, const ReorderBufferEntry* rob) {
+      OutOfOrderCoreEvent::fill_commit(type, rob);
+      return this;
+    }
+
+    FlexibleOOOCoreBinaryEvent* fill_load_store(int type, const ReorderBufferEntry* rob, LoadStoreQueueEntry* inherit_sfr, Waddr virtaddr) {
+      OutOfOrderCoreEvent::fill_load_store(type, rob, inherit_sfr, virtaddr);
+      return this;
+    }
+  };
+  struct MetadataCoreidEvent {
+    W16 type;
+    W16 coreid;
+  } __attribute__ ((packed));
+
+  ostream& operator<<(ostream& os, const OutOfOrderCoreBinaryEvent& e );
+
+  //typedef GenericEventLog<OutOfOrderCoreEvent> EventLog;
+
+  //typedef FilteredEventLog<FlexibleOOOCoreBinaryEvent, AllPassFilter> EventLog;
+  typedef FilteredEventLog<FlexibleOOOCoreBinaryEvent, ASFUserStatsFilter> EventLog;
 
   struct LoadStoreAliasPredictor: public FullyAssociativeTags<W64, 8> { };
 
@@ -1509,8 +1742,9 @@ namespace OutOfOrderModel {
     W64 queued_mem_lock_release_list[4];
 
     ThreadContext(OutOfOrderCore& core_, int threadid_, Context& ctx_) :
-      core(core_), threadid(threadid_), ctx(ctx_), locked_line_buffer(*this),
-      asf_context(&locked_line_buffer, core), asf_pipeline_intercept(&asf_context, &locked_line_buffer, this) {
+      core(core_), threadid(threadid_), ctx(ctx_),
+      locked_line_buffer(*this),asf_context(&locked_line_buffer, core),
+      asf_pipeline_intercept(&asf_context, &locked_line_buffer, this) {
       reset();
       ctx_.asf_context = &asf_context;
     }
@@ -2134,6 +2368,30 @@ struct OutOfOrderCoreStats { // rootnode:
   PerContextOutOfOrderCoreStats vcpu5;
   PerContextOutOfOrderCoreStats vcpu6;
   PerContextOutOfOrderCoreStats vcpu7;
+  PerContextOutOfOrderCoreStats vcpu8;
+  PerContextOutOfOrderCoreStats vcpu9;
+  PerContextOutOfOrderCoreStats vcpu10;
+  PerContextOutOfOrderCoreStats vcpu11;
+  PerContextOutOfOrderCoreStats vcpu12;
+  PerContextOutOfOrderCoreStats vcpu13;
+  PerContextOutOfOrderCoreStats vcpu14;
+  PerContextOutOfOrderCoreStats vcpu15;
+  PerContextOutOfOrderCoreStats vcpu16;
+  PerContextOutOfOrderCoreStats vcpu17;
+  PerContextOutOfOrderCoreStats vcpu18;
+  PerContextOutOfOrderCoreStats vcpu19;
+  PerContextOutOfOrderCoreStats vcpu20;
+  PerContextOutOfOrderCoreStats vcpu21;
+  PerContextOutOfOrderCoreStats vcpu22;
+  PerContextOutOfOrderCoreStats vcpu23;
+  PerContextOutOfOrderCoreStats vcpu24;
+  PerContextOutOfOrderCoreStats vcpu25;
+  PerContextOutOfOrderCoreStats vcpu26;
+  PerContextOutOfOrderCoreStats vcpu27;
+  PerContextOutOfOrderCoreStats vcpu28;
+  PerContextOutOfOrderCoreStats vcpu29;
+  PerContextOutOfOrderCoreStats vcpu30;
+  PerContextOutOfOrderCoreStats vcpu31;
 
   struct simulator {
     double total_time;

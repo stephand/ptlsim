@@ -17,7 +17,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA.
  *
- * Copyright (c) 2008-2010 Advanced Micro Devices, Inc.
+ * Copyright (c) 2008-2012 Advanced Micro Devices, Inc.
  * Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
  *
  * @author stephan.diestelhorst@amd.com
@@ -55,8 +55,10 @@ class ASFContext {
     void reset();
 
     void enter_spec_region(const Context& c);
+    void enter_spec_inv_region(const Context& c);
     void leave_spec_region();
     bool const in_spec_region() { return in_spec_reg; }
+    bool const is_inverted() { return inverted; }
     bool has_error() { return status_code != ASF_SUCCESS; }
     /* Methods to create particular errors */
     void capacity_error(W64 rip, Waddr addr);
@@ -69,10 +71,9 @@ class ASFContext {
 
   protected:
     LockedLineBuffer                *llb;
-#ifdef ENABLE_ASF_CACHE_BASED
-    CacheSubsystem::L1CacheSpecRead *l1_spec_read;
-#endif
+    CacheSubsystem::L1Cache *l1_spec;
     bool          in_spec_reg;
+    bool          inverted;
     W16           software_abort;
     int           nest_level;
     ASFStatusCode status_code;
@@ -93,10 +94,11 @@ namespace OutOfOrderModel {
   const int LLB_LINE_SIZE         = CacheSubsystem::L1_LINE_SIZE;
 
   class LockedLineBuffer;
-  class LLBLine {
+  template <int linesize = LLB_LINE_SIZE>
+  class LLBLineT {
     friend class LockedLineBuffer;
     protected:
-      W64  orig_data[LLB_LINE_SIZE / sizeof(W64)];
+      W64  orig_data[linesize / sizeof(W64)];
       int  written:1, datavalid:1, speculative:1;
       int  refcount;
 
@@ -104,16 +106,16 @@ namespace OutOfOrderModel {
       void  reset() {written = 0; refcount = 0; datavalid = 0; speculative = 0;}
 
       void  copy_from_phys(Waddr physaddr) {
-        assert(mask(physaddr, LLB_LINE_SIZE) == 0);
-        for (int i = 0; i < LLB_LINE_SIZE / sizeof(W64);
+        assert(mask(physaddr, linesize) == 0);
+        for (int i = 0; i < linesize / sizeof(W64);
              ++i, physaddr += sizeof(W64)) {
                orig_data[i] = loadphys(physaddr);
         }
       }
 
       void  copy_to_phys(Waddr physaddr) {
-        assert(mask(physaddr, LLB_LINE_SIZE) == 0);
-        for (int i = 0; i < LLB_LINE_SIZE / sizeof(W64);
+        assert(mask(physaddr, linesize) == 0);
+        for (int i = 0; i < linesize / sizeof(W64);
              ++i, physaddr += sizeof(W64)) {
                storephys(physaddr, orig_data[i]);
         }
@@ -121,14 +123,14 @@ namespace OutOfOrderModel {
 
       W64 data(Waddr physaddr) {
         assert(datavalid);
-        return orig_data[mask(physaddr, LLB_LINE_SIZE) >> 3];
+        return orig_data[mask(physaddr, linesize) >> 3];
       }
-      LLBLine() : written(false),refcount(0),datavalid(0),speculative(0) {}
+      LLBLineT() : written(false),refcount(0),datavalid(0),speculative(0) {}
       ostream& toString(ostream& os) const;
 
       bool is_dirty() const { return written; }
   };
-
+  typedef LLBLineT<> LLBLine;
   class LockedLineBuffer: public FullyAssociativeArray<Waddr, LLBLine, ASF_MAX_SPEC_LINES + ASF_MAX_LINES> {
     typedef FullyAssociativeArray<Waddr, LLBLine, ASF_MAX_SPEC_LINES + ASF_MAX_LINES > base_t;
     protected:
@@ -150,13 +152,13 @@ namespace OutOfOrderModel {
       void undo();
 
       void commit() {clear(); lasterr = 0;};
-      void abort() { undo(); /*clear();*/ lasterr = 0; };
+      void abort() { undo(); clear(); lasterr = 0; };
 
       bool contains(Waddr addr) { return probe(floor(addr, LLB_LINE_SIZE)); }
       bool empty() const { return (num_spec_locations + num_nonspec_locations == 0); }
       int  size() const { return num_spec_locations + num_nonspec_locations; }
-      LLBLine* external_probe(Waddr addr, bool invalidating);
-      LLBLine* probe_other_LLBs(Waddr addr, bool invalidating);
+      LLBLine* external_probe(Waddr addr, bool invalidating, ReorderBufferEntry *rob);
+      LLBLine* probe_other_LLBs(Waddr addr, bool invalidating, ReorderBufferEntry *rob);
       bool mark_clean(Waddr addr);
       bool mark_clean_others(Waddr addr);
       void mark_written(Waddr addr);
@@ -187,7 +189,7 @@ namespace OutOfOrderModel {
       int  issue_load(ReorderBufferEntry& rob, LoadStoreQueueEntry& state, LoadStoreQueueEntry* sfra) {return issue_mem(rob, state, sfra); }
       int  issue_store(ReorderBufferEntry& rob, LoadStoreQueueEntry& state) {return issue_mem(rob, state, null); }
       bool commit(const Context &ctx, ReorderBufferEntry& rob);
-      bool issue_probe_and_merge(W64 physaddr, bool invalidating, W64& out_data);
+      bool issue_probe_and_merge(W64 physaddr, bool invalidating, W64& out_data, ReorderBufferEntry *rob);
       int  pre_commit(Context& ctx, int i);
       int  post_commit(Context& ctx, int i);
       void annul_replay_redispatch(ReorderBufferEntry& rob);

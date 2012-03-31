@@ -1,0 +1,2 @@
+Enable new PTLsim logging / tracing facility:
+ptlsim*.event_logging ... -ringbuf -eventlog pystone_events.conflicts.log

@@ -17,7 +17,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA.
  *
- * Copyright (c) 2008-2010 Advanced Micro Devices, Inc.
+ * Copyright (c) 2008-2012 Advanced Micro Devices, Inc.
  * Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
  *
  * @author stephan.diestelhorst@amd.com
@@ -30,10 +30,9 @@
 
 template <typename T> byte x86_genflags(T r);
 
-
 #ifdef ENABLE_ASF_CACHE_BASED
 ASFContext::ASFContext(LockedLineBuffer *l, OutOfOrderModel::OutOfOrderCore& core) :
-  llb(l),l1_spec_read(&core.caches.L1),vcpuid_(core.coreid) {}
+  llb(l),l1_spec(&core.caches.L1),vcpuid_(core.coreid) {}
 #else
 ASFContext::ASFContext(LockedLineBuffer *l, OutOfOrderModel::OutOfOrderCore& core) :
   llb(l),vcpuid_(core.coreid){}
@@ -73,8 +72,12 @@ bool ASFContext::to_sim_context(Context& c, bool is_assist) {
       break;
     case (ASF_DISALLOWED_OP):
       /* Use the assist_gp_fault to generate the GP fault. */
+      is_assist            = false;
+#if (0)
+      // SD: Disable generation of GP exceptions for now.
       is_assist            = true;
       c.commitarf[REG_rip] = ASSIST_GP_FAULT;
+#endif
       break;
   }
 
@@ -115,13 +118,49 @@ void ASFContext::enter_spec_region(const Context& c) {
     // TODO: Generate proper error here
     assert(false);
 
+  // just prevent nesting different types for now, otherwise we need a
+  // bit state per level
+  if (nest_level > 1) {
+    assert(false == inverted);
+  }
   nest_level++;
 
   if (nest_level == 1) {
     in_spec_reg = true;
+    inverted = false;
     llb->clear();
 #ifdef ENABLE_ASF_CACHE_BASED
-    l1_spec_read->start();
+    l1_spec->start();
+#endif
+    /* Store context for later roll-back */
+    abort_rip   = c.commitarf[REG_rip] + 5; // FIXME: This relies on knowing the length of the SPECULATE AMD64 instruction
+    saved_rsp   = c.commitarf[REG_rsp];
+    if (logable(5)) logfile << __FILE__,__LINE__,": SPECULATE stores ",abort_rip, " and RSP=",(void*)saved_rsp, endl;
+  }
+}
+
+/**
+ * Enters a ASF speculative region with inverted default semantics.
+ */
+void ASFContext::enter_spec_inv_region(const Context& c) {
+  assert(in_spec_reg == (nest_level > 0));
+  if (nest_level >= ASF_MAX_NESTING_DEPTH)
+    // TODO: Generate proper error here
+    assert(false);
+
+  // just prevent nesting different types for now, otherwise we need a
+  // bit state per level
+  if (nest_level > 1) {
+    assert(true == inverted);
+  }
+  nest_level++;
+
+  if (nest_level == 1) {
+    in_spec_reg = true;
+    inverted = true;
+    llb->clear();
+#ifdef ENABLE_ASF_CACHE_BASED
+    l1_spec->start();
 #endif
     /* Store context for later roll-back */
     abort_rip   = c.commitarf[REG_rip] + 5; // FIXME: This relies on knowing the length of the SPECULATE AMD64 instruction
@@ -142,7 +181,7 @@ void ASFContext::leave_spec_region() {
     in_spec_reg = false;
     llb->commit();
 #ifdef ENABLE_ASF_CACHE_BASED
-    l1_spec_read->commit();
+    l1_spec->commit();
 #endif
   }
 }
@@ -237,6 +276,7 @@ namespace OutOfOrderModel {
     /* Memops might be replayed, but have already an associated LLB-line */
     if (rob.llbline) return ISSUE_COMPLETED;
 
+    // TODO: Refactor this code into a proper interface!
 #ifdef ENABLE_ASF_CACHE_BASED
     // With cache-based ASF loads do not need an LLB entry, they just set the
     // SR bit in the cache.
@@ -249,7 +289,8 @@ namespace OutOfOrderModel {
 
       CacheSubsystem::L1CacheLineSpecRead *line;
       CacheSubsystem::CacheHierarchy&      caches = thread->core.caches;
-      CacheSubsystem::L1CacheSpecRead&     L1 = caches.L1;
+      CacheSubsystem::L1Cache&             L1 = caches.L1;
+
       line = L1.probe(state.physaddr << 3, rob.virtpage);
       if (logable(6))
         logfile << "[vcpu ", vcpuid(),"]",__FILE__,__LINE__," line ", (line?"":"not "),
@@ -298,7 +339,34 @@ namespace OutOfOrderModel {
       // line, when it is brought into L1
       return ISSUE_COMPLETED;
     }
-#endif
+#endif // Note: All loads captured here, if ENABLE_ASF_CACHE_BASED was defined!
+#ifdef ENABLE_ASF_CACHE_WRITE_SET
+    // With cache-based write-set tracking, ASF stores do not need an LLB entry,
+    // set the SW bit in the cache and take a snapshot
+    if likely (isstore(rob.uop.opcode)) {
+      // Flag present L1 lines as speculative early on
+
+      CacheSubsystem::L1CacheLineSpecRW *line;
+      CacheSubsystem::CacheHierarchy&    caches = thread->core.caches;
+      CacheSubsystem::L1Cache&           L1 = caches.L1;
+
+      // TODO: How about adding to the cache at store / commit time?
+      // return ISSUE_COMPLETED;
+
+      line = L1.select(state.physaddr << 3, rob.virtpage);
+      assert(line);
+      // TODO: How about doing this at commit-time?
+      line->set_sr();
+      line->set_sw();
+
+      if (logable(5)) logfile << "[vcpu ", vcpuid(), "]"__FILE__,
+        __LINE__,": Hi we: ", rob, "@", rob.uop.rip, " add spec entry to the cache !", endl;
+
+      // NOTE: Capacity check happens through the call-backs,
+      //       creating the actual backup-copy during commit of the store
+      return ISSUE_COMPLETED;
+    }
+#endif // Note: All stores captured here, if ENABLE_ASF_CACHE_WRITE_SET was defined!
 
     /* Add the address to the LLB */
     if (logable(5)) logfile << "[vcpu ", vcpuid(), "]"__FILE__,
@@ -326,7 +394,7 @@ namespace OutOfOrderModel {
       // TODO: Proper MSR treatment
 
       // This will trigger at the outer check for any ASF-related errors
-      asf_context->capacity_error(rob.uop.rip, rob.origvirt);
+      asf_context->capacity_error(rob.uop.rip.rip, rob.origvirt);
 
       if (logable(5)) logfile << "[vcpu ", vcpuid(), "]"__FILE__,
         __LINE__,": We exceed the LLB's capacity (for sure)!", endl;
@@ -508,6 +576,7 @@ namespace OutOfOrderModel {
     switch(rob.uop.opcode) {
       case (OP_val):
       case (OP_spec):
+      case (OP_spec_inv):
       case (OP_com):
         state.reg.rddata  = 0;
         state.reg.rdflags = x86_genflags<W64>(state.reg.rddata);
@@ -555,7 +624,7 @@ namespace OutOfOrderModel {
           logfile << "llbline=", *rob.llbline;
         logfile << endl;
       }
-      asf_context->capacity_error(rob.uop.rip, virtaddr);
+      asf_context->capacity_error(rob.uop.rip.rip, virtaddr);
       return false;
     }
 
@@ -572,7 +641,26 @@ namespace OutOfOrderModel {
    */
   bool ASFPipelineIntercept::commit_store(ReorderBufferEntry& rob, Waddr physaddr, Waddr virtaddr) {
     assert(asf_context->in_spec_region());
+    if (!rob.lsq->bytemask) return true;
+#ifdef ENABLE_ASF_CACHE_WRITE_SET
+    CacheSubsystem::L1CacheLineSpecRW *line;
+    CacheSubsystem::CacheHierarchy&    caches = thread->core.caches;
+    CacheSubsystem::L1Cache&           L1 = caches.L1;
 
+    // TODO: One could also *select* the entry here!
+    physaddr = floor(physaddr, CacheSubsystem::L1_LINE_SIZE);
+    line = L1.probe(physaddr, virtaddr);
+
+    /* Capacity issues etc are handled by the callbacks before the commit. */
+    assert(line);
+    assert(line->sr() && line->sw());
+    if (!line->has_backup())
+      line->copy_from_phys(physaddr);
+    // TODO: One could also just set the bits here!
+    //line->set_sr();
+    //line->set_sw();
+    return true;
+#endif
     /* Additional check for ASF's maximum capacity. */
     if unlikely (!rob.llbline || !llb->mark_nonspec(rob.llbline)) {
       if (logable(5)) {
@@ -582,7 +670,7 @@ namespace OutOfOrderModel {
           logfile << "llbline=", *rob.llbline;
         logfile << endl;
       }
-      asf_context->capacity_error(rob.uop.rip, virtaddr);
+      asf_context->capacity_error(rob.uop.rip.rip, virtaddr);
       return false;
     }
 
@@ -602,9 +690,27 @@ namespace OutOfOrderModel {
    * @param out_data The returned data, left alone, in case no new data is available.
    * @return Has this produced new data?
    */
-  bool ASFPipelineIntercept::issue_probe_and_merge(W64 physaddr, bool invalidating, W64& out_data) {
+  bool ASFPipelineIntercept::issue_probe_and_merge(W64 physaddr, bool invalidating, W64& out_data, ReorderBufferEntry *rob) {
     Waddr llb_phys = floor(physaddr, LLB_LINE_SIZE);
 
+    // FIXME: For using the L1 caches as ASF data-tracker, and working
+    //        notifications, all of this could be provided in a decentralised
+    //        manner, by extending the external_probe functions and extending
+    //        the notifications.
+    //        However, this is hampered by the fact that the caches get probed
+    //        *after* the data has been read for the loads!
+
+    // NOTE: Read-set tracking already works, as commit-store invalidates the
+    //       other caches at commit-time.
+#ifdef ENABLE_ASF_CACHE_WRITE_SET
+    // Ugly hack: Move the cross-cache-probing routine in here to ensure data correctness.
+    if (logable(5))
+      logfile << __FILE__,__LINE__, " issue probe and merge for ", (void*)physaddr, endl;
+    thread->core.caches.probe_other_caches(physaddr, invalidating);
+    W64 in_data = out_data;
+    out_data    = loadphys(physaddr);
+    return (in_data != out_data);
+#endif
     /* Probe other LLBs, where the original contents of speculatively (in
      * ASF-CS) modified memory is located.
      * In case the line is modified somewhere else, we will receive a pointer to
@@ -621,7 +727,7 @@ namespace OutOfOrderModel {
      * hardware though.
      */
 
-    LLBLine* orig_line = llb->probe_other_LLBs(llb_phys, invalidating);
+    LLBLine* orig_line = llb->probe_other_LLBs(llb_phys, invalidating, rob);
     if unlikely (orig_line)  {
         /* options: a) we could either wait until all other CS have been rolled
          *             back, but that could stall this store forever, if no
@@ -659,6 +765,13 @@ namespace OutOfOrderModel {
       /* SPECULATE always returns zero. */
       assert(!rob.physreg->data);
       asf_context->enter_spec_region(ctx);
+      return true;
+    }
+
+    if unlikely(rob.uop.opcode == OP_spec_inv) {
+      /* SPECULATE_INV always returns zero. */
+      assert(!rob.physreg->data);
+      asf_context->enter_spec_inv_region(ctx);
       return true;
     }
 
@@ -822,6 +935,15 @@ namespace OutOfOrderModel {
       if likely ((commitrc == COMMIT_RESULT_OK) || (commitrc == COMMIT_RESULT_NONE))
         commitrc = COMMIT_RESULT_OK_FLUSH;
 
+      // Log abort event
+      if unlikely (config.event_log_enabled) {
+        OutOfOrderCoreEvent *e = thread->core.eventlog.add(EVENT_ASF_ABORT);
+        if (e) {
+          e->abort.abort_reason          = ctx.commitarf[REG_rax];
+          e->abort.total_insns_committed = thread->total_insns_committed;
+        }
+      }
+
       /* Prepare all ASF state for next iteration */
       asf_context->reset();
 
@@ -873,6 +995,8 @@ namespace OutOfOrderModel {
 
         asf_context->disallowed(ctx.commitarf[REG_rip]);
 
+        // SD: Hide the caused assists and just flush the core
+        commitrc = COMMIT_RESULT_NONE;
       } else if (inrange(assistid, (int)ASSIST_INVALID_OPCODE, (int)ASSIST_GP_FAULT)) {
         /* These are actually just exceptions so they'll be treated as those */
         logfile << "[vcpu ", vcpuid(),"]"__FILE__,":",__LINE__,"@",sim_cycle," Exception ", assist_names[assistid],
@@ -899,7 +1023,7 @@ namespace OutOfOrderModel {
 #ifdef ENABLE_ASF_CACHE_BASED
     // TODO: Integrate nicely!
     if unlikely (thread->core.caches.L1.capacity_error()) {
-      asf_context->capacity_error(ctx.commitarf[REG_RIP], 0);
+      asf_context->capacity_error(ctx.commitarf[REG_rip], 0);
       return COMMIT_RESULT_OK_FLUSH;
     }
 
@@ -910,7 +1034,7 @@ namespace OutOfOrderModel {
     if (logable(5)) logfile << "[vcpu ", vcpuid(),"]"__FILE__,__LINE__,": Error ", hexstring(asf_err, 64),
                        " found! Aborting the transaction!", endl;
 
-    asf_context->contention(ctx.commitarf[REG_RIP], 0);
+    asf_context->contention(ctx.commitarf[REG_rip], 0);
 
     return COMMIT_RESULT_OK_FLUSH;
   }
@@ -1082,7 +1206,7 @@ namespace OutOfOrderModel {
    * @return Pointer to original data, if speculative updates have occured to that line! Null, if
    *         line not touched / present in LLB.
    */
-  LLBLine* LockedLineBuffer::external_probe(Waddr addr, bool invalidating) {
+  LLBLine* LockedLineBuffer::external_probe(Waddr addr, bool invalidating, ReorderBufferEntry *rob) {
     /* For now just implement the policy of aborting ourselves. */
     Waddr cache_line_phys_addr = floor(addr, LLB_LINE_SIZE);
     LLBLine* l = probe(cache_line_phys_addr);
@@ -1090,6 +1214,17 @@ namespace OutOfOrderModel {
     if likely (!l) return null;                                   // Line not in LLB
     if likely (!l->written && !invalidating) return null;         // multiple readers ok!
 
+    if unlikely (config.event_log_enabled) {
+      OutOfOrderCoreEvent* event = thread.core.eventlog.add(EVENT_ASF_CONFLICT, rob);
+      if unlikely (event) {
+        // NOTE: Thid does not work with threads..
+        event->conflict.src_id = rob->coreid;
+        event->conflict.dst_id = thread.getcore().coreid;
+        event->conflict.inv    = invalidating;
+        event->conflict.phys_addr = addr;
+        event->conflict.virt_addr = rob->origvirt;
+      }
+    }
     if (logable(5)) logfile << "[vcpu ", thread.ctx.vcpuid,"]"__FILE__,__LINE__,
       ": ",invalidating ? "Inv-" : "", "probe hit on ", (void*)addr, endl;
 
@@ -1111,7 +1246,7 @@ namespace OutOfOrderModel {
    * @return Pointer to one copy of the original data. Null, if line not touched
    *         / present in no LLB.
    */
-  LLBLine* LockedLineBuffer::probe_other_LLBs(Waddr addr, bool invalidating) {
+  LLBLine* LockedLineBuffer::probe_other_LLBs(Waddr addr, bool invalidating, ReorderBufferEntry *rob) {
     OutOfOrderMachine& m = thread.core.machine;
     LLBLine* orig_line = null;
     LLBLine* res;
@@ -1121,7 +1256,7 @@ namespace OutOfOrderModel {
       foreach(tid, c.threadcount) {
         ThreadContext& t = *c.threads[tid];
         if (&t == &thread) continue;
-        res = t.locked_line_buffer.external_probe(addr, invalidating);
+        res = t.locked_line_buffer.external_probe(addr, invalidating, rob);
         // ASF guarantees that there is only a single modified LLB entry
         assert(! (res && orig_line));
         if (!orig_line) orig_line = res;
@@ -1186,6 +1321,7 @@ namespace OutOfOrderModel {
     l->written = true;
   }
 
+  template <>
   ostream& LLBLine::toString(ostream& os) const{
     os << "LLB line: ", this, " refcount: ",refcount, written ? "dirty":"", speculative ? "spec":"", endl;
     if (datavalid)

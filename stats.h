@@ -41,7 +41,7 @@
 // need to replicate the vcpu0,vcpu1,... structures in several
 // places below.
 //
-static const int MAX_SIMULATED_VCPUS = 8;
+static const int MAX_SIMULATED_VCPUS = 32;
 
 struct EventsInMode { // rootnode: summable
   W64 user64;
@@ -68,8 +68,8 @@ struct PTLsimStats { // rootnode:
     // Compile time information
     struct version {
       char build_timestamp[32];
-      W64 svn_revision;
-      char svn_timestamp[32];
+      char svn_timestamp[64];
+      char svn_revision[64];
       char build_hostname[64];
       char build_compiler[16];
     } version;

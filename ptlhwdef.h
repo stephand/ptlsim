@@ -4,7 +4,7 @@
 // Hardware Definitions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
-// Copyright (c) 2007-2010 Advanced Micro Devices, Inc.
+// Copyright (c) 2007-2012 Advanced Micro Devices, Inc.
 // Contributed by Stephan Diestelhorst <stephan.diestelhorst@amd.com>
 //
 
@@ -1179,6 +1179,7 @@ enum {
 #ifdef ENABLE_ASF
   // ASF
   OP_spec,
+  OP_spec_inv,
   OP_com,
   OP_val,
   OP_rel,
@@ -1349,7 +1350,7 @@ struct TransOpBase {
   // Misc info (terminal writer of targets in this insn, etc)
   // SD-TODO-MERGE: What is the marked flag used for?
   // Nothing! => Request on ML
-  byte final_insn_in_bb:1, final_arch_in_insn:1, final_flags_in_insn:1, any_flags_in_insn:1, is_asf:1, invalidating: 1, pad:1, marked:1;
+  byte final_insn_in_bb:1, final_arch_in_insn:1, final_flags_in_insn:1, any_flags_in_insn:1, is_asf:1, invalidating: 1, pad:1, inverted:1;
   // Immediates
   W64s rbimm;
   W64s rcimm;
@@ -1375,6 +1376,7 @@ struct TransOp: public TransOpBase {
     this->rbimm = rbimm;
     this->rcimm = rcimm;
     this->setflags = setflags;
+    this->inverted = false;
   }
 };
 

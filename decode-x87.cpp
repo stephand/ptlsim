@@ -103,6 +103,8 @@ make_unary_x87_func(f2xm1, math::exp2(ra.d) - 1);
 
 void assist_x87_frndint(Context& ctx) {
   W64& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
+#if 0
+  assert(0);  // Now implemented using uops
   SSEType ra(r);
   switch (ctx.fpcw.rc) {
   case 0: // round to nearest (round)
@@ -115,6 +117,20 @@ void assist_x87_frndint(Context& ctx) {
     ra.d = math::trunc(ra.d); break;
   }
   r = ra.w64;
+#else
+  int ofpcw;  // Old fpcw
+  int tfpcw = ctx.fpcw & 0x0c00 | 0x37f;
+  asm (
+    "fstcw %0    \n\t"
+    "fldcw %4    \n\t"
+    "fldl  %3    \n\t"
+    "frndint     \n\t"
+    "fstpl %1    \n\t"
+    "fldcw %2"
+    :"=m" (ofpcw), "=m" (r)
+    : "m" (ofpcw),  "m" (r), "m" (tfpcw));
+#endif
+
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
   sw->c1 = 0; sw->c2 = 0;
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
@@ -146,7 +162,7 @@ make_two_output_x87_func_with_push(fxtract, (st1u.d = math::significand(st0u.d),
 void assist_x87_fprem1(Context& ctx) {
   W64& tos = ctx.commitarf[REG_fptos];
   W64& st0 = ctx.fpstack[tos >> 3];
-  W64& st1 = ctx.fpstack[((tos >> 3) - 1) & 0x7];
+  W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
   SSEType st0u(st0); SSEType st1u(st1);
 
   X87StatusWord fpsw;

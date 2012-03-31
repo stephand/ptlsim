@@ -15,6 +15,9 @@
 #include <stddef.h>
 #include <syscalls.h>
 
+//++MTY Needed for gcc 4.3+:
+#undef __USE_EXTERN_INLINES
+
 //
 // From asm-x86_64/string.h and asm-i386/string.h:
 //
@@ -177,8 +180,8 @@ extern "C" void* memcpy(void* t, const void* f, size_t n) {
   else return __memcpy((t),(f),(n));
 }
 
-#define __HAVE_ARCH_MEMMOVE
-void *memmove(void * dest,const void * src, size_t n);
+//#define __HAVE_ARCH_MEMMOVE
+//void *memmove(void * dest,const void * src, size_t n);
 
 #define memcmp __builtin_memcmp
 
@@ -1074,14 +1077,14 @@ void *memmove(void *dest, const void *src, size_t count)
 	const char *s;
 
 	if (dest <= src) {
-		tmp = dest;
-		s = src;
+		tmp = (char *) dest;
+		s = (const char *) src;
 		while (count--)
 			*tmp++ = *s++;
 	} else {
-		tmp = dest;
+		tmp = (char *)dest;
 		tmp += count;
-		s = src;
+		s = (const char *) src;
 		s += count;
 		while (count--)
 			*--tmp = *--s;
