@@ -392,7 +392,7 @@ int ReorderBufferEntry::issue() {
 
       state.reg.rddata = lsq->data;
       state.reg.rdflags = (lsq->invalid << log2(FLAG_INV)) | ((!lsq->datavalid) << log2(FLAG_WAIT));
-      //This is never used: state.reg.addr = lsq->physaddr;
+      state.reg.addr = lsq->physaddr; // Used for event log!
       if unlikely (completed == ISSUE_NEEDS_REPLAY) {
         per_context_ooocore_stats_update(threadid, issue.result.replay++);
         return ISSUE_NEEDS_REPLAY;

@@ -1192,6 +1192,7 @@ namespace OutOfOrderModel {
     EVENT_ASF_CONFLICT,
     // Metadata events
     EVENT_META_COREID,
+    EVENT_ASF_NESTLEVEL,
   };
 
   //
@@ -1403,6 +1404,9 @@ namespace OutOfOrderModel {
         W8 dst_id;
         W8 inv;
       } conflict __attribute__ ((packed));
+      struct {
+        int nest_level;
+      } nestlevel __attribute__ ((packed));
     } __attribute__ ((packed));
 
     ostream& print(ostream& os) const;

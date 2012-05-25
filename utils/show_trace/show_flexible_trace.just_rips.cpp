@@ -382,6 +382,8 @@ int main() {
 		   << (int)e.conflict.src_id << " -> " << (int)e.conflict.dst_id
 	       << " inv: " << (bool)e.conflict.inv << " phys: " << (void*)e.conflict.phys_addr
 	       << " virt: " << (void*)e.conflict.virt_addr << " rip: " << (void*)e.rip.rip << "\n";
+	else if (e.type == EVENT_ASF_NESTLEVEL)
+	  cout << the_coreid_tracker.get_coreid() << " " << e.cycle << " New nesting level: " << e.nestlevel.nest_level << "\n";
     records ++;
     pos += size;
   }

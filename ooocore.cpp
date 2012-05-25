@@ -1006,6 +1006,7 @@ namespace OutOfOrderModel {
       {EVENT_ASF_ABORT,              EVENT_ASF_ABORT,           FLEX_SIZE(OutOfOrderCoreEvent, abort)},
       {EVENT_ASF_CONFLICT,           EVENT_ASF_CONFLICT,        FLEX_SIZE(OutOfOrderCoreEvent, conflict)},
       {EVENT_META_COREID,            EVENT_META_COREID,         sizeof(MetadataCoreidEvent)},
+      {EVENT_ASF_NESTLEVEL,          EVENT_ASF_NESTLEVEL,       FLEX_SIZE(OutOfOrderCoreEvent, nestlevel)},
   };
   const int SubfieldSizes::sizes_elem = sizeof(sizes)/sizeof(sizes[0]);
   W16 SubfieldSizes::last_type = 0xFFFF;

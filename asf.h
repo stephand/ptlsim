@@ -59,6 +59,7 @@ class ASFContext {
     void leave_spec_region();
     bool const in_spec_region() { return in_spec_reg; }
     bool const is_inverted() { return inverted; }
+    int get_nest_level() const { return nest_level; }
     bool has_error() { return status_code != ASF_SUCCESS; }
     /* Methods to create particular errors */
     void capacity_error(W64 rip, Waddr addr);

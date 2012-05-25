@@ -765,6 +765,15 @@ namespace OutOfOrderModel {
       /* SPECULATE always returns zero. */
       assert(!rob.physreg->data);
       asf_context->enter_spec_region(ctx);
+
+      // Make the current nesting level explicit in the commit logfile
+      if unlikely (config.commitlog_filename) {
+        OutOfOrderCoreBinaryEvent e(vcpuid());
+        e.fill(EVENT_ASF_NESTLEVEL, &rob);
+        e.nestlevel.nest_level = asf_context->get_nest_level();
+        commitlogfile << e;
+      }
+
       return true;
     }
 
@@ -772,6 +781,15 @@ namespace OutOfOrderModel {
       /* SPECULATE_INV always returns zero. */
       assert(!rob.physreg->data);
       asf_context->enter_spec_inv_region(ctx);
+
+      // Make the current nesting level explicit in the commit logfile
+      if unlikely (config.commitlog_filename) {
+        OutOfOrderCoreBinaryEvent e(vcpuid());
+        e.fill(EVENT_ASF_NESTLEVEL, &rob);
+        e.nestlevel.nest_level = asf_context->get_nest_level();
+        commitlogfile << e;
+      }
+
       return true;
     }
 
@@ -788,6 +806,15 @@ namespace OutOfOrderModel {
         return false;
       }
       asf_context->leave_spec_region();
+
+      // Make the current nesting level explicit in the commit logfile
+      if unlikely (config.commitlog_filename) {
+        OutOfOrderCoreBinaryEvent e(vcpuid());
+        e.fill(EVENT_ASF_NESTLEVEL, &rob);
+        e.nestlevel.nest_level = asf_context->get_nest_level();
+        commitlogfile << e;
+      }
+
       return true;
     }
 
