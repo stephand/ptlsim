@@ -34,7 +34,10 @@ endif
 #
 PTLSIM_HYPERVISOR ?= 1
 
-CC ?= g++-4.2
+#CC ?= g++-4.2
+ifeq ($(CC), cc)
+	CC = g++-4.2
+endif
 
 GCCVER_SPECIFIC =
 
