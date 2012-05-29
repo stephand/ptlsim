@@ -1431,7 +1431,8 @@ namespace OutOfOrderModel {
            (type == EVENT_COMMIT_OK) ||
            (type == EVENT_DISPATCH_OK) ||
            (type == EVENT_ASF_ABORT) ||
-           (type == EVENT_ASF_CONFLICT)
+           (type == EVENT_ASF_CONFLICT) ||
+           (type == EVENT_ASF_NESTLEVEL)
           );
     }
     bool operator()(const W16 type, const FetchBufferEntry& uop) const {

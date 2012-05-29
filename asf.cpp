@@ -766,12 +766,10 @@ namespace OutOfOrderModel {
       assert(!rob.physreg->data);
       asf_context->enter_spec_region(ctx);
 
-      // Make the current nesting level explicit in the commit logfile
-      if unlikely (config.commitlog_filename) {
-        OutOfOrderCoreBinaryEvent e(vcpuid());
-        e.fill(EVENT_ASF_NESTLEVEL, &rob);
-        e.nestlevel.nest_level = asf_context->get_nest_level();
-        commitlogfile << e;
+      // Make the current nesting level explicit in the event logfile
+      if unlikely (config.event_log_enabled) {
+        OutOfOrderCoreEvent *e = thread->core.eventlog.add(EVENT_ASF_NESTLEVEL, &rob);
+        e->nestlevel.nest_level = asf_context->get_nest_level();
       }
 
       return true;
@@ -782,12 +780,10 @@ namespace OutOfOrderModel {
       assert(!rob.physreg->data);
       asf_context->enter_spec_inv_region(ctx);
 
-      // Make the current nesting level explicit in the commit logfile
-      if unlikely (config.commitlog_filename) {
-        OutOfOrderCoreBinaryEvent e(vcpuid());
-        e.fill(EVENT_ASF_NESTLEVEL, &rob);
-        e.nestlevel.nest_level = asf_context->get_nest_level();
-        commitlogfile << e;
+      // Make the current nesting level explicit in the event logfile
+      if unlikely (config.event_log_enabled) {
+        OutOfOrderCoreEvent *e = thread->core.eventlog.add(EVENT_ASF_NESTLEVEL, &rob);
+        e->nestlevel.nest_level = asf_context->get_nest_level();
       }
 
       return true;
@@ -807,12 +803,10 @@ namespace OutOfOrderModel {
       }
       asf_context->leave_spec_region();
 
-      // Make the current nesting level explicit in the commit logfile
-      if unlikely (config.commitlog_filename) {
-        OutOfOrderCoreBinaryEvent e(vcpuid());
-        e.fill(EVENT_ASF_NESTLEVEL, &rob);
-        e.nestlevel.nest_level = asf_context->get_nest_level();
-        commitlogfile << e;
+      // Make the current nesting level explicit in the event logfile
+      if unlikely (config.event_log_enabled) {
+        OutOfOrderCoreEvent *e = thread->core.eventlog.add(EVENT_ASF_NESTLEVEL, &rob);
+        e->nestlevel.nest_level = asf_context->get_nest_level();
       }
 
       return true;
