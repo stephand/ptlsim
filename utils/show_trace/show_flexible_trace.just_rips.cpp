@@ -29,6 +29,7 @@
 #include "show_flexible_trace_ptlsim_types.h"
 #include <set>
 #include <list>
+#include <map>
 #include <algorithm>
 
 using namespace std;
@@ -349,6 +350,10 @@ int main() {
   for (stat_it = analyzers.begin(); stat_it != analyzers.end(); ++stat_it)
     (*stat_it)->begin();
   
+
+  map<int, uint32_t> old_cycle;
+  map<int, uint64_t> cycle_offset;
+ 
   while (!std::cin.eof() && !std::cin.fail()) {
     std::cin.read((char*)&size, sizeof(size));
 
@@ -368,24 +373,41 @@ int main() {
     for (stat_it = analyzers.begin(); stat_it != analyzers.end(); ++stat_it)
       (*stat_it)->parse_event(e);
 
-	if (e.type == EVENT_COMMIT_OK) {
-	  cout << the_coreid_tracker.get_coreid() << " " << e.cycle << " " << (void*)e.rip.rip << "\n";
-	  if (e.uop.opcode == OP_spec_inv)
-		  cout << the_coreid_tracker.get_coreid() << " " << e.cycle << " SPECULATE\n";
-	  if (e.uop.opcode == OP_com)
-		  cout << the_coreid_tracker.get_coreid() << " " << e.cycle << " COMMIT\n";
-	}
-	else if (e.type == EVENT_ASF_ABORT)
-	  cout << the_coreid_tracker.get_coreid() << " " << e.cycle << " ABORT" << (int)((signed char)(e.abort.abort_reason & 0xFF)) << "\n";
-	else if (e.type == EVENT_ASF_CONFLICT)
-	  cout << "Conflict cycle " << e.cycle << " " 
-		   << (int)e.conflict.src_id << " -> " << (int)e.conflict.dst_id
-	       << " inv: " << (bool)e.conflict.inv << " phys: " << (void*)e.conflict.phys_addr
-	       << " virt: " << (void*)e.conflict.virt_addr << " rip: " << (void*)e.rip.rip << "\n";
-	else if (e.type == EVENT_ASF_NESTLEVEL)
-	  cout << the_coreid_tracker.get_coreid() << " " << e.cycle << " New nesting level: " << e.nestlevel.nest_level << "\n";
+#if (0)
+    /* De-overflow the 32bit cycle value */
+    int coreid = the_coreid_tracker.get_coreid();
+    if (old_cycle.find(coreid) == old_cycle.end())
+      old_cycle[coreid] = e.cycle;
+    if (old_cycle.find(coreid) == old_cycle.end())
+      old_cycle[coreid] = e.cycle;
+
+    /* Allow cycles to be off by 2^30 to account for async write-out */
+    if ( (int32_t) (e.cycle - old_cycle) < -(1L<<30)) {
+      cycle_offset += 1LL << 32;
+    }
+#endif
+    uint64_t deoverflowed_cycle = e.cycle;
+
+    if (e.type == EVENT_COMMIT_OK) {
+      cout << the_coreid_tracker.get_coreid() << " " << deoverflowed_cycle << " " << (void*)e.rip.rip << "\n";
+      if (e.uop.opcode == OP_spec_inv)
+          cout << the_coreid_tracker.get_coreid() << " " << deoverflowed_cycle << " SPECULATE\n";
+      if (e.uop.opcode == OP_com)
+          cout << the_coreid_tracker.get_coreid() << " " << deoverflowed_cycle << " COMMIT\n";
+    }
+    else if (e.type == EVENT_ASF_ABORT)
+      cout << the_coreid_tracker.get_coreid() << " " << deoverflowed_cycle << " ABORT" << (int)((signed char)(e.abort.abort_reason & 0xFF)) << "\n";
+    else if (e.type == EVENT_ASF_CONFLICT)
+      cout << "Conflict cycle " << deoverflowed_cycle << " " 
+           << (int)e.conflict.src_id << " -> " << (int)e.conflict.dst_id
+           << " inv: " << (bool)e.conflict.inv << " phys: " << (void*)e.conflict.phys_addr
+           << " virt: " << (void*)e.conflict.virt_addr << " rip: " << (void*)e.rip.rip << "\n";
+    else if (e.type == EVENT_ASF_NESTLEVEL)
+      cout << the_coreid_tracker.get_coreid() << " " << deoverflowed_cycle << " New nesting level: " << e.nestlevel.nest_level << "\n";
+
     records ++;
     pos += size;
+    //old_cycle = e.cycle;
   }
   for (stat_it = analyzers.begin(); stat_it != analyzers.end(); ++stat_it)
     (*stat_it)->end();

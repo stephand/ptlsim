@@ -1205,7 +1205,7 @@ namespace OutOfOrderModel {
   struct OutOfOrderCoreEvent {
     W16 type;
     W16 rob;
-    W32 cycle;
+    W64 cycle;
     W32 uuid;
     RIPVirtPhysBase rip;
     TransOpBase uop;
