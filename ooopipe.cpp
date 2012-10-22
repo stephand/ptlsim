@@ -1496,6 +1496,16 @@ int ThreadContext::complete(int cluster) {
     if unlikely (rob->cycles_left <= 0) {
       if unlikely (config.event_log_enabled) core.eventlog.add(EVENT_COMPLETE, rob);
       rob->changestate(rob_completed_list[cluster]);
+
+      // SD: Fences use a dedicated way to wake-up their destination register
+      //     and should bypass the complete stage and go directly
+      //
+      //     issue -> commit (unblock the fence) ->
+      //     complete (with FLAG_WAIT already cleared) -> .. -> commit
+      //
+      //     The following assertion checks this logic.
+      assert( !(rob->lsq && (rob->lsq->lfence | rob->lsq->sfence) && (rob->physreg->flags & FLAG_WAIT)) );
+
       // SD: Make the register ready here, instead of at issue time. This should be more correct!
       //     Together with the 0 cycle fwd = bypass fix elsewhere, this works as expected!
       rob->physreg->flags &= ~FLAG_WAIT;
