@@ -9,6 +9,8 @@
 // GNU General Public License, Version 2.
 //
 
+// required to avoid redefinition of inline functions
+#define __NO_CTYPE
 #include <globals.h>
 #include <superstl.h>
 #include <stdarg.h>

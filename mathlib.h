@@ -75,6 +75,7 @@ namespace math {
   }
 
   /* All floating-point numbers can be put in one of these categories.  */
+  /* FIXME: these definitions conflicts with defines in math.h
   enum {
     FP_NAN,
     FP_INFINITE,
@@ -82,6 +83,7 @@ namespace math {
     FP_SUBNORMAL,
     FP_NORMAL
   };
+  */
 
 #undef isinf
   inline int isinf(double x) {
