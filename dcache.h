@@ -446,7 +446,7 @@ namespace CacheSubsystem {
     }
 
     int flush_virt(Waddr virtaddr, W64 threadid) {
-      return invalidate(tagof(virtaddr, threadid));
+      return base_t::invalidate(tagof(virtaddr, threadid));
     }
   };
 
